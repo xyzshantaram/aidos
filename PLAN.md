@@ -52,6 +52,19 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   **Evaluate:** you drive one full ticket from creation to done using only the CLI for the
   agent's half and the board for yours. `attach_evidence` cannot write a row authored by you.
   The markdown from `plan` round-trips back through the importer without loss.
+  **Built, awaiting your check.** 111 tests pass. The half of the criterion that needs the
+  board cannot run until P4 exists, so this ticket stays open on purpose. I verified the rest
+  by driving the real CLI: a payload naming an author changes nothing, every non-system actor
+  in the log is `agent`, and both refusal paths print JSON rather than a traceback.
+  Two design points moved during the work. `plan import` now lands every ticket in `open`
+  whatever mark the document carries, and records the document's claim as
+  `builtin:imported_state` evidence. Import was the last path that could reach `done` without
+  a human, and it is now shut. The plan format also grew four state marks, because `[x]` and
+  `[ ]` could only encode two of the four states.
+  Reading the finished code found one defect the 108 tests missed: the unknown-kind refusal
+  read the kind off the command flags, but `plan import` writes an evidence kind and has no
+  such flag, so that path raised a second error inside the error handler and printed the
+  traceback the contract forbids. Fixed, and `test_29` now fails without the fix.
 
 - [ ] **Ticket P4: Board.** tkinter. Ticket list and detail, field editing, comments, the four
   states with gate enforcement on every move, and evidence attach including screenshot files.
@@ -247,7 +260,8 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 
 | Metric | Count / Value | Notes |
 |---|---|---|
-| Verification catch rate | 2 / 4 | independent checks that caught a real discrepancy, vs. total checks performed. The reopen check found two defects the 29 passing tests missed. Reading the implementation found two more. Re-running the suite and reading a test file found nothing new. |
-| Escaped defect rate | 0 / 2 | bugs found after a ticket was marked `done`, vs. tickets closed. Both P1 defects were caught before the ticket closed, not after. |
-| Rework/reopen rate | 2 / 2 | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. Neither omission was found by grilling. Both were found by checking the artifact. |
-| Rough cost | 4 dispatches for P1+P2 | two test-writing rounds and two implementation rounds, plus four checks by me. A single combined dispatch would have been cheaper and would have shipped a store that lost all data on restart, since the same agent would have written the tests that missed it. |
+| Verification catch rate | 3 / 9 | independent checks that caught a real discrepancy, vs. total checks performed. The reopen check found two defects the 29 passing tests missed. Reading the implementation found two more. For P3, five checks found one defect, and the one that found it was reading the finished code. Re-running suites, re-reading tests, and driving the CLI by hand each found nothing new. Reading code is the check that pays. |
+| Escaped defect rate | 0 / 2 | bugs found after a ticket was marked `done`, vs. tickets closed. Both P1 defects were caught before the ticket closed, not after. P3 is not closed yet, so it does not count here. |
+| Rework/reopen rate | 3 / 3 | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. P3 needed one because my contract told import to preserve a `done` mark and also told the agent it could never reach `done`. Those two rules cannot both hold. A subagent found the conflict by writing tests against the contract, before any code existed. Grilling found none of the three. |
+| Rough cost | 4 dispatches for P1+P2, 8 for P3 | of the 8, three produced nothing: two `coder` dispatches returned empty without writing a file, and one `general` implementation dispatch timed out. The five that worked were a probe, a test-writing round, a contract revision, the plan parser, and the CLI. Splitting the implementation in two after the timeout is what got it finished. |
+| Contract defects found before code | 1 | the import versus `done` conflict. Writing tests against a contract, with no implementation to shape them, is the only step so far that has caught a contradiction rather than a bug. |

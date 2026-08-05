@@ -40,7 +40,15 @@ class GateRefused(Exception):
 
 
 class UnknownKind(Exception):
-    """Raised when an evidence kind is not registered."""
+    """Raised when an evidence kind is not registered.
+
+    The kind is carried as an attribute, because a caller that did not name
+    the kind itself still has to report which kind was missing.
+    """
+
+    def __init__(self, kind_id):
+        self.kind_id = kind_id
+        super().__init__("no such kind: %s" % kind_id)
 
 
 class Event:
@@ -100,6 +108,13 @@ class Event:
         if t == "ticket.set":
             return "Ticket %s updated by %s at %s" % (
                 f.get("ticket_id"), f.get("actor"), at)
+        if t == "phase.set":
+            return ("Phase %s of project %s set by %s at %s"
+                    % (f.get("number"), f.get("project_id"),
+                       f.get("actor"), at))
+        if t == "plan.meta_set":
+            return ("Plan meta of project %s set by %s at %s"
+                    % (f.get("project_id"), f.get("actor"), at))
         if t == "project.created":
             return ("Project %s created at %s by %s at %s"
                     % (f.get("project_id"), f.get("abs_path"),
@@ -135,6 +150,14 @@ class Store:
         )
         self.db.commit()
 
+    def _next_order(self, project_id, phase):
+        """Return the next free position in one phase, counted from 1."""
+        used = [
+            ticket["order"] for ticket in self.tickets.values()
+            if ticket["project_id"] == project_id and ticket["phase"] == phase
+        ]
+        return max(used) + 1 if used else 1
+
     def _apply_event(self, fields):
         """Apply one log record to the projection. Refusals change nothing."""
         t = fields["type"]
@@ -163,23 +186,58 @@ class Store:
                 self._next_project_id = pid + 1
         elif t == "project.moved":
             self.projects[fields["project_id"]]["abs_path"] = fields["abs_path"]
+        elif t == "phase.set":
+            key = (fields["project_id"], fields["number"])
+            phase = self.phases.get(key)
+            if phase is None:
+                phase = {
+                    "project_id": fields["project_id"],
+                    "number": fields["number"],
+                    "title": "",
+                    "state": "open",
+                }
+                self.phases[key] = phase
+            for name in ("title", "state"):
+                if name in fields:
+                    phase[name] = fields[name]
+        elif t == "plan.meta_set":
+            meta = self.plan_meta.get(fields["project_id"])
+            if meta is None:
+                meta = {
+                    "frontmatter": "",
+                    "preamble": "",
+                    "context_sections": [],
+                }
+                self.plan_meta[fields["project_id"]] = meta
+            for name in ("frontmatter", "preamble", "context_sections"):
+                if name in fields:
+                    meta[name] = fields[name]
         elif t == "ticket.created":
             tid = fields["ticket_id"]
+            # A record written before the plan fields existed holds no phase,
+            # body, criteria, or order. Each one falls back to its default so
+            # that an old log still replays.
+            phase = fields.get("phase", 1)
             self.tickets[tid] = {
                 "id": tid,
                 "project_id": fields["project_id"],
                 "title": fields["title"],
                 "description": fields["description"],
+                "body": fields.get("body", ""),
+                "criteria": fields.get("criteria", ""),
+                "phase": phase,
+                "order": fields.get(
+                    "order", self._next_order(fields["project_id"], phase)),
                 "state": "open",
             }
             if tid >= self._next_ticket_id:
                 self._next_ticket_id = tid + 1
         elif t == "ticket.set":
             ticket = self.tickets[fields["ticket_id"]]
-            if "title" in fields:
-                ticket["title"] = fields["title"]
-            if "description" in fields:
-                ticket["description"] = fields["description"]
+            for name in ("title", "description", "body", "criteria",
+                         "phase", "order"):
+                if name in fields:
+                    ticket[name] = fields[name]
         elif t == "ticket.moved":
             self.tickets[fields["ticket_id"]]["state"] = fields["to_state"]
         elif t == "evidence.attached":
@@ -265,18 +323,110 @@ class Store:
     def get_project(self, project_id):
         return self.projects[project_id]
 
+    # ---- phases ----
+
+    def set_phase(self, project_id, number, *, title=None, state=None,
+                  actor="system"):
+        """Create or update one phase. One audit record is appended.
+
+        A new phase starts with an empty title and the state "open". The phase
+        state is a label for the plan document. No gate reads it.
+        """
+        if project_id not in self.projects:
+            raise KeyError(project_id)
+        fields = {
+            "type": "phase.set",
+            "project_id": project_id,
+            "number": number,
+            "actor": actor,
+            "at": time.time(),
+        }
+        if title is not None:
+            fields["title"] = title
+        if state is not None:
+            fields["state"] = state
+        self._append(fields)
+        self._apply_event(fields)
+
+    def get_phase(self, project_id, number):
+        return self.phases[(project_id, number)]
+
+    # ---- plan meta ----
+
+    def set_plan_meta(self, project_id, *, frontmatter=None, preamble=None,
+                      context_sections=None, actor="system"):
+        """Store the parts of a plan document that hold no ticket.
+
+        One audit record is appended. A context section carries a heading, a
+        text, and an index. The index counts the phases that come before the
+        section, so an export can put the section back in its place.
+        """
+        if project_id not in self.projects:
+            raise KeyError(project_id)
+        fields = {
+            "type": "plan.meta_set",
+            "project_id": project_id,
+            "actor": actor,
+            "at": time.time(),
+        }
+        if frontmatter is not None:
+            fields["frontmatter"] = frontmatter
+        if preamble is not None:
+            fields["preamble"] = preamble
+        if context_sections is not None:
+            fields["context_sections"] = [
+                {
+                    "heading": section["heading"],
+                    "text": section["text"],
+                    "index": section["index"],
+                }
+                for section in context_sections
+            ]
+        self._append(fields)
+        self._apply_event(fields)
+
+    def get_plan_meta(self, project_id):
+        """Return the plan meta of one project.
+
+        A project that never held a plan document gives an empty frontmatter,
+        an empty preamble, and no context section.
+        """
+        meta = self.plan_meta.get(project_id)
+        if meta is None:
+            return {"frontmatter": "", "preamble": "", "context_sections": []}
+        return {
+            "frontmatter": meta["frontmatter"],
+            "preamble": meta["preamble"],
+            "context_sections": [dict(section)
+                                 for section in meta["context_sections"]],
+        }
+
+    def phases_for(self, project_id):
+        """Return every phase of one project, sorted by phase number."""
+        return [
+            phase for key, phase in sorted(self.phases.items())
+            if key[0] == project_id
+        ]
+
     # ---- tickets ----
 
-    def create_ticket(self, project_id, title, description, *, actor="user"):
+    def create_ticket(self, project_id, title, description, *, actor="user",
+                      body="", criteria="", phase=1, order=None):
         if project_id not in self.projects:
             raise KeyError(project_id)
         tid = self._next_ticket_id
+        if order is None:
+            order = self._next_order(project_id, phase)
         fields = {
             "type": "ticket.created",
             "ticket_id": tid,
             "project_id": project_id,
             "title": title,
             "description": description,
+            "body": body,
+            "criteria": criteria,
+            "phase": phase,
+            "order": order,
             "actor": actor,
             "at": time.time(),
         }
@@ -284,17 +434,20 @@ class Store:
         self._apply_event(fields)
         return tid
 
-    def set_ticket(self, ticket_id, *, actor="user", title=None, description=None):
+    def set_ticket(self, ticket_id, *, actor="user", title=None,
+                   description=None, body=None, criteria=None, phase=None,
+                   order=None):
         fields = {
             "type": "ticket.set",
             "ticket_id": ticket_id,
             "actor": actor,
             "at": time.time(),
         }
-        if title is not None:
-            fields["title"] = title
-        if description is not None:
-            fields["description"] = description
+        for name, value in (("title", title), ("description", description),
+                            ("body", body), ("criteria", criteria),
+                            ("phase", phase), ("order", order)):
+            if value is not None:
+                fields[name] = value
         self._append(fields)
         self._apply_event(fields)
 
@@ -305,7 +458,7 @@ class Store:
 
     def attach_evidence(self, ticket_id, kind_id, payload, *, actor="user"):
         if kind_id not in self.kinds:
-            raise UnknownKind("no such kind: %s" % kind_id)
+            raise UnknownKind(kind_id)
         fields = {
             "type": "evidence.attached",
             "ticket_id": ticket_id,
@@ -396,6 +549,8 @@ class Store:
         self.kinds = {}
         self.gates = {}
         self.projects = {}
+        self.phases = {}
+        self.plan_meta = {}
         self.tickets = {}
         self.evidence = {}
         self._next_project_id = 1
