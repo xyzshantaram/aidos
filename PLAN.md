@@ -18,27 +18,33 @@ argue with, not a settled contract.
 **Goal.** A throwaway board that pins the behavior of the ticket kernel before anyone writes it
 in Rust, and that holds this plan so this file can be deleted.
 
-**Constraints.** Python, tkinter, and `sqlite3`. Standard library only. Lives in
-`~/repos/helm-prototype`, not in this repository, because throwaway code in a repository you
-keep does not stay throwaway. It is a behavior specification. No line of it survives into helm.
+**Constraints.** Python, tkinter, and `sqlite3`. Standard library only. Lives in `prototype/`
+in this repository. It is a behavior specification, not a component. No line of it survives
+into helm. Throwaway code in a repository you keep does not stay throwaway unless someone
+deletes it on purpose, so Ticket U5 exists to be that someone.
 
-- [ ] **Ticket P1: Schema and event log.** Tables for projects, tickets, the evidence kind
+- [x] **Ticket P1: Schema and event log.** Tables for projects, tickets, the evidence kind
   registry, evidence rows, gate config, and an append-only event log. Current state derives from
   the log. Author and timestamp are stamped by the writer layer and are never read from caller
   input. Evidence kinds are namespaced strings, `builtin:*` and `plugin:*`.
-  **Evaluate:** a test replays the event log from empty and reproduces the exact current state
-  of tickets and evidence. A test confirms an attempt to pass an author through the payload does
-  not change the stored author. A test confirms changing a weight in the registry changes every
-  affected ticket score with no row rewrite.
+  **Done.** 37 unittest cases pass. I verified three claims against the real artifact rather
+  than trusting the report: a file-backed store reopens with identical state including the
+  original evidence timestamps, the stored author comes from the actor and not from a payload
+  that tries to set one, and a weight change moves every affected score with no row rewritten.
+  Review found two further defects, both fixed: the store never rebuilt its projection on open,
+  so nothing survived a restart, and registry changes were unlogged, so loosening a gate left no
+  audit trace.
 
-- [ ] **Ticket P2: Gate engine.** A gate names one transition and the evidence kinds it
+- [x] **Ticket P2: Gate engine.** A gate names one transition and the evidence kinds it
   requires. Gate config is data, not code. A refused transition returns the missing kind and the
   author who must supply it. Confidence score is computed and displayed, and never consulted by
   a gate.
-  **Evaluate:** a test moves a ticket through the full lifecycle and asserts the exact refusal
-  message at each blocked step. A test confirms a ticket with a high score and a missing
-  mandatory kind is still refused. Loosening a gate is a config edit with no schema change and
-  no data migration.
+  **Done.** Deny by default was absent from the first contract I wrote and is now the most
+  important test in the suite: a transition with no configured gate is refused for every actor,
+  and stays refused even when every registered evidence kind is attached. I ran that case
+  myself. A refused move now appends one audit record that replay ignores, so an attempted
+  bypass is visible rather than silent. Gate config is data, and loosening one needs no
+  migration.
 
 - [ ] **Ticket P3: Agent CLI.** Commands for `plan` (serialize the whole plan to markdown),
   `set_ticket`, `attach_evidence`, and `move_ticket`. Output is JSON on stdout. This is the
@@ -157,6 +163,14 @@ keep does not stay throwaway. It is a behavior specification. No line of it surv
   submissions appear as evidence on the right tickets. An unknown node kind renders an error
   node and does not break the page.
 
+- [ ] **Ticket U5: Delete the prototype.** Remove `prototype/` once the web UI has replaced it.
+  The prototype was always meant to die. This ticket is the only thing that makes that happen.
+  **Evaluate:** you confirm you have run a full ticket lifecycle in the browser, including
+  evidence attach and a rendered node tree, and that you no longer open the tkinter board. Every
+  behavior the prototype's tests pin has an equivalent test in the Rust suite, checked one by
+  one against the prototype's test list, not by eye. Only then is `prototype/` removed, in a
+  commit that names the Rust tests that replaced it.
+
 ---
 
 ## Phase 5: Tools, scripting, and skills — `pending`
@@ -233,7 +247,7 @@ keep does not stay throwaway. It is a behavior specification. No line of it surv
 
 | Metric | Count / Value | Notes |
 |---|---|---|
-| Verification catch rate | 0 / 0 | independent checks that caught a real discrepancy, vs. total checks performed |
-| Escaped defect rate | 0 / 0 | bugs found after a ticket was marked `done`, vs. tickets closed |
-| Rework/reopen rate | 0 / 0 | tickets reopened or rescoped after grilling had settled them, vs. tickets grilled |
-| Rough cost | — | approximate turns and tokens for grilling, planning, dispatch and review per ticket, vs. a rough estimate of direct implementation |
+| Verification catch rate | 2 / 4 | independent checks that caught a real discrepancy, vs. total checks performed. The reopen check found two defects the 29 passing tests missed. Reading the implementation found two more. Re-running the suite and reading a test file found nothing new. |
+| Escaped defect rate | 0 / 2 | bugs found after a ticket was marked `done`, vs. tickets closed. Both P1 defects were caught before the ticket closed, not after. |
+| Rework/reopen rate | 2 / 2 | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. Neither omission was found by grilling. Both were found by checking the artifact. |
+| Rough cost | 4 dispatches for P1+P2 | two test-writing rounds and two implementation rounds, plus four checks by me. A single combined dispatch would have been cheaper and would have shipped a store that lost all data on restart, since the same agent would have written the tests that missed it. |
