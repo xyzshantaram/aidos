@@ -34,6 +34,8 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   Review found two further defects, both fixed: the store never rebuilt its projection on open,
   so nothing survived a restart, and registry changes were unlogged, so loosening a gate left no
   audit trace.
+  **Superseded in part.** Ticket P7 replaced the in-memory projection described here with SQL
+  views. Every behavior this ticket pins still holds. The mechanism that delivered it does not.
 
 - [x] **Ticket P2: Gate engine.** A gate names one transition and the evidence kinds it
   requires. Gate config is data, not code. A refused transition returns the missing kind and the
@@ -45,6 +47,8 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   myself. A refused move now appends one audit record that replay ignores, so an attempted
   bypass is visible rather than silent. Gate config is data, and loosening one needs no
   migration.
+  **Superseded in part.** Ticket P7 moved the gate lookup into a SQL view. Deny by default and
+  every refusal message this ticket pins are unchanged.
 
 - [ ] **Ticket P3: Agent CLI.** Commands for `plan` (serialize the whole plan to markdown),
   `set_ticket`, `attach_evidence`, and `move_ticket`. Output is JSON on stdout. This is the
@@ -66,11 +70,64 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   such flag, so that path raised a second error inside the error handler and printed the
   traceback the contract forbids. Fixed, and `test_29` now fails without the fix.
 
-- [ ] **Ticket P4: Board.** tkinter. Ticket list and detail, field editing, comments, the four
-  states with gate enforcement on every move, and evidence attach including screenshot files.
-  A refusal shows the missing kind in plain language.
+- [ ] **Ticket P7: SQL views own every derived read.** Ordered before Ticket P4, and numbered
+  after it so that no committed ticket id changes meaning. The in-memory projection goes away.
+  Every derived read comes from a SQL view over `events`, one view per event kind for
+  uniformity: tickets, projects, phases, plan meta, kinds, gates, evidence, and comments. `seq`
+  is the ordering authority for last-write-wins, and `at` becomes display metadata that no query
+  orders by. Two events can share one `time.time()` value, so ordering by `at` picks an
+  arbitrary winner. Standard library `sqlite3` cannot register a virtual table, because
+  `Connection.create_module` does not exist, so a view is the reachable shape. `json_extract`
+  and SQL window functions are both available and do the work.
+  The store's read surface becomes explicit query methods, including a paged ticket read taking
+  a project filter, a sort key, a limit, and an offset. The dict attributes and
+  `rebuild_projection` are deleted, along with the nine call sites in `cli.py` and the two in
+  `tests/cli_helpers.py`. The paged read computes the confidence score and the gate fraction as
+  columns, so the board sorts on either without loading every row.
+  The tests are rewritten in the same change. That is a known risk, accepted on purpose. The
+  same hand edits the queries and the assertions that check them, so a wrong view and an
+  assertion adjusted to match it can cancel out. Nothing independent guards this rewrite.
+  Tickets P1 and P2 stay `done`. This ticket supersedes the mechanism they describe, and it is
+  recorded as a rework event in the benchmarking table, because the first contract never
+  anticipated paged reads.
+  Why the churn is worth it: helm's Rust side uses `sqlx` over SQLite, so this view SQL ports to
+  Tickets C2 and C3 unchanged. The derivation gets written once and serves both implementations.
+  **Evaluate:** the full suite passes with no in-memory projection left in the store. A test
+  proves last-write-wins follows `seq` and not `at`, using two events written inside one clock
+  tick. Reopening the database yields identical reads, because no projection exists to rebuild.
+  A page of twenty returns exactly twenty rows and the correct total count. Sorting by score and
+  sorting by gate fraction produce different orders on a fixture built to separate them.
+
+- [ ] **Ticket P4: Board.** Depends on Ticket P7. tkinter, split in two. `board_model.py`
+  imports no tkinter and holds every decision: paging maths, the project filter, the sort order,
+  what a card shows, which moves are offered, and the exact refusal text. `board.py` builds
+  widgets and calls it. The model joins the unit suite. Widget smoke tests run under `xvfb-run`,
+  which is installed and verified working, so both halves are checkable.
+  Layout. A grid of ticket cards spanning every project, with a project filter. Twenty cards in
+  4 by 5 with the detail panel closed, ten in 2 by 5 with it open. Opening the panel recomputes
+  the offset so the selected ticket stays on screen. Detail is a side panel, not a modal. A card
+  shows the title, the state, the confidence score prominently, and the gate fraction below it
+  in muted smaller text. The fraction counts the forward transition only, along
+  `open -> in_progress -> awaiting_verification -> done`, so `done` shows none. Both numbers
+  sort.
+  Behavior. The board creates tickets. Projects stay CLI-created. It edits fields, adds
+  comments, moves states with gate enforcement, and attaches evidence of any registered kind as
+  actor `user`. Comments get their own event type and their own view, so no gate can accept a
+  comment as proof. The window re-queries when it regains focus, with no timer, so a repaint
+  never lands mid-edit. A refusal prints `str(GateRefused)` verbatim, which already names the
+  missing kinds and the allowed actors.
+  Storage. The storage root is the directory holding the database. An attached image is copied
+  to `<root>/blobs/<sha256>`, so the same image is stored once however often it is attached. The
+  evidence payload carries the hash, the original file name, the byte length, and the media
+  type. `--db` becomes optional and defaults to `$XDG_DATA_HOME/helm-proto/helm.db`. The
+  prototype root is `helm-proto` and never `helm`, so it cannot collide with the data directory
+  Ticket C1 defines. A backup is a copy of the root.
   **Evaluate:** you use it for a working session without dropping to SQL. Every refusal names
-  what is missing. A screenshot attaches, persists, and displays after a restart.
+  what is missing. A screenshot attaches, persists, and displays after a restart. Opening the
+  panel on a ticket in the second half of a page keeps that ticket on screen. A write made from
+  the CLI appears after you click away and back, with no restart. Sorting by score and sorting
+  by gate fraction produce different orders. The model suite passes with no display available,
+  and the widget smoke tests pass under `xvfb-run`.
 
 - [ ] **Ticket P5: Node-tree renderer.** Render a declarative node tree into tkinter widgets:
   `stack`, `row`, `text`, `markdown`, `image`, `form`, `input`, `checkbox`, `dropdown`,
@@ -299,6 +356,6 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 |---|---|---|
 | Verification catch rate | 3 / 9 | independent checks that caught a real discrepancy, vs. total checks performed. The reopen check found two defects the 29 passing tests missed. Reading the implementation found two more. For P3, five checks found one defect, and the one that found it was reading the finished code. Re-running suites, re-reading tests, and driving the CLI by hand each found nothing new. Reading code is the check that pays. |
 | Escaped defect rate | 0 / 2 | bugs found after a ticket was marked `done`, vs. tickets closed. Both P1 defects were caught before the ticket closed, not after. P3 is not closed yet, so it does not count here. |
-| Rework/reopen rate | 3 / 3 | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. P3 needed one because my contract told import to preserve a `done` mark and also told the agent it could never reach `done`. Those two rules cannot both hold. A subagent found the conflict by writing tests against the contract, before any code existed. Grilling found none of the three. |
+| Rework/reopen rate | 4 rounds / 3 tickets | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. P3 needed one because my contract told import to preserve a `done` mark and also told the agent it could never reach `done`. Those two rules cannot both hold. A subagent found the conflict by writing tests against the contract, before any code existed. Grilling found none of the three. The fourth round is Ticket P7, which discards P1's in-memory projection entirely: my contract never asked how the board would read twenty tickets at a time, so it specified a structure that cannot paginate. Grilling the UI found it, one question in. |
 | Rough cost | 4 dispatches for P1+P2, 8 for P3 | of the 8, three produced nothing: two `coder` dispatches returned empty without writing a file, and one `general` implementation dispatch timed out. The five that worked were a probe, a test-writing round, a contract revision, the plan parser, and the CLI. Splitting the implementation in two after the timeout is what got it finished. |
 | Contract defects found before code | 1 | the import versus `done` conflict. Writing tests against a contract, with no implementation to shape them, is the only step so far that has caught a contradiction rather than a bug. |
