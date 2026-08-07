@@ -149,6 +149,43 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   is unmet, and is not reachable through `git -C`, `sh -c`, an alias, or a script. A test suite
   of bypass attempts is written first and each one fails to bypass.
 
+- [ ] **Ticket A5: Subagent definitions.** A subagent is defined by a markdown file in the
+  config directory, with YAML frontmatter and a body. The frontmatter holds the name, the
+  description, the model, the temperature, the tool allow and deny lists, and the permissions.
+  The body is the system prompt. Identity stays flat. Every subagent writes as the single author
+  `agent`, and its name is metadata on a record rather than an actor of its own.
+  A subagent has no access to the ticket board. It cannot create a ticket, edit one, move one,
+  or attach evidence. Only the orchestrator touches the board, and it does so under its own
+  signoff. That one rule settles two problems at once. The confidence score counts one kind from
+  one author once, however many subagents produced the work, so no fan-out inflates it. And
+  `allowed_actors` stays a flat list of strings rather than growing into a hierarchy.
+  **Evaluate:** a new definition file becomes a callable subagent with no code change. A
+  malformed definition fails to load with a message naming the file and the problem, and does
+  not stop the other definitions loading. A subagent that calls any board tool is refused, and
+  the refusal says the orchestrator is the only actor that may do it. After a session that ran
+  several subagents, the log holds no author other than `agent`, `user`, and `system`.
+
+- [ ] **Ticket A6: Subagents run detached.** Depends on Ticket A5. A subagent is a long-running
+  job, not a blocking call. The spawn tool starts the job, returns a job identifier at once, and
+  never waits for a result. A second tool reports the status of a job. A third returns the
+  finished report. A fetch against a job that is still running returns a status, not a partial
+  report. Jobs outlive the parent turn and are listed per session. The Phase 1 work is the
+  reason this ticket exists: two dispatches returned nothing and one timed out, and a blocking
+  call hides all three until the timeout expires.
+  A finished report can optionally become a provenance item. The orchestrator attaches it, since
+  a subagent cannot write to the board itself. It lands as an evidence row under its own kind,
+  with the job identifier, the subagent name, and the start and end times. You can then ask
+  later what a named subagent did on a given day, and read its own account of the work rather
+  than infer it from the diff.
+  **Evaluate:** the parent agent spawns a job and takes its next action in the same turn, before
+  that job finishes. A status check names the job, its state, and how long it has run. A report
+  fetch against a running job is refused with text that tells the parent to check the status
+  again, and it does not block. A subagent that crashes or times out reports a terminal state
+  with a reason, so no parent can poll forever. Killing a job stops its process and leaves no
+  orphan. Two jobs run at once and neither report is attributed to the wrong job. A report
+  attached as evidence carries `agent` as its author and the subagent name as metadata, survives
+  a restart, and a query by subagent name and date returns it with its job identifier intact.
+
 ---
 
 ## Phase 4: Web UI — `pending`
