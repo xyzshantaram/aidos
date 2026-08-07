@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from helm_proto.store import GateRefused, Store
+from aidos_proto.store import GateRefused, Store
 
 
 class RegistrySurvivesReopenTest(unittest.TestCase):

@@ -15,8 +15,8 @@ import json
 import os
 import sys
 
-from helm_proto.plan import PlanParseError, parse_plan, render_plan
-from helm_proto.store import GateRefused, Store, UnknownKind
+from aidos_proto.plan import PlanParseError, parse_plan, render_plan
+from aidos_proto.store import GateRefused, Store, UnknownKind
 
 # The CLI acts as this actor on every write.
 ACTOR = "agent"
@@ -343,7 +343,7 @@ HANDLERS = {
 
 def build_parser():
     """Return the flag parser of the whole CLI."""
-    parser = argparse.ArgumentParser(prog="helm_proto.cli")
+    parser = argparse.ArgumentParser(prog="aidos_proto.cli")
     parser.add_argument("--db", required=True, help="path of the database")
     commands = parser.add_subparsers(dest="command", required=True)
 

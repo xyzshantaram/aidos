@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from helm_proto.store import Store
+from aidos_proto.store import Store
 
 
 class StateSurvivesReopenTest(unittest.TestCase):

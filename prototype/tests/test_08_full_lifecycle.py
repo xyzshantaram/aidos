@@ -2,7 +2,7 @@
 
 import unittest
 
-from helm_proto.store import GateRefused
+from aidos_proto.store import GateRefused
 from tests.helpers import make_store
 
 GATES = {

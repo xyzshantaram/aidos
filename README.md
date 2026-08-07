@@ -1,6 +1,6 @@
-# helm
+# aidos
 
-helm is a coding-agent harness that makes it hard to ignore the code, the scope, and the
+aidos is a coding-agent harness that makes it hard to ignore the code, the scope, and the
 features.
 
 You open a session. The agent talks the work through with you before it writes anything.
@@ -14,7 +14,7 @@ required proof exists. You sign off at both ends.
 An agent left alone drifts. It widens scope, drops half-finished work, and reports success it
 did not earn. The usual fixes are prompts and good intentions. Both fail over a long session.
 
-helm moves the fix into the harness. A gate is a rule the agent cannot talk its way past.
+aidos moves the fix into the harness. A gate is a rule the agent cannot talk its way past.
 
 ## The model
 
@@ -26,7 +26,7 @@ state exists because work the agent finished but you have not checked is exactly
 get dropped, and it is not the same as work nobody has started.
 
 **Evidence** is a first-class row attached to a ticket. A row holds a kind, an author, a time,
-and a payload. helm stamps the author from the entry point that made the call. helm never reads
+and a payload. aidos stamps the author from the entry point that made the call. aidos never reads
 the author from the payload, so the agent cannot write a row that names you. Kinds are
 namespaced, so a plugin can add its own: `builtin:user_signoff`, or
 `plugin:xyz.shantaram:lighthouse_score`.
@@ -37,7 +37,7 @@ the payload. Weight therefore cannot drift between two rows of the same kind, an
 attaches a row cannot set its own weight.
 
 **Gates** are predicates over evidence. A gate names one transition and the evidence kinds that
-transition requires. If a row is missing, helm refuses the move and names the kind that is
+transition requires. If a row is missing, aidos refuses the move and names the kind that is
 missing and who must write it. Gates live in config, so strictness is a setting and not a
 schema migration.
 
@@ -53,8 +53,8 @@ advisory. It never unlocks anything. Only the mandatory kinds do that.
 4. You sign off. Only then does the ticket move to `in-progress`. You may review or change the
    file allowlist first.
 5. The agent does the work and reports what it did.
-6. helm runs the automated check. A failure sends the ticket back.
-7. On a pass, helm dispatches the reviewer. The reviewer reports to **you**, not to the agent.
+6. aidos runs the automated check. A failure sends the ticket back.
+7. On a pass, aidos dispatches the reviewer. The reviewer reports to **you**, not to the agent.
 8. You send the ticket back with comments, or you mark it done.
 
 ## The plan
@@ -74,7 +74,7 @@ structured, in the web UI. Markdown is also the import format for the first plan
 
 ## Rules
 
-helm never writes a file into a project directory. All state lives in helm's own data
+aidos never writes a file into a project directory. All state lives in aidos's own data
 directory. A project is keyed by its absolute path. A `move` command repoints a project to a
 new path and changes the working directory of the agent session, which also covers a switch
 between worktrees.
@@ -92,7 +92,7 @@ between worktrees.
   memory cap, a stack cap, and an interrupt handler, together with host async functions that a
   script can await without blocking a tokio worker.
 
-helm runs on one machine and serves your other devices on the LAN. It holds one human identity,
+aidos runs on one machine and serves your other devices on the LAN. It holds one human identity,
 so an evidence row is either yours or the agent's, with no login.
 
 ## Provider profiles
@@ -101,7 +101,7 @@ A profile is one provider setup: provider URL, API key, model auto-detection, an
 model list. Every profile has the same shape. One provider may appear in many profiles, such as
 a test and a production DeepSeek, or a personal and a work Claude subscription.
 
-Providers are not uniformly OpenAI compatible, so helm translates through rig's provider layer
+Providers are not uniformly OpenAI compatible, so aidos translates through rig's provider layer
 and not through raw compatibility endpoints. Anthropic's own compatibility layer ignores
 `strict` tool schemas, prompt caching, and `reasoning_effort`, and Anthropic states it is not
 production ready.
@@ -110,12 +110,12 @@ production ready.
 
 - **Tools are directories.** Each holds a `README.md` with frontmatter, a description, and
   screenshots, plus a `script.js`. Drop a directory into the config directory to add a tool.
-  helm ships a `.d.ts` for the tool API, so an author gets editor completion while shipping
+  aidos ships a `.d.ts` for the tool API, so an author gets editor completion while shipping
   plain JavaScript.
 - **Skills are first class.** A small core of tools stays always on. A skill activates a
   further group when a task needs it. This keeps the context small, which also makes small
   models work better.
-- **The agent can build a user interface.** It emits a declarative node tree and helm renders
+- **The agent can build a user interface.** It emits a declarative node tree and aidos renders
   it, so the agent can build a throwaway dashboard for a one-off review task. Form submissions
   come back as structured data and land as evidence rows.
 - **The shell tool is narrow.** Allow and deny patterns, with ask by default for anything
@@ -127,7 +127,7 @@ production ready.
 
 The declarative node tree, the script-facing standard library split into `ctx`, `ui`, `util`
 and `store`, and the per-turn resource model all come from
-[nostr-canvas](https://gitlab.com/soapbox-pub/nostr-canvas). helm does not embed that crate. It
+[nostr-canvas](https://gitlab.com/soapbox-pub/nostr-canvas). aidos does not embed that crate. It
 copies the design, and some code, into a plain Rust program.
 
 ## License

@@ -10,7 +10,7 @@ import os
 
 from cli_helpers import IMPORT_RECORD_KIND, CliTestCase
 
-from helm_proto.store import Store
+from aidos_proto.store import Store
 
 
 PLAN = (

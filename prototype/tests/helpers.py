@@ -1,6 +1,6 @@
 """Shared setup helpers for the tests. No test logic here."""
 
-from helm_proto.store import Store
+from aidos_proto.store import Store
 
 DEFAULT_KINDS = [
     ("builtin:user_signoff", "User signoff", "The human confirms the work.", 1.0),

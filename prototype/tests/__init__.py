@@ -1,1 +1,1 @@
-"""Test package for the helm ticket kernel prototype."""
+"""Test package for the aidos ticket kernel prototype."""

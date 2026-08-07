@@ -1,13 +1,13 @@
-# helm implementation plan
+# aidos implementation plan
 
 This file is a bootstrap artifact with a scheduled death. Phase 1 builds a throwaway ticket
 board. That board then imports this plan, and this file is deleted. Everything after Phase 1
 lives in the board, not here.
 
-Split of work: the plan and the Phase 1 prototype are written for you. You build helm itself,
+Split of work: the plan and the Phase 1 prototype are written for you. You build aidos itself,
 from Phase 2 onward.
 
-**Evaluation criteria below are a first draft.** None has your signoff yet. Under helm's own
+**Evaluation criteria below are a first draft.** None has your signoff yet. Under aidos's own
 rules a ticket cannot leave `open` without one, so treat every criterion here as a proposal to
 argue with, not a settled contract.
 
@@ -20,7 +20,7 @@ in Rust, and that holds this plan so this file can be deleted.
 
 **Constraints.** Python, tkinter, and `sqlite3`. Standard library only. Lives in `prototype/`
 in this repository. It is a behavior specification, not a component. No line of it survives
-into helm. Throwaway code in a repository you keep does not stay throwaway unless someone
+into aidos. Throwaway code in a repository you keep does not stay throwaway unless someone
 deletes it on purpose, so Ticket U5 exists to be that someone.
 
 - [x] **Ticket P1: Schema and event log.** Tables for projects, tickets, the evidence kind
@@ -90,7 +90,7 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   Tickets P1 and P2 stay `done`. This ticket supersedes the mechanism they describe, and it is
   recorded as a rework event in the benchmarking table, because the first contract never
   anticipated paged reads.
-  Why the churn is worth it: helm's Rust side uses `sqlx` over SQLite, so this view SQL ports to
+  Why the churn is worth it: aidos's Rust side uses `sqlx` over SQLite, so this view SQL ports to
   Tickets C2 and C3 unchanged. The derivation gets written once and serves both implementations.
   **Evaluate:** the full suite passes with no in-memory projection left in the store. A test
   proves last-write-wins follows `seq` and not `at`, using two events written inside one clock
@@ -119,8 +119,8 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   Storage. The storage root is the directory holding the database. An attached image is copied
   to `<root>/blobs/<sha256>`, so the same image is stored once however often it is attached. The
   evidence payload carries the hash, the original file name, the byte length, and the media
-  type. `--db` becomes optional and defaults to `$XDG_DATA_HOME/helm-proto/helm.db`. The
-  prototype root is `helm-proto` and never `helm`, so it cannot collide with the data directory
+  type. `--db` becomes optional and defaults to `$XDG_DATA_HOME/aidos-proto/aidos.db`. The
+  prototype root is `aidos-proto` and never `aidos`, so it cannot collide with the data directory
   Ticket C1 defines. A backup is a copy of the root.
   **Evaluate:** you use it for a working session without dropping to SQL. Every refusal names
   what is missing. A screenshot attaches, persists, and displays after a restart. Opening the
@@ -144,12 +144,12 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 
 ---
 
-## Phase 2: helm core — `pending`
+## Phase 2: aidos core — `pending`
 
 **Goal.** The ticket kernel in Rust, with no HTTP and no agent yet.
 
 - [ ] **Ticket C1: Workspace and data directory.** Cargo workspace. Data under
-  `$XDG_DATA_HOME/helm`. Config loading, including from a git URL. Project registry keyed by
+  `$XDG_DATA_HOME/aidos`. Config loading, including from a git URL. Project registry keyed by
   absolute path, with the `move` command.
   **Evaluate:** a first run creates the data directory and an empty database. `move` repoints a
   project and a later session opens in the new path. A config git URL clones, and a second run
@@ -177,7 +177,7 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 
 ## Phase 3: HTTP and agent loop — `pending`
 
-**Goal.** helm talks to a model and to a browser.
+**Goal.** aidos talks to a model and to a browser.
 
 - [ ] **Ticket A1: HTTP and WebSocket.** `poem`. A WebSocket carries the agent-to-client
   protocol. `ts-rs` exports every wire type to TypeScript as a build step. Optional shared token
@@ -315,7 +315,7 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   session is deleted or when you clear it.
   **Evaluate:** the agent creates a workspace, writes per-item subdirectories, builds a
   dashboard over them, and your comments and screenshots land as evidence. The workspace
-  survives a helm restart. Clearing removes it from disk and from the database.
+  survives an aidos restart. Clearing removes it from disk and from the database.
 
 ---
 
@@ -326,7 +326,7 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   in-process or in a child process before Phase 5 starts. `boa_engine` is the pure-Rust fallback
   and loses a memory cap, host-async await, and value-level serde.
 - **rig ships no HTTP transport.** The bridge from its in-process stream to the WebSocket is
-  helm's own code and its own bug surface. Ticket A2 owns it.
+  aidos's own code and its own bug surface. Ticket A2 owns it.
 - **Broad allow patterns reopen the shell bypass.** Ask-by-default is the real control, not the
   pattern list. Ticket A4's bypass suite is the check on this and should be written first.
 - **Providers are not uniformly OpenAI compatible.** Translate through rig's provider layer.
@@ -341,7 +341,7 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   rejects, or scores a command. Only worth doing once Ticket A4's bypass suite exists to score
   against.
 - A skill that explores a command-line tool and helps you author a gate pattern for it.
-- A `customize-helm` skill mirroring `customize-opencode`.
+- A `customize-aidos` skill mirroring `customize-opencode`.
 - Multi-person LAN identity. Deferred by decision, not by oversight. Retrofitting it touches
   every write path that stamps an author.
 

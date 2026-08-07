@@ -2,7 +2,7 @@
 
 import unittest
 
-from helm_proto.store import UnknownKind
+from aidos_proto.store import UnknownKind
 from tests.helpers import make_store
 
 

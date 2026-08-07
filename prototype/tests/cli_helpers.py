@@ -1,6 +1,6 @@
 """Shared helpers for the CLI tests, and the CLI specification itself.
 
-The module helm_proto.cli does not exist yet. The test modules test_20 upward
+The module aidos_proto.cli does not exist yet. The test modules test_20 upward
 define it. Read this docstring first. It records every flag spelling and every
 output rule that those tests assume. Where the brief fixed a spelling, this
 docstring repeats it. Where the brief left a spelling open, this docstring
@@ -9,7 +9,7 @@ fixes it.
 Invocation
 ----------
 
-    python3 -m helm_proto.cli --db PATH SUBCOMMAND [FLAGS]
+    python3 -m aidos_proto.cli --db PATH SUBCOMMAND [FLAGS]
 
 The global flag --db PATH comes before the subcommand. The CLI creates the
 database file if the file is absent.
@@ -181,7 +181,7 @@ import sys
 import tempfile
 import unittest
 
-from helm_proto.store import Store
+from aidos_proto.store import Store
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -276,7 +276,7 @@ class CliTestCase(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.db_path = os.path.join(self.tmp.name, "helm.sqlite")
+        self.db_path = os.path.join(self.tmp.name, "aidos.sqlite")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -289,7 +289,7 @@ class CliTestCase(unittest.TestCase):
         The command runs from the repository root, so the real entry point and
         the real exit code are under test.
         """
-        argv = [sys.executable, "-m", "helm_proto.cli",
+        argv = [sys.executable, "-m", "aidos_proto.cli",
                 "--db", db or self.db_path]
         argv.extend(args)
         env = dict(os.environ)
@@ -301,7 +301,7 @@ class CliTestCase(unittest.TestCase):
         result = CliResult(proc.returncode, proc.stdout, proc.stderr)
         if "No module named" in result.stderr:
             self.fail(
-                "helm_proto.cli does not exist yet. Python said: %s"
+                "aidos_proto.cli does not exist yet. Python said: %s"
                 % result.stderr.strip())
         return result
 

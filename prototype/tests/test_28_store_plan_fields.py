@@ -1,15 +1,15 @@
 """Item 28. The store holds the plan fields of a ticket, and it holds phases.
 
-These tests cover the change to helm_proto/store.py that the CLI needs. They
+These tests cover the change to aidos_proto/store.py that the CLI needs. They
 pass now, because the store is real code. Every other module from test_20
-upward fails until helm_proto/cli.py exists.
+upward fails until aidos_proto/cli.py exists.
 """
 
 import os
 import tempfile
 import unittest
 
-from helm_proto.store import Store
+from aidos_proto.store import Store
 from tests.helpers import make_store
 
 
