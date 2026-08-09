@@ -22,10 +22,15 @@ class LifecycleWithHumanHalfBlockedTest(CliTestCase):
                     "--to", "in_progress")
 
     def reach_awaiting_verification(self):
-        """Take the ticket to awaiting_verification with an automated check."""
+        """Take the ticket to awaiting_verification.
+
+        The second gate needs a check and a review. The CLI may author both,
+        so the agent walks this step alone.
+        """
         self.reach_in_progress()
-        self.run_ok("attach-evidence", "--ticket", str(self.ticket),
-                    "--kind", "builtin:automated_check")
+        for kind_id in ("builtin:automated_check", "builtin:review_pass"):
+            self.run_ok("attach-evidence", "--ticket", str(self.ticket),
+                        "--kind", kind_id)
         self.run_ok("move-ticket", "--ticket", str(self.ticket),
                     "--to", "awaiting_verification")
 
@@ -58,6 +63,8 @@ class LifecycleWithHumanHalfBlockedTest(CliTestCase):
 
     def test_27_the_automated_check_is_needed_for_the_second_move(self):
         self.reach_in_progress()
+        self.run_ok("attach-evidence", "--ticket", str(self.ticket),
+                    "--kind", "builtin:review_pass")
         payload = self.run_fail(
             "move-ticket", "--ticket", str(self.ticket),
             "--to", "awaiting_verification")

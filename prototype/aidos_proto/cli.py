@@ -36,6 +36,10 @@ BUILTIN_KINDS = {
         "Test run", "A test run and its result.", 1.0),
     "builtin:review_note": (
         "Review note", "A remark from a review.", 0.5),
+    "builtin:review_pass": (
+        "Review pass",
+        "A reviewer read the change and reported findings.",
+        1.0),
     "builtin:imported_state": (
         "Imported state",
         "The state that a plan document claimed at import time.",
@@ -46,7 +50,8 @@ BUILTIN_KINDS = {
 DEFAULT_GATES = {
     ("open", "in_progress"): (["builtin:user_signoff"], ["user", "agent"]),
     ("in_progress", "awaiting_verification"): (
-        ["builtin:automated_check"], ["user", "agent"]),
+        ["builtin:automated_check", "builtin:review_pass"],
+        ["user", "agent"]),
     ("awaiting_verification", "done"): (["builtin:user_verified"], ["user"]),
     ("awaiting_verification", "in_progress"): ([], ["user"]),
 }

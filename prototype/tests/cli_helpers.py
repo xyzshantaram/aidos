@@ -199,6 +199,10 @@ BUILTIN_KINDS = {
         "Test run", "A test run and its result.", 1.0),
     "builtin:review_note": (
         "Review note", "A remark from a review.", 0.5),
+    "builtin:review_pass": (
+        "Review pass",
+        "A reviewer read the change and reported findings.",
+        1.0),
     "builtin:imported_state": (
         "Imported state",
         "The state that a plan document claimed at import time.",
@@ -220,7 +224,8 @@ STATE_MARKS = {
 DEFAULT_GATES = {
     ("open", "in_progress"): (["builtin:user_signoff"], ["user", "agent"]),
     ("in_progress", "awaiting_verification"): (
-        ["builtin:automated_check"], ["user", "agent"]),
+        ["builtin:automated_check", "builtin:review_pass"],
+        ["user", "agent"]),
     ("awaiting_verification", "done"): (["builtin:user_verified"], ["user"]),
     ("awaiting_verification", "in_progress"): ([], ["user"]),
 }
@@ -234,6 +239,7 @@ AGENT_KINDS = [
     "builtin:after_shot",
     "builtin:test_run",
     "builtin:review_note",
+    "builtin:review_pass",
     "builtin:imported_state",
 ]
 
@@ -402,23 +408,25 @@ class CliTestCase(unittest.TestCase):
         The board acts as the user, so it passes every gate that a human may
         pass. The CLI has no path to the last step.
         """
+        to_in_progress = (["builtin:user_signoff"], "in_progress")
+        to_awaiting = (
+            ["builtin:automated_check", "builtin:review_pass"],
+            "awaiting_verification")
         steps = {
             "open": [],
-            "in_progress": [
-                ("builtin:user_signoff", "in_progress")],
-            "awaiting_verification": [
-                ("builtin:user_signoff", "in_progress"),
-                ("builtin:automated_check", "awaiting_verification")],
+            "in_progress": [to_in_progress],
+            "awaiting_verification": [to_in_progress, to_awaiting],
             "done": [
-                ("builtin:user_signoff", "in_progress"),
-                ("builtin:automated_check", "awaiting_verification"),
-                ("builtin:user_verified", "done")],
+                to_in_progress,
+                to_awaiting,
+                (["builtin:user_verified"], "done")],
         }
         store = self.read_store(db=db)
         try:
-            for kind_id, to_state in steps[state]:
-                store.attach_evidence(
-                    ticket_id, kind_id, {"ok": True}, actor="user")
+            for kind_ids, to_state in steps[state]:
+                for kind_id in kind_ids:
+                    store.attach_evidence(
+                        ticket_id, kind_id, {"ok": True}, actor="user")
                 store.move_ticket(ticket_id, to_state, actor="user")
         finally:
             store.close()
