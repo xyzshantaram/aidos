@@ -4,8 +4,14 @@ This file is a bootstrap artifact with a scheduled death. Phase 1 builds a throw
 board. That board then imports this plan, and this file is deleted. Everything after Phase 1
 lives in the board, not here.
 
-Split of work: the plan and the Phase 1 prototype are written for you. You build aidos itself,
-from Phase 2 onward.
+How the work is split: you own the architecture and the verification, and the agent writes the
+implementation. The thinking happens up front, in long design sessions, so that the agent can
+keep working between checkpoints instead of stopping for every small decision. Gates carry the
+review in between.
+
+Every user-facing document follows ASD-STE100 Simplified Technical English as closely as the
+subject allows. That covers the README, the help text, error messages, and anything the agent
+writes for a person to read.
 
 **Evaluation criteria below are a first draft.** None has your signoff yet. Under aidos's own
 rules a ticket cannot leave `open` without one, so treat every criterion here as a proposal to
@@ -69,6 +75,23 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   read the kind off the command flags, but `plan import` writes an evidence kind and has no
   such flag, so that path raised a second error inside the error handler and printed the
   traceback the contract forbids. Fixed, and `test_29` now fails without the fix.
+
+- [ ] **Ticket P8: A review is its own evidence kind.** Register `builtin:review_pass`, labelled
+  "Review pass", described as "A reviewer read the change and reported findings", weight 1.0.
+  Add it to the gate from `in_progress` to `awaiting_verification`, beside
+  `builtin:automated_check`. A passing test suite says nothing about dead code, a duplicated
+  helper, or scope that grew. A review says nothing about whether the thing runs. Those are two
+  claims, so they are two kinds.
+  `builtin:review_note` stays as it is, weight 0.5, for a single remark. The new kind means the
+  pass finished. The agent attaches it, so this adds no step for you. Under Ticket A5 the
+  orchestrator attaches it and the subagent's report is the payload.
+  A limit worth recording rather than hiding: the agent writes this row itself, so the gate
+  cannot tell a real review from an empty claim. What it buys is that a missing review becomes a
+  refusal naming a missing kind, instead of an absence nobody notices. That is the difference
+  between a rule and a habit, and it is smaller than it sounds.
+  **Evaluate:** a ticket with a passing check and no review is refused, and the refusal names
+  `builtin:review_pass`. The same ticket moves once the review row exists. The number of gates a
+  human must satisfy is unchanged, so the change costs you nothing at the keyboard.
 
 - [ ] **Ticket P7: SQL views own every derived read.** Ordered before Ticket P4, and numbered
   after it so that no committed ticket id changes meaning. The in-memory projection goes away.
@@ -135,6 +158,21 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   **Evaluate:** a hand-written node tree renders, and its form submission appears as an evidence
   row on the right ticket with the right author. An unknown node kind renders an error node
   rather than crashing the board.
+
+- [ ] **Ticket P9: Evidence names the criterion it covers.** Depends on Ticket P4. Criteria stay
+  one freeform text field on the ticket. Nothing splits them into rows, because enumerating them
+  would be a chore on every ticket. Instead an evidence payload may carry the text of the
+  criterion it addresses, and the board groups the evidence list by criterion and shows which
+  ones nothing covers yet.
+  This is the half that makes work hard to miss. A gate asks whether a kind is present. It
+  cannot ask whether the work is finished, because one `builtin:automated_check` row satisfies
+  the gate whether it exercised six criteria or none.
+  Advisory, like the confidence score. No gate reads coverage, and an uncovered criterion blocks
+  nothing. The board makes it visible and you decide what it means.
+  **Evaluate:** a ticket with three criteria and evidence naming two shows the third as
+  uncovered. Evidence naming no criterion still attaches and still counts toward its gate. A
+  criterion reworded after evidence was attached leaves that evidence visible as uncovered
+  rather than dropping it silently.
 
 - [ ] **Ticket P6: Import this plan and delete this file.** Split PLAN.md into tickets by its
   YAML frontmatter and headings. Load the context and rules sections.

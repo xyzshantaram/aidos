@@ -9,6 +9,16 @@ required proof exists. You sign off at both ends.
 
 **Nothing is built yet. This repository holds the plan. See PLAN.md.**
 
+## The name
+
+Aidos is a Greek word for the sense of respect that keeps people honest with each other. In
+Plato's *Protagoras*, Zeus sends Hermes to hand out aidos and dike, respect and justice. Hermes
+asks whether to give them to a few experts, the way crafts are given out. Zeus says everyone
+gets them, because a city cannot hold together otherwise.
+
+That is the idea here. The rules apply to both sides. The agent cannot mark its own work done,
+and nothing reaches `done` without you, so you cannot drop out of the loop either.
+
 ## The problem
 
 An agent left alone drifts. It widens scope, drops half-finished work, and reports success it
