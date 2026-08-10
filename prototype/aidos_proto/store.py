@@ -5,6 +5,239 @@ import sqlite3
 import time
 
 
+# ---- SQL views over the log ----
+# Each view mirrors one projection attribute. A later change can swap a
+# view in for the in-memory copy without renaming any field.
+
+_SQL_V_KINDS = """
+CREATE VIEW IF NOT EXISTS v_kinds AS
+SELECT json_extract(c.body,'$.kind_id') AS kind_id,
+       (SELECT json_extract(u.body,'$.label')
+          FROM events u
+         WHERE json_extract(u.body,'$.kind_id') =
+               json_extract(c.body,'$.kind_id')
+           AND json_extract(u.body,'$.type') IN
+               ('kind.registered','kind.weight_set')
+           AND json_extract(u.body,'$.label') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS label,
+       (SELECT json_extract(u.body,'$.description')
+          FROM events u
+         WHERE json_extract(u.body,'$.kind_id') =
+               json_extract(c.body,'$.kind_id')
+           AND json_extract(u.body,'$.type') IN
+               ('kind.registered','kind.weight_set')
+           AND json_extract(u.body,'$.description') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS description,
+       (SELECT json_extract(u.body,'$.weight')
+          FROM events u
+         WHERE json_extract(u.body,'$.kind_id') =
+               json_extract(c.body,'$.kind_id')
+           AND json_extract(u.body,'$.type') IN
+               ('kind.registered','kind.weight_set')
+           AND json_extract(u.body,'$.weight') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS weight
+  FROM events c
+ WHERE json_extract(c.body,'$.type') IN
+       ('kind.registered','kind.weight_set')
+ GROUP BY json_extract(c.body,'$.kind_id')
+"""
+
+_SQL_V_GATES = """
+CREATE VIEW IF NOT EXISTS v_gates AS
+SELECT json_extract(c.body,'$.from_state') AS from_state,
+       json_extract(c.body,'$.to_state') AS to_state,
+       json_extract(c.body,'$.required_kinds') AS required_kinds,
+       json_extract(c.body,'$.allowed_actors') AS allowed_actors
+  FROM events c
+ WHERE json_extract(c.body,'$.type') = 'gate.set'
+   AND c.seq = (SELECT MAX(u.seq)
+                  FROM events u
+                 WHERE json_extract(u.body,'$.type') = 'gate.set'
+                   AND json_extract(u.body,'$.from_state') =
+                       json_extract(c.body,'$.from_state')
+                   AND json_extract(u.body,'$.to_state') =
+                       json_extract(c.body,'$.to_state'))
+"""
+
+_SQL_V_PROJECTS = """
+CREATE VIEW IF NOT EXISTS v_projects AS
+SELECT json_extract(c.body,'$.project_id') AS project_id,
+       (SELECT json_extract(u.body,'$.abs_path')
+          FROM events u
+         WHERE json_extract(u.body,'$.project_id') =
+               json_extract(c.body,'$.project_id')
+           AND json_extract(u.body,'$.type') IN
+               ('project.created','project.moved')
+           AND json_extract(u.body,'$.abs_path') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS abs_path,
+       (SELECT json_extract(u.body,'$.name')
+          FROM events u
+         WHERE json_extract(u.body,'$.project_id') =
+               json_extract(c.body,'$.project_id')
+           AND json_extract(u.body,'$.type') IN
+               ('project.created','project.moved')
+           AND json_extract(u.body,'$.name') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS name
+  FROM events c
+ WHERE json_extract(c.body,'$.type') = 'project.created'
+"""
+
+_SQL_V_PHASES = """
+CREATE VIEW IF NOT EXISTS v_phases AS
+SELECT json_extract(c.body,'$.project_id') AS project_id,
+       json_extract(c.body,'$.number') AS number,
+       COALESCE((SELECT json_extract(u.body,'$.title')
+                   FROM events u
+                  WHERE json_extract(u.body,'$.project_id') =
+                        json_extract(c.body,'$.project_id')
+                    AND json_extract(u.body,'$.number') =
+                        json_extract(c.body,'$.number')
+                    AND json_extract(u.body,'$.type') = 'phase.set'
+                    AND json_extract(u.body,'$.title') IS NOT NULL
+                  ORDER BY u.seq DESC
+                  LIMIT 1), '') AS title,
+       COALESCE((SELECT json_extract(u.body,'$.state')
+                   FROM events u
+                  WHERE json_extract(u.body,'$.project_id') =
+                        json_extract(c.body,'$.project_id')
+                    AND json_extract(u.body,'$.number') =
+                        json_extract(c.body,'$.number')
+                    AND json_extract(u.body,'$.type') = 'phase.set'
+                    AND json_extract(u.body,'$.state') IS NOT NULL
+                  ORDER BY u.seq DESC
+                  LIMIT 1), 'open') AS state
+  FROM events c
+ WHERE json_extract(c.body,'$.type') = 'phase.set'
+ GROUP BY json_extract(c.body,'$.project_id'),
+          json_extract(c.body,'$.number')
+"""
+
+_SQL_V_PLAN_META = """
+CREATE VIEW IF NOT EXISTS v_plan_meta AS
+SELECT json_extract(c.body,'$.project_id') AS project_id,
+       COALESCE((SELECT json_extract(u.body,'$.frontmatter')
+                   FROM events u
+                  WHERE json_extract(u.body,'$.project_id') =
+                        json_extract(c.body,'$.project_id')
+                    AND json_extract(u.body,'$.type') =
+                        'plan.meta_set'
+                    AND json_extract(u.body,'$.frontmatter')
+                        IS NOT NULL
+                  ORDER BY u.seq DESC
+                  LIMIT 1), '') AS frontmatter,
+       COALESCE((SELECT json_extract(u.body,'$.preamble')
+                   FROM events u
+                  WHERE json_extract(u.body,'$.project_id') =
+                        json_extract(c.body,'$.project_id')
+                    AND json_extract(u.body,'$.type') =
+                        'plan.meta_set'
+                    AND json_extract(u.body,'$.preamble')
+                        IS NOT NULL
+                  ORDER BY u.seq DESC
+                  LIMIT 1), '') AS preamble,
+       COALESCE((SELECT json_extract(u.body,'$.context_sections')
+                   FROM events u
+                  WHERE json_extract(u.body,'$.project_id') =
+                        json_extract(c.body,'$.project_id')
+                    AND json_extract(u.body,'$.type') =
+                        'plan.meta_set'
+                    AND json_extract(u.body,'$.context_sections')
+                        IS NOT NULL
+                  ORDER BY u.seq DESC
+                  LIMIT 1), '[]') AS context_sections
+  FROM events c
+ WHERE json_extract(c.body,'$.type') = 'plan.meta_set'
+ GROUP BY json_extract(c.body,'$.project_id')
+"""
+
+_SQL_V_TICKETS = """
+CREATE VIEW IF NOT EXISTS v_tickets AS
+SELECT json_extract(c.body,'$.ticket_id') AS ticket_id,
+       json_extract(c.body,'$.project_id') AS project_id,
+       (SELECT json_extract(u.body,'$.title')
+          FROM events u
+         WHERE json_extract(u.body,'$.ticket_id') =
+               json_extract(c.body,'$.ticket_id')
+           AND json_extract(u.body,'$.type') IN
+               ('ticket.created','ticket.set')
+           AND json_extract(u.body,'$.title') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS title,
+       (SELECT json_extract(u.body,'$.description')
+          FROM events u
+         WHERE json_extract(u.body,'$.ticket_id') =
+               json_extract(c.body,'$.ticket_id')
+           AND json_extract(u.body,'$.type') IN
+               ('ticket.created','ticket.set')
+           AND json_extract(u.body,'$.description') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS description,
+       (SELECT json_extract(u.body,'$.body')
+          FROM events u
+         WHERE json_extract(u.body,'$.ticket_id') =
+               json_extract(c.body,'$.ticket_id')
+           AND json_extract(u.body,'$.type') IN
+               ('ticket.created','ticket.set')
+           AND json_extract(u.body,'$.body') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS body,
+       (SELECT json_extract(u.body,'$.criteria')
+          FROM events u
+         WHERE json_extract(u.body,'$.ticket_id') =
+               json_extract(c.body,'$.ticket_id')
+           AND json_extract(u.body,'$.type') IN
+               ('ticket.created','ticket.set')
+           AND json_extract(u.body,'$.criteria') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS criteria,
+       (SELECT json_extract(u.body,'$.phase')
+          FROM events u
+         WHERE json_extract(u.body,'$.ticket_id') =
+               json_extract(c.body,'$.ticket_id')
+           AND json_extract(u.body,'$.type') IN
+               ('ticket.created','ticket.set')
+           AND json_extract(u.body,'$.phase') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS phase,
+       (SELECT json_extract(u.body,'$.order')
+          FROM events u
+         WHERE json_extract(u.body,'$.ticket_id') =
+               json_extract(c.body,'$.ticket_id')
+           AND json_extract(u.body,'$.type') IN
+               ('ticket.created','ticket.set')
+           AND json_extract(u.body,'$.order') IS NOT NULL
+         ORDER BY u.seq DESC
+         LIMIT 1) AS "order",
+       COALESCE((SELECT json_extract(u.body,'$.to_state')
+                   FROM events u
+                  WHERE json_extract(u.body,'$.ticket_id') =
+                        json_extract(c.body,'$.ticket_id')
+                    AND json_extract(u.body,'$.type') = 'ticket.moved'
+                  ORDER BY u.seq DESC
+                  LIMIT 1), 'open') AS state
+  FROM events c
+ WHERE json_extract(c.body,'$.type') = 'ticket.created'
+"""
+
+_SQL_V_EVIDENCE = """
+CREATE VIEW IF NOT EXISTS v_evidence AS
+SELECT json_extract(c.body,'$.ticket_id') AS ticket_id,
+       json_extract(c.body,'$.kind_id') AS kind_id,
+       json_extract(c.body,'$.payload') AS payload,
+       json_extract(c.body,'$.actor') AS author,
+       json_extract(c.body,'$.at') AS created_at,
+       c.seq AS seq
+  FROM events c
+ WHERE json_extract(c.body,'$.type') = 'evidence.attached'
+ ORDER BY c.seq
+"""
+
+
 class GateRefused(Exception):
     """Raised when a transition is refused by its gate."""
 
@@ -135,6 +368,12 @@ class Store:
             "CREATE TABLE IF NOT EXISTS events ("
             "seq INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)"
         )
+        # The views read the derived state without replaying the log in
+        # Python. Each one mirrors one projection attribute.
+        for sql in (_SQL_V_KINDS, _SQL_V_GATES, _SQL_V_PROJECTS,
+                    _SQL_V_PHASES, _SQL_V_PLAN_META, _SQL_V_TICKETS,
+                    _SQL_V_EVIDENCE):
+            self.db.execute(sql)
         self.rebuild_projection()
 
     def close(self):
