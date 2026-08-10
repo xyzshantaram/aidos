@@ -391,11 +391,11 @@ class Store:
 
     def _next_order(self, project_id, phase):
         """Return the next free position in one phase, counted from 1."""
-        used = [
-            ticket["order"] for ticket in self.tickets.values()
-            if ticket["project_id"] == project_id and ticket["phase"] == phase
-        ]
-        return max(used) + 1 if used else 1
+        row = self.db.execute(
+            'SELECT COALESCE(MAX("order"), 0) + 1 FROM v_tickets'
+            ' WHERE project_id = ? AND phase = ?',
+            (project_id, phase)).fetchone()
+        return row[0]
 
     def _apply_event(self, fields):
         """Apply one log record to the projection. Refusals change nothing."""
@@ -506,7 +506,10 @@ class Store:
 
     def set_kind_weight(self, kind_id, weight):
         """Change the weight of a kind. One audit record is appended."""
-        if kind_id not in self.kinds:
+        row = self.db.execute(
+            "SELECT 1 FROM v_kinds WHERE kind_id = ?",
+            (kind_id,)).fetchone()
+        if row is None:
             raise UnknownKind(kind_id)
         fields = {
             "type": "kind.weight_set",
@@ -535,7 +538,10 @@ class Store:
     # ---- projects ----
 
     def create_project(self, abs_path, name):
-        pid = self._next_project_id
+        row = self.db.execute(
+            "SELECT COALESCE(MAX(project_id), 0) + 1 FROM v_projects"
+        ).fetchone()
+        pid = row[0]
         fields = {
             "type": "project.created",
             "project_id": pid,
@@ -560,7 +566,13 @@ class Store:
         self._apply_event(fields)
 
     def get_project(self, project_id):
-        return self.projects[project_id]
+        row = self.db.execute(
+            "SELECT abs_path, name FROM v_projects"
+            " WHERE project_id = ?", (project_id,)).fetchone()
+        if row is None:
+            raise KeyError(project_id)
+        abs_path, name = row
+        return {"id": project_id, "abs_path": abs_path, "name": name}
 
     # ---- phases ----
 
@@ -571,7 +583,10 @@ class Store:
         A new phase starts with an empty title and the state "open". The phase
         state is a label for the plan document. No gate reads it.
         """
-        if project_id not in self.projects:
+        row = self.db.execute(
+            "SELECT 1 FROM v_projects WHERE project_id = ?",
+            (project_id,)).fetchone()
+        if row is None:
             raise KeyError(project_id)
         fields = {
             "type": "phase.set",
@@ -588,7 +603,15 @@ class Store:
         self._apply_event(fields)
 
     def get_phase(self, project_id, number):
-        return self.phases[(project_id, number)]
+        row = self.db.execute(
+            "SELECT title, state FROM v_phases"
+            " WHERE project_id = ? AND number = ?",
+            (project_id, number)).fetchone()
+        if row is None:
+            raise KeyError((project_id, number))
+        title, state = row
+        return {"project_id": project_id, "number": number,
+                "title": title, "state": state}
 
     # ---- plan meta ----
 
@@ -600,7 +623,10 @@ class Store:
         text, and an index. The index counts the phases that come before the
         section, so an export can put the section back in its place.
         """
-        if project_id not in self.projects:
+        row = self.db.execute(
+            "SELECT 1 FROM v_projects WHERE project_id = ?",
+            (project_id,)).fetchone()
+        if row is None:
             raise KeyError(project_id)
         fields = {
             "type": "plan.meta_set",
@@ -630,30 +656,45 @@ class Store:
         A project that never held a plan document gives an empty frontmatter,
         an empty preamble, and no context section.
         """
-        meta = self.plan_meta.get(project_id)
-        if meta is None:
+        row = self.db.execute(
+            "SELECT frontmatter, preamble, context_sections"
+            " FROM v_plan_meta WHERE project_id = ?",
+            (project_id,)).fetchone()
+        if row is None:
             return {"frontmatter": "", "preamble": "", "context_sections": []}
+        frontmatter, preamble, context_sections = row
         return {
-            "frontmatter": meta["frontmatter"],
-            "preamble": meta["preamble"],
+            "frontmatter": frontmatter,
+            "preamble": preamble,
             "context_sections": [dict(section)
-                                 for section in meta["context_sections"]],
+                                 for section in json.loads(context_sections)],
         }
 
     def phases_for(self, project_id):
         """Return every phase of one project, sorted by phase number."""
+        rows = self.db.execute(
+            "SELECT number, title, state FROM v_phases"
+            " WHERE project_id = ? ORDER BY number",
+            (project_id,)).fetchall()
         return [
-            phase for key, phase in sorted(self.phases.items())
-            if key[0] == project_id
+            {"project_id": project_id, "number": number,
+             "title": title, "state": state}
+            for number, title, state in rows
         ]
 
     # ---- tickets ----
 
     def create_ticket(self, project_id, title, description, *, actor="user",
                       body="", criteria="", phase=1, order=None):
-        if project_id not in self.projects:
+        row = self.db.execute(
+            "SELECT 1 FROM v_projects WHERE project_id = ?",
+            (project_id,)).fetchone()
+        if row is None:
             raise KeyError(project_id)
-        tid = self._next_ticket_id
+        row = self.db.execute(
+            "SELECT COALESCE(MAX(ticket_id), 0) + 1 FROM v_tickets"
+        ).fetchone()
+        tid = row[0]
         if order is None:
             order = self._next_order(project_id, phase)
         fields = {
@@ -691,12 +732,44 @@ class Store:
         self._apply_event(fields)
 
     def get_ticket(self, ticket_id):
-        return self.tickets[ticket_id]
+        row = self.db.execute(
+            'SELECT project_id, title, description, body, criteria, phase,'
+            ' "order", state FROM v_tickets WHERE ticket_id = ?',
+            (ticket_id,)).fetchone()
+        if row is None:
+            raise KeyError(ticket_id)
+        (project_id, title, description, body, criteria,
+         phase, order, state) = row
+        # A record written before the plan fields existed holds no body,
+        # criteria, phase, or order, so the view returns NULL for each one.
+        # Fall back to the defaults that replay used.
+        if body is None:
+            body = ""
+        if criteria is None:
+            criteria = ""
+        if phase is None:
+            phase = 1
+        if order is None:
+            order = self._next_order(project_id, phase)
+        return {
+            "id": ticket_id,
+            "project_id": project_id,
+            "title": title,
+            "description": description,
+            "body": body,
+            "criteria": criteria,
+            "phase": phase,
+            "order": order,
+            "state": state,
+        }
 
     # ---- evidence ----
 
     def attach_evidence(self, ticket_id, kind_id, payload, *, actor="user"):
-        if kind_id not in self.kinds:
+        row = self.db.execute(
+            "SELECT 1 FROM v_kinds WHERE kind_id = ?",
+            (kind_id,)).fetchone()
+        if row is None:
             raise UnknownKind(kind_id)
         fields = {
             "type": "evidence.attached",
@@ -710,27 +783,44 @@ class Store:
         self._apply_event(fields)
 
     def evidence_for(self, ticket_id):
-        return list(self.evidence.get(ticket_id, []))
+        rows = self.db.execute(
+            "SELECT kind_id, payload, author, created_at FROM v_evidence"
+            " WHERE ticket_id = ?", (ticket_id,)).fetchall()
+        return [
+            {"kind_id": kind_id,
+             "payload": json.loads(payload),
+             "author": author,
+             "created_at": created_at}
+            for kind_id, payload, author, created_at in rows
+        ]
 
     def confidence_score(self, ticket_id):
         """Sum one weight per kind per distinct author. Advisory only."""
+        weights = dict(self.db.execute(
+            "SELECT kind_id, weight FROM v_kinds").fetchall())
         total = 0.0
         counted = set()
-        for row in self.evidence.get(ticket_id, []):
-            key = (row["kind_id"], row["author"])
+        rows = self.db.execute(
+            "SELECT kind_id, author FROM v_evidence"
+            " WHERE ticket_id = ?", (ticket_id,)).fetchall()
+        for kind_id, author in rows:
+            key = (kind_id, author)
             if key in counted:
                 continue
             counted.add(key)
-            total += self.kinds[row["kind_id"]][2]
+            total += weights[kind_id]
         return total
 
     # ---- transitions ----
 
     def move_ticket(self, ticket_id, to_state, *, actor="user"):
-        ticket = self.tickets[ticket_id]
+        ticket = self.get_ticket(ticket_id)
         from_state = ticket["state"]
-        gate = self.gates.get((from_state, to_state))
-        if gate is None:
+        row = self.db.execute(
+            "SELECT required_kinds, allowed_actors FROM v_gates"
+            " WHERE from_state = ? AND to_state = ?",
+            (from_state, to_state)).fetchone()
+        if row is None:
             self._append({
                 "type": "ticket.move_refused",
                 "ticket_id": ticket_id,
@@ -741,8 +831,12 @@ class Store:
                 "reason": "no gate configured for this transition",
             })
             raise GateRefused([], [], from_state, to_state, actor, no_gate=True)
-        required_kinds, allowed_actors = gate
-        attached = {row["kind_id"] for row in self.evidence.get(ticket_id, [])}
+        required_kinds = json.loads(row[0])
+        allowed_actors = json.loads(row[1])
+        kinds = self.db.execute(
+            "SELECT DISTINCT kind_id FROM v_evidence"
+            " WHERE ticket_id = ?", (ticket_id,)).fetchall()
+        attached = {kind_id for (kind_id,) in kinds}
         missing = [kind for kind in required_kinds if kind not in attached]
         if actor not in allowed_actors or missing:
             reason = self._refusal_reason(missing, allowed_actors)
