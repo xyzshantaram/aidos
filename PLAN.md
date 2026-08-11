@@ -136,6 +136,29 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   A page of twenty returns exactly twenty rows and the correct total count. Sorting by score and
   sorting by gate fraction produce different orders on a fixture built to separate them.
 
+- [ ] **Ticket P10: Tests use the real builtin kinds.** Depends on Ticket P7, so the rename does
+  not churn tests that Ticket P7 rewrites. `tests/helpers.py` registers its own kind list and
+  calls the ids `builtin:`. That list is not the real registry. It is a second and contradicting
+  claim about what the builtins are. `builtin:after_shot` carries weight 1.0 there and weight
+  0.5 in `cli.py`, and weight drives `confidence_score`. `builtin:user_signoff` and
+  `builtin:review_pass` disagree on their description. Four more ids exist only in the fixture:
+  `builtin:agent_report`, `builtin:comment`, `builtin:eval_criteria`, `builtin:file_allowlist`.
+  Nothing has broken yet, because store tests never load the CLI registry. That is luck, not
+  design.
+  The builtin registry becomes one definition that both the CLI and the tests read. It does not
+  belong in `cli.py`, because the store sits below the CLI and must not import upward. Move it
+  into the library beside the store.
+  The mirror in `tests/cli_helpers.py` stays duplicated on purpose. It restates the registry so
+  a test can catch an unintended change. A test that imported the constant would assert that a
+  value equals itself.
+  One complication to settle rather than paper over: four fixture ids have no real counterpart,
+  so the tests that use them must move to real kinds. `builtin:comment` becomes real in Ticket
+  P4, and criteria evidence is Ticket P9's subject, so some of these may be worth registering
+  rather than deleting. Decide per id. Do not invent a kind to keep an old test compiling.
+  **Evaluate:** no test registers a kind id that the real registry does not hold, and no id
+  carries a label, description, or weight that differs from it. A test asserts that agreement,
+  so later drift fails the suite instead of passing quietly. The full suite passes.
+
 - [ ] **Ticket P4: Board.** Depends on Ticket P7. tkinter, split in two. `board_model.py`
   imports no tkinter and holds every decision: paging maths, the project filter, the sort order,
   what a card shows, which moves are offered, and the exact refusal text. `board.py` builds
@@ -188,6 +211,23 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   uncovered. Evidence naming no criterion still attaches and still counts toward its gate. A
   criterion reworded after evidence was attached leaves that evidence visible as uncovered
   rather than dropping it silently.
+
+- [ ] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
+  shape that the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
+  special rules, Human review queue, and an optional Benchmarking section. That shape is
+  cleaner, and it guides the writer instead of leaving the layout open.
+  This changes the tool, not this document. Do not restyle PLAN.md to match. This file is
+  deleted by Ticket P6, so rewriting it buys nothing.
+  The open question is phases. `plan.py` special-cases `## Phase N` headings and gives each
+  phase a number, a title, and a state. The skill has one flat checklist and no phases. Decide
+  whether aidos keeps phases as a first-class field, or treats them as ordinary sections and
+  lets ticket order carry the sequence. Settle this before Ticket P6 runs, because P6 imports
+  into whichever shape wins.
+  A related decision that is now settled: importing a ticket in a state other than `open` does
+  not need to be exercised by this file. Test coverage of `claimed_state` is enough, so the
+  choice of shape is not constrained by dogfooding.
+  **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
+  heading parses without error. The round-trip tests cover the new shape, not only the old one.
 
 - [ ] **Ticket P6: Import this plan and delete this file.** Split PLAN.md into tickets by its
   YAML frontmatter and headings. Load the context and rules sections.
