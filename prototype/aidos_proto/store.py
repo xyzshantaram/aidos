@@ -238,6 +238,69 @@ SELECT json_extract(c.body,'$.ticket_id') AS ticket_id,
 """
 
 
+# ---- tickets page ----
+# STATE_ORDER defines the forward transitions of a ticket. Each state
+# hands on to the next one. The last state has no successor, so a
+# ticket in it has no forward gate and no fraction.
+
+STATE_ORDER = ("open", "in_progress", "awaiting_verification", "done")
+
+
+def _next_state_sql(indent):
+    """Return a SQL CASE that maps a ticket state to its successor.
+
+    The arms come from STATE_ORDER, so the order is written once and
+    the SQL cannot drift from it. The last state matches no arm, so
+    the CASE yields NULL and the caller reads that as no forward gate.
+    """
+    pad = " " * indent
+    arms = "\n".join(
+        "%sWHEN '%s' THEN '%s'" % (pad, state, following)
+        for state, following in zip(STATE_ORDER, STATE_ORDER[1:]))
+    return "CASE t.state\n%s\n%sEND" % (arms, pad)
+
+_SQL_SCORE = """
+COALESCE((SELECT SUM(k.weight)
+            FROM (SELECT DISTINCT ev.kind_id, ev.author
+                    FROM v_evidence ev
+                   WHERE ev.ticket_id = t.ticket_id) AS de
+            JOIN v_kinds k ON k.kind_id = de.kind_id), 0.0)
+"""
+
+_SQL_GATE_FRACTION = """
+CASE
+  WHEN NOT EXISTS (SELECT 1 FROM v_gates g
+                    WHERE g.from_state = t.state
+                      AND g.to_state = __NEXT_STATE__) THEN NULL
+  ELSE (SELECT CASE
+                  WHEN COALESCE(json_array_length(g.required_kinds), 0) = 0
+                    THEN 1.0
+                  ELSE CAST((SELECT COUNT(*)
+                               FROM json_each(g.required_kinds) req
+                              WHERE EXISTS (SELECT 1
+                                              FROM v_evidence ev
+                                             WHERE ev.ticket_id =
+                                                   t.ticket_id
+                                               AND ev.kind_id =
+                                                   req.value))
+                        AS REAL)
+                       / COALESCE(json_array_length(g.required_kinds), 0)
+               END
+          FROM v_gates g
+         WHERE g.from_state = t.state
+           AND g.to_state = __NEXT_STATE__)
+END
+""".replace("__NEXT_STATE__", _next_state_sql(22))
+
+_SORT_COLUMNS = {
+    "id": ("ticket_id",),
+    "title": ("title",),
+    "phase": ("phase", '"order"'),
+    "score": ("score",),
+    "gate_fraction": ("gate_fraction",),
+}
+
+
 class GateRefused(Exception):
     """Raised when a transition is refused by its gate."""
 
@@ -731,6 +794,25 @@ class Store:
         self._append(fields)
         self._apply_event(fields)
 
+    def _fill_ticket_defaults(self, project_id, body, criteria, phase,
+                              order):
+        """Return the plan fields with the defaults replay used.
+
+        A ticket record written before the plan fields existed carries
+        no body, criteria, phase or order, so v_tickets gives NULL for
+        each one. Both the single read and the paged read need the
+        same defaults, so they live here only.
+        """
+        if body is None:
+            body = ""
+        if criteria is None:
+            criteria = ""
+        if phase is None:
+            phase = 1
+        if order is None:
+            order = self._next_order(project_id, phase)
+        return body, criteria, phase, order
+
     def get_ticket(self, ticket_id):
         row = self.db.execute(
             'SELECT project_id, title, description, body, criteria, phase,'
@@ -740,17 +822,8 @@ class Store:
             raise KeyError(ticket_id)
         (project_id, title, description, body, criteria,
          phase, order, state) = row
-        # A record written before the plan fields existed holds no body,
-        # criteria, phase, or order, so the view returns NULL for each one.
-        # Fall back to the defaults that replay used.
-        if body is None:
-            body = ""
-        if criteria is None:
-            criteria = ""
-        if phase is None:
-            phase = 1
-        if order is None:
-            order = self._next_order(project_id, phase)
+        body, criteria, phase, order = self._fill_ticket_defaults(
+            project_id, body, criteria, phase, order)
         return {
             "id": ticket_id,
             "project_id": project_id,
@@ -762,6 +835,57 @@ class Store:
             "order": order,
             "state": state,
         }
+
+    def tickets_page(self, *, project_id=None, sort="id",
+                     descending=False, limit=20, offset=0):
+        """Return one page of ticket rows plus the total count.
+
+        The rows carry every field of get_ticket plus a score and a
+        gate_fraction. The total counts matching tickets before limit
+        and offset apply.
+        """
+        columns = _SORT_COLUMNS.get(sort)
+        if columns is None:
+            raise ValueError("unknown sort key: %r" % (sort,))
+        params = []
+        where = ""
+        if project_id is not None:
+            where = " WHERE t.project_id = ?"
+            params.append(project_id)
+        direction = " DESC" if descending else ""
+        order_by = ", ".join("%s%s" % (col, direction)
+                             for col in columns)
+        sql = (
+            'SELECT t.ticket_id, t.project_id, t.title, t.description,'
+            ' t.body, t.criteria, t.phase, t."order", t.state,'
+            ' ' + _SQL_SCORE + ' AS score,'
+            ' ' + _SQL_GATE_FRACTION + ' AS gate_fraction'
+            ' FROM v_tickets t' + where + ' ORDER BY ' + order_by
+            + ', ticket_id LIMIT ? OFFSET ?'
+        )
+        rows = self.db.execute(sql, params + [limit, offset]).fetchall()
+        total = self.db.execute(
+            "SELECT COUNT(*) FROM v_tickets t" + where,
+            params).fetchone()[0]
+        page = []
+        for (ticket_id, owner_id, title, description, body, criteria,
+             phase, order, state, score, gate_fraction) in rows:
+            body, criteria, phase, order = self._fill_ticket_defaults(
+                owner_id, body, criteria, phase, order)
+            page.append({
+                "id": ticket_id,
+                "project_id": owner_id,
+                "title": title,
+                "description": description,
+                "body": body,
+                "criteria": criteria,
+                "phase": phase,
+                "order": order,
+                "state": state,
+                "score": score,
+                "gate_fraction": gate_fraction,
+            })
+        return page, total
 
     # ---- evidence ----
 
