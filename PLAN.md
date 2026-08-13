@@ -112,12 +112,12 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   the assertions that check them. That was avoidable. The projection stays alive while the views
   are proven equal to it on a fixture, so the rewrite is checked against something it did not
   write. The projection dies last, once it has already done that job.
-  Views, the read swap, and the paged read are done. What is left:
-  - **Unit 4a.** Rewrite the assertions in `tests/test_31_views_match_projection.py` to explicit
-    expected values, while the projection still exists to confirm the two agree. Those tests
-    compare views against `store.tickets` today, so deleting the projection would leave them
-    comparing against nothing. Doing this first carries the proven equivalence forward. Doing it
-    second loses it, which is exactly the failure this ticket first walked into.
+  Views, the read swap, the paged read, and Unit 4a are done. Unit 4a rewrote every assertion in
+  `tests/test_31_views_match_projection.py` to a hand-derived expected value, while the projection
+  still existed to confirm the two agree. That carries the proven equivalence forward instead of
+  losing it, which is exactly the failure this ticket first walked into. `created_at` stayed
+  non-literal, because `time.time()` is not reproducible; the test pins row order on `seq` and
+  asserts only that `created_at` does not fall. What is left:
   - **Unit 4b.** Delete the projection attributes and `rebuild_projection`. Move the nine call
     sites in `cli.py`, the two in `tests/cli_helpers.py`, and the six `rebuild_projection` calls
     in tests. Two reopen tests lean on `__init__` rebuilding and need rewriting.

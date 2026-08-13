@@ -1,9 +1,10 @@
-"""Item 31. SQL views over the log match the in-memory projection.
+"""Item 31. SQL views over the log match hand-written expected values.
 
-The in-memory projection is the oracle. Each view must return exactly
-what the projection holds, so one can replace the other without renaming
-any field. The fixture drives every event type a view reads. The
-refused move writes a log record that must change no view.
+Each assertion compares one view to a literal value derived by hand
+from the fixture events and the view SQL. The projection still exists,
+but no assertion reads it, because a later unit deletes it. The fixture
+drives every event type a view reads. The refused move writes a log
+record that must change no view.
 """
 
 import json
@@ -61,11 +62,23 @@ class ViewsMatchProjectionTest(unittest.TestCase):
         rows = self.store.db.execute(
             "SELECT kind_id, label, description, weight FROM v_kinds"
             " ORDER BY kind_id").fetchall()
-        self.assertEqual(
-            rows,
-            [(kind_id, label, description, weight)
-             for kind_id, (label, description, weight)
-             in sorted(self.store.kinds.items())])
+        self.assertEqual(rows, [
+            ("builtin:after_shot", "After shot",
+             "The state after the work.", 1.0),
+            ("builtin:agent_report", "Agent report",
+             "The agent describes the work.", 1.0),
+            ("builtin:comment", "Comment", "A remark on the ticket.", 0.5),
+            ("builtin:eval_criteria", "Evaluation criteria",
+             "The criteria to judge the work.", 1.0),
+            ("builtin:file_allowlist", "File allowlist",
+             "The files the change may touch.", 1.0),
+            ("builtin:review_pass", "Review pass",
+             "A human review passed.", 1.0),
+            ("builtin:user_signoff", "User signoff",
+             "The human confirms the work.", 1.0),
+            ("kind_a", "Kind A", "The first kind.", 3.0),
+            ("kind_b", "Kind B", "The second kind.", 2.0),
+        ])
 
         rows = self.store.db.execute(
             "SELECT from_state, to_state, required_kinds,"
@@ -75,27 +88,24 @@ class ViewsMatchProjectionTest(unittest.TestCase):
             [(from_state, to_state, json.loads(required),
               json.loads(allowed))
              for from_state, to_state, required, allowed in rows],
-            [(from_state, to_state, required, allowed)
-             for (from_state, to_state), (required, allowed)
-             in sorted(self.store.gates.items())])
+            [("open", "review", ["kind_a", "kind_b"], ["user", "agent"]),
+             ("review", "done", ["kind_a"], ["user"])])
 
         rows = self.store.db.execute(
             "SELECT project_id, abs_path, name FROM v_projects"
             " ORDER BY project_id").fetchall()
-        self.assertEqual(
-            rows,
-            [(project_id, project["abs_path"], project["name"])
-             for project_id, project
-             in sorted(self.store.projects.items())])
+        self.assertEqual(rows, [
+            (1, "/srv/a2", "Alpha"),
+            (2, "/srv/b", "Beta"),
+        ])
 
         rows = self.store.db.execute(
             "SELECT project_id, number, title, state FROM v_phases"
             " ORDER BY project_id, number").fetchall()
-        self.assertEqual(
-            rows,
-            [(project_id, number, phase["title"], phase["state"])
-             for (project_id, number), phase
-             in sorted(self.store.phases.items())])
+        self.assertEqual(rows, [
+            (1, 1, "Groundwork", "done"),
+            (2, 2, "Build", "open"),
+        ])
 
         rows = self.store.db.execute(
             "SELECT project_id, frontmatter, preamble, context_sections"
@@ -105,37 +115,41 @@ class ViewsMatchProjectionTest(unittest.TestCase):
               json.loads(context_sections))
              for project_id, frontmatter, preamble, context_sections
              in rows],
-            [(project_id, meta["frontmatter"], meta["preamble"],
-              meta["context_sections"])
-             for project_id, meta
-             in sorted(self.store.plan_meta.items())])
+            [(1, "# Front", "Intro",
+              [{"heading": "H1", "text": "T1", "index": 0}])])
 
         rows = self.store.db.execute(
             'SELECT ticket_id, project_id, title, description, body,'
             ' criteria, phase, "order", state FROM v_tickets'
             ' ORDER BY ticket_id').fetchall()
-        self.assertEqual(
-            rows,
-            [(ticket["id"], ticket["project_id"], ticket["title"],
-              ticket["description"], ticket["body"], ticket["criteria"],
-              ticket["phase"], ticket["order"], ticket["state"])
-             for ticket_id, ticket
-             in sorted(self.store.tickets.items())])
+        self.assertEqual(rows, [
+            (1, 1, "Renamed one", "First desc.", "New body.",
+             "A new rule.", 2, 1, "done"),
+            (2, 1, "Ticket two", "Second desc.", "", "", 1, 2, "open"),
+            (3, 2, "Ticket three", "Third desc.", "A body.",
+             "A rule.", 1, 1, "open"),
+        ])
 
         rows = self.store.db.execute(
             "SELECT ticket_id, kind_id, payload, author, created_at,"
             " seq FROM v_evidence ORDER BY seq").fetchall()
-        by_ticket = {}
-        for row in rows:
-            by_ticket.setdefault(row[0], []).append(row)
-        self.assertEqual(set(by_ticket), set(self.store.evidence))
-        for ticket_id, view_rows in by_ticket.items():
-            self.assertEqual(
-                [(json.loads(row[2]), row[3], row[4])
-                 for row in view_rows],
-                [(evidence["payload"], evidence["author"],
-                  evidence["created_at"])
-                 for evidence in self.store.evidence[ticket_id]])
+        self.assertEqual(
+            [(ticket_id, kind_id, json.loads(payload), author, seq)
+             for ticket_id, kind_id, payload, author, created_at, seq
+             in rows],
+            [(1, "kind_a", {"note": "one"}, "user", 27),
+             (1, "kind_b", {"note": "two"}, "user", 28),
+             (1, "kind_a", {"note": "three"}, "agent", 29)])
+        # created_at comes from time.time(), so it cannot be a literal.
+        # Two calls can share one clock tick, so the values must not fall,
+        # not necessarily rise.
+        created_at = [row[4] for row in rows]
+        self.assertTrue(
+            all(isinstance(at, float) for at in created_at),
+            "created_at must be a wall-clock float")
+        self.assertEqual(
+            created_at, sorted(created_at),
+            "created_at must not fall as seq rises")
 
 
 class SeqOrderingTest(unittest.TestCase):
@@ -178,7 +192,6 @@ class SeqOrderingTest(unittest.TestCase):
             "SELECT weight FROM v_kinds WHERE kind_id = 'seqkind'"
         ).fetchone()
         self.assertEqual(row[0], 9.0)
-        self.assertEqual(store.kinds["seqkind"][2], 9.0)
 
 
 class LegacyTicketDefaultsTest(unittest.TestCase):
@@ -188,7 +201,7 @@ class LegacyTicketDefaultsTest(unittest.TestCase):
     body, criteria, phase or order. The view returns NULL for each one
     and get_ticket supplies the default in Python. That fallback sits
     outside the view, so test_31 above does not reach it. These tests
-    hold it against the projection while the projection still exists.
+    assert the fallback against explicit expected dicts.
     """
 
     def _legacy_store(self, modern_first):
@@ -217,19 +230,44 @@ class LegacyTicketDefaultsTest(unittest.TestCase):
         store.rebuild_projection()
         return store
 
-    def _assert_matches_projection(self, store, ticket_id):
-        self.assertEqual(
-            store.get_ticket(ticket_id), store.tickets[ticket_id])
-
-    def test_31_legacy_ticket_defaults_match_the_projection(self):
+    def test_31_legacy_defaults_fill_the_missing_fields(self):
         store = self._legacy_store(modern_first=False)
-        self._assert_matches_projection(store, 1)
+        self.assertEqual(store.get_ticket(1), {
+            "id": 1,
+            "project_id": 1,
+            "title": "Legacy",
+            "description": "A desc.",
+            "body": "",
+            "criteria": "",
+            "phase": 1,
+            "order": 1,
+            "state": "open",
+        })
 
     def test_31_legacy_defaults_step_past_an_existing_order(self):
         store = self._legacy_store(modern_first=True)
-        self._assert_matches_projection(store, 1)
-        self._assert_matches_projection(store, 2)
-        self.assertEqual(store.get_ticket(2)["order"], 2)
+        self.assertEqual(store.get_ticket(1), {
+            "id": 1,
+            "project_id": 1,
+            "title": "Modern",
+            "description": "A desc.",
+            "body": "",
+            "criteria": "",
+            "phase": 1,
+            "order": 1,
+            "state": "open",
+        })
+        self.assertEqual(store.get_ticket(2), {
+            "id": 2,
+            "project_id": 1,
+            "title": "Legacy",
+            "description": "A desc.",
+            "body": "",
+            "criteria": "",
+            "phase": 1,
+            "order": 2,
+            "state": "open",
+        })
 
 
 if __name__ == "__main__":
