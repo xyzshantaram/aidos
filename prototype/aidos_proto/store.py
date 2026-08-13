@@ -292,13 +292,28 @@ CASE
 END
 """.replace("__NEXT_STATE__", _next_state_sql(22))
 
+# A legacy ticket has a NULL phase and order in v_tickets. The caller
+# sees the filled defaults instead, so each sort key below sorts on the
+# same values the caller sees: a NULL phase counts as phase 1 and a
+# NULL order sorts after every real order in its phase group.
 _SORT_COLUMNS = {
     "id": ("ticket_id",),
     "title": ("title",),
-    "phase": ("phase", '"order"'),
+    "phase": ("COALESCE(phase, 1)",
+              'CASE WHEN "order" IS NULL THEN 1 ELSE 0 END', '"order"'),
     "score": ("score",),
     "gate_fraction": ("gate_fraction",),
 }
+
+# The columns Store._ticket_dict takes, in the order it takes them. Three
+# reads select them, so the order lives here once.
+_TICKET_COLUMNS = ("ticket_id", "project_id", "title", "description",
+                   "body", "criteria", "phase", '"order"', "state")
+
+
+def _ticket_columns(prefix=""):
+    """Return the ticket column list, with an optional table prefix."""
+    return ", ".join(prefix + name for name in _TICKET_COLUMNS)
 
 
 class GateRefused(Exception):
@@ -423,9 +438,10 @@ class Event:
 
 
 class Store:
-    """An append-only ticket store with a derived projection."""
+    """An append-only ticket store. Every read comes from SQL views."""
 
     def __init__(self, path):
+        self.path = path
         self.db = sqlite3.connect(path)
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS events ("
@@ -437,7 +453,6 @@ class Store:
                     _SQL_V_PHASES, _SQL_V_PLAN_META, _SQL_V_TICKETS,
                     _SQL_V_EVIDENCE):
             self.db.execute(sql)
-        self.rebuild_projection()
 
     def close(self):
         """Release the database connection."""
@@ -460,97 +475,6 @@ class Store:
             (project_id, phase)).fetchone()
         return row[0]
 
-    def _apply_event(self, fields):
-        """Apply one log record to the projection. Refusals change nothing."""
-        t = fields["type"]
-        if t == "kind.registered":
-            self.kinds[fields["kind_id"]] = (
-                fields["label"], fields["description"], fields["weight"]
-            )
-        elif t == "kind.weight_set":
-            if fields["kind_id"] in self.kinds:
-                label, description, _ = self.kinds[fields["kind_id"]]
-                self.kinds[fields["kind_id"]] = (
-                    label, description, fields["weight"]
-                )
-        elif t == "gate.set":
-            self.gates[(fields["from_state"], fields["to_state"])] = (
-                list(fields["required_kinds"]), list(fields["allowed_actors"])
-            )
-        elif t == "project.created":
-            pid = fields["project_id"]
-            self.projects[pid] = {
-                "id": pid,
-                "abs_path": fields["abs_path"],
-                "name": fields["name"],
-            }
-            if pid >= self._next_project_id:
-                self._next_project_id = pid + 1
-        elif t == "project.moved":
-            self.projects[fields["project_id"]]["abs_path"] = fields["abs_path"]
-        elif t == "phase.set":
-            key = (fields["project_id"], fields["number"])
-            phase = self.phases.get(key)
-            if phase is None:
-                phase = {
-                    "project_id": fields["project_id"],
-                    "number": fields["number"],
-                    "title": "",
-                    "state": "open",
-                }
-                self.phases[key] = phase
-            for name in ("title", "state"):
-                if name in fields:
-                    phase[name] = fields[name]
-        elif t == "plan.meta_set":
-            meta = self.plan_meta.get(fields["project_id"])
-            if meta is None:
-                meta = {
-                    "frontmatter": "",
-                    "preamble": "",
-                    "context_sections": [],
-                }
-                self.plan_meta[fields["project_id"]] = meta
-            for name in ("frontmatter", "preamble", "context_sections"):
-                if name in fields:
-                    meta[name] = fields[name]
-        elif t == "ticket.created":
-            tid = fields["ticket_id"]
-            # A record written before the plan fields existed holds no phase,
-            # body, criteria, or order. Each one falls back to its default so
-            # that an old log still replays.
-            phase = fields.get("phase", 1)
-            self.tickets[tid] = {
-                "id": tid,
-                "project_id": fields["project_id"],
-                "title": fields["title"],
-                "description": fields["description"],
-                "body": fields.get("body", ""),
-                "criteria": fields.get("criteria", ""),
-                "phase": phase,
-                "order": fields.get(
-                    "order", self._next_order(fields["project_id"], phase)),
-                "state": "open",
-            }
-            if tid >= self._next_ticket_id:
-                self._next_ticket_id = tid + 1
-        elif t == "ticket.set":
-            ticket = self.tickets[fields["ticket_id"]]
-            for name in ("title", "description", "body", "criteria",
-                         "phase", "order"):
-                if name in fields:
-                    ticket[name] = fields[name]
-        elif t == "ticket.moved":
-            self.tickets[fields["ticket_id"]]["state"] = fields["to_state"]
-        elif t == "evidence.attached":
-            self.evidence.setdefault(fields["ticket_id"], []).append({
-                "kind_id": fields["kind_id"],
-                "payload": fields["payload"],
-                "author": fields["actor"],
-                "created_at": fields["at"],
-            })
-        # ticket.move_refused carries no state change. Ignore it.
-
     # ---- registry ----
 
     def register_kind(self, kind_id, human_label, description, weight):
@@ -565,7 +489,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
 
     def set_kind_weight(self, kind_id, weight):
         """Change the weight of a kind. One audit record is appended."""
@@ -582,7 +505,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
 
     def set_gate(self, from_state, to_state, required_kinds, allowed_actors):
         """Set the gate for one exact state pair. One audit record is appended."""
@@ -596,7 +518,25 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
+
+    def kinds(self):
+        """Return the kind registry as a map from kind id to its tuple."""
+        rows = self.db.execute(
+            "SELECT kind_id, label, description, weight FROM v_kinds"
+        ).fetchall()
+        return {kind_id: (label, description, weight)
+                for kind_id, label, description, weight in rows}
+
+    def gates(self):
+        """Return the gate registry as a map from state pair to its tuple."""
+        rows = self.db.execute(
+            "SELECT from_state, to_state, required_kinds, allowed_actors"
+            " FROM v_gates").fetchall()
+        return {
+            (from_state, to_state): (
+                json.loads(required_kinds), json.loads(allowed_actors))
+            for from_state, to_state, required_kinds, allowed_actors in rows
+        }
 
     # ---- projects ----
 
@@ -614,7 +554,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
         return pid
 
     def move_project(self, project_id, new_abs_path):
@@ -626,7 +565,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
 
     def get_project(self, project_id):
         row = self.db.execute(
@@ -636,6 +574,26 @@ class Store:
             raise KeyError(project_id)
         abs_path, name = row
         return {"id": project_id, "abs_path": abs_path, "name": name}
+
+    def projects(self):
+        """Return every project as a map from project id to its dict."""
+        rows = self.db.execute(
+            "SELECT project_id, abs_path, name FROM v_projects"
+            " ORDER BY project_id").fetchall()
+        return {
+            project_id: {"id": project_id, "abs_path": abs_path,
+                         "name": name}
+            for project_id, abs_path, name in rows
+        }
+
+    def find_project(self, abs_path):
+        """Return the id of the project at one path, or None."""
+        row = self.db.execute(
+            "SELECT project_id FROM v_projects WHERE abs_path = ?"
+            " ORDER BY project_id LIMIT 1", (abs_path,)).fetchone()
+        if row is None:
+            return None
+        return row[0]
 
     # ---- phases ----
 
@@ -663,7 +621,6 @@ class Store:
         if state is not None:
             fields["state"] = state
         self._append(fields)
-        self._apply_event(fields)
 
     def get_phase(self, project_id, number):
         row = self.db.execute(
@@ -711,7 +668,6 @@ class Store:
                 for section in context_sections
             ]
         self._append(fields)
-        self._apply_event(fields)
 
     def get_plan_meta(self, project_id):
         """Return the plan meta of one project.
@@ -774,7 +730,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
         return tid
 
     def set_ticket(self, ticket_id, *, actor="user", title=None,
@@ -792,7 +747,6 @@ class Store:
             if value is not None:
                 fields[name] = value
         self._append(fields)
-        self._apply_event(fields)
 
     def _fill_ticket_defaults(self, project_id, body, criteria, phase,
                               order):
@@ -813,15 +767,14 @@ class Store:
             order = self._next_order(project_id, phase)
         return body, criteria, phase, order
 
-    def get_ticket(self, ticket_id):
-        row = self.db.execute(
-            'SELECT project_id, title, description, body, criteria, phase,'
-            ' "order", state FROM v_tickets WHERE ticket_id = ?',
-            (ticket_id,)).fetchone()
-        if row is None:
-            raise KeyError(ticket_id)
-        (project_id, title, description, body, criteria,
-         phase, order, state) = row
+    def _ticket_dict(self, ticket_id, project_id, title, description,
+                     body, criteria, phase, order, state):
+        """Return one ticket dict with the replay defaults applied.
+
+        get_ticket, tickets_for and tickets_page read the same nine
+        columns from v_tickets, so they all build the dict here. The
+        order of the keys matches the column order of the SELECT.
+        """
         body, criteria, phase, order = self._fill_ticket_defaults(
             project_id, body, criteria, phase, order)
         return {
@@ -835,6 +788,26 @@ class Store:
             "order": order,
             "state": state,
         }
+
+    def get_ticket(self, ticket_id):
+        row = self.db.execute(
+            'SELECT ' + _ticket_columns() + ' FROM v_tickets'
+            ' WHERE ticket_id = ?',
+            (ticket_id,)).fetchone()
+        if row is None:
+            raise KeyError(ticket_id)
+        return self._ticket_dict(*row)
+
+    def tickets_for(self, project_id):
+        """Return every ticket of one project, sorted by phase and order."""
+        rows = self.db.execute(
+            'SELECT ' + _ticket_columns() + ' FROM v_tickets'
+            ' WHERE project_id = ?'
+            ' ORDER BY COALESCE(phase, 1),'
+            ' CASE WHEN "order" IS NULL THEN 1 ELSE 0 END,'
+            ' "order", ticket_id',
+            (project_id,)).fetchall()
+        return [self._ticket_dict(*row) for row in rows]
 
     def tickets_page(self, *, project_id=None, sort="id",
                      descending=False, limit=20, offset=0):
@@ -856,8 +829,7 @@ class Store:
         order_by = ", ".join("%s%s" % (col, direction)
                              for col in columns)
         sql = (
-            'SELECT t.ticket_id, t.project_id, t.title, t.description,'
-            ' t.body, t.criteria, t.phase, t."order", t.state,'
+            'SELECT ' + _ticket_columns("t.") + ','
             ' ' + _SQL_SCORE + ' AS score,'
             ' ' + _SQL_GATE_FRACTION + ' AS gate_fraction'
             ' FROM v_tickets t' + where + ' ORDER BY ' + order_by
@@ -870,21 +842,12 @@ class Store:
         page = []
         for (ticket_id, owner_id, title, description, body, criteria,
              phase, order, state, score, gate_fraction) in rows:
-            body, criteria, phase, order = self._fill_ticket_defaults(
-                owner_id, body, criteria, phase, order)
-            page.append({
-                "id": ticket_id,
-                "project_id": owner_id,
-                "title": title,
-                "description": description,
-                "body": body,
-                "criteria": criteria,
-                "phase": phase,
-                "order": order,
-                "state": state,
-                "score": score,
-                "gate_fraction": gate_fraction,
-            })
+            ticket = self._ticket_dict(
+                ticket_id, owner_id, title, description, body, criteria,
+                phase, order, state)
+            ticket["score"] = score
+            ticket["gate_fraction"] = gate_fraction
+            page.append(ticket)
         return page, total
 
     # ---- evidence ----
@@ -904,7 +867,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
 
     def evidence_for(self, ticket_id):
         rows = self.db.execute(
@@ -983,7 +945,6 @@ class Store:
             "at": time.time(),
         }
         self._append(fields)
-        self._apply_event(fields)
 
     @staticmethod
     def _refusal_reason(missing, allowed_actors):
@@ -994,23 +955,9 @@ class Store:
             parts.append("allowed actors: " + ", ".join(allowed_actors))
         return " ".join(parts)
 
-    # ---- log and projection ----
+    # ---- log ----
 
     def events(self):
         """Return the whole log as Event objects, oldest first."""
         rows = self.db.execute("SELECT body FROM events ORDER BY seq").fetchall()
         return [Event(json.loads(body)) for (body,) in rows]
-
-    def rebuild_projection(self):
-        """Drop the projection and rebuild it from the log alone."""
-        self.kinds = {}
-        self.gates = {}
-        self.projects = {}
-        self.phases = {}
-        self.plan_meta = {}
-        self.tickets = {}
-        self.evidence = {}
-        self._next_project_id = 1
-        self._next_ticket_id = 1
-        for event in self.events():
-            self._apply_event(event.fields)

@@ -1,14 +1,18 @@
 """Item 16. A refused move is logged as an audit record."""
 
+import os
+import tempfile
 import unittest
 
 from aidos_proto.store import GateRefused
-from tests.helpers import make_store
+from tests.helpers import make_store, reopen
 
 
 class RefusedMoveLogTest(unittest.TestCase):
     def setUp(self):
-        self.store = make_store()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmp.name, "store.sqlite")
+        self.store = make_store(path=self.db_path)
         self.store.set_gate(
             "open", "in_progress", ["builtin:user_signoff"], ["user"]
         )
@@ -22,6 +26,9 @@ class RefusedMoveLogTest(unittest.TestCase):
         self.ticket = self.store.create_ticket(
             self.project, "T", "d", actor="user"
         )
+
+    def tearDown(self):
+        self.tmp.cleanup()
 
     def test_16_refused_move_appends_exactly_one_record(self):
         before = len(self.store.events())
@@ -67,7 +74,7 @@ class RefusedMoveLogTest(unittest.TestCase):
         score_before = self.store.confidence_score(self.ticket)
         log_before = self.store.events()
 
-        self.store.rebuild_projection()
+        self.store = reopen(self.store)
 
         self.assertEqual(self.store.get_ticket(self.ticket), ticket_before)
         self.assertEqual(self.store.evidence_for(self.ticket), rows_before)

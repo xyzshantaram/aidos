@@ -93,7 +93,10 @@ class TicketsPageTest(unittest.TestCase):
     def test_32_walking_offsets_visits_every_ticket_once(self):
         """Moving the offset covers the whole set with no duplicate."""
         store = self._store_with_tickets(7)
-        ids = sorted(store.tickets)
+        ids = sorted(
+            ticket["id"]
+            for project_id in store.projects()
+            for ticket in store.tickets_for(project_id))
         collected = []
         offset = 0
         while len(collected) < len(ids):
@@ -101,6 +104,29 @@ class TicketsPageTest(unittest.TestCase):
             collected.extend(row["id"] for row in page)
             offset += 3
         self.assertEqual(sorted(collected), ids)
+
+    def test_32_legacy_rows_sort_with_the_filled_defaults(self):
+        """A legacy ticket sorts by the phase and order it reports."""
+        store = make_store()
+        project = store.create_project("/srv/proj/legacy", "legacy")
+        store.create_ticket(project, "Modern A", "One.", phase=1, order=1)
+        store.create_ticket(project, "Modern B", "Two.", phase=2, order=1)
+        store._append({
+            "type": "ticket.created",
+            "ticket_id": 3,
+            "project_id": project,
+            "title": "Legacy",
+            "description": "A desc.",
+            "actor": "user",
+            "at": 1.0,
+        })
+        expected = [1, 3, 2]
+        self.assertEqual(
+            [ticket["id"] for ticket in store.tickets_for(project)],
+            expected)
+        self.assertEqual(
+            [row["id"] for row in store.tickets_page(sort="phase")[0]],
+            expected)
 
     def test_32_an_unknown_sort_key_is_refused(self):
         """An unknown sort key raises ValueError."""

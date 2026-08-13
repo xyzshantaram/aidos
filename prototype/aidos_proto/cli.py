@@ -84,7 +84,9 @@ class Refusal(Exception):
 
 def require_project(store, project_id):
     """Refuse a project id that the store does not hold."""
-    if project_id not in store.projects:
+    try:
+        store.get_project(project_id)
+    except KeyError:
         raise Refusal(
             "unknown_project", "no project with id %s" % project_id,
             project_id=project_id)
@@ -92,29 +94,12 @@ def require_project(store, project_id):
 
 def require_ticket(store, ticket_id):
     """Refuse a ticket id that the store does not hold. Return the ticket."""
-    if ticket_id not in store.tickets:
+    try:
+        return store.get_ticket(ticket_id)
+    except KeyError:
         raise Refusal(
             "unknown_ticket", "no ticket with id %s" % ticket_id,
             ticket_id=ticket_id)
-    return store.get_ticket(ticket_id)
-
-
-def find_project(store, abs_path):
-    """Return the id of the project at one path, or None."""
-    for project_id in sorted(store.projects):
-        if store.projects[project_id]["abs_path"] == abs_path:
-            return project_id
-    return None
-
-
-def tickets_of(store, project_id):
-    """Return every ticket of one project, sorted by phase and then order."""
-    rows = [
-        ticket for ticket in store.tickets.values()
-        if ticket["project_id"] == project_id
-    ]
-    rows.sort(key=lambda row: (row["phase"], row["order"], row["id"]))
-    return rows
 
 
 def ticket_view(ticket):
@@ -151,19 +136,21 @@ def handle_init(store, args):
     """Register the builtin kinds and the default gates, and hold a project."""
     abs_path = os.path.abspath(args.project_path or os.getcwd())
     name = args.project_name or os.path.basename(abs_path) or abs_path
+    kinds = store.kinds()
     for kind_id, (label, description, weight) in BUILTIN_KINDS.items():
-        if store.kinds.get(kind_id) != (label, description, weight):
+        if kinds.get(kind_id) != (label, description, weight):
             store.register_kind(kind_id, label, description, weight)
-    for (from_state, to_state), (kinds, actors) in DEFAULT_GATES.items():
-        if store.gates.get((from_state, to_state)) != (kinds, actors):
-            store.set_gate(from_state, to_state, kinds, actors)
-    project_id = find_project(store, abs_path)
+    gates = store.gates()
+    for (from_state, to_state), (gate_kinds, actors) in DEFAULT_GATES.items():
+        if gates.get((from_state, to_state)) != (gate_kinds, actors):
+            store.set_gate(from_state, to_state, gate_kinds, actors)
+    project_id = store.find_project(abs_path)
     if project_id is None:
         project_id = store.create_project(abs_path, name)
     return {
         "ok": True,
         "project_id": project_id,
-        "kinds": sorted(store.kinds),
+        "kinds": sorted(store.kinds()),
         "gates": [
             {
                 "from_state": from_state,
@@ -189,7 +176,9 @@ def handle_create_ticket(store, args):
 def create_ticket(store, project_id, title, body, criteria, phase,
                   phase_title, order=None):
     """Create one ticket, and create its phase when the phase is absent."""
-    if (project_id, phase) not in store.phases:
+    try:
+        store.get_phase(project_id, phase)
+    except KeyError:
         store.set_phase(
             project_id, phase, title=phase_title, state="open", actor=ACTOR)
     return store.create_ticket(
@@ -251,7 +240,7 @@ def handle_list(store, args):
     require_project(store, args.project)
     return {
         "ok": True,
-        "tickets": [ticket_view(row) for row in tickets_of(store, args.project)],
+        "tickets": [ticket_view(row) for row in store.tickets_for(args.project)],
     }
 
 
@@ -259,7 +248,7 @@ def handle_plan_export(store, args):
     """Return the plan document of one project as markdown."""
     require_project(store, args.project)
     meta = store.get_plan_meta(args.project)
-    rows = tickets_of(store, args.project)
+    rows = store.tickets_for(args.project)
     phases = []
     for phase in store.phases_for(args.project):
         phases.append({
@@ -297,7 +286,7 @@ def handle_plan_import(store, args):
             "file_not_read", "cannot read the plan file %s: %s"
             % (args.file, error.strerror), path=args.file) from error
     document = parse_plan(text)
-    if tickets_of(store, args.project):
+    if store.tickets_for(args.project):
         raise Refusal(
             "project_not_empty",
             "project %s already holds a ticket, and an import loads a whole "

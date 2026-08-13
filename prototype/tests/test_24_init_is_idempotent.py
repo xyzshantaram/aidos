@@ -22,7 +22,7 @@ class InitIsIdempotentTest(CliTestCase):
         store = self.read_store()
         try:
             return (kinds_snapshot(store), gates_snapshot(store),
-                    dict(store.projects))
+                    store.projects())
         finally:
             store.close()
 

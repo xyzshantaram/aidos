@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from aidos_proto.store import Store
-from tests.helpers import make_store
+from tests.helpers import make_store, reopen
 
 
 class TicketPlanFieldsTest(unittest.TestCase):
@@ -73,8 +73,15 @@ class TicketPlanFieldsTest(unittest.TestCase):
 class OldRecordReplayTest(unittest.TestCase):
     """A log written before the plan fields existed must still replay."""
 
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmp.name, "store.sqlite")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
     def test_28_an_old_ticket_record_replays_with_defaults(self):
-        store = make_store()
+        store = make_store(path=self.db_path)
         project = store.create_project("/srv/proj/old", "old")
         # The shape that create_ticket wrote before the plan fields existed.
         # The test uses the write path of the store, because no public method
@@ -88,7 +95,7 @@ class OldRecordReplayTest(unittest.TestCase):
             "actor": "user",
             "at": 0.0,
         })
-        store.rebuild_projection()
+        store = reopen(store)
 
         row = store.get_ticket(1)
         self.assertEqual(row["title"], "Old ticket")
@@ -100,7 +107,7 @@ class OldRecordReplayTest(unittest.TestCase):
         self.assertEqual(row["order"], 1)
 
     def test_28_an_old_update_record_replays(self):
-        store = make_store()
+        store = make_store(path=self.db_path)
         project = store.create_project("/srv/proj/old", "old")
         ticket = store.create_ticket(project, "T", "d", body="A body.")
         store._append({
@@ -110,7 +117,7 @@ class OldRecordReplayTest(unittest.TestCase):
             "actor": "user",
             "at": 0.0,
         })
-        store.rebuild_projection()
+        store = reopen(store)
 
         row = store.get_ticket(ticket)
         self.assertEqual(row["title"], "Renamed")

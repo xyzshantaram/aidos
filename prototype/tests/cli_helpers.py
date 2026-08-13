@@ -450,14 +450,14 @@ class CliTestCase(unittest.TestCase):
 
 def kinds_snapshot(store):
     """Return the kind registry as plain comparable data."""
-    return dict(store.kinds)
+    return dict(store.kinds())
 
 
 def gates_snapshot(store):
     """Return the gate registry with both lists sorted, so order is free."""
     return {
         pair: (sorted(kinds), sorted(actors))
-        for pair, (kinds, actors) in store.gates.items()
+        for pair, (kinds, actors) in store.gates().items()
     }
 
 

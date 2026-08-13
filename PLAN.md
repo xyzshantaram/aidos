@@ -117,10 +117,21 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   still existed to confirm the two agree. That carries the proven equivalence forward instead of
   losing it, which is exactly the failure this ticket first walked into. `created_at` stayed
   non-literal, because `time.time()` is not reproducible; the test pins row order on `seq` and
-  asserts only that `created_at` does not fall. What is left:
-  - **Unit 4b.** Delete the projection attributes and `rebuild_projection`. Move the nine call
-    sites in `cli.py`, the two in `tests/cli_helpers.py`, and the six `rebuild_projection` calls
-    in tests. Two reopen tests lean on `__init__` rebuilding and need rewriting.
+  asserts only that `created_at` does not fall.
+  **Built, awaiting your check.** Unit 4b deleted the projection attributes, `_apply_event` and
+  `rebuild_projection`, and moved every call site. `cli.py` lost two helpers that had become pure
+  delegation, and its three membership checks now catch `KeyError` from a read they already
+  needed. Four store methods replaced the attributes: `kinds`, `gates`, `projects` and
+  `tickets_for`, plus `find_project`, which pushes a path lookup into SQL. The five tests that
+  called `rebuild_projection` to prove state derives from the log now close the store and reopen
+  the file. Re-reading through a rebuilt projection was a real claim. Re-reading through a view is
+  a value compared with itself, so only a reopen keeps the claim honest.
+  Two defects came out of review, and the suite found neither. `tickets_for` sorted on the raw
+  view columns while `_fill_ticket_defaults` supplied the defaults afterwards, so a legacy record
+  with no phase and no order sorted ahead of every real row while reporting a filled order.
+  `_SORT_COLUMNS` had the same fault under the `phase` key. Both are fixed, and a test pins the
+  id order. Two smaller ones: the ticket dict was built in three places, and `helpers.reopen`
+  returned an empty store when the store was in memory. 135 tests pass.
   Tickets P1 and P2 stay `done`. This ticket supersedes the mechanism they describe, and it is
   recorded as a rework event in the benchmarking table, because the first contract never
   anticipated paged reads.
@@ -447,13 +458,23 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 - [ ] Ticket P7 paged read — decide whether the gate fraction is the number the board should
   sort on, before Ticket P4 builds a card around it. It counts only the forward transition, so
   a ticket in `done` shows nothing at all.
+- [ ] Ticket P7 legacy defaults — decide whether a ticket record that carries no order deserves a
+  stable one. `_fill_ticket_defaults` computes the default at read time, so the value climbs as
+  later tickets appear: a legacy row reported order 2, then order 3 once one more ticket existed.
+  The old projection fixed the value when it replayed the record. Reproducing that in SQL needs a
+  window function over earlier events. The path only matters for a log written before the plan
+  fields existed, so the real question is whether such a log is worth supporting at all.
+- [ ] Ticket P7 duplicate creation records — `v_projects` and `v_tickets` carry no `GROUP BY`,
+  unlike the other five views. Two `ticket.created` records sharing one id would return the
+  ticket twice, and the old projection collapsed them by last-write-wins. The store never writes
+  a duplicate, so this needs a hand-written log. Decide whether the views should defend anyway.
 
 ## Benchmarking
 
 | Metric | Count / Value | Notes |
 |---|---|---|
-| Verification catch rate | 7 / 19 | independent checks that caught a real discrepancy, vs. total checks performed. The reopen check found two defects the 29 passing tests missed. Reading the implementation found two more. For P3, five checks found one defect, and the one that found it was reading the finished code. P7 units 1 to 3 added four catches from ten checks, and all four came from reading the diff or from breaking the code on purpose: a seq-versus-`at` test that could not discriminate, a `STATE_ORDER` constant that nothing read while the same ordering sat hardcoded three times in SQL, an untested `awaiting_verification` to `done` gate, and a legacy-default block duplicated across two methods. Re-running suites again caught nothing, in any ticket so far. Reading code and deliberately breaking it are the checks that pay. |
+| Verification catch rate | 9 / 23 | independent checks that caught a real discrepancy, vs. total checks performed. The reopen check found two defects the 29 passing tests missed. Reading the implementation found two more. For P3, five checks found one defect, and the one that found it was reading the finished code. P7 units 1 to 3 added four catches from ten checks, and all four came from reading the diff or from breaking the code on purpose: a seq-versus-`at` test that could not discriminate, a `STATE_ORDER` constant that nothing read while the same ordering sat hardcoded three times in SQL, an untested `awaiting_verification` to `done` gate, and a legacy-default block duplicated across two methods. Re-running suites again caught nothing, in any ticket so far. Reading code and deliberately breaking it are the checks that pay. Unit 4b added two catches from four checks. One of them is the first dispatched review pass on this project, and it found a sort regression that the author missed and that a full read of the diff also missed. Reading the diff found three smaller faults of its own. The suite caught nothing again, and running the broken case by hand only confirmed what the review had already named. That is the case for Ticket P8 in one line: a review and a check are different claims, and here they disagreed. |
 | Escaped defect rate | 0 / 2 | bugs found after a ticket was marked `done`, vs. tickets closed. Both P1 defects were caught before the ticket closed, not after. P3 is not closed yet, so it does not count here. |
 | Rework/reopen rate | 5 rounds / 4 tickets | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. P3 needed one because my contract told import to preserve a `done` mark and also told the agent it could never reach `done`. Those two rules cannot both hold. A subagent found the conflict by writing tests against the contract, before any code existed. Grilling found none of the three. The fourth round is Ticket P7, which discards P1's in-memory projection entirely: my contract never asked how the board would read twenty tickets at a time, so it specified a structure that cannot paginate. Grilling the UI found it, one question in. The fifth round is Ticket P7 rescoping itself while being built: its contract asked for a comments view over an event type that does not exist, and it accepted up front that nothing would guard the rewrite. Both were found by reading the contract against the code before dispatching, not by grilling. |
-| Rough cost | 4 dispatches for P1+P2, 8 for P3, 7 for P7 units 1 to 3 | of P3's 8, three produced nothing: two `coder` dispatches returned empty without writing a file, and one `general` implementation dispatch timed out. The five that worked were a probe, a test-writing round, a contract revision, the plan parser, and the CLI. Splitting the implementation in two after the timeout is what got it finished. P7 spent 7: two `researcher` maps of the store and its call sites, and five `coder` runs. One `coder` run returned empty again, the same failure as P3, and splitting that unit into implementation and tests fixed it. Two research dispatches up front were worth it: they kept 550 lines of store code out of the main session while still yielding the exact call-site counts the ticket needed. |
+| Rough cost | 4 dispatches for P1+P2, 8 for P3, 11 for P7 | of P3's 8, three produced nothing: two `coder` dispatches returned empty without writing a file, and one `general` implementation dispatch timed out. The five that worked were a probe, a test-writing round, a contract revision, the plan parser, and the CLI. Splitting the implementation in two after the timeout is what got it finished. P7 spent 7: two `researcher` maps of the store and its call sites, and five `coder` runs. One `coder` run returned empty again, the same failure as P3, and splitting that unit into implementation and tests fixed it. Two research dispatches up front were worth it: they kept 550 lines of store code out of the main session while still yielding the exact call-site counts the ticket needed. Unit 4b spent the other four: implementation, tests, a review pass, and one fix round. Splitting implementation from tests before dispatching avoided the empty return that hit both P3 and an earlier P7 unit. |
 | Contract defects found before code | 2 | the import versus `done` conflict, and Ticket P7 asking for a comments view over an event type nothing writes. Writing tests against a contract, and reading a contract against the code it describes, are the only steps so far that have caught a contradiction rather than a bug. Both happened before any code was dispatched. |

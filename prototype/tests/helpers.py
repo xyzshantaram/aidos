@@ -13,9 +13,23 @@ DEFAULT_KINDS = [
 ]
 
 
-def make_store(kinds=DEFAULT_KINDS):
-    """Return a fresh in-memory store with the given kinds registered."""
-    store = Store(":memory:")
+def make_store(kinds=DEFAULT_KINDS, path=None):
+    """Return a fresh store with the given kinds registered.
+
+    A path of None gives an in-memory store. A real path gives a
+    file-backed store, which a reopen can read again.
+    """
+    store = Store(":memory:" if path is None else path)
     for kind_id, label, description, weight in kinds:
         store.register_kind(kind_id, label, description, weight)
     return store
+
+
+def reopen(store):
+    """Close a store and return a fresh one opened on the same path."""
+    path = store.path
+    if path == ":memory:":
+        raise ValueError(
+            "cannot reopen an in-memory store: give make_store a file path")
+    store.close()
+    return Store(path)

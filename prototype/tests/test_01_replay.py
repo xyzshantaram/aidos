@@ -1,17 +1,26 @@
-"""Item 1. Replay. Rebuild the projection and check the state is unchanged."""
+"""Item 1. Replay. The log alone carries the state after a reopen."""
 
+import os
+import tempfile
 import unittest
 
 from aidos_proto.store import GateRefused
-from tests.helpers import make_store
+from tests.helpers import make_store, reopen
 
 
 class ReplayTest(unittest.TestCase):
-    def test_01_replay_state_is_identical_after_rebuild(self):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmp.name, "store.sqlite")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_01_replay_state_is_identical_after_reopen(self):
         store = make_store([
             ("builtin:user_signoff", "User signoff", "The human signs off.", 1.0),
             ("builtin:agent_report", "Agent report", "The agent reports.", 1.0),
-        ])
+        ], path=self.db_path)
         store.set_kind_weight("builtin:user_signoff", 2.0)
         store.set_gate("open", "in_progress", ["builtin:user_signoff"], ["user"])
 
@@ -69,7 +78,7 @@ class ReplayTest(unittest.TestCase):
         self.assertEqual(tickets_before[ticket_two]["state"], "open")
         self.assertEqual(len(evidence_before[ticket_one]), 2)
 
-        store.rebuild_projection()
+        store = reopen(store)
 
         for ticket_id, ticket in tickets_before.items():
             self.assertEqual(store.get_ticket(ticket_id), ticket)

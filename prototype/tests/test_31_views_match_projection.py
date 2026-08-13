@@ -1,10 +1,9 @@
 """Item 31. SQL views over the log match hand-written expected values.
 
 Each assertion compares one view to a literal value derived by hand
-from the fixture events and the view SQL. The projection still exists,
-but no assertion reads it, because a later unit deletes it. The fixture
-drives every event type a view reads. The refused move writes a log
-record that must change no view.
+from the fixture events and the view SQL. The fixture drives every
+event type a view reads. The refused move writes a log record that
+must change no view.
 """
 
 import json
@@ -14,7 +13,7 @@ from aidos_proto.store import GateRefused, Store
 from tests.helpers import make_store
 
 
-class ViewsMatchProjectionTest(unittest.TestCase):
+class ViewsMatchExpectedValuesTest(unittest.TestCase):
     def setUp(self):
         self.store = self._fixture_store()
 
@@ -187,7 +186,6 @@ class SeqOrderingTest(unittest.TestCase):
                 "at": 123.0,
             }),))
         store.db.commit()
-        store.rebuild_projection()
         row = store.db.execute(
             "SELECT weight FROM v_kinds WHERE kind_id = 'seqkind'"
         ).fetchone()
@@ -227,7 +225,6 @@ class LegacyTicketDefaultsTest(unittest.TestCase):
                 "at": 1.0,
             }),))
         store.db.commit()
-        store.rebuild_projection()
         return store
 
     def test_31_legacy_defaults_fill_the_missing_fields(self):

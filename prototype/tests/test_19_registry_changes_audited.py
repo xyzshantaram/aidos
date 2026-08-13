@@ -1,14 +1,21 @@
 """Item 19. Registry changes are audited in the log."""
 
+import os
+import tempfile
 import unittest
 
 from aidos_proto.store import GateRefused
-from tests.helpers import make_store
+from tests.helpers import make_store, reopen
 
 
 class RegistryAuditTest(unittest.TestCase):
     def setUp(self):
-        self.store = make_store()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.tmp.name, "store.sqlite")
+        self.store = make_store(path=self.db_path)
+
+    def tearDown(self):
+        self.tmp.cleanup()
 
     def test_19_register_kind_is_audited(self):
         before = len(self.store.events())
@@ -65,7 +72,7 @@ class RegistryAuditTest(unittest.TestCase):
         scores_before = {ticket: store.confidence_score(ticket)}
         events_before = store.events()
 
-        store.rebuild_projection()
+        store = reopen(store)
 
         self.assertEqual(store.get_ticket(ticket), tickets_before[ticket])
         self.assertEqual(store.evidence_for(ticket), evidence_before[ticket])
