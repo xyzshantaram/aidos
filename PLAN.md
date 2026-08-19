@@ -84,7 +84,7 @@ design philosophy is the same one aidos was built around.
   bundles (including `<project>/.dsh/skills` and `$DSH_HOME/skills`). This is
   Ticket T4. The plan-skill structure (Ticket P11) is a skill definition.
 - **Provider profiles exist.** `ctx.credentials` and per-session model
-  selection is Ticket A2's profile story.
+  selection cover the profile story.
 
 What is net-new is small. It is exactly the part of aidos that is aidos:
 
@@ -93,11 +93,11 @@ What is net-new is small. It is exactly the part of aidos that is aidos:
    model-facing tools). It is a direct port of the Phase-1 prototype,
    following the dsh-goal domain's pattern.
 2. The **board** as a dsh web client plugin (React, not the Svelte 5 the
-   from-scratch plan chose). It replaces the tkinter board. It consumes the
+   from-scratch plan chose). It is the first board. It consumes the
    projection and calls the Remote endpoints.
 3. The **plan skill** and the `plan` import and serialize tools.
 4. Small glue: subagent job reports as evidence rows, the human-review queue
-   surface, and (optionally) a tool-directory loader and config-from-git.
+   surface, and (optionally) config-from-git.
 
 The from-scratch stack's hard parts all dissolve. There is no Rust kernel
 (the domain is TypeScript, like every dsh plugin). There is no HTTP or
@@ -119,7 +119,7 @@ There is no SQLite (the session log is the store).
 | MCP servers | nostrbook, gitlab, swiggy-food, swiggy-instamart | web_search and web_fetch are native dsh tools. |
 | Delivery | Two bundles | aidos is unopinionated and distributable. Personal config lives in dotfiles-ai and syncs to the harness. |
 | Scratch rule | Per-project scratch outside the repo | Agent output never lands in the project repo. It lives in the scratch dir or the ticket board. |
-| Node-tree renderer | Paused. tkinter now, nostr-canvas later | Throwaway dashboards stay tkinter for now. |
+| Node-tree renderer | Paused. nostr-canvas later | No renderer ships in v1. |
 | Model profiles | A Profile submenu replaces the model seat | Work and personal set providers, show a badge, and allow a per-session override. |
 | Tab title | A title-rewriter client plugin | The renderer hardcodes "— DeepSeek Harness" in the tab title. |
 
@@ -189,7 +189,7 @@ The parts below are the ones this design leans on.
 | Provider profiles | `ctx.credentials` plus per-session model selection | Built |
 | HTTP and WebSocket agent-to-client protocol | dsh webserver plus API gateway plus browser transport (SSE) | Built |
 | Web UI (board, evidence, screenshots) | New client plugin(s) plus `ctx.attachments` for images | New (client surface built) |
-| Node-tree renderer, throwaway dashboards | Paused. The prototype's tkinter dashboards stay. nostr-canvas comes later. | Deferred |
+| Node-tree renderer, throwaway dashboards | Paused. nostr-canvas comes later. The web board (B3) is the only board. | Deferred |
 | Subagent definitions (markdown plus frontmatter) | Agent presets (`agent.cordis.yml` plus relative plugin files); subagent spawn and fork with `toolFilter` | Built |
 | Subagents cannot touch the board | `delegationDepthOf(agent) > 0` makes board tools refuse; `toolFilter: { deny: [board tools] }` at spawn | Built seam |
 | Detached subagent jobs | `ctx.jobs` plus `job_output`/`job_list`/`job_kill` | Built |
@@ -239,12 +239,12 @@ All events are whole-value and versioned.
 | `ticket/change` | `{ kind: "ticket/change", version, operation: "create"\|"set"\|"move", ticket: <full snapshot>, at }` | Last-write-wins per ticket id, ordered by `seq` (Ticket P7's lesson: never order by `at`) |
 | `evidence/attached` | `{ kind: "evidence/attached", version, ticketId, row: { kind, author, at, payload } }` | Append to the ticket's evidence list |
 | `plan/change` | `{ kind: "plan/change", version, context, rules, frontmatter? }` | Whole-value replace (context capped at 500 lines at the write boundary) |
-| `comment/added` | `{ kind: "comment/added", version, ticketId, text, author, at }` | Append (Ticket P4: comments get their own event type and view, so no gate can accept a comment as proof) |
+| `comment/added` | `{ kind: "comment/added", version, ticketId, text, author, at }` | Append (comments get their own event type and view, so no gate can accept a comment as proof) |
 
 A **ticket snapshot** carries the prototype's fields: `id`, `revision`,
 `title`, `description`, `state` (`open | in-progress | awaiting-verification |
-done`), `criteria` (freeform text. Ticket P9's criterion coverage is a
-derived read over evidence payloads), `phase`/`order` (plan ordering),
+done`), `criteria` (freeform text. Criterion coverage is a derived read
+over evidence payloads, built in B3), `phase`/`order` (plan ordering),
 `createdAt`, `updatedAt`. `state` is an exhaustive enum. Adding a state fails
 to compile until every arm of the transition function is handled (Ticket C3's
 evaluate criterion, now via TypeScript exhaustiveness).
@@ -288,8 +288,8 @@ names the kind (Ticket P29) instead of a replay crash.
 
 - **Builtin kinds** (`builtin:user_signoff`, `builtin:automated_check`,
   `builtin:review_pass`, `builtin:review_note`, `builtin:imported_state`,
-  `builtin:comment`, ...) are one constant table in the aidos package (Ticket
-  P10's single definition). The CLI and the tests read the same constants.
+  `builtin:comment`, ...) are one constant table in the aidos package. The
+  CLI and the tests read the same constants.
   The test suite's mirror restates them on purpose, so drift fails the suite.
   Each carries `{ label, description, weight, allowedAuthors }`.
 - **Gate config** is a settings namespace (`ctx.settings.register("aidos",
@@ -359,7 +359,7 @@ view` and a zod schema each, exactly like the `goal` projection.
 | Key | View |
 |---|---|
 | `aidos.tickets` | Map ticket id to snapshot plus derived `confidenceScore` (weights summed per kind per author once) and `gateFraction` (forward transition only; `done` shows none). Both are sortable columns. The board sorts without loading history. |
-| `aidos.evidence` | Rows per ticket, grouped by the criterion text they address (Ticket P9's coverage read) |
+| `aidos.evidence` | Rows per ticket, grouped by the criterion text they address (criterion coverage, built in B3) |
 | `aidos.plan` | Context, rules, and frontmatter as one whole value |
 | `aidos.comments` | Comment list per ticket |
 
@@ -417,7 +417,7 @@ following:
   labeled advisory, gate fraction muted below it, project filter, sort by
   score or fraction, detail panel (side, not modal). The panel shows
   evidence grouped by criterion and highlights uncovered criteria (Ticket
-  P9).
+  P9's coverage read, folded into the board).
 - It acts through the Remote endpoints (`ctx.remote.aidos.<method>(
   sessionId, ...)`, the generated client for the service's typert bindings):
   create and edit fields, attach evidence as `user` (including screenshots
@@ -428,9 +428,10 @@ following:
   cache and change frames make this trivial.
 
 The agent-built throwaway dashboards (node-tree, Ticket U4) are **paused**.
-The prototype's tkinter board and dashboards stay in use. Later work looks at
-nostr-canvas for the declarative node tree. The aidos board client plugin is
-unaffected: it is a real product surface, not a throwaway dashboard.
+Later work looks at nostr-canvas for the declarative node tree. The prototype
+never built a board; the web board (B3) is the first one. The aidos board
+client plugin is unaffected: it is a real product surface, not a throwaway
+dashboard.
 
 #### The plan skill and import (Tickets P11, P6, C4)
 
@@ -573,6 +574,38 @@ speaks Anthropic, the personal bundle needs a small LLM adapter plugin
 (around a hundred lines). If meridian also exposes an OpenAI-compatible
 mode, a configurable provider route covers it.
 
+#### Personal AI config
+
+Two behaviors the user wants from the harness. Both ship in the personal
+bundle.
+
+**Dismissed questions interrupt the loop.** Today, closing a question
+rejects the pending ask with code `ASK_CANCELLED` (verified in
+`dsh-host-apiproxy`: the pending promise rejects with that code). The model
+then sees a tool error and keeps going. The personal preset ships its own
+`ask_user_question` tool row that wraps the shipped tool. On `ASK_CANCELLED`
+the wrapper calls `exec.agent.cancel('user-dismissed-question',
+{ keepInbox: true })`. `Agent.cancel` aborts the active turn and the
+between-turn task. `keepInbox` preserves queued and steering work for the
+next user prompt, so a dismissed question stops the run, not the session.
+Plan-review dismissal already stops via `dsh-plan-mode`; the wrapper covers
+the generic question path. Tool shadowing: preset row order decides which
+`ask_user_question` row wins. Confirm at W7.
+
+**Reject with a comment.** The approval answer payload is exactly
+`{ sessionId, approvalId, outcome: 'allowed-once' | 'rejected' }` (verified
+in `dsh-host-apiproxy/api/approvals.schema`). There is no comment channel,
+and the model sees only the resulting tool outcome. The personal bundle's
+client plugin extends the permission card with an optional Comment field.
+Reject with a comment answers the approval normally (`'rejected'`) and
+injects a steering user message through
+`sessions.send(sessionId, { mode: 'steer', content })`. The `steer` mode
+submits at the nearest step boundary, so the agent reads the comment at that
+point in the loop. The message reads "The user rejected the <tool> call.
+Comment: <text> Adjust your next action." The upstream end state is an
+optional rejection-reason field on the approval outcome. Confirm the
+permission-card seat at W8.
+
 ### Packaging and delivery
 
 The implementation ships as two dsh bundle additions. No fork is needed.
@@ -610,7 +643,8 @@ per boot.
 A second bundle package (or a profile) whose patch mounts the workstation
 port: the skills, the subagent tool rows, the session-hygiene row, the MCP
 rows, the AGENTS.md copy, and the client plugins (the Profile model seat,
-the title rewriter, the cost display). It lives in `~/repos/dotfiles-ai`
+the title rewriter, the cost display, the dismiss-interrupt wrapper, the
+reject-with-comment permission card). It lives in `~/repos/dotfiles-ai`
 and syncs to `$DSH_HOME`. It depends on the aidos bundle only if a session
 runs both.
 
@@ -628,30 +662,37 @@ runs both.
 
 ### Build order
 
-1. **A0, domain kernel plus tests.** Port the prototype's store and plan
+1. **B0, domain kernel plus tests.** Port the prototype's store and plan
    tests 1:1 as TypeScript unit tests against the fold, invariant,
    projection units, and the gate function. No UI, no tools. This is C2 plus
    C3 and the P-series pins.
-2. **A1, tools.** `get_tickets`, `set_ticket`, `attach_evidence`,
+2. **B1, tools.** `get_tickets`, `set_ticket`, `attach_evidence`,
    `move_ticket`, `plan`, `plan_import`, with the guard and the depth check.
-   Port the P3 CLI tests (test_20 to 25) as tool tests. Port the P8 and P10
-   pins.
-3. **A2, human surface.** Remote endpoints plus `userQuestions`-backed
+   Port the P3 CLI tests (test_20 to 25) as tool tests. Port the P8 pins and
+   the builtin-kind mirror pin (one constant table plus a deliberate test
+   mirror).
+3. **B2, human surface.** Remote endpoints plus `userQuestions`-backed
    flows. Port the lifecycle tests that need two actors (test_08, test_09,
    test_22, test_27).
-4. **A3, board client plugin.** The Tickets tab, the global Tickets entry,
-   the grid, detail, evidence, signoff, and send-back. Port the projection
-   and view tests (test_26, test_31, test_32) against the client read model.
-   U5's "every behavior has an equivalent test" checklist is the definition
-   of done.
-5. **A4, plan skill plus import dogfood.** Import this file into the board.
+4. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
+   the grid, detail, evidence, signoff, and send-back. Criterion coverage
+   (Ticket P9's read) lands here. Port the projection and view tests
+   (test_26, test_31, test_32) against the client read model. U5's "every
+   behavior has an equivalent test" checklist is the definition of done.
+   **Evaluate:** a dropped connection reconnects and the view is correct
+   afterward with no refresh.
+5. **B4, plan skill plus import dogfood.** Import this file into the board.
    Delete this file under a ticket (P6). Keep the benchmarking table alive.
-6. **A5, subagent and job glue plus shell posture checks.** A6 provenance
-   attachment. The A4 bypass suite against the shipped shell posture.
+6. **B5, subagent and job glue plus shell posture checks.** A6 provenance
+   attachment. The shell bypass suite (Ticket A4) against the shipped shell
+   posture.
 7. **W0, personal bundle scaffold.** The sync script (dotfiles-ai to
    `$DSH_HOME`), the preset directory, the provider routes in Settings to
    Models (OpenCode Go and the direct DeepSeek route), and the meridian
    protocol check (Anthropic adapter or OpenAI-compatible route).
+   **Evaluate:** two profiles against the same provider, with different
+   keys, both work in one install. Model auto-detection lists models for
+   each.
 8. **W1, skills port.** All ten skills as `SKILL.md` bundles, with the
    opencode-term translation.
 9. **W2, subagent rows.** coder, tester, researcher, see. Pin the model
@@ -662,14 +703,22 @@ runs both.
     section. The long-running command tool.
 12. **W5, AGENTS.md and LAN.** The rules copy. The Caddy, mDNS, and systemd
     units for `dsh web`. The dotfiles README describes the setup in a few
-    lines; the configs stay in the deployed locations.
+    lines. The configs stay in the deployed locations.
+    **Evaluate:** a second device on the LAN connects and receives live
+    events. Without the token, a write is refused.
 13. **W6, profiles client.** The Profile submenu in the model seat, the
     badge, the per-session override, the cost display, and the title
     rewriter.
+14. **W7, dismissed questions interrupt the loop.** The personal
+    `ask_user_question` wrapper tool. `Agent.cancel` with `keepInbox: true`
+    on `ASK_CANCELLED`.
+15. **W8, reject with a comment.** The permission-card extension: a Comment
+    field, a normal `'rejected'` answer, and a steering-message injection
+    that carries the comment to the agent.
 
-A0 and W0 to W3 are independent. The personal bundle delivers immediate
-value before the kernel finishes. The board (A3) is the milestone that
-replaces the tkinter board.
+B0 and the W-series are independent. The personal bundle delivers immediate
+value before the kernel finishes. The board (B3) is the milestone that ships
+the first board.
 
 ### Risks
 
@@ -683,8 +732,8 @@ replaces the tkinter board.
 - **The board client plugin depends on the client-plugin surface.** The
   consumption path is verified (the `dsh.client` manifest, the `./client`
   bundle, the roster row). The dsh frontend build emits the bundle. Budget
-  the monorepo setup in A3.
-- **The Tickets tab seat names** need confirmation during A3. The trajectory
+  the monorepo setup in B3.
+- **The Tickets tab seat names** need confirmation during B3. The trajectory
   view registers a `view.trajectory` label. The board registers its own view
   through the same mechanism. The exact seat and entry-point ids come from
   the client slot surface at build time.
@@ -693,7 +742,7 @@ replaces the tkinter board.
   v1; keep the read path lazy.
 - **Settings versus log for gates** is settled (settings namespace). If the
   audit pin later reads stricter, promote kind and gate changes to log-only
-  events. Decide before A0 ships if that changes. It touches the fold.
+  events. Decide before B0 ships if that changes. It touches the fold.
 - **The Go subscription route** is pinned: base URL `https://opencode.ai/zen/go/v1`
   (the adapter appends `/chat/completions`), model ids `deepseek-v4-pro` and
   `deepseek-v4-flash` (the docs list more, and
@@ -713,6 +762,13 @@ replaces the tkinter board.
   (a configurable product title) is the clean end state.
 - **The cost display seat** is a companion to the shipped stats strip. Its
   exact seat comes from the client slot surface at build time.
+- **The ask-user wrapper shadows the shipped tool.** Preset row order decides
+  which `ask_user_question` row wins. Confirm at W7.
+- **The approval outcome has no rejection-reason channel.** The comment rides
+  a steering message, not the approval result. The upstream end state is an
+  optional reason field on the outcome.
+- **The permission-card seat** is where the Comment field mounts. Confirm at
+  W8.
 
 ---
 
@@ -724,13 +780,15 @@ U5's rule). Phase and order are first-class ticket fields.
 
 ### Phase 1: Ticket prototype — `in_progress`
 
-**Goal.** A throwaway board that pins the behavior of the ticket kernel before anyone writes
-the real one, and that holds this plan so this file can be deleted.
+**Goal.** A throwaway prototype that pins the behavior of the ticket kernel before anyone
+writes the real one. The repository holds this plan until the board can import it (Ticket P6).
 
-**Constraints.** Python, tkinter, and `sqlite3`. Standard library only. Lives in `prototype/`
-in this repository. It is a behavior specification, not a component. No line of it survives
-into aidos. Throwaway code in a repository you keep does not stay throwaway unless someone
-deletes it on purpose, so Ticket U5 exists to be that someone.
+**Constraints.** Python and `sqlite3`. Standard library only. Lives in `prototype/` in this
+repository. It is a behavior specification, not a component. No line of it survives into aidos.
+The tkinter board (Ticket P4) and the node-tree renderer (Ticket P5) are dropped: the 32 tests
+and the paged read already pin the behavior a board would have exercised, and the web board
+(B3) is the first real one. Throwaway code in a repository you keep does not stay throwaway
+unless someone deletes it on purpose, so Ticket U5 exists to be that someone.
 
 - [x] **Ticket P1: Schema and event log.** Tables for projects, tickets, the evidence kind
   registry, evidence rows, gate config, and an append-only event log. Current state derives from
@@ -766,7 +824,7 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   agent's half and the board for yours. `attach_evidence` cannot write a row authored by you.
   The markdown from `plan` round-trips back through the importer without loss.
   **Built, awaiting your check.** 111 tests pass. The half of the criterion that needs the
-  board cannot run until P4 exists, so this ticket stays open on purpose. I verified the rest
+  board cannot run until the web board exists (B3), so this ticket stays open on purpose. I verified the rest
   by driving the real CLI: a payload naming an author changes nothing, every non-system actor
   in the log is `agent`, and both refusal paths print JSON rather than a traceback.
   Two design points moved during the work. `plan import` now lands every ticket in `open`
@@ -852,82 +910,6 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
   A page of twenty returns exactly twenty rows and the correct total count. Sorting by score and
   sorting by gate fraction produce different orders on a fixture built to separate them.
 
-- [ ] **Ticket P10: Tests use the real builtin kinds.** Depends on Ticket P7, so the rename does
-  not churn tests that Ticket P7 rewrites. `tests/helpers.py` registers its own kind list and
-  calls the ids `builtin:`. That list is not the real registry. It is a second and contradicting
-  claim about what the builtins are. `builtin:after_shot` carries weight 1.0 there and weight
-  0.5 in `cli.py`, and weight drives `confidence_score`. `builtin:user_signoff` and
-  `builtin:review_pass` disagree on their description. Four more ids exist only in the fixture:
-  `builtin:agent_report`, `builtin:comment`, `builtin:eval_criteria`, `builtin:file_allowlist`.
-  Nothing has broken yet, because store tests never load the CLI registry. That is luck, not
-  design.
-  The builtin registry becomes one definition that both the CLI and the tests read. It does not
-  belong in `cli.py`, because the store sits below the CLI and must not import upward. Move it
-  into the library beside the store.
-  The mirror in `tests/cli_helpers.py` stays duplicated on purpose. It restates the registry so
-  a test can catch an unintended change. A test that imported the constant would assert that a
-  value equals itself.
-  One complication to settle rather than paper over: four fixture ids have no real counterpart,
-  so the tests that use them must move to real kinds. `builtin:comment` becomes real in Ticket
-  P4, and criteria evidence is Ticket P9's subject, so some of these may be worth registering
-  rather than deleting. Decide per id. Do not invent a kind to keep an old test compiling.
-  **Evaluate:** no test registers a kind id that the real registry does not hold, and no id
-  carries a label, description, or weight that differs from it. A test asserts that agreement,
-  so later drift fails the suite instead of passing quietly. The full suite passes.
-
-- [ ] **Ticket P4: Board.** Depends on Ticket P7. tkinter, split in two. `board_model.py`
-  imports no tkinter and holds every decision: paging maths, the project filter, the sort order,
-  what a card shows, which moves are offered, and the exact refusal text. `board.py` builds
-  widgets and calls it. The model joins the unit suite. Widget smoke tests run under `xvfb-run`,
-  which is installed and verified working, so both halves are checkable.
-  Layout. A grid of ticket cards spanning every project, with a project filter. Twenty cards in
-  4 by 5 with the detail panel closed, ten in 2 by 5 with it open. Opening the panel recomputes
-  the offset so the selected ticket stays on screen. Detail is a side panel, not a modal. A card
-  shows the title, the state, the confidence score prominently, and the gate fraction below it
-  in muted smaller text. The fraction counts the forward transition only, along
-  `open -> in_progress -> awaiting_verification -> done`, so `done` shows none. Both numbers
-  sort.
-  Behavior. The board creates tickets. Projects stay CLI-created. It edits fields, adds
-  comments, moves states with gate enforcement, and attaches evidence of any registered kind as
-  actor `user`. Comments get their own event type and their own view, so no gate can accept a
-  comment as proof. The window re-queries when it regains focus, with no timer, so a repaint
-  never lands mid-edit. A refusal prints `str(GateRefused)` verbatim, which already names the
-  missing kinds and the allowed actors.
-  Storage. The storage root is the directory holding the database. An attached image is copied
-  to `<root>/blobs/<sha256>`, so the same image is stored once however often it is attached. The
-  evidence payload carries the hash, the original file name, the byte length, and the media
-  type. `--db` becomes optional and defaults to `$XDG_DATA_HOME/aidos-proto/aidos.db`. The
-  prototype root is `aidos-proto` and never `aidos`, so it cannot collide with the data directory
-  Ticket C1 defines. A backup is a copy of the root.
-  **Evaluate:** you use it for a working session without dropping to SQL. Every refusal names
-  what is missing. A screenshot attaches, persists, and displays after a restart. Opening the
-  panel on a ticket in the second half of a page keeps that ticket on screen. A write made from
-  the CLI appears after you click away and back, with no restart. Sorting by score and sorting
-  by gate fraction produce different orders. The model suite passes with no display available,
-  and the widget smoke tests pass under `xvfb-run`.
-
-- [ ] **Ticket P5: Node-tree renderer.** Render a declarative node tree into tkinter widgets:
-  `stack`, `row`, `text`, `markdown`, `image`, `form`, `input`, `checkbox`, `dropdown`,
-  `button`. A form submit produces structured data that lands as an evidence row.
-  **Evaluate:** a hand-written node tree renders, and its form submission appears as an evidence
-  row on the right ticket with the right author. An unknown node kind renders an error node
-  rather than crashing the board.
-
-- [ ] **Ticket P9: Evidence names the criterion it covers.** Depends on Ticket P4. Criteria stay
-  one freeform text field on the ticket. Nothing splits them into rows, because enumerating them
-  would be a chore on every ticket. Instead an evidence payload may carry the text of the
-  criterion it addresses, and the board groups the evidence list by criterion and shows which
-  ones nothing covers yet.
-  This is the half that makes work hard to miss. A gate asks whether a kind is present. It
-  cannot ask whether the work is finished, because one `builtin:automated_check` row satisfies
-  the gate whether it exercised six criteria or none.
-  Advisory, like the confidence score. No gate reads coverage, and an uncovered criterion blocks
-  nothing. The board makes it visible and you decide what it means.
-  **Evaluate:** a ticket with three criteria and evidence naming two shows the third as
-  uncovered. Evidence naming no criterion still attaches and still counts toward its gate. A
-  criterion reworded after evidence was attached leaves that evidence visible as uncovered
-  rather than dropping it silently.
-
 - [ ] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
   shape that the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
   special rules, Human review queue, and an optional Benchmarking section. That shape is
@@ -959,10 +941,10 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 - [ ] **Ticket C1: Workspace and data directory.** On dsh: `ctx.workspaceRegistry` plus the
   session `cwd`. Config lives in the profile and the settings. `move` repoints the workspace
   path and the session `cwd` through a Remote endpoint, not a filesystem move. Config-from-git
-  stays optional glue; the personal bundle ships a sync script instead.
-  **Evaluate:** a first run creates the data directory and an empty database. `move` repoints a
-  project and a later session opens in the new path. A config git URL clones, and a second run
-  updates rather than re-clones.
+  stays optional glue. The personal bundle ships a sync script instead.
+  **Evaluate:** a first run attaches the session to its workspace path. `move` repoints a
+  project and a later session opens in the new path. The sync script copies dotfiles-ai to
+  `$DSH_HOME`. A second run updates rather than duplicating.
 
 - [ ] **Ticket C2: Event log and projection.** On dsh: the session log plus the strict replay
   fold, the invariant companion, and the projection units. The dsh-goal domain is the pattern.
@@ -988,23 +970,8 @@ deletes it on purpose, so Ticket U5 exists to be that someone.
 
 ### Phase 3: HTTP and agent loop — `pending`
 
-**Goal.** aidos talks to a model and to a browser. dsh provides the transport; the work is the
-tools and the gate enforcement.
-
-- [ ] **Ticket A1: HTTP and WebSocket.** Built by dsh: the webserver, the API gateway, and the
-  browser transport. typert generates the client bindings, so the wire protocol cannot drift.
-  **Evaluate:** generated TypeScript matches the Rust types, and a deliberate mismatch fails the
-  build rather than reaching the browser. A second device on the LAN connects and receives live
-  events. Without the token, a write is refused.
-
-- [ ] **Ticket A2: Agent loop and profiles.** Built by dsh: the agent loop, `ctx.credentials`,
-  and per-session model selection. The work and personal split becomes the Profile submenu (see
-  the design's "Model profiles"). The opencode-go route: base URL `https://opencode.ai/zen/go/v1`,
-  model ids `deepseek-v4-pro` and `deepseek-v4-flash`, key in `$DSH_HOME/.credentials.yaml`
-  under `OPENCODE_GO_API_KEY`. The meridian route: protocol check at W0.
-  **Evaluate:** two profiles against the same provider, with different keys, both work in one
-  install. Model auto-detection lists models for each. A tool call and its result both appear on
-  the WebSocket in order. Cancelling mid-stream leaves no orphaned task.
+**Goal.** aidos talks to a model and to a browser. dsh provides the transport and the loop. The
+work is the tools and the gate enforcement.
 
 - [ ] **Ticket A3: Tool dispatch and gate enforcement.** Every state change goes through the
   kernel. `ctx.tools.register` provides the tools. `ctx.tools.guard` provides the monotonic
@@ -1050,17 +1017,16 @@ tools and the gate enforcement.
 
 **Goal.** The board you actually use, replacing the Phase 1 prototype.
 
-- [ ] **Ticket U1: Scaffold and live client.** On dsh: the client-plugin surface plus the
-  connection transport. Reconnect is built. Types come from typert, never hand-written.
-  **Evaluate:** a dropped connection reconnects and the view is correct afterward with no
-  refresh. No hand-written duplicate of a Rust type exists in the source.
-
 - [ ] **Ticket U2: Board.** The aidos board client plugin: the Tickets tab next to Chat and
   Trajectory, the global Tickets entry near New Session, the ticket grid, detail, field
-  editing, comments, and state moves. Gate refusals surface as readable text naming the missing
-  kind.
+  editing, comments, and state moves. Evidence groups by the criterion it addresses, and
+  uncovered criteria are highlighted (Ticket P9's coverage read, folded here). Gate refusals
+  surface as readable text naming the missing kind.
   **Evaluate:** you run a full ticket lifecycle in the browser without touching the prototype.
-  Every refusal is legible without reading logs.
+  Every refusal is legible without reading logs. A ticket with three criteria and evidence
+  naming two shows the third as uncovered. Evidence naming no criterion still attaches and
+  still counts toward its gate. A criterion reworded after evidence was attached leaves that
+  evidence visible as uncovered rather than dropping it silently.
 
 - [ ] **Ticket U3: Evidence and screenshots.** `ctx.attachments` stores content-addressed
   images, hash-deduped. Evidence rows reference the attachment refs. Show the confidence score
@@ -1068,8 +1034,8 @@ tools and the gate enforcement.
   **Evaluate:** a pasted screenshot attaches and survives a restart. The score is visibly marked
   as advisory and no control anywhere is enabled or disabled by it.
 
-- [ ] **Ticket U4: Node-tree renderer.** Paused. The prototype's tkinter dashboards stay in use.
-  Later work looks at nostr-canvas for the declarative node tree.
+- [ ] **Ticket U4: Node-tree renderer.** Paused. No renderer ships in v1. Later work looks at
+  nostr-canvas for the declarative node tree.
   **Evaluate:** the agent builds a throwaway review dashboard, you complete it, and the
   submissions appear as evidence on the right tickets. An unknown node kind renders an error
   node and does not break the page.
@@ -1077,38 +1043,19 @@ tools and the gate enforcement.
 - [ ] **Ticket U5: Delete the prototype.** Remove `prototype/` once the web UI has replaced it.
   The prototype was always meant to die. This ticket is the only thing that makes that happen.
   **Evaluate:** you confirm you have run a full ticket lifecycle in the browser, including
-  evidence attach and a rendered node tree, and that you no longer open the tkinter board. Every
-  behavior the prototype's tests pin has an equivalent test in the Rust suite, checked one by
-  one against the prototype's test list, not by eye. Only then is `prototype/` removed, in a
-  commit that names the Rust tests that replaced it.
+  evidence attach. Every behavior the prototype's tests pin has an equivalent test in the dsh
+  suite, checked one by one against the prototype's test list, not by eye. Only then is
+  `prototype/` removed, in a commit that names the tests that replaced it.
 
 ### Phase 5: Tools, scripting, and skills — `pending`
 
 **Goal.** The extension surface.
 
-- [ ] **Ticket T1: Script engine.** Moot. Tool scripts are JS plugins; there is no embedded
-  engine to sandbox. The rquickjs spike dissolves. dsh's model is that a loaded plugin is
-  trusted, and the agent's reach is bounded by tools, the sandbox, and approval. If a future
-  untrusted-script mode is wanted, a worker-thread code runtime with `AbortSignal` and
-  `timeoutMs` is the dsh-shaped answer.
-  **Evaluate:** an infinite loop is stopped by the interrupt handler and does not hang the
-  server. An allocation loop hits the memory cap and fails the one script without taking down
-  the process. A script awaiting a database write does not block a tokio worker. A script cannot
-  reach the filesystem, the network, a timer, or a process.
-
-- [ ] **Ticket T2: Tool loader.** Deferred. Use the existing plugin system: tools ship as
-  packages or as preset-relative plugin files. Revisit only if a third party wants
-  directory-based tool distribution.
-  **Evaluate:** a new directory becomes a callable tool. A malformed tool fails to load with a
-  message naming the file and the problem, and does not stop other tools loading. Editor
-  completion works against the shipped types.
-
-- [ ] **Ticket T3: Script standard library.** The tool API is the stdlib: `exec` is the context,
-  card render intents are the UI, output schemas are the util, service calls are the store. A
-  `.d.ts` ships with the aidos tool packages for editor completion.
-  **Evaluate:** a tool builds a node tree using only `ui` constructors and it renders. A script
-  cannot reach a raw host binding directly. A typo on a global is an error with a line number,
-  not a silent undefined.
+- [ ] **Ticket T3: Tool types.** The tool API is the standard library: `exec` is the context,
+  output schemas are the util, service calls are the store. The aidos tool packages ship a
+  `.d.ts` for editor completion.
+  **Evaluate:** a tool author gets editor completion and inline type errors against the shipped
+  types. A parameter typo fails schema validation rather than passing silently.
 
 - [ ] **Ticket T4: Skills.** On dsh: `ctx.skills` plus the filesystem provider plus the `skill`
   tool. The preset tool groups are the always-on core; a skill activates a further group.
@@ -1138,6 +1085,8 @@ tools and the gate enforcement.
 - **Model profiles.** Work uses meridian for the orchestrator; personal uses OpenCode Go
   `deepseek-v4-pro`. Subagents always run OpenCode Go `deepseek-v4-flash`. See the design's
   "Model profiles".
+- **Personal AI config.** Dismissing a question interrupts the agent loop (W7). Rejecting a
+  permission request can carry a comment the agent reads at that point in the loop (W8).
 - **Board scope.** The Tickets tab and the global Tickets entry both ship in v1.
 - The AGENTS.md rules from dotfiles-ai port to `$DSH_HOME/AGENTS.md` (W5).
 
@@ -1150,8 +1099,8 @@ tools and the gate enforcement.
 - [ ] Ticket P8 — drive a ticket that has a passing check and no review, and say whether the
   refusal reads clearly at the terminal and names the right kind.
 - [ ] Ticket P7 paged read — decide whether the gate fraction is the number the board should
-  sort on, before Ticket P4 builds a card around it. It counts only the forward transition, so
-  a ticket in `done` shows nothing at all.
+  sort on, before the board (B3) builds a card around it. It counts only the forward transition,
+  so a ticket in `done` shows nothing at all.
 - [ ] Ticket P7 legacy defaults — decide whether a ticket record that carries no order deserves a
   stable one. `_fill_ticket_defaults` computes the default at read time, so the value climbs as
   later tickets appear: a legacy row reported order 2, then order 3 once one more ticket existed.
@@ -1168,7 +1117,13 @@ tools and the gate enforcement.
   selection.
 - [ ] W6 — the title rewriter race against the renderer's `DocumentTitle` effect.
 - [ ] W6 — the cost display seat next to the shipped stats strip.
-- [ ] A3 — the global board's cold-read latency for the "re-read on focus" rule.
+- [ ] B3 — the global board's cold-read latency for the "re-read on focus" rule.
+- [ ] W7 — dismiss-interrupt semantics: `keepInbox: true` (preserve queued work for the next
+  prompt) versus a hard stop.
+- [ ] W7 — the ask-user wrapper's shadowing order against the shipped tool row.
+- [ ] W8 — comment delivery: a steering message versus an upstream rejection-reason field on
+  the approval outcome.
+- [ ] W8 — the permission-card seat for the Comment field.
 
 ---
 
