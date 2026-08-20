@@ -450,19 +450,35 @@ tracebacks (Ticket P29).
 
 A client plugin package (`@aidos/dsh-client-aidos-board`) declares
 `dsh.client` and ships a prebuilt `./client` bundle. The aidos patch inserts
-it into the browser roster. It is written in React against the published
-client packages (`@deepseek-ai/dsh-client-ui-primitives`,
-`@deepseek-ai/dsh-client-ui-slots`). The dsh frontend build emits its bundle
-in the client module format (`window.__ModuleLoader__.load({ id, factory })`).
-It mounts through the slot system (`ctx.slots.inject(...)`). The goal bar in
-the input dock and the plan seat are the precedents. The board does the
-following:
+it into the browser roster. It is written in React against
+`@deepseek-ai/dsh-client-ui-primitives` and
+`@deepseek-ai/dsh-client-ui-slots`. Both are absent from the installed tree
+(inlined into the shipped bundles, referenced by `.d.ts` only) and exist on
+npm at `0.0.1-rc.1`; the board build depends on them explicitly (verified:
+`dsh-client-runtime/lib/types/client/slots.d.ts:14-15`). The dsh frontend
+build emits its bundle in the client module format
+(`window.__ModuleLoader__.load({ id, factory })`). It mounts through the
+slot system (`ctx.slots.inject(...)`). The goal bar in the input dock and
+the plan seat are the precedents. The board does the following:
 
-- It registers a **Tickets view tab** beside Chat and Trajectory. The tab
-  shows the current workspace's board. It registers a **global Tickets
-  entry** near New Session. The entry opens the cross-workspace board.
-  Both ship in v1. The cross-workspace board reads every session's
-  `aidos.tickets` projection through the cold read path.
+- It registers a **Tickets view tab** beside Chat and Trajectory through the
+  `conversation.view` list slot: `ctx.slots.inject("conversation.view", ...)`
+  with id `tickets` and order 20, the trajectory precedent (verified:
+  `dsh-client-ui-trajectory/lib/client.js:7341-7371`, slot declared at
+  `dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts:107-111`).
+  The tab shows the current workspace's board.
+- It registers a **global Tickets entry** near New Session. The seat is a
+  B3 decision: the New Session button is hardcoded shell chrome
+  (`dsh-client-ui-sidebar/lib/client.js:204-217`) and the sidebar slot
+  inventory has no adjacent additive seat. Options: `sidebar.footer.action`,
+  replace a single seat, or fork the sidebar. The entry opens the
+  cross-workspace board. Both ship in v1.
+- The cross-workspace board reads every session's `aidos.tickets`
+  projection. The client reads projections only for open sessions
+  (`dsh-client-runtime/lib/types/client/contract/sessions.d.ts:126`), and
+  `coldSnapshot` is host-only (`dsh-session-projection-cache/lib/
+  index.js:159-197`). B3 adds one aidos Remote that runs the cold read on
+  the host and returns the page.
 - It reads the `aidos.tickets`, `aidos.evidence`, and `aidos.plan`
   projection values (`useProjection(...)` or
   `sessions.binding(id).session.projections.faceOf(key)`, the same read path
@@ -880,15 +896,26 @@ the first board.
   adapters. aidos adds nothing.
 - **The board client plugin depends on the client-plugin surface.** The
   consumption path is verified (the `dsh.client` manifest, the `./client`
-  bundle, the roster row). The dsh frontend build emits the bundle. Budget
-  the monorepo setup in B3.
-- **The Tickets tab seat names** need confirmation during B3. The trajectory
-  view registers a `view.trajectory` label. The board registers its own view
-  through the same mechanism. The exact seat and entry-point ids come from
-  the client slot surface at build time.
-- **Multi-session reads.** The global board reads cold projections. The
-  "re-read on focus" rule has a latency budget for cold sessions. Fine for
-  v1; keep the read path lazy.
+  bundle, the roster row). `dsh-client-ui-primitives` and
+  `dsh-client-ui-slots` are absent from the installed tree (inlined into
+  the shipped bundles; npm `0.0.1-rc.1`). The board build depends on them
+  explicitly. Budget the monorepo setup in B3.
+- **The Tickets tab seat is verified.** The board registers through the
+  `conversation.view` list slot (`ctx.slots.inject("conversation.view", ...)`,
+  id `tickets`, order 20), the trajectory precedent. The **global Tickets
+  entry has no seat beside New Session**: the button is hardcoded shell
+  chrome (`dsh-client-ui-sidebar/lib/client.js:204-217`). Options at B3:
+  `sidebar.footer.action`, replace a seat, or fork the sidebar.
+- **The cross-workspace board needs a new cold-read Remote.** The client
+  reads projections only for open sessions; `coldSnapshot` is host-only
+  (`dsh-session-projection-cache`). B3 adds one aidos Remote that runs the
+  cold read on the host. The "re-read on focus" rule has a latency budget
+  for cold sessions. Fine for v1; keep the read path lazy.
+- **dsh-plan-mode is preset-plane.** The web surface ships
+  `- id: plan-mode, disabled: true` (`dsh-web-app/cordis.patch.yml`), so
+  the plan projection and the "Chat about it" review flow exist only when a
+  preset mounts `dsh-plan-mode`. The aidos preset must mount it, or its own
+  plan-review flow, for B2's review flows.
 - **Settings versus log for gates** is settled (settings namespace). If the
   audit pin later reads stricter, promote kind and gate changes to log-only
   events. Decide before B0 ships if that changes. It touches the fold.
@@ -1297,7 +1324,11 @@ work is the tools and the gate enforcement.
   selection.
 - [ ] W6 — the title rewriter race against the renderer's `DocumentTitle` effect.
 - [ ] W6 — the cost display seat next to the shipped stats strip.
-- [ ] B3 — the global board's cold-read latency for the "re-read on focus" rule.
+- [ ] B3 — the global Tickets entry seat: `sidebar.footer.action` versus
+  replacing a seat versus forking the sidebar (the New Session button is
+  hardcoded shell chrome).
+- [ ] B3 — the new cold-read Remote's latency for the "re-read on focus"
+  rule, on a cold session.
 - [ ] W7 — dismiss-interrupt semantics: `keepInbox: true` (preserve queued work for the next
   prompt) versus a hard stop.
 - [ ] W7 — the ask-user wrapper's shadowing order against the shipped tool row.
