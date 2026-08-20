@@ -1,0 +1,15 @@
+# The aidos bundle patch. Inserted by the profile composition when the
+# package is added as a bundle (package.json's `dsh.bundle.patch`).
+#
+# Host plane: the aidos-core service (session-log backed ticket service,
+# projections, invariant companion). The `aidos` settings namespace for
+# kind and gate config is registered by the service itself.
+#
+# The agent plane ships as the aidos preset (presets/aidos/); the
+# deployment mounts it by adding its presets root to dsh-agent-presets
+# (the web profile's home patch or $DSH_HOME/.agent-presets).
+- insert:
+    - id: aidos-invariants
+      name: '@deepseek-ai/dsh-invariants'
+    - id: aidos-core
+      name: aidos

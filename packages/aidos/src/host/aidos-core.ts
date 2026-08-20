@@ -1,0 +1,1215 @@
+/**
+ * The aidos-core service. A Cordis Service over the session log, following
+ * the dsh-goal pattern. SPEC-B1.md sections 4b and 6 are the contract.
+ *
+ * The service wraps the B0 kernel over the session log: reads fold the
+ * session's aidos events and run the pure projection units; writes validate
+ * (the invariant), append one whole-value aidos event via
+ * `session.append`, then fold. The author is always stamped from the entry
+ * point — the tool body passes the agent, and the agent is never read from
+ * a payload.
+ */
+
+import { Service } from "@deepseek-ai/cordis";
+import type { Context } from "@deepseek-ai/cordis";
+import z from "@deepseek-ai/schemastery";
+import { z as zod } from "zod";
+import type { Agent } from "@deepseek-ai/dsh-agent";
+import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
+import { settingsNamespace } from "@deepseek-ai/dsh-settings";
+// Load the Context augmentations the service reads (workspace binding and
+// the projection registry) and the projection table its units merge into.
+import "@deepseek-ai/dsh-workspace";
+import "@deepseek-ai/dsh-session-projection";
+import type { KindDef } from "../kernel/types";
+
+// The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
+import { readFileSync } from "fs";
+import { isAbsolute, join, basename } from "path";
+import { createInitialState } from "../kernel/fold";
+import type { AidosState } from "../kernel/fold";
+import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
+import { checkGate, isLegalTransition } from "../kernel/gates";
+import {
+  confidenceScoreOf,
+  gateFractionOf,
+  ticketsProjection,
+} from "../kernel/projections";
+import type { TicketView } from "../kernel/projections";
+import { parsePlan, renderPlan } from "../plan/plan";
+import type { PlanPhase, PlanTicket } from "../plan/plan";
+import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
+import { STATE_ORDER } from "../kernel/types";
+import type {
+  Actor,
+  AidosConfig,
+  CommentRecord,
+  ContextSection,
+  EvidenceRow,
+  PhaseView,
+  PlanValue,
+  ProjectId,
+  TicketId,
+  TicketRow,
+  TicketSnapshot,
+  TicketState,
+} from "../kernel/types";
+import {
+  ContextTooLongError,
+  EvidenceAuthorRefused,
+  GateRefused,
+  ProjectNotEmptyError,
+  UnknownKind,
+  UnknownProject,
+  UnknownTicket,
+} from "../kernel/types";
+import type { AidosEvent } from "../kernel/events";
+import { AIDOS_EVENT_TYPES, foldSessionEvent, registerAidosInvariant } from "./invariant";
+
+/** The session event types the aidos stream owns (the kernel event kinds). */
+export { AIDOS_EVENT_TYPES };
+
+/**
+ * A payload that is not one JSON object. The tool renders it as
+ * `bad_payload`; the service refuses it before any append.
+ */
+export class BadPayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
+ * A plan file that could not be read. The tool renders it as
+ * `file_not_read`; the refusal carries the path.
+ */
+export class FileNotReadError extends Error {
+  readonly path: string;
+  constructor(path: string, message: string) {
+    super(message);
+    this.path = path;
+  }
+}
+
+// ---- the session event vocabulary ----
+
+declare module "@deepseek-ai/dsh-session/types" {
+  interface SessionEventMap {
+    "ticket/change": import("../kernel/events").TicketChangeEvent;
+    "evidence/attached": import("../kernel/events").EvidenceAttachedEvent;
+    "plan/change": import("../kernel/events").PlanChangeEvent;
+    "comment/added": import("../kernel/events").CommentAddedEvent;
+    "aidos/refusal": import("../kernel/events").RefusalEvent;
+    "project/created": import("../kernel/events").ProjectCreatedEvent;
+    "project/moved": import("../kernel/events").ProjectMovedEvent;
+    "phase/set": import("../kernel/events").PhaseSetEvent;
+  }
+}
+
+// ---- the projection table ----
+
+declare module "@deepseek-ai/dsh-session-projection/types" {
+  interface SessionProjectionMap {
+    /** Ticket id to the board row: the snapshot plus score and fraction. */
+    "aidos.tickets": Record<string, TicketView>;
+    /** Ticket id to its evidence rows, oldest first. */
+    "aidos.evidence": Record<string, EvidenceRow[]>;
+    /** Project id to the whole-value plan. */
+    "aidos.plan": Record<string, PlanValue>;
+    /** Ticket id to its comments, oldest first. */
+    "aidos.comments": Record<string, CommentRecord[]>;
+  }
+}
+
+declare module "@deepseek-ai/cordis" {
+  interface Context {
+    aidos: AidosService;
+  }
+}
+
+// ---- the aidos settings namespace ----
+
+/** The settings shape of one evidence kind. */
+export interface AidosSettingsKind {
+  id: string;
+  label: string;
+  description: string;
+  weight: number;
+  allowedAuthors: Actor[];
+}
+
+/** The settings shape of one gate. */
+export interface AidosSettingsGate {
+  fromState: TicketState;
+  toState: TicketState;
+  requiredKinds: string[];
+  allowedActors: Actor[];
+}
+
+/** The resolved value of the `aidos` settings namespace. */
+export interface AidosSettings {
+  kinds: AidosSettingsKind[];
+  gates: AidosSettingsGate[];
+}
+
+const ACTOR_UNION = z.union(["agent", "user", "system"]);
+
+/** The schemastery schema of the aidos settings namespace. */
+export const AIDOS_SETTINGS_SCHEMA = z.object({
+  kinds: z
+    .array(
+      z.object({
+        id: z.string().required(),
+        label: z.string().default(""),
+        description: z.string().default(""),
+        weight: z.number().default(1),
+        allowedAuthors: z.array(ACTOR_UNION).default(["agent", "user"]),
+      }),
+    )
+    .default([]),
+  gates: z
+    .array(
+      z.object({
+        fromState: z.union([...STATE_ORDER]).required(),
+        toState: z.union([...STATE_ORDER]).required(),
+        requiredKinds: z.array(z.string()).default([]),
+        allowedActors: z.array(ACTOR_UNION).default([]),
+      }),
+    )
+    .default([]),
+});
+
+/**
+ * Validate one resolved settings value and detach it as an AidosConfig.
+ * A gate referencing an unregistered kind fails here, at config load, not at
+ * gate time (SPEC-B1 decision 14).
+ */
+function resolveConfig(settings: AidosSettings): AidosConfig {
+  const kinds = settings.kinds.map((kind) => ({
+    id: kind.id,
+    label: kind.label,
+    description: kind.description,
+    weight: kind.weight,
+    allowedAuthors: [...kind.allowedAuthors],
+  }));
+  const gates = settings.gates.map((gate) => ({
+    fromState: gate.fromState,
+    toState: gate.toState,
+    requiredKinds: [...gate.requiredKinds],
+    allowedActors: [...gate.allowedActors],
+  }));
+  const known = new Set(kinds.map((kind) => kind.id));
+  for (const gate of gates) {
+    for (const kind of gate.requiredKinds) {
+      if (!known.has(kind)) {
+        throw new Error(
+          `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`,
+        );
+      }
+    }
+  }
+  return { kinds, gates };
+}
+
+// ---- projection state and apply bodies (plain JSON per the unit contract) ----
+
+/** The internal state of the aidos.tickets unit: snapshots plus evidence. */
+export interface TicketsProjectionState {
+  tickets: Record<string, TicketSnapshot>;
+  evidence: Record<string, EvidenceRow[]>;
+}
+
+/** The projection-grade fold of the tickets unit. */
+export function applyTicketsProjection(
+  state: TicketsProjectionState,
+  event: SessionEvent,
+): TicketsProjectionState {
+  if (event.type === "ticket/change") {
+    const ticket = event.data.ticket;
+    return {
+      tickets: { ...state.tickets, [String(ticket.id)]: ticket },
+      evidence: state.evidence,
+    };
+  }
+  if (event.type === "evidence/attached") {
+    const id = String(event.data.ticketId);
+    const rows = state.evidence[id] ?? [];
+    return {
+      tickets: state.tickets,
+      evidence: { ...state.evidence, [id]: [...rows, event.data.row] },
+    };
+  }
+  return state;
+}
+
+/** The projection-grade fold of the aidos.evidence unit. */
+export function applyEvidenceProjection(
+  state: Record<string, EvidenceRow[]>,
+  event: SessionEvent,
+): Record<string, EvidenceRow[]> {
+  if (event.type !== "evidence/attached") return state;
+  const id = String(event.data.ticketId);
+  const rows = state[id] ?? [];
+  return { ...state, [id]: [...rows, event.data.row] };
+}
+
+/** The projection-grade fold of the aidos.plan unit. */
+export function applyPlanProjection(
+  state: Record<string, PlanValue>,
+  event: SessionEvent,
+): Record<string, PlanValue> {
+  if (event.type !== "plan/change") return state;
+  return { ...state, [String(event.data.projectId)]: event.data.plan };
+}
+
+/** The projection-grade fold of the aidos.comments unit. */
+export function applyCommentsProjection(
+  state: Record<string, CommentRecord[]>,
+  event: SessionEvent,
+): Record<string, CommentRecord[]> {
+  if (event.type !== "comment/added") return state;
+  const id = String(event.data.ticketId);
+  const rows = state[id] ?? [];
+  return {
+    ...state,
+    [id]: [
+      ...rows,
+      {
+        ticketId: event.data.ticketId,
+        text: event.data.text,
+        author: event.data.author,
+        at: event.data.at,
+      },
+    ],
+  };
+}
+
+// ---- projection schemas (zod, the wire payload validator) ----
+
+const STATE_ENUM = zod.enum([...STATE_ORDER]);
+const ACTOR_ZOD = zod.union([
+  zod.literal("agent"),
+  zod.literal("user"),
+  zod.literal("system"),
+]);
+const EVIDENCE_ROW_ZOD = zod.object({
+  kind: zod.string(),
+  author: ACTOR_ZOD,
+  at: zod.number(),
+  payload: zod.record(zod.string(), zod.unknown()),
+});
+const TICKET_VIEW_ZOD = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  title: zod.string(),
+  description: zod.string(),
+  body: zod.string(),
+  criteria: zod.string(),
+  phase: zod.number(),
+  order: zod.number(),
+  state: STATE_ENUM,
+  confidenceScore: zod.number(),
+  gateFraction: zod.number().nullable(),
+});
+const PLAN_VALUE_ZOD = zod.object({
+  frontmatter: zod.string(),
+  context: zod.object({
+    preamble: zod.string(),
+    contextSections: zod.array(
+      zod.object({ heading: zod.string(), text: zod.string(), index: zod.number() }),
+    ),
+  }),
+  rules: zod.string(),
+});
+const COMMENT_ZOD = zod.object({
+  ticketId: zod.number(),
+  text: zod.string(),
+  author: ACTOR_ZOD,
+  at: zod.number(),
+});
+const TICKETS_PROJECTION_ZOD = zod.record(zod.string(), TICKET_VIEW_ZOD);
+const EVIDENCE_PROJECTION_ZOD = zod.record(zod.string(), zod.array(EVIDENCE_ROW_ZOD));
+const PLAN_PROJECTION_ZOD = zod.record(zod.string(), PLAN_VALUE_ZOD);
+const COMMENTS_PROJECTION_ZOD = zod.record(zod.string(), zod.array(COMMENT_ZOD));
+
+// ---- shared small helpers ----
+
+/** One plain JSON object. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Clone one JSON-safe value; the log must never alias caller data. */
+function deepClone<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => deepClone(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>)) {
+      out[key] = deepClone((value as Record<string, unknown>)[key]);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/** One ticket row from a folded snapshot. The one read code path. */
+function rowOf(snapshot: TicketSnapshot): TicketRow {
+  return {
+    id: snapshot.id,
+    projectId: snapshot.projectId,
+    title: snapshot.title,
+    description: snapshot.description,
+    body: snapshot.body,
+    criteria: snapshot.criteria,
+    phase: snapshot.phase,
+    order: snapshot.order,
+    state: snapshot.state,
+  };
+}
+
+/** The title a newly created phase takes when none is named. */
+const DEFAULT_PHASE_TITLE = "Untitled phase";
+
+/** The refusal reason string, mirroring the prototype's _refusal_reason. */
+function refusalReason(missing: string[], allowedActors: string[]): string {
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    parts.push(`missing evidence kinds: ${missing.join(", ")}`);
+  }
+  if (allowedActors.length > 0) {
+    parts.push(`allowed actors: ${allowedActors.join(", ")}`);
+  }
+  return parts.join(" ");
+}
+
+// ---- the service ----
+
+/** One per-session fold cache. */
+interface SessionCache {
+  state: AidosState;
+  observedSeq: number;
+}
+
+export interface AidosCoreConfig {
+  /** The project name a session takes when it binds its workspace. */
+  defaultProjectName?: string;
+}
+
+export interface SetTicketArgs {
+  ticketId?: number;
+  projectId?: number;
+  title?: string;
+  description?: string;
+  body?: string;
+  criteria?: string;
+  phase?: number;
+  phaseTitle?: string;
+  order?: number;
+}
+
+export interface AttachEvidenceArgs {
+  ticketId: number;
+  kind: string;
+  payload?: Record<string, unknown>;
+}
+
+export interface MoveTicketArgs {
+  ticketId: number;
+  to: TicketState;
+}
+
+export interface PlanImportArgs {
+  file: string;
+  projectId?: number;
+}
+
+export interface EvidenceView {
+  ticketId: number;
+  kind: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * The ticket service, backed by the owning session log. The constructor
+ * registers the four projection units and the invariant companion.
+ * B2 adds the typert Remote layer; B1 keeps the plain Service.
+ */
+export class AidosService extends Service {
+  static inject = [
+    "agents",
+    "sessionProjections",
+    "invariants",
+    "settings",
+    "workspaceRegistry",
+  ];
+
+  static Config = z.object({});
+
+  private readonly _config: AidosCoreConfig;
+  private readonly _caches = new WeakMap<Session, SessionCache>();
+  private _resolvedConfig: AidosConfig;
+
+  constructor(ctx: Context, config?: AidosCoreConfig) {
+    super(ctx, "aidos");
+    this._config = config ?? {};
+    this._resolvedConfig = {
+      kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
+      gates: DEFAULT_CONFIG.gates.map((gate) => ({
+        ...gate,
+        requiredKinds: [...gate.requiredKinds],
+        allowedActors: [...gate.allowedActors],
+      })),
+    };
+
+    // Config: the aidos settings namespace. Defaults are DEFAULT_CONFIG;
+    // the resolved value layers schema defaults, then base, then the user.
+    // The registration and the watch ride the inject child's fiber, so a
+    // settings service going away restores the defaults with it.
+    ctx.inject(["settings"], (settingsCtx) => {
+      const scope = settingsCtx.settings.register(
+        settingsNamespace("aidos"),
+        AIDOS_SETTINGS_SCHEMA,
+        { base: DEFAULT_CONFIG },
+      );
+      this._resolvedConfig = resolveConfig(scope.get());
+      scope.watch((next) => {
+        this._resolvedConfig = resolveConfig(next);
+      });
+    });
+
+    // The four projection units, registered under their keys.
+    ctx.inject(["sessionProjections"], (projectionCtx) => {
+      this._registerProjections(projectionCtx);
+    });
+
+    // The invariant companion, when the registry is composed.
+    if (ctx.invariants) {
+      registerAidosInvariant(ctx);
+    }
+
+    // The workspace project: bootstrap the session's project at session
+    // start, and for any agent already live when the service mounts.
+    ctx.on("agent/session-start", ({ agent }) => {
+      this._ensureProject(agent);
+    });
+    const agents = ctx.agents;
+    if (agents) {
+      for (const agent of agents.list()) {
+        this._ensureProject(agent);
+      }
+    }
+  }
+
+  // ---- reads ----
+
+  /** The board rows of one agent's session. Sorted by phase and order. */
+  getTickets(agent: Agent, opts?: { projectId?: number }): TicketView[] {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    let projectId: ProjectId;
+    if (opts?.projectId !== undefined) {
+      projectId = opts.projectId;
+      if (!cache.state.projects.has(projectId)) {
+        throw new UnknownProject(projectId);
+      }
+    } else {
+      projectId = this._ensureProject(agent).projectId;
+    }
+    const views = ticketsProjection(cache.state, this._resolvedConfig);
+    const rows = [...views.values()].filter((view) => view.projectId === projectId);
+    rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    return rows;
+  }
+
+  /** The distinct ticket states of one agent's session (the mask input). */
+  ticketStates(agent: Agent): TicketState[] {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const states = new Set<TicketState>();
+    for (const snapshot of cache.state.tickets.values()) {
+      states.add(snapshot.state);
+    }
+    return STATE_ORDER.filter((state) => states.has(state));
+  }
+
+  /** The union of the in-progress tickets' allowlists (the write boundary). */
+  allowlistUnion(agent: Agent): string[] {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const union: string[] = [];
+    const seen = new Set<string>();
+    for (const snapshot of cache.state.tickets.values()) {
+      if (snapshot.state !== "in_progress") continue;
+      for (const entry of snapshot.allowlist) {
+        if (!seen.has(entry)) {
+          seen.add(entry);
+          union.push(entry);
+        }
+      }
+    }
+    return union;
+  }
+
+  /** Serialize one project's plan as markdown. */
+  plan(agent: Agent, opts?: { projectId?: number }): string {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const meta = this._planMetaOf(projectId, cache.state);
+    const rows = this._ticketsFor(projectId, cache.state);
+    const phases: PlanPhase[] = this._phasesFor(projectId, cache.state).map((phase) => ({
+      number: phase.number,
+      title: phase.title,
+      state: phase.state,
+      tickets: rows
+        .filter((row) => row.phase === phase.number)
+        .map((row): PlanTicket => ({
+          id: String(row.id),
+          title: row.title,
+          body: row.body,
+          criteria: row.criteria,
+          claimedState: row.state,
+          order: row.order,
+        })),
+    }));
+    return renderPlan({
+      frontmatter: meta.frontmatter,
+      preamble: meta.preamble,
+      phases,
+      contextSections: meta.contextSections,
+    });
+  }
+
+  // ---- writes ----
+
+  /** Create or edit one ticket. Creates the phase when absent. */
+  setTicket(agent: Agent, args: SetTicketArgs): TicketRow {
+    if (args.ticketId !== undefined) {
+      return this._editTicket(agent, args);
+    }
+    return this._createTicket(agent, args);
+  }
+
+  /** Attach agent-authored evidence. The author is the agent, never the payload. */
+  attachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
+    const ticketId = args.ticketId;
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    if (!cache.state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    // The kind comes first, like the CLI: a human-only kind refuses before
+    // the payload is looked at, and an unregistered kind refuses after.
+    const def = this._resolveKind(args.kind);
+    if (!def) {
+      throw new UnknownKind(args.kind);
+    }
+    if (!def.allowedAuthors.includes("agent")) {
+      throw new EvidenceAuthorRefused(args.kind, "agent");
+    }
+    const payload = args.payload ?? {};
+    if (!isPlainRecord(payload)) {
+      throw new BadPayloadError("the payload must be a JSON object");
+    }
+    const attached = this._attachEvidenceInternal(agent, ticketId, def.id, payload, "agent");
+    return { ticketId, kind: args.kind, payload: attached };
+  }
+
+  /** Move one ticket. The gate enforces; done refuses for any agent. */
+  moveTicket(agent: Agent, args: MoveTicketArgs): {
+    ticketId: number;
+    fromState: TicketState;
+    toState: TicketState;
+  } {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const ticketId = args.ticketId;
+    const toState = args.to;
+    const ticket = cache.state.tickets.get(ticketId);
+    if (!ticket) {
+      throw new UnknownTicket(ticketId);
+    }
+    const fromState = ticket.state;
+
+    // 1. The pair must be legal. An illegal pair is a refusal like any
+    //    other: it appends one aidos/refusal record and changes no state.
+    if (!isLegalTransition(fromState, toState)) {
+      this._appendRefusal(agent, ticketId, fromState, toState, "no gate configured for this transition");
+      throw new GateRefused({ noGate: true, fromState, toState, actor: "agent" });
+    }
+
+    // 2. The gate. A refusal appends one aidos/refusal record, then throws.
+    const evidence = cache.state.evidence.get(ticketId) ?? [];
+    try {
+      checkGate(this._resolvedConfig, ticket, evidence, toState, "agent");
+    } catch (error) {
+      if (error instanceof GateRefused) {
+        this._appendRefusal(agent, ticketId, fromState, toState, refusalReason(error.missingKinds, error.allowedActors));
+        throw error;
+      }
+      throw error;
+    }
+
+    // 3. The move itself. One whole-value ticket/change record.
+    const at = this._atFor(agent.session, ticketId, ticket.updatedAt);
+    const snapshot: TicketSnapshot = {
+      ...ticket,
+      state: toState,
+      revision: ticket.revision + 1,
+      updatedAt: at,
+    };
+    this._commit(agent, {
+      kind: "ticket/change",
+      version: 1,
+      operation: "move",
+      ticket: snapshot,
+      at,
+    });
+    return { ticketId, fromState, toState };
+  }
+
+  /** Import one plan file into an empty project. */
+  planImport(agent: Agent, args: PlanImportArgs): {
+    phases: number[];
+    tickets: number[];
+  } {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = args.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+
+    // The file read (through the workspace root), then parse first: a parse
+    // error imports nothing.
+    const text = this._readPlanFile(agent, args.file);
+    const document = parsePlan(text);
+
+    // An import loads a whole plan into an empty project; it never merges.
+    if (this._ticketsFor(projectId, cache.state).length > 0) {
+      throw new ProjectNotEmptyError(projectId);
+    }
+
+    // The plan meta stores verbatim; rules stay "".
+    const planValue: PlanValue = {
+      frontmatter: document.frontmatter,
+      context: {
+        preamble: document.preamble,
+        contextSections: document.contextSections,
+      },
+      rules: "",
+    };
+    const lines = planContextLineCount(planValue);
+    if (lines > PLAN_CONTEXT_LIMIT) {
+      throw new ContextTooLongError(lines - PLAN_CONTEXT_LIMIT);
+    }
+    this._commit(agent, {
+      kind: "plan/change",
+      version: 1,
+      projectId,
+      plan: planValue,
+      at: this._now(),
+    });
+
+    const ticketIds: TicketId[] = [];
+    for (const phase of document.phases) {
+      // Phases come from the document, state as a label.
+      this._commit(agent, {
+        kind: "phase/set",
+        version: 1,
+        projectId,
+        number: phase.number,
+        title: phase.title,
+        state: phase.state,
+        at: this._now(),
+      });
+      for (const ticket of phase.tickets) {
+        // Every ticket lands in open, phase and order from the document,
+        // ids from the session's counter.
+        const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
+          body: ticket.body,
+          criteria: ticket.criteria,
+          phase: phase.number,
+          order: ticket.order,
+        });
+        // One imported_state row per ticket, author system.
+        this._attachEvidenceInternal(
+          agent,
+          ticketId,
+          "builtin:imported_state",
+          { claimed_state: ticket.claimedState, source: args.file },
+          "system",
+        );
+        ticketIds.push(ticketId);
+      }
+    }
+    return { phases: document.phases.map((phase) => phase.number), tickets: ticketIds };
+  }
+
+  // ---- internals: the session port ----
+
+  /** The per-session fold cache, seeding once from the session log. */
+  private _cache(session: Session): SessionCache {
+    let cache = this._caches.get(session);
+    if (cache) return cache;
+    const state = createInitialState();
+    for (const event of session.events) {
+      foldSessionEvent(state, event);
+    }
+    cache = { state, observedSeq: session.events.length };
+    this._caches.set(session, cache);
+    return cache;
+  }
+
+  /** Fold the events appended since the last observation. */
+  private _sync(session: Session, cache: SessionCache): void {
+    const events = session.events;
+    for (let index = cache.observedSeq; index < events.length; index += 1) {
+      foldSessionEvent(cache.state, events[index]);
+    }
+    cache.observedSeq = events.length;
+  }
+
+  /**
+   * The append path: validate the candidate against the folded state (the
+   * invariant companion's check), append to the session log, then fold.
+   * A violation throws InvariantError and the log does not change.
+   */
+  private _commit(agent: Agent, event: AidosEvent): void {
+    const session = agent.session;
+    const cache = this._cache(session);
+    this._sync(session, cache);
+    validateAidosEvent(cache.state, event);
+    session.append(event.kind, event);
+    this._sync(session, cache);
+  }
+
+  /** The clock, seconds as a float, floored per ticket at the last at. */
+  private _now(): number {
+    return Date.now() / 1000;
+  }
+
+  private _atFor(session: Session, ticketId: TicketId, floor?: number): number {
+    const cache = this._cache(session);
+    this._sync(session, cache);
+    let at = this._now();
+    const lastAt = cache.state.lastAt.get(ticketId);
+    if (lastAt !== undefined && lastAt > at) {
+      at = lastAt;
+    }
+    if (floor !== undefined && floor > at) {
+      at = floor;
+    }
+    return at;
+  }
+
+  // ---- internals: the workspace project ----
+
+  /**
+   * The workspace binding: the session's workspace record (path and name),
+   * falling back to the session header cwd and then a default.
+   */
+  private _workspaceOf(agent: Agent): { absPath: string; name: string } {
+    const registry = this.ctx.workspaceRegistry;
+    if (registry) {
+      try {
+        for (const workspace of registry.list()) {
+          if (workspace.sessionIds.includes(agent.session.id)) {
+            return { absPath: workspace.path, name: workspace.title };
+          }
+        }
+      } catch {
+        // The registry may be unavailable mid-bootstrap; fall through.
+      }
+    }
+    const cwd = agent.session.header.cwd;
+    if (cwd) {
+      return {
+        absPath: cwd,
+        name: this._config.defaultProjectName ?? (basename(cwd) || cwd),
+      };
+    }
+    return { absPath: ".", name: this._config.defaultProjectName ?? "aidos" };
+  }
+
+  /** The workspace path the session binds to. */
+  private _workspacePath(agent: Agent): string {
+    return this._workspaceOf(agent).absPath;
+  }
+
+  /**
+   * Bootstrap one session's workspace project: create it once, keyed by the
+   * workspace path. The project id is the session's first (1 on a fresh
+   * session), mirroring the CLI's init.
+   */
+  private _ensureProject(agent: Agent): { projectId: ProjectId } {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const binding = this._workspaceOf(agent);
+    for (const [projectId, project] of cache.state.projects) {
+      if (project.absPath === binding.absPath) {
+        return { projectId };
+      }
+    }
+    const projectId = this._nextProjectId(cache.state);
+    this._commit(agent, {
+      kind: "project/created",
+      version: 1,
+      projectId,
+      absPath: binding.absPath,
+      name: binding.name,
+      at: this._now(),
+    });
+    return { projectId };
+  }
+
+  // ---- internals: ticket writes ----
+
+  /** Create one ticket in open, creating the phase when it is absent. */
+  private _createTicket(agent: Agent, args: SetTicketArgs): TicketRow {
+    const title = args.title;
+    if (typeof title !== "string" || title.trim() === "") {
+      throw new BadPayloadError("set_ticket requires a title to create a ticket");
+    }
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = args.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const phase = args.phase ?? 1;
+    const phases = cache.state.phases.get(projectId);
+    if (!phases || !phases.has(phase)) {
+      this._commit(agent, {
+        kind: "phase/set",
+        version: 1,
+        projectId,
+        number: phase,
+        title: args.phaseTitle ?? DEFAULT_PHASE_TITLE,
+        state: "open",
+        at: this._now(),
+      });
+    }
+    const ticketId = this._createTicketInternal(agent, projectId, title, args.description ?? "", {
+      body: args.body,
+      criteria: args.criteria,
+      phase,
+      order: args.order,
+    });
+    const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new Error("a created ticket is missing from the folded state");
+    }
+    return rowOf(snapshot);
+  }
+
+  /** Edit the named fields of one ticket; an absent field leaves its value. */
+  private _editTicket(agent: Agent, args: SetTicketArgs): TicketRow {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const ticketId = args.ticketId as TicketId;
+    const prev = cache.state.tickets.get(ticketId);
+    if (!prev) {
+      throw new UnknownTicket(ticketId);
+    }
+    const at = this._atFor(agent.session, ticketId, prev.updatedAt);
+    const snapshot: TicketSnapshot = {
+      ...prev,
+      title: args.title ?? prev.title,
+      description: args.description ?? prev.description,
+      body: args.body ?? prev.body,
+      criteria: args.criteria ?? prev.criteria,
+      phase: args.phase ?? prev.phase,
+      order: args.order ?? prev.order,
+      revision: prev.revision + 1,
+      updatedAt: at,
+    };
+    this._commit(agent, {
+      kind: "ticket/change",
+      version: 1,
+      operation: "set",
+      ticket: snapshot,
+      at,
+    });
+    return rowOf(snapshot);
+  }
+
+  /** The shared create: one whole-value ticket/change create record. */
+  private _createTicketInternal(
+    agent: Agent,
+    projectId: ProjectId,
+    title: string,
+    description: string,
+    opts?: { body?: string; criteria?: string; phase?: number; order?: number },
+  ): TicketId {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const ticketId = this._nextTicketId(cache.state);
+    const phase = opts?.phase ?? 1;
+    const order = opts?.order ?? this._nextOrder(cache.state, projectId, phase);
+    const at = this._now();
+    const snapshot: TicketSnapshot = {
+      id: ticketId,
+      projectId,
+      title,
+      description,
+      body: opts?.body ?? "",
+      criteria: opts?.criteria ?? "",
+      phase,
+      order,
+      state: "open",
+      allowlist: [],
+      revision: 1,
+      createdAt: at,
+      updatedAt: at,
+    };
+    this._commit(agent, {
+      kind: "ticket/change",
+      version: 1,
+      operation: "create",
+      ticket: snapshot,
+      at,
+    });
+    return ticketId;
+  }
+
+  /** Attach one evidence row with a stamped actor. Returns the row payload. */
+  private _attachEvidenceInternal(
+    agent: Agent,
+    ticketId: TicketId,
+    kind: string,
+    payload: Record<string, unknown>,
+    actor: Actor,
+  ): Record<string, unknown> {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const def = this._resolvedConfig.kinds.find((candidate) => candidate.id === kind);
+    if (!def) {
+      throw new UnknownKind(kind);
+    }
+    if (!def.allowedAuthors.includes(actor)) {
+      throw new EvidenceAuthorRefused(kind, actor);
+    }
+    const row: EvidenceRow = {
+      kind,
+      author: actor,
+      at: this._atFor(agent.session, ticketId),
+      payload: deepClone(payload),
+    };
+    this._commit(agent, {
+      kind: "evidence/attached",
+      version: 1,
+      ticketId,
+      row,
+    });
+    return row.payload;
+  }
+
+  /** One log-only refusal record, appended before the GateRefused throw. */
+  private _appendRefusal(
+    agent: Agent,
+    ticketId: TicketId,
+    fromState: TicketState,
+    toState: TicketState,
+    reason: string,
+  ): void {
+    this._commit(agent, {
+      kind: "aidos/refusal",
+      version: 1,
+      ticketId,
+      fromState,
+      toState,
+      actor: "agent",
+      reason,
+      at: this._now(),
+    });
+  }
+
+  /**
+   * Resolve one tool kind name to its registered kind. The agent-allowed
+   * kinds are offered by their short names (automated_check and friends);
+   * they resolve to the registered builtin: ids so the gate's required kinds
+   * match. A full id resolves exactly.
+   */
+  private _resolveKind(kind: string): KindDef | undefined {
+    const direct = this._resolvedConfig.kinds.find((candidate) => candidate.id === kind);
+    if (direct) return direct;
+    if (!kind.startsWith("builtin:") && !kind.startsWith("plugin:")) {
+      return this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+    }
+    return undefined;
+  }
+
+  // ---- internals: reads over the folded state ----
+
+  private _ticketsFor(projectId: ProjectId, state: AidosState): TicketRow[] {
+    const rows: TicketRow[] = [];
+    for (const snapshot of state.tickets.values()) {
+      if (snapshot.projectId === projectId) {
+        rows.push(rowOf(snapshot));
+      }
+    }
+    rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    return rows;
+  }
+
+  private _phasesFor(projectId: ProjectId, state: AidosState): PhaseView[] {
+    const phases = state.phases.get(projectId);
+    if (!phases) return [];
+    return [...phases.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([number, phase]) => ({
+        projectId,
+        number,
+        title: phase.title,
+        state: phase.state,
+      }));
+  }
+
+  private _planMetaOf(
+    projectId: ProjectId,
+    state: AidosState,
+  ): { frontmatter: string; preamble: string; contextSections: ContextSection[] } {
+    const plan = state.plans.get(projectId);
+    if (!plan) {
+      return { frontmatter: "", preamble: "", contextSections: [] };
+    }
+    return {
+      frontmatter: plan.frontmatter,
+      preamble: plan.context.preamble,
+      contextSections: plan.context.contextSections.map((section) => ({ ...section })),
+    };
+  }
+
+  private _nextProjectId(state: AidosState): ProjectId {
+    let max = 0;
+    for (const id of state.projects.keys()) {
+      if (id > max) max = id;
+    }
+    return max + 1;
+  }
+
+  private _nextTicketId(state: AidosState): TicketId {
+    let max = 0;
+    for (const id of state.tickets.keys()) {
+      if (id > max) max = id;
+    }
+    return max + 1;
+  }
+
+  /** The next free order in one phase, counted from 1. */
+  private _nextOrder(state: AidosState, projectId: ProjectId, phase: number): number {
+    let max = 0;
+    for (const snapshot of state.tickets.values()) {
+      if (
+        snapshot.projectId === projectId &&
+        snapshot.phase === phase &&
+        snapshot.order > max
+      ) {
+        max = snapshot.order;
+      }
+    }
+    return max + 1;
+  }
+
+  /** Read one plan file, resolved under the session's workspace root. */
+  private _readPlanFile(agent: Agent, file: string): string {
+    const target = isAbsolute(file) ? file : join(this._workspacePath(agent), file);
+    try {
+      return readFileSync(target, "utf8");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new FileNotReadError(file, `cannot read the plan file ${file}: ${detail}`);
+    }
+  }
+
+  // ---- internals: the projection registrations ----
+
+  private _registerProjections(projectionCtx: Context): void {
+    projectionCtx.sessionProjections.register({
+      key: "aidos.tickets",
+      schema: TICKETS_PROJECTION_ZOD,
+      init: (): TicketsProjectionState => ({ tickets: {}, evidence: {} }),
+      apply: applyTicketsProjection,
+      view: (state) => this._ticketsView(state),
+      stateVersion: 1,
+    });
+    projectionCtx.sessionProjections.register({
+      key: "aidos.evidence",
+      schema: EVIDENCE_PROJECTION_ZOD,
+      init: () => ({}),
+      apply: applyEvidenceProjection,
+      view: (state) => state,
+      stateVersion: 1,
+    });
+    projectionCtx.sessionProjections.register({
+      key: "aidos.plan",
+      schema: PLAN_PROJECTION_ZOD,
+      init: () => ({}),
+      apply: applyPlanProjection,
+      view: (state) => state,
+      stateVersion: 1,
+    });
+    projectionCtx.sessionProjections.register({
+      key: "aidos.comments",
+      schema: COMMENTS_PROJECTION_ZOD,
+      init: () => ({}),
+      apply: applyCommentsProjection,
+      view: (state) => state,
+      stateVersion: 1,
+    });
+  }
+
+  /** The board view of the tickets unit, config applied at view time. */
+  private _ticketsView(state: TicketsProjectionState): Record<string, TicketView> {
+    const config = this._resolvedConfig;
+    const out: Record<string, TicketView> = {};
+    for (const [id, snapshot] of Object.entries(state.tickets)) {
+      const evidence = state.evidence[id] ?? [];
+      out[id] = {
+        id: snapshot.id,
+        projectId: snapshot.projectId,
+        title: snapshot.title,
+        description: snapshot.description,
+        body: snapshot.body,
+        criteria: snapshot.criteria,
+        phase: snapshot.phase,
+        order: snapshot.order,
+        state: snapshot.state,
+        confidenceScore: confidenceScoreOf(config, evidence),
+        gateFraction: gateFractionOf(config, snapshot, evidence),
+      };
+    }
+    return out;
+  }
+}
+
+/**
+ * Mount the service on a context. Returns the disposer.
+ *
+ * The service is constructed directly (the Service constructor registers
+ * `ctx.aidos` synchronously), so the harness reads the service without
+ * awaiting a plugin load; the constructor's own registrations ride the
+ * calling fiber and unload with it. The disposer lifts the service off the
+ * context for callers that want an explicit handle.
+ */
+export function registerAidosService(ctx: Context, config?: AidosCoreConfig): () => void {
+  const service = new AidosService(ctx, config);
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    try {
+      ctx.reflect.set("aidos", undefined);
+    } catch {
+      // The owning fiber may already be unloading; the registration dies
+      // with it, so there is nothing left to lift.
+    }
+    void service;
+  };
+}

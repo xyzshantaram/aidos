@@ -1,0 +1,10 @@
+# The aidos agent preset composition. A top-level list of plugin rows; the
+# preset loader resolves a relative name from this preset's own directory,
+# so the aidos-tools plugin file travels with the preset.
+#
+# The single row mounts the aidos-tools plugin, which registers the six
+# board tools, the tool:aidos prompt section, the delegation-depth guard,
+# the state-gated tool masks, the bash-ask listener, and the per-ticket
+# allowlist guard. The AidosService itself mounts on the host plane
+# (registerAidosService); this composition only adds the agent-plane rows.
+- name: ./aidos-tools.js
