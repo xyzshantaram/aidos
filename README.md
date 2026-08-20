@@ -75,15 +75,15 @@ aidos never writes a file into a project directory. All state lives in aidos's o
 A project is keyed by its absolute path. A `move` command repoints a project to a new path.
 
 aidos is opt-in. The aidos preset sits alongside the standard preset. A quick task uses a standard
-session with zero ticket machinery.
+session with zero ticket machinery. The agent's tools follow the ticket state. Before signoff it
+can read and plan but cannot write files or run commands.
 
 ## Built on DeepSeek Harness
 
 The implementation builds on DeepSeek Harness (dsh), not the from-scratch stack an earlier draft
 assumed. dsh provides the agent loop, the session log, the web UI, the tool pipeline, subagents,
 jobs, skills, and the human loop. aidos adds the ticket kernel, the board, and the plan skill. The
-session log is the append-only source of truth. Derived reads are projections, not queries. A gate
-is a monotonic tool guard.
+session log is the append-only source of truth. Derived reads are projections, not queries.
 
 See PLAN.md for the full design and the ticket list.
 

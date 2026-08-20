@@ -179,6 +179,7 @@ The parts below are the ones this design leans on.
 | Tickets, states, lifecycle | New `aidos` session domain (`ticket/change` whole-value events), states as an exhaustive enum | **New** |
 | Evidence rows, kind registry, weights | New domain rows plus kind definitions (builtin constants plus settings namespace), authors stamped at the write boundary | **New** |
 | Gates (data, deny-by-default, named refusals) | New pure gate function in the service plus monotonic `ctx.tools.guard()` | **New** (seam built) |
+| Agent tool access follows ticket state | `ctx.tools.restrict` per agent scope, re-applied on `ticket/change`, with the guard as the call-time belt | **New** (seam built) |
 | Confidence score, gate fraction (advisory) | Projection unit columns, rendered by the board | New (mechanics built) |
 | Plan: tickets plus context (under 500 lines) plus rules | `plan/change` session event plus `plan` skill plus `plan`/`plan_import` tools | New (format exists in prototype) |
 | Agent CLI (`set_ticket`, `attach_evidence`, `move_ticket`, `plan`) | Model-facing tools registered via `ctx.tools.register` (JSON results) | **New** |
@@ -350,6 +351,35 @@ the child's own scope registers. Board tools therefore live on the
 agent-preset plane (which children join via `composeFrom`). A
 `toolFilter: { deny: [...] }` at spawn can mask them. The depth check catches
 everything else.
+
+#### State-gated tool access
+
+The agent's tool surface follows the ticket it is working. Before you sign
+off, the agent can plan and read but cannot change anything. This is the
+structural form of "talk the work through before it writes anything". The
+score stays advisory: the tiers key on ticket state, never on the score.
+
+The mask is per session and keyed by the state of the session's active
+ticket. `ctx.tools.restrict({ deny: [...] })` removes the named global
+tools from the agent scope. The mask is re-applied at session start and on
+every `ticket/change` event. The monotonic guard re-checks the state at
+call time, so a mid-turn move cannot unlock a call that already started.
+The aidos preset owns the mask; standard sessions have no ticket machinery
+and no mask.
+
+| State | Tools the agent may see |
+|---|---|
+| open (or no active ticket) | conversation, questions, `plan`/`plan_import`, ticket tools, skills, `read`/`read_image`, web search and fetch |
+| in-progress | the above plus `write`, `edit`, `bash`, subagents, jobs, and the MCP tools |
+| awaiting-verification | read, bash (to run the automated check), evidence tools. No write or edit |
+| done | conversation, read, `get_tickets` |
+
+The tier contents are a first draft (see the human review queue). The
+active ticket defaults to the one the human last moved to `in-progress`.
+The board offers a "work on this ticket" control for sessions with several
+tickets. The file allowlist composes with the tiers: the tiers decide which
+tools exist, and the allowlist decides which paths the implementation tools
+may touch.
 
 #### Projection units (Ticket P7's SQL views, ported)
 
@@ -714,14 +744,17 @@ runs both.
    C3 and the P-series pins.
 2. **B1, tools.** `get_tickets`, `set_ticket`, `attach_evidence`,
    `move_ticket`, `plan`, `plan_import`, with the guard and the depth check.
-   Port the P3 CLI tests (test_20 to 25) as tool tests. Port the P8 pins and
+   The state-gated tool tiers ship here: the `ctx.tools.restrict` masks
+   follow ticket state, and the guard enforces them at call time. Port the
+   P3 CLI tests (test_20 to 25) as tool tests. Port the P8 pins and
    the builtin-kind mirror pin (one constant table plus a deliberate test
    mirror).
 3. **B2, human surface.** Remote endpoints plus `userQuestions`-backed
    flows. Port the lifecycle tests that need two actors (test_08, test_09,
    test_22, test_27).
 4. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
-   the grid, detail, evidence, signoff, and send-back. Criterion coverage
+   the grid, detail, evidence, signoff, send-back, and the "work on this
+   ticket" control. Criterion coverage
    (Ticket P9's read) lands here. Port the projection and view tests
    (test_26, test_31, test_32) against the client read model. U5's "every
    behavior has an equivalent test" checklist is the definition of done.
@@ -842,6 +875,16 @@ the first board.
 - **The manifest deny must cover the hashline edit path.** hashline writes
   through `ctx.fs`, so the guard hooks the same write boundary as the
   builtin tools, not only the tool schemas.
+- **The tool tiers are a UX judgment.** Which tools exist per state is a
+  first draft. The awaiting-verification tier keeps bash and subagents for
+  the check and the review. A read-only tier is the alternative. Settle in
+  review before B1 ships.
+- **The active ticket defaults to the last ticket moved to in-progress.**
+  Multi-ticket sessions may need the explicit board control. The mask
+  re-applies per session, and the guard catches a mid-turn move.
+- **Subagents inherit the mask.** A child spawned in open has no
+  implementation tools. One spawned in-progress has them. The tier follows
+  the parent's active ticket at spawn time.
 
 ---
 
@@ -1207,6 +1250,10 @@ work is the tools and the gate enforcement.
   remotes, stash, rebase, and submodules always go to the user).
 - [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
   the ecosystem autodetect behavior.
+- [ ] B1 — the tool tier contents per state, especially whether
+  awaiting-verification keeps bash and subagents or goes read-only.
+- [ ] B1 — the active-ticket default (last moved to in-progress) versus the
+  explicit board control for multi-ticket sessions.
 
 ---
 
