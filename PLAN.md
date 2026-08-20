@@ -585,7 +585,7 @@ file and deleted. PLAN.md is the sanctioned exception to the rule: it is the
 bootstrap ticket source, and Ticket P6 deletes it when the board imports it.
 The dotfiles-ai repo keeps only the user's own tracked content. Once the
 port is verified, the opencode items that moved out are deleted from the
-repo (W13).
+repo (W12).
 
 ### The workstation port (dotfiles-ai)
 
@@ -680,6 +680,11 @@ Plan-review dismissal already stops via `dsh-plan-mode`; the wrapper covers
 the generic question path. Tool shadowing: preset row order decides which
 `ask_user_question` row wins. Confirm at W7.
 
+**Steering is built in.** The `/btw` command idea is dropped. The dsh
+composer already steers a running agent: a user message sent while a turn
+is in flight submits in `steer` mode at the nearest step boundary. No
+custom client plugin needed.
+
 **Reject with a comment.** The approval answer payload is exactly
 `{ sessionId, approvalId, outcome: 'allowed-once' | 'rejected' }` (verified
 in `dsh-host-apiproxy/api/approvals.schema`). There is no comment channel,
@@ -736,19 +741,6 @@ denies `read`/`write`/`edit` calls whose path is a manifest or lockfile:
 `Gemfile`. The model cannot pin an outdated version, because the tool is
 the only writer and it always resolves current. Review the file list at
 W11. `requirements.txt` may deserve an exception.
-
-**The /btw steer command (W12).** The composer accepts `/btw <message>`.
-The personal client plugin recognizes the prefix and does not submit the
-line as a normal user message. It keeps the text in a pending queue. After
-the next assistant message that carries real content completes (a message
-with a text part; a tool-call-only message or a thinking block does not
-count), the plugin injects the text as a user message through
-`sessions.send(sessionId, { mode: 'steer', content })`, the same call the
-W8 permission card uses. The agent reads the note at that point in the
-loop. Pending messages fire in order, each after the next content-bearing
-assistant message. If no turn is running when the user types `/btw`, the
-message fires immediately as a steer. Confirm the composer slot and the
-assistant-message part shape at W12.
 
 ### Packaging and delivery
 
@@ -879,12 +871,8 @@ runs both.
 18. **W11, dependencies through a tool only.** The `package` tool with
     ecosystem autodetect. The manifest and lockfile deny guard on the
     read/write/edit tools.
-19. **W12, the /btw steer command.** The personal client plugin intercepts
-    `/btw <message>` in the composer, queues the text, and injects it as a
-    steer user message after the next content-bearing assistant message.
-    With no turn running, it injects immediately.
-20. **W13, decommission dotfiles-ai.** After the personal bundle (W0 to
-    W12) is verified from `$DSH_HOME` alone, delete the opencode content
+19. **W12, decommission dotfiles-ai.** After the personal bundle (W0 to
+    W11) is verified from `$DSH_HOME` alone, delete the opencode content
     that moved out of dotfiles-ai: the ported skills, the agent
     definitions (coder, tester, researcher, see), the opencode plugins,
     the MCP rows, and the provider config. The repo keeps the user's own
@@ -1353,10 +1341,7 @@ work is the tools and the gate enforcement.
   remotes, stash, rebase, and submodules always go to the user).
 - [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
   the ecosystem autodetect behavior.
-- [ ] W12 — the composer slot and the content-bearing assistant-message
-  detection (a text part versus a tool-call-only message), plus the idle
-  case: `/btw` with no turn running fires immediately.
-- [ ] W13 — the harness runs with zero opencode config left in
+- [ ] W12 — the harness runs with zero opencode config left in
   dotfiles-ai, and a fresh clone syncs the same bundle.
 - [ ] B0 — run `npm test` in `packages/aidos/` yourself and skim
   PORT-MAP.md's "could not port" rows before B1 builds on the kernel.
