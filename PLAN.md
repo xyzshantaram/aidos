@@ -558,7 +558,9 @@ $DSH_HOME/aidos/scratch/<workspace-key>/
 **How the port uses it.** The former DSH.md design doc was consumed by this
 file and deleted. PLAN.md is the sanctioned exception to the rule: it is the
 bootstrap ticket source, and Ticket P6 deletes it when the board imports it.
-The dotfiles-ai repo keeps only the user's own tracked content.
+The dotfiles-ai repo keeps only the user's own tracked content. Once the
+port is verified, the opencode items that moved out are deleted from the
+repo (W13).
 
 ### The workstation port (dotfiles-ai)
 
@@ -625,11 +627,15 @@ revision trail audits changes. The plugin reads the resolved value per
 selection and per call.
 
 **The meridian route.** Meridian (`rynfar/meridian`, port 9000) is the work
-AI. The opencode config treats it as an Anthropic-compatible endpoint. dsh
-ships no Anthropic adapter, so W0 must verify the protocol: if meridian
-speaks Anthropic, the personal bundle needs a small LLM adapter plugin
-(around a hundred lines). If meridian also exposes an OpenAI-compatible
-mode, a configurable provider route covers it.
+AI. It exposes OpenAI-compatible endpoints: `/v1/chat/completions` and
+`/v1/models` (user-verified on port 9000). The opencode config also treats
+it as Anthropic-compatible, and dsh's pi-ai adapter serves the
+`anthropic-messages` protocol, so no adapter plugin is needed either way.
+W0 declares the route through pi-ai with `api: openai-completions` and
+`baseURL: http://127.0.0.1:9000/v1`. That protocol also enables `/models`
+auto-detection in the Models page, which `anthropic-messages` cannot do.
+A dummy `apiKeyEnv` value satisfies the credential check. The exact rows
+are in `docs/w0-providers.md`.
 
 #### Personal AI config
 
@@ -705,6 +711,19 @@ denies `read`/`write`/`edit` calls whose path is a manifest or lockfile:
 `Gemfile`. The model cannot pin an outdated version, because the tool is
 the only writer and it always resolves current. Review the file list at
 W11. `requirements.txt` may deserve an exception.
+
+**The /btw steer command (W12).** The composer accepts `/btw <message>`.
+The personal client plugin recognizes the prefix and does not submit the
+line as a normal user message. It keeps the text in a pending queue. After
+the next assistant message that carries real content completes (a message
+with a text part; a tool-call-only message or a thinking block does not
+count), the plugin injects the text as a user message through
+`sessions.send(sessionId, { mode: 'steer', content })`, the same call the
+W8 permission card uses. The agent reads the note at that point in the
+loop. Pending messages fire in order, each after the next content-bearing
+assistant message. If no turn is running when the user types `/btw`, the
+message fires immediately as a steer. Confirm the composer slot and the
+assistant-message part shape at W12.
 
 ### Packaging and delivery
 
@@ -792,9 +811,10 @@ runs both.
    attachment. The shell bypass suite (Ticket A4) against the shipped shell
    posture.
 7. **W0, personal bundle scaffold.** The sync script (dotfiles-ai to
-   `$DSH_HOME`), the preset directory, the provider routes in Settings to
-   Models (OpenCode Go and the direct DeepSeek route), and the meridian
-   protocol check (Anthropic adapter or OpenAI-compatible route).
+   `$DSH_HOME`), the preset directory, and the provider routes in Settings
+   to Models: OpenCode Go, the direct DeepSeek route, and meridian as an
+   OpenAI-compatible route (`api: openai-completions`,
+   `baseURL: http://127.0.0.1:9000/v1`). No adapter plugin is needed.
    **Evaluate:** two profiles against the same provider, with different
    keys, both work in one install. Model auto-detection lists models for
    each.
@@ -831,6 +851,19 @@ runs both.
 18. **W11, dependencies through a tool only.** The `package` tool with
     ecosystem autodetect. The manifest and lockfile deny guard on the
     read/write/edit tools.
+19. **W12, the /btw steer command.** The personal client plugin intercepts
+    `/btw <message>` in the composer, queues the text, and injects it as a
+    steer user message after the next content-bearing assistant message.
+    With no turn running, it injects immediately.
+20. **W13, decommission dotfiles-ai.** After the personal bundle (W0 to
+    W12) is verified from `$DSH_HOME` alone, delete the opencode content
+    that moved out of dotfiles-ai: the ported skills, the agent
+    definitions (coder, tester, researcher, see), the opencode plugins,
+    the MCP rows, and the provider config. The repo keeps the user's own
+    tracked content and the sync source for the bundle. The dotfiles
+    README states the new purpose. **Evaluate:** the harness works with no
+    opencode config left, and a fresh clone of dotfiles-ai syncs the same
+    personal bundle.
 
 B0 and the W-series are independent. The personal bundle delivers immediate
 value before the kernel finishes. The board (B3) is the milestone that ships
@@ -866,10 +899,12 @@ the first board.
   auto-detection). The API key lives in `$DSH_HOME/.credentials.yaml` under
   `OPENCODE_GO_API_KEY` (or the env var, which wins). Configure the route in
   W0.
-- **Meridian's protocol** is unverified. The opencode config treats it as
-  Anthropic-compatible. dsh ships no Anthropic adapter. W0 must check
-  whether meridian also speaks OpenAI-compatible, or a small adapter plugin
-  is needed.
+- **Meridian's protocol** is settled. Meridian exposes OpenAI-compatible
+  `/v1/chat/completions` and `/v1/models` on port 9000 (user-verified).
+  dsh's pi-ai adapter serves both `openai-completions` and
+  `anthropic-messages`, so no adapter plugin is needed. W0 declares the
+  route with `api: openai-completions` and a dummy key. One curl probe
+  before wiring confirms the endpoints.
 - **The Profile seat** replaces the shipped model seat. The slot shadowing
   must be confirmed in W6, together with the badge comparison against the
   live session selection.
@@ -1256,8 +1291,8 @@ work is the tools and the gate enforcement.
   unlike the other five views. Two `ticket.created` records sharing one id would return the
   ticket twice, and the old projection collapsed them by last-write-wins. The store never writes
   a duplicate, so this needs a hand-written log. Decide whether the views should defend anyway.
-- [ ] W0 — the meridian protocol check: Anthropic-only or also OpenAI-compatible. It decides
-  whether a small adapter is needed.
+- [ ] W0 — curl-probe http://127.0.0.1:9000/v1/chat/completions and /v1/models once, and confirm
+  the openai-completions route answers before wiring.
 - [ ] W6 — the Profile seat shadowing and the badge comparison against the live session
   selection.
 - [ ] W6 — the title rewriter race against the renderer's `DocumentTitle` effect.
@@ -1276,6 +1311,11 @@ work is the tools and the gate enforcement.
   remotes, stash, rebase, and submodules always go to the user).
 - [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
   the ecosystem autodetect behavior.
+- [ ] W12 — the composer slot and the content-bearing assistant-message
+  detection (a text part versus a tool-call-only message), plus the idle
+  case: `/btw` with no turn running fires immediately.
+- [ ] W13 — the harness runs with zero opencode config left in
+  dotfiles-ai, and a fresh clone syncs the same bundle.
 - [ ] B1 — awaiting-verification asks on every bash call; decide whether a
   concurrent in-progress ticket pays the same ask.
 - [ ] B1 — the union semantics of multiple in-progress tickets: the write
