@@ -116,7 +116,7 @@ There is no SQLite (the session log is the store).
 | Subagent board access | Depth check plus toolFilter | Structural exclusion |
 | T2 tool loader | Defer. Use the existing plugin system. | The loader was a greenfield artifact. Presets and packages cover the need. |
 | Config from git | Defer. Use a sync script. | dsh hot-reloads patches and re-discovers presets and skills live. |
-| MCP servers | nostrbook, gitlab, swiggy-food, swiggy-instamart | web_search and web_fetch are native dsh tools. |
+| MCP servers | nostrbook, gitlab, swiggy-food, swiggy-instamart, git | web_search and web_fetch are native dsh tools. The git row is the model's only git surface (W10). |
 | Delivery | Two bundles | aidos is unopinionated and distributable. Personal config lives in dotfiles-ai and syncs to the harness. |
 | Scratch rule | Per-project scratch outside the repo | Agent output never lands in the project repo. It lives in the scratch dir or the ticket board. |
 | Node-tree renderer | Paused. nostr-canvas later | No renderer ships in v1. |
@@ -520,6 +520,9 @@ lives in dotfiles-ai and syncs to the harness.
 | Plugin: opencode-profile | Replaced by the Profile submenu (see "Model profiles"). A client plugin with the Profile submenu, the badge, and the see-model resolver. | Personal bundle client plugin |
 | Plugin: session-hygiene | A small prompt-section plugin. It reads session age (`session.header.createdAt`) and compaction count (compaction events, the `sessionStats` projection) and injects a warning section when the session is old or heavily compacted. | Personal bundle host row |
 | Tool: shell-command-long-running | `dsh-tool-bash` with `run_in_background` gives background jobs with `job_output`/`job_kill`. A thin tmux wrapper is optional via `dsh-tmux-context`. The opencode TUI "bash renderer" problem does not exist in dsh. | Personal preset tool row |
+| Text editing | dsh-better-edit (hashline, npm, MIT): hash-anchored `read`/`edit`/`batch_edit`/`undo_last_edit` replacing the builtin fs `read`/`edit`. Writes go through `ctx.fs`, so the sandbox still confines. Guidance overrides per preset at `$DSH_HOME/plugins/dsh-better-edit/<preset>/`. | Personal bundle plugin add |
+| Git access | Raw git is denied to the model. The official MCP git server (`mcp-server-git` via uvx) exposes status, diff, log, commit, add, reset, branch, checkout, and show as `mcp__git__*` tools. A `git` stub on the model's PATH redirects to those tools or asks the user. The A4 bypass suite covers the escape routes. | Personal bundle patch plus preset |
+| Dependencies | A `package` tool takes the ecosystem, autodetects the package manager, and installs the latest registry version. Manifest and lockfile paths are denied to the read/write/edit tools; the tool is the only path that changes them. | Personal bundle custom tool plus guard |
 | Tab title | A title-rewriter client plugin. The renderer hardcodes `document.title = "<session title> — DeepSeek Harness"`. The plugin observes `document.title` and rewrites it to `dsh | <session title>`. The upstream fix is a configurable product title. | Personal bundle client plugin |
 | Session cost | A `cost` projection unit sums per-model tokens (from `assistant/chunk` usage records) times the price from a price-table settings namespace. A small client component shows it near the stats strip. The strip itself is shipped client code. Our display is a companion. | Personal bundle |
 | MCP servers | `dsh-mcp-client` rows: nostrbook, gitlab, swiggy-food, swiggy-instamart. Skip web_search and fetch: dsh's native `web_search` and `web_fetch` cover them. | Personal bundle patch |
@@ -605,6 +608,43 @@ point in the loop. The message reads "The user rejected the <tool> call.
 Comment: <text> Adjust your next action." The upstream end state is an
 optional rejection-reason field on the approval outcome. Confirm the
 permission-card seat at W8.
+
+**Hashline editing (W9).** dsh-better-edit replaces the builtin fs `read`
+and `edit` with hash-anchored `read`/`edit`/`batch_edit`/`undo_last_edit`.
+Every line carries a 3-character content hash. An edit targets hashes, so
+the model never echoes the replaced text (31 to 43 percent fewer output
+tokens) and a stale or ambiguous range is hard-rejected before anything is
+written. Writes go through `ctx.fs`, so the sandbox and the observation
+policy still confine. Guidance overrides per preset live at
+`$DSH_HOME/plugins/dsh-better-edit/<preset>/<section>.md` and are seeded on
+first boot. The builtin `write` and `read_image` stay. Tool-name shadowing:
+`read` and `edit` collide with the builtin rows, and registration order
+decides the winner. Confirm at W9.
+
+**Git through MCP only (W10).** The official `mcp-server-git` (run via
+uvx) exposes status, unstaged and staged diff, log, commit, add, reset,
+branch, checkout, and show as `mcp__git__*` tools. Raw git is denied to the
+model two ways. A `tools/pre-execute` deny refuses bash calls whose command
+matches git patterns. A `git` stub on the model's bash PATH prints "Use the
+mcp__git__* tools. If the operation is not available there, ask the user to
+run it." The MCP server cannot push, fetch, manage remotes, stash, rebase,
+merge, touch submodules, or handle credentials, so those operations always
+route to the user. The A4 bypass suite extends to the escape routes
+(`git -C`, `sh -c`, aliases, scripts, command substitution). The human side
+keeps real git. The PATH-stub mechanics land on `dsh-shell-env`'s
+contributor registry or the sandbox executor's env config. Confirm at W10.
+
+**Dependencies through a tool only (W11).** A `package` tool takes the
+ecosystem (rust, python, nodejs, go, and so on), autodetects the package
+manager (cargo, uv or pip or poetry, npm or pnpm or bun, go, and so on),
+resolves the latest version from the registry, and runs the change. A guard
+denies `read`/`write`/`edit` calls whose path is a manifest or lockfile:
+`package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`,
+`pnpm-lock.yaml`, `bun.lock`, `cargo.toml`, `Cargo.lock`, `pyproject.toml`,
+`poetry.lock`, `Pipfile`, `requirements.txt`, `go.mod`, `go.sum`, and
+`Gemfile`. The model cannot pin an outdated version, because the tool is
+the only writer and it always resolves current. Review the file list at
+W11. `requirements.txt` may deserve an exception.
 
 ### Packaging and delivery
 
@@ -715,6 +755,15 @@ runs both.
 15. **W8, reject with a comment.** The permission-card extension: a Comment
     field, a normal `'rejected'` answer, and a steering-message injection
     that carries the comment to the agent.
+16. **W9, hashline editing.** Install dsh-better-edit in the personal
+    profile. Confirm the tool-name shadowing against the builtin fs rows.
+    Override the guidance per preset.
+17. **W10, git through MCP only.** The `mcp__git` server row. The bash deny
+    patterns for raw git and the `git` PATH stub. Extend the A4 bypass
+    suite with the escape routes.
+18. **W11, dependencies through a tool only.** The `package` tool with
+    ecosystem autodetect. The manifest and lockfile deny guard on the
+    read/write/edit tools.
 
 B0 and the W-series are independent. The personal bundle delivers immediate
 value before the kernel finishes. The board (B3) is the milestone that ships
@@ -769,6 +818,18 @@ the first board.
   optional reason field on the outcome.
 - **The permission-card seat** is where the Comment field mounts. Confirm at
   W8.
+- **hashline shadows the builtin fs tools by name.** `read` and `edit`
+  collide, and registration order decides the winner. The builtin `write`
+  and `read_image` stay. Confirm at W9.
+- **The git PATH stub needs an env seam.** `dsh-shell-env`'s contributor
+  registry or the sandbox executor's env config must carry the stub dir and
+  drop git from the model PATH. Confirm at W10. The pre-execute deny is the
+  belt either way.
+- **The MCP git server is early development.** Its tool set is the contract.
+  Operations outside it always route to the user.
+- **The manifest deny must cover the hashline edit path.** hashline writes
+  through `ctx.fs`, so the guard hooks the same write boundary as the
+  builtin tools, not only the tool schemas.
 
 ---
 
@@ -985,7 +1046,8 @@ work is the tools and the gate enforcement.
   shipped permission presets bundle the knobs: `workspace-write` is the workspace-write sandbox
   plus ask approval; `danger-full-access` is full access plus never. The bypass suite is a
   verification artifact of the aidos preset's configuration: each listed bypass attempt must ask
-  or refuse.
+  or refuse. The personal bundle extends the deny list to raw git and to
+  manifest and lockfile edits (W10, W11), with the same bypass discipline.
   **Evaluate:** an unmatched command asks and does not run. `git push` is refused while its gate
   is unmet, and is not reachable through `git -C`, `sh -c`, an alias, or a script. A test suite
   of bypass attempts is written first and each one fails to bypass.
@@ -1086,7 +1148,9 @@ work is the tools and the gate enforcement.
   `deepseek-v4-pro`. Subagents always run OpenCode Go `deepseek-v4-flash`. See the design's
   "Model profiles".
 - **Personal AI config.** Dismissing a question interrupts the agent loop (W7). Rejecting a
-  permission request can carry a comment the agent reads at that point in the loop (W8).
+  permission request can carry a comment the agent reads at that point in the loop (W8). The
+  model edits through hashline (W9), touches git only through MCP (W10), and changes
+  dependencies only through the package tool (W11).
 - **Board scope.** The Tickets tab and the global Tickets entry both ship in v1.
 - The AGENTS.md rules from dotfiles-ai port to `$DSH_HOME/AGENTS.md` (W5).
 
@@ -1124,6 +1188,12 @@ work is the tools and the gate enforcement.
 - [ ] W8 — comment delivery: a steering message versus an upstream rejection-reason field on
   the approval outcome.
 - [ ] W8 — the permission-card seat for the Comment field.
+- [ ] W9 — hashline shadowing of the builtin `read`/`edit` rows, and the
+  guidance override layout per preset.
+- [ ] W10 — the PATH-stub mechanics, and the git-MCP coverage list (push,
+  remotes, stash, rebase, and submodules always go to the user).
+- [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
+  the ecosystem autodetect behavior.
 
 ---
 
