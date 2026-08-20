@@ -563,7 +563,10 @@ copies, no design-doc copies. Agent output has exactly two homes: the
 scratch dir and the ticket board.
 
 **Design.** Each workspace (a dsh workspace, keyed by its canonical path)
-gets a durable scratch directory:
+gets a durable scratch directory. The workspace key is the SAME canonical
+cwd key dsh uses to name its session directories (`dsh-session-jsonl`
+workspace dirs), so `--home-sid-repos-aidos--` for a repo at
+`/home/sid/repos/aidos`:
 
 ```
 $DSH_HOME/aidos/scratch/<workspace-key>/
@@ -571,9 +574,11 @@ $DSH_HOME/aidos/scratch/<workspace-key>/
 
 - It is a plain directory on disk under the harness home. It survives
   reboots. It is not the spill seam, whose default root is process-tmp.
-- The session context surfaces the scratch path to the agent. The `plan`
-  context section can name it. Evidence rows can reference files in it by
-  path (never by embedding file contents in the log).
+- It is ALWAYS accessible: the path is deterministic (constant, computed
+  from the canonical cwd, no per-session randomness), so any agent can reach
+  it without asking. The session context surfaces the scratch path to the
+  agent; the `plan` context section can name it. Evidence rows can reference
+  files in it by path (never by embedding file contents in the log).
 - Clearing a workspace's scratch removes the directory and optionally writes
   an evidence row. The workspace registry's durable records stay untouched.
 - The ticket board is the other home. Notes, decisions, and plans that have
