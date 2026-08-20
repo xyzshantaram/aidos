@@ -230,6 +230,7 @@ const AIDOS_GUIDANCE =
   "attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, subagent_report); user_signoff and user_verified are the human's to supply, never yours. " +
   "move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. " +
   "plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. " +
+  "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
   "The board tools are the orchestrator's: a subagent cannot use them.";
 
 // ---- the six tools ----
