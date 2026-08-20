@@ -7,7 +7,7 @@ become tickets in one central store. A ticket moves between states only when the
 exists. You sign off at both ends.
 
 **Status.** The Phase-1 prototype pins the kernel behavior. It lives in `prototype/`. The dsh-based
-build has started: build B0 ships the domain kernel and its test port in `packages/aidos/`. PLAN.md holds the design and the ticket list.
+build is underway: B0 ships the domain kernel, B1 the dsh tools, guards, and state-gated tiers, in `packages/aidos/`. PLAN.md holds the design and the ticket list.
 
 ## The name
 
@@ -73,8 +73,7 @@ aidos never writes a file into a project directory. All state lives in aidos's o
 A project is keyed by its absolute path. A `move` command repoints a project to a new path.
 
 aidos is opt-in. The aidos preset sits alongside the standard preset. A quick task uses a standard
-session with zero ticket machinery. The agent's tools follow the ticket state. Before signoff it
-can read and plan but cannot write files or run commands.
+session with zero ticket machinery. The agent's tools follow the ticket state. Before signoff it can read and plan but cannot write files or run commands.
 
 ## Built on DeepSeek Harness
 
@@ -89,8 +88,8 @@ See PLAN.md for the full design and the ticket list.
 
 - `PLAN.md` — the design and the tickets. It is a bootstrap artifact with a scheduled death. The
   board imports it, and Ticket P6 deletes it.
-- `packages/aidos/` — the B0 domain kernel: the fold, the invariants, the gates, the Store, the
-  plan units, and the ported tests. SPEC.md is its contract and dies at B1.
+- `packages/aidos/` — the B0 domain kernel plus the B1 dsh tool layer: the fold, the gates, the
+  Store, the plan units, the service, the six tools, and the ported tests. SPEC-B1.md is the contract.
 - `prototype/` — the Phase-1 behavior specification. Ticket U5 deletes it when the web UI replaces
   it.
 

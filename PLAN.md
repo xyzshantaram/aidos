@@ -587,6 +587,14 @@ The dotfiles-ai repo keeps only the user's own tracked content. Once the
 port is verified, the opencode items that moved out are deleted from the
 repo (W12).
 
+**Archived sessions have no UI view or delete.** The web UI can archive a
+session row (it disappears from every list surface), but there is no
+unarchive or viewing surface and no delete action (dsh-client-ui-workspace
+known limitations). View an archived session by decompressing its log:
+`zstdcat "$DSH_HOME/sessions/<workspace-dir>/<session-id>/session.jsonl.zstd"`.
+Delete one by removing its directory. Session logs are zstd-compressed
+JSONL; each session is one directory under the workspace's sessions dir.
+
 ### The workstation port (dotfiles-ai)
 
 This section ports the user's opencode workstation config
@@ -818,6 +826,25 @@ runs both.
    to 25), P8 pins, and the guard/mask/bash-ask/allowlist policy tests:
    47 files, 213 tests green. Verified in a podman container (see the
    B1 human review item).
+
+**The container test harness.** B1's plugins were verified in an isolated
+podman container (scratch dir `~/.dsh/aidos/scratch/aidos/
+podman-b1-test/`, tracked in `containers.md`, cleaned with
+`cleanup.sh`): node:24 + the dsh CLI, `dsh web` on 127.0.0.1:3090 (host
+network), the aidos package mounted at `/opt/aidos` and added to the web
+profile as a bundle. Gotchas paid in real time, keep them: SELinux
+requires `:Z` on the bind mounts (container_t cannot write user_home_t);
+preset discovery skips symlinks (`readdir` withFileTypes, `isDirectory()`
+false), so the preset must be a real directory whose `agent.cordis.yml`
+mounts a tiny loader that re-exports the mounted bundle (deps resolve via
+`/opt/aidos/node_modules`); the shipped web composition mounts no
+invariants service, so the aidos bundle patch mounts `dsh-invariants`
+itself. The container proved: the six tools live with correct constraints,
+human-only kinds enforced on attach and move, clean structured refusals,
+the open-tier mask hides write/edit/bash, plan export works, and the
+workspace bootstrap binds the session project. The human-side walk
+(signoff to done, bash-ask, allowlists) needs B2 and is retested in the
+same container.
 3. **B2, human surface.** Remote endpoints plus `userQuestions`-backed
    flows. Port the lifecycle tests that need two actors (test_08, test_09,
    test_22, test_27).
@@ -1349,11 +1376,10 @@ work is the tools and the gate enforcement.
   dotfiles-ai, and a fresh clone syncs the same bundle.
 - [ ] B0 — run `npm test` in `packages/aidos/` yourself and skim
   PORT-MAP.md's "could not port" rows before B1 builds on the kernel.
-- [ ] B1 — in the podman test container (http://127.0.0.1:3090, tracked
-  in the scratch dir), create a session with the Aidos preset and confirm
-  the six tools appear, the tool:aidos guidance is in the prompt, and the
-  state mask applies (open tickets hide write/edit/bash; a signoff moves
-  the ticket to in-progress and unlocks them).
+- [ ] B1 — container-confirmed (user test log): the six tools appear with
+  the correct constraints, refusals are clean, and the open mask hides
+  write/edit/bash. The remaining half — a signoff unlocking the
+  in-progress tier — needs B2's human surface and is retested then.
 - [ ] B1 — awaiting-verification asks on every bash call; decide whether a
   concurrent in-progress ticket pays the same ask.
 - [ ] B1 — the union semantics of multiple in-progress tickets: the write
