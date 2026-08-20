@@ -1,0 +1,16 @@
+{
+  "name": "aidos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "aidos domain kernel. Build B0: a pure TypeScript port of the Phase-1 prototype.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

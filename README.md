@@ -7,7 +7,7 @@ become tickets in one central store. A ticket moves between states only when the
 exists. You sign off at both ends.
 
 **Status.** The Phase-1 prototype pins the kernel behavior. It lives in `prototype/`. The dsh-based
-build is not started yet. PLAN.md holds the design and the ticket list.
+build has started: build B0 ships the domain kernel and its test port in `packages/aidos/`. PLAN.md holds the design and the ticket list.
 
 ## The name
 
@@ -43,8 +43,7 @@ set its own weight.
 transition requires. If a row is missing, aidos refuses the move and names the missing kind and who
 must write it. Gates live in config, so strictness is a setting and not a schema migration.
 
-A ticket also shows a confidence score, summed from the weights of its evidence. The score is
-advisory. It never unlocks anything. Only the mandatory kinds do that.
+A ticket also shows a confidence score, summed from the weights of its evidence. The score is advisory. It never unlocks anything. Only the mandatory kinds do that.
 
 ## Ticket lifecycle
 
@@ -82,8 +81,8 @@ can read and plan but cannot write files or run commands.
 
 The implementation builds on DeepSeek Harness (dsh), not the from-scratch stack an earlier draft
 assumed. dsh provides the agent loop, the session log, the web UI, the tool pipeline, subagents,
-jobs, skills, and the human loop. aidos adds the ticket kernel, the board, and the plan skill. The
-session log is the append-only source of truth. Derived reads are projections, not queries.
+jobs, skills, and the human loop. aidos adds the ticket kernel, the board, and the plan skill.
+The session log is the append-only source of truth. Derived reads are projections, not queries.
 
 See PLAN.md for the full design and the ticket list.
 
