@@ -811,7 +811,8 @@ runs both.
    Store, plan parser, plan import and export) plus all 32 ported tests,
    the constants mirror, and the audit pin. SPEC.md is the contract.
    122 tests green, both typechecks pass. No UI, no tools. C2 plus C3 and
-   the P-series pins.
+   the P-series pins. SPEC.md dies at B1: the kernel consumes it, its
+   decisions fold into this file, and the B1 commit deletes it.
 2. **B1, tools.** `get_tickets`, `set_ticket`, `attach_evidence`,
    `move_ticket`, `plan`, `plan_import`, with the guard and the depth check.
    The state-gated tool tiers ship here: the `ctx.tools.restrict` masks
@@ -1357,6 +1358,8 @@ work is the tools and the gate enforcement.
   case: `/btw` with no turn running fires immediately.
 - [ ] W13 — the harness runs with zero opencode config left in
   dotfiles-ai, and a fresh clone syncs the same bundle.
+- [ ] B0 — run `npm test` in `packages/aidos/` yourself and skim
+  PORT-MAP.md's "could not port" rows before B1 builds on the kernel.
 - [ ] B1 — awaiting-verification asks on every bash call; decide whether a
   concurrent in-progress ticket pays the same ask.
 - [ ] B1 — the union semantics of multiple in-progress tickets: the write

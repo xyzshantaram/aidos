@@ -65,8 +65,7 @@ A plan belongs to a project. It holds three parts:
 - a project rules section that stores your preferences, which the agent may update.
 
 The agent reads the plan serialized as markdown, because markdown is what an agent handles well.
-The agent writes through tool calls such as `set_ticket`. You edit in the web UI. A plan is a
-better to-do list. The rules section gives your preferences a place to live.
+The agent writes through tool calls such as `set_ticket`. You edit in the web UI. A plan is a better to-do list. The rules section gives your preferences a place to live.
 
 ## Rules
 
@@ -90,6 +89,8 @@ See PLAN.md for the full design and the ticket list.
 
 - `PLAN.md` — the design and the tickets. It is a bootstrap artifact with a scheduled death. The
   board imports it, and Ticket P6 deletes it.
+- `packages/aidos/` — the B0 domain kernel: the fold, the invariants, the gates, the Store, the
+  plan units, and the ported tests. SPEC.md is its contract and dies at B1.
 - `prototype/` — the Phase-1 behavior specification. Ticket U5 deletes it when the web UI replaces
   it.
 
