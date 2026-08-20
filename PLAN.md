@@ -179,7 +179,7 @@ The parts below are the ones this design leans on.
 | Tickets, states, lifecycle | New `aidos` session domain (`ticket/change` whole-value events), states as an exhaustive enum | **New** |
 | Evidence rows, kind registry, weights | New domain rows plus kind definitions (builtin constants plus settings namespace), authors stamped at the write boundary | **New** |
 | Gates (data, deny-by-default, named refusals) | New pure gate function in the service plus monotonic `ctx.tools.guard()` | **New** (seam built) |
-| Agent tool access follows ticket state | `ctx.tools.restrict` per agent scope, re-applied on `ticket/change`, with the guard as the call-time belt | **New** (seam built) |
+| Agent tool access follows ticket state | `ctx.tools.restrict` per agent scope, re-applied on `ticket/change`. Union over states; bash asks via `tools/pre-execute` while a ticket awaits verification; per-ticket allowlists and child path guards at the write boundary | **New** (seams built) |
 | Confidence score, gate fraction (advisory) | Projection unit columns, rendered by the board | New (mechanics built) |
 | Plan: tickets plus context (under 500 lines) plus rules | `plan/change` session event plus `plan` skill plus `plan`/`plan_import` tools | New (format exists in prototype) |
 | Agent CLI (`set_ticket`, `attach_evidence`, `move_ticket`, `plan`) | Model-facing tools registered via `ctx.tools.register` (JSON results) | **New** |
@@ -354,32 +354,56 @@ everything else.
 
 #### State-gated tool access
 
-The agent's tool surface follows the ticket it is working. Before you sign
+The agent's tool surface follows the session's tickets. Before you sign
 off, the agent can plan and read but cannot change anything. This is the
 structural form of "talk the work through before it writes anything". The
 score stays advisory: the tiers key on ticket state, never on the score.
 
-The mask is per session and keyed by the state of the session's active
-ticket. `ctx.tools.restrict({ deny: [...] })` removes the named global
-tools from the agent scope. The mask is re-applied at session start and on
-every `ticket/change` event. The monotonic guard re-checks the state at
-call time, so a mid-turn move cannot unlock a call that already started.
-The aidos preset owns the mask; standard sessions have no ticket machinery
-and no mask.
+The mask is per session and derives from the set of ticket states.
+`ctx.tools.restrict({ deny: [...] })` removes the named global tools from
+the agent scope. The mask is re-applied at session start and on every
+`ticket/change` event. The monotonic guard re-checks the state at call
+time, so a mid-turn move cannot unlock a call that already started. The
+aidos preset owns the mask; standard sessions have no ticket machinery and
+no mask.
 
 | State | Tools the agent may see |
 |---|---|
-| open (or no active ticket) | conversation, questions, `plan`/`plan_import`, ticket tools, skills, `read`/`read_image`, web search and fetch |
+| open | conversation, questions, `plan`/`plan_import`, ticket tools, skills, `read`/`read_image`, web search and fetch |
 | in-progress | the above plus `write`, `edit`, `bash`, subagents, jobs, and the MCP tools |
-| awaiting-verification | read, bash (to run the automated check), evidence tools. No write or edit |
+| awaiting-verification | read, bash (each call asks), evidence tools, subagents and jobs for the review pass. No write or edit |
 | done | conversation, read, `get_tickets` |
 
-The tier contents are a first draft (see the human review queue). The
-active ticket defaults to the one the human last moved to `in-progress`.
-The board offers a "work on this ticket" control for sessions with several
-tickets. The file allowlist composes with the tiers: the tiers decide which
-tools exist, and the allowlist decides which paths the implementation tools
-may touch.
+The session mask is the union: implementation tools exist while at least
+one ticket is in-progress. Bash also stays visible while a ticket is
+awaiting-verification, because the check must run. While any ticket is
+awaiting-verification, every bash call asks. A state-aware
+`tools/pre-execute` listener returns `ask` for the bash tool, and the
+approval outcome is one-shot, so each call asks again. A ticket in
+awaiting-verification contributes no write or edit access: its files are
+frozen until you send it back or mark it done.
+
+**Allowlists are per ticket.** Each in-progress ticket carries its own
+file allowlist (the prototype's `builtin:file_allowlist` idea). The write
+boundary enforces the union of the in-progress allowlists. A write outside
+the union is refused and names the in-progress ticket whose allowlist
+would need to cover it. You extend an allowlist on the board. The tiers
+decide which tools exist; the allowlists decide which paths the
+implementation tools may touch.
+
+**The active ticket stays a board focus.** It defaults to the one you last
+moved to `in-progress`. It picks which ticket the detail panel shows,
+where new evidence lands by default, and which ticket's check the agent
+runs. The mask itself does not depend on it.
+
+**Subagents can be confined to directories or files.** A path guard
+registered through the child's `agent.ctx` enforces a dir or file
+allowlist on `read`/`write`/`edit` for that child only. It is the same
+path predicate the tiers use, parameterized per scope. A refusal names the
+allowed root. `toolFilter` removes whole tools, and the shared sandbox
+confines bash to the workspace root. The in-process child derives its cwd
+from the parent session, so the sandbox root is the same workspace; the
+deployment `cwd` override exists only for the out-of-process provider.
 
 #### Projection units (Ticket P7's SQL views, ported)
 
@@ -745,16 +769,18 @@ runs both.
 2. **B1, tools.** `get_tickets`, `set_ticket`, `attach_evidence`,
    `move_ticket`, `plan`, `plan_import`, with the guard and the depth check.
    The state-gated tool tiers ship here: the `ctx.tools.restrict` masks
-   follow ticket state, and the guard enforces them at call time. Port the
-   P3 CLI tests (test_20 to 25) as tool tests. Port the P8 pins and
-   the builtin-kind mirror pin (one constant table plus a deliberate test
-   mirror).
+   follow the union of ticket states, the state-aware `tools/pre-execute`
+   listener forces bash to ask while a ticket awaits verification, and the
+   per-ticket allowlist guard enforces the write union and the subagent
+   path scopes. Port the P3 CLI tests (test_20 to 25) as tool tests. Port
+   the P8 pins and the builtin-kind mirror pin (one constant table plus a
+   deliberate test mirror).
 3. **B2, human surface.** Remote endpoints plus `userQuestions`-backed
    flows. Port the lifecycle tests that need two actors (test_08, test_09,
    test_22, test_27).
 4. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
-   the grid, detail, evidence, signoff, send-back, and the "work on this
-   ticket" control. Criterion coverage
+   the grid, detail, evidence, signoff, send-back, the active-ticket focus
+   control, and the per-ticket allowlist editor. Criterion coverage
    (Ticket P9's read) lands here. Port the projection and view tests
    (test_26, test_31, test_32) against the client read model. U5's "every
    behavior has an equivalent test" checklist is the definition of done.
@@ -875,16 +901,16 @@ the first board.
 - **The manifest deny must cover the hashline edit path.** hashline writes
   through `ctx.fs`, so the guard hooks the same write boundary as the
   builtin tools, not only the tool schemas.
-- **The tool tiers are a UX judgment.** Which tools exist per state is a
-  first draft. The awaiting-verification tier keeps bash and subagents for
-  the check and the review. A read-only tier is the alternative. Settle in
-  review before B1 ships.
-- **The active ticket defaults to the last ticket moved to in-progress.**
-  Multi-ticket sessions may need the explicit board control. The mask
-  re-applies per session, and the guard catches a mid-turn move.
+- **The tool tiers are a UX judgment.** awaiting-verification asks on every
+  bash call while any ticket waits. A concurrent in-progress ticket pays
+  the same ask. Settle before B1 ships.
+- **Multiple in-progress tickets union their allowlists** at the write
+  boundary. A refusal names the ticket whose allowlist must grow. The
+  union semantics and the refusal text need review.
 - **Subagents inherit the mask.** A child spawned in open has no
-  implementation tools. One spawned in-progress has them. The tier follows
-  the parent's active ticket at spawn time.
+  implementation tools. One spawned in-progress has them, scoped by the
+  child's own path guard when one is set. The child-scope path guard is
+  the verified seam; confirm whether bash workdirs are confined in v1.
 
 ---
 
@@ -1250,10 +1276,12 @@ work is the tools and the gate enforcement.
   remotes, stash, rebase, and submodules always go to the user).
 - [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
   the ecosystem autodetect behavior.
-- [ ] B1 — the tool tier contents per state, especially whether
-  awaiting-verification keeps bash and subagents or goes read-only.
-- [ ] B1 — the active-ticket default (last moved to in-progress) versus the
-  explicit board control for multi-ticket sessions.
+- [ ] B1 — awaiting-verification asks on every bash call; decide whether a
+  concurrent in-progress ticket pays the same ask.
+- [ ] B1 — the union semantics of multiple in-progress tickets: the write
+  refusal names the ticket whose allowlist must grow; confirm the text.
+- [ ] B3 — the subagent dir/file guard: the child-scope path predicate on
+  read/write/edit, and whether bash workdirs are confined in v1.
 
 ---
 
