@@ -2,5 +2,5 @@
 # directory name and the trust comes from the root the preset was
 # discovered under.
 name: Aidos
-description: The ticket board agent: plan, tickets, evidence, and state-gated tool access.
+description: "The ticket board agent: plan, tickets, evidence, and state-gated tool access."
 order: 50

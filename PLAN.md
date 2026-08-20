@@ -787,13 +787,24 @@ Patch layers apply in order: bundle patches, then the profile's
 wins). Patch files hot-reload (`watchUserPatches`). Bundle layers are static
 per boot.
 
-**Gotcha (hit in the live cutover, 2026-08-20):** the aidos agent preset's
-tools mount against a host-plane `aidos-core` service. That service comes only
-from the aidos BUNDLE patch, so the package must be added to the web profile's
-`dsh.profile.bundles` (`dsh plugin --profile web add <aidos-path>`); adding
-only the preset (`.agent-presets/aidos`) leaves the preset hanging `waiting
-for aidos` and the roster showing no description. `dotfiles-ai/dsh/sync.sh`
-step 8b now does the bundle-add, so a fresh sync converges.
+**Two gotchas, hit together in the live cutover (2026-08-20), independent
+causes that looked like one symptom:**
+
+1. **The preset did not mount.** The aidos agent preset's tools mount against
+   a host-plane `aidos-core` service. That service comes only from the aidos
+   BUNDLE patch, so the package must be added to the web profile's
+   `dsh.profile.bundles` (`dsh plugin --profile web add <aidos-path>`).
+   Adding only the preset (`.agent-presets/aidos`) leaves it hanging
+   `waiting for aidos`. `dotfiles-ai/dsh/sync.sh` step 8b now does the
+   bundle-add, so a fresh sync converges.
+2. **The roster showed no description.** Unrelated to the bundle. The
+   description scalar carried an unquoted colon-space (`agent: plan`), so
+   YAML read it as a nested mapping and `preset.yml` failed to parse whole
+   (`ScannerError: mapping values are not allowed here`). dsh still
+   discovers a preset by directory name, which is why the tools and tier
+   masks worked with zero display metadata. Quote any description holding
+   a colon. Fixed in both the package `preset.yml` and the sync.sh heredoc
+   that writes the deployed copy.
 
 #### The personal bundle (dotfiles-ai)
 
@@ -1424,9 +1435,9 @@ work is the tools and the gate enforcement.
   layer is static per boot), then: the roster shows aidos + PTC (code) +
   standard (standard/minimal/cordis masked to .bak); the personal bundle's
   MCP servers, guards, and see tool appear in a session.
-- [ ] W-series — the aidos preset description should now render: the root
-  cause was aidos not being a web-profile bundle; fixed in sync.sh 8b.
-  Confirm it shows next to the name after the restart.
+- [x] W-series — the aidos preset description renders (user-confirmed
+  2026-08-20). The cause was NOT the missing bundle: `preset.yml` had an
+  unquoted colon in the description, so the whole file failed to parse.
 - [ ] W0 — curl-probe http://127.0.0.1:9000/v1/models once more and confirm
   the meridian models (incl. claude-fable-5) list in the model picker.
 - [ ] W5 — systemd cutover is LIVE: confirm https://potato.local:1337
