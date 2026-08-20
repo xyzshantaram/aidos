@@ -787,6 +787,14 @@ Patch layers apply in order: bundle patches, then the profile's
 wins). Patch files hot-reload (`watchUserPatches`). Bundle layers are static
 per boot.
 
+**Gotcha (hit in the live cutover, 2026-08-20):** the aidos agent preset's
+tools mount against a host-plane `aidos-core` service. That service comes only
+from the aidos BUNDLE patch, so the package must be added to the web profile's
+`dsh.profile.bundles` (`dsh plugin --profile web add <aidos-path>`); adding
+only the preset (`.agent-presets/aidos`) leaves the preset hanging `waiting
+for aidos` and the roster showing no description. `dotfiles-ai/dsh/sync.sh`
+step 8b now does the bundle-add, so a fresh sync converges.
+
 #### The personal bundle (dotfiles-ai)
 
 A second bundle package (or a profile) whose patch mounts the workstation
@@ -893,11 +901,19 @@ same container.
     section (session-age + compaction-count escalation) mounted host-plane.
     Long-running shell needs no plugin: `dsh-tool-bash` `run_in_background`
     + `job_output`/`job_kill` cover the opencode gap.
-12. **W5, AGENTS.md and LAN.** DONE (partial). `$DSH_HOME/AGENTS.md` written
-    (dsh translation). `lang/` holds the systemd unit + Caddyfile + mDNS
-    notes; basic_auth ENABLED with a placeholder password — regenerate before
-    a shared LAN. Caddy/units not yet deployed.
-    **Evaluate:** a second device on the LAN connects and receives live
+12. **W5, AGENTS.md and LAN.** DONE (deployed and live under systemd).
+    `$DSH_HOME/AGENTS.md` written (dsh translation). The `lang/` directory was
+    REMOVED from the dotfiles-ai repo per user directive: no config templates
+    ship in the repo, only a prose note in the dotfiles README that rynfar
+    and Caddy are set up. The Caddyfile and systemd units live only in the
+    deployed locations. Deployed: `dsh-web.service` (dsh web on
+    127.0.0.1:3080, trusted-host potato.local:1337) and `caddy.service`
+    (type notify, `caddy run`, 1337-3080), both `WantedBy=user-www.target`;
+    `opencode-web.service` removed, target now exactly caddy+dsh-web+meridian.
+    basic_auth ENABLED (user `shan`), placeholder password until regenerated
+    for a shared LAN. `caddy adapt` clean. The repo `dsh/lang/` deletions
+    are staged, not committed. **Evaluate:** a second device connects to
+    https://potato.local:1337, prompts for basic auth, and receives live
     events. Without the token, a write is refused.
 13. **W6, profiles client.** The Profile submenu in the model seat, the
     badge, the per-session override, the cost display, and the title
@@ -1403,20 +1419,44 @@ work is the tools and the gate enforcement.
   refusal names the ticket whose allowlist must grow; confirm the text.
 - [ ] B3 — the subagent dir/file guard: the child-scope path predicate on
   read/write/edit, and whether bash workdirs are confined in v1.
-- [ ] W-series live — restart `dsh web`, then: the roster shows aidos +
-  PTC (code) + standard (standard/minimal/cordis masked to .bak); the
-  personal bundle's MCP servers, guards, and see tool appear in a session.
-- [ ] W-series — the aidos preset shows its description in the roster next
-  to the name (user reported it missing; the preset.yml carries
-  name/description/order — confirm the roster renders it).
+- [ ] W-series live — restart `dsh web` (REQUIRED to load the aidos bundle:
+  aidos was added to dsh.profile.bundles in sync.sh step 8b and the bundle
+  layer is static per boot), then: the roster shows aidos + PTC (code) +
+  standard (standard/minimal/cordis masked to .bak); the personal bundle's
+  MCP servers, guards, and see tool appear in a session.
+- [ ] W-series — the aidos preset description should now render: the root
+  cause was aidos not being a web-profile bundle; fixed in sync.sh 8b.
+  Confirm it shows next to the name after the restart.
 - [ ] W0 — curl-probe http://127.0.0.1:9000/v1/models once more and confirm
   the meridian models (incl. claude-fable-5) list in the model picker.
-- [ ] W5 — LAN auth: connect over Caddy, confirm basic_auth prompts, and
-  regenerate the placeholder password before exposing to a shared LAN.
+- [ ] W5 — systemd cutover is LIVE: confirm https://potato.local:1337
+  prompts basic auth from a second LAN device (user `shan`) and streams
+  live events; confirm the no-token write is refused. Regenerate the
+  placeholder password before exposing to a shared LAN.
+- [ ] Fresh session — default model: settings.yaml now says
+  opencode-go/deepseek-v4-flash (was deepseek-v4-pro). Confirm the model
+  picker lists opencode-go + meridian (incl. claude-fable-5) and a fresh
+  session opens on the flash default.
+- [ ] Fresh session (aidos preset) — the six board tools
+  (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import)
+  and `tool:aidos` appear; exercise the state-gated tiers (open tier hides
+  write/edit/bash; awaiting-verification asks on each bash call).
+- [ ] see tool — FIXED + VERIFIED (2026-08-20): the failure was dsh-config, not
+  meridian. The pi-ai adapter only accepts images when a model/route declares
+  image input; the hand-declared meridian models had none, so the see subagent
+  got "model does not declare image input capability" (UNSUPPORTED_CONTENT).
+  Fix: added `defaultInput: [text, image]` to the meridian route in
+  ~/.dsh/settings.yaml, restarted dsh, and the see tool returned a factual
+  image description via claude-haiku-4-5. Work profile verified.
+- [ ] Fresh session — the session-hygiene section is absent (only appears
+  after many compactions; optional to reproduce).
 - [ ] bash-guard — add a drop-in rule for a new command (e.g. `curl`) and
   confirm it takes effect without restart (rules re-read per call).
-- [ ] see tool — decide the personal profile route (opencode-go/qwen3.7-plus
-  has no backing provider); point it at a real provider or wire a provider.
+- [ ] see tool — personal profile route: resolves to opencode-go/qwen3.7-plus,
+  which the opencode-go gateway DOES serve (verified via /v1/models, 28 models)
+  and the route IS wired (OPENCODE_API_KEY). Open: whether the opencode-go
+  route declares image input for qwen3.7-plus; if not, add defaultInput like
+  meridian, then verify see on the personal profile.
 
 ---
 
