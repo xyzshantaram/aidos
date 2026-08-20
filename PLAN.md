@@ -617,9 +617,15 @@ tokens) and a stale or ambiguous range is hard-rejected before anything is
 written. Writes go through `ctx.fs`, so the sandbox and the observation
 policy still confine. Guidance overrides per preset live at
 `$DSH_HOME/plugins/dsh-better-edit/<preset>/<section>.md` and are seeded on
-first boot. The builtin `write` and `read_image` stay. Tool-name shadowing:
-`read` and `edit` collide with the builtin rows, and registration order
-decides the winner. Confirm at W9.
+first boot. The builtin `write` and `read_image` stay. The registry rule:
+duplicates within one layer fail, and scoped registrations shadow globals.
+The personal preset removes the conflicting builtins on purpose. Its plugin
+file calls `ctx.tools.restrict({ deny: ['read', 'edit'] })` on the agent
+scope. The restriction removes exactly those global tools from the visible
+surface. hashline's scoped `read` and `edit` stay, because restrictions
+never touch scoped registrations. The result is deterministic and does not
+depend on registration order. The fs plugin has no per-tool disable
+config. Confirm the layer hashline registers into at W9.
 
 **Git through MCP only (W10).** The official `mcp-server-git` (run via
 uvx) exposes status, unstaged and staged diff, log, commit, add, reset,
@@ -755,9 +761,11 @@ runs both.
 15. **W8, reject with a comment.** The permission-card extension: a Comment
     field, a normal `'rejected'` answer, and a steering-message injection
     that carries the comment to the agent.
-16. **W9, hashline editing.** Install dsh-better-edit in the personal
-    profile. Confirm the tool-name shadowing against the builtin fs rows.
-    Override the guidance per preset.
+16. **W9, hashline editing.** Install dsh-better-edit. Confirm the layer it
+    registers into (duplicates within one layer fail; scoped shadows
+    global). `ctx.tools.restrict({ deny: ['read', 'edit'] })` from the
+    personal preset removes the builtin pair. Override the guidance per
+    preset.
 17. **W10, git through MCP only.** The `mcp__git` server row. The bash deny
     patterns for raw git and the `git` PATH stub. Extend the A4 bypass
     suite with the escape routes.
@@ -818,9 +826,13 @@ the first board.
   optional reason field on the outcome.
 - **The permission-card seat** is where the Comment field mounts. Confirm at
   W8.
-- **hashline shadows the builtin fs tools by name.** `read` and `edit`
-  collide, and registration order decides the winner. The builtin `write`
-  and `read_image` stay. Confirm at W9.
+- **hashline and the builtin fs tools share `read` and `edit`.** The
+  registry fails duplicates within one layer and lets scoped registrations
+  shadow globals. The deterministic fix: `ctx.tools.restrict({ deny:
+  ['read', 'edit'] })` from the personal preset removes the builtin pair
+  from the visible surface, and hashline's scoped tools stay. Confirm the
+  layer hashline registers into at W9. The builtin `write` and `read_image`
+  stay either way.
 - **The git PATH stub needs an env seam.** `dsh-shell-env`'s contributor
   registry or the sandbox executor's env config must carry the stub dir and
   drop git from the model PATH. Confirm at W10. The pre-execute deny is the
@@ -1188,8 +1200,9 @@ work is the tools and the gate enforcement.
 - [ ] W8 — comment delivery: a steering message versus an upstream rejection-reason field on
   the approval outcome.
 - [ ] W8 — the permission-card seat for the Comment field.
-- [ ] W9 — hashline shadowing of the builtin `read`/`edit` rows, and the
-  guidance override layout per preset.
+- [ ] W9 — the layer hashline registers into, and the
+  `restrict({ deny: ['read', 'edit'] })` result on the visible tool list.
+  Plus the guidance override layout per preset.
 - [ ] W10 — the PATH-stub mechanics, and the git-MCP coverage list (push,
   remotes, stash, rebase, and submodules always go to the user).
 - [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
