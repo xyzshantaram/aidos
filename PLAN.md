@@ -861,25 +861,37 @@ same container.
 6. **B5, subagent and job glue plus shell posture checks.** A6 provenance
    attachment. The shell bypass suite (Ticket A4) against the shipped shell
    posture.
-7. **W0, personal bundle scaffold.** The sync script (dotfiles-ai to
-   `$DSH_HOME`), the preset directory, and the provider routes in Settings
-   to Models: OpenCode Go, the direct DeepSeek route, and meridian as an
-   OpenAI-compatible route (`api: openai-completions`,
-   `baseURL: http://127.0.0.1:9000/v1`). No adapter plugin is needed.
-   **Evaluate:** two profiles against the same provider, with different
-   keys, both work in one install. Model auto-detection lists models for
-   each.
-8. **W1, skills port.** All ten skills as `SKILL.md` bundles, with the
-   opencode-term translation.
-9. **W2, subagent rows.** coder, tester, researcher, see. Pin the model
-   tiers. Set the tool filters. Build the see model resolver against the
-   profile settings.
-10. **W3, MCP rows.** nostrbook, gitlab, swiggy-food, swiggy-instamart.
-11. **W4, hygiene and long-running shell.** The session-hygiene prompt
-    section. The long-running command tool.
-12. **W5, AGENTS.md and LAN.** The rules copy. The Caddy, mDNS, and systemd
-    units for `dsh web`. The dotfiles README describes the setup in a few
-    lines. The configs stay in the deployed locations.
+ 7. **W0, personal bundle scaffold.** DONE. The sync script
+   (`~/repos/dotfiles-ai/dsh/sync.sh`, idempotent installer: clone + run to
+   converge) syncs the personal bundle into `$DSH_HOME` and writes the
+   web-profile host-plane patch. Provider routes applied live:
+   `opencode-go` (catalog, `OPENCODE_API_KEY`) and `meridian`
+   (`api: openai-completions`, `baseURL: http://127.0.0.1:9000/v1`, 6 models).
+   Default model switched to `opencode-go/deepseek-v4-pro` (was
+   `deepseek-official`). **Evaluate:** two profiles against one provider and
+   `/models` auto-detection — pending human check.
+ 8. **W1, skills port.** DONE. All ten opencode skills ported to dsh
+   `SKILL.md` bundles in `~/repos/dotfiles-ai/dsh/skills/`, synced to
+   `$DSH_HOME/skills`. OpenCode terms translated (`question` — dsh
+   `ask_user_question`, MCP `mcp__*` naming). Frontmatter machine-validated.
+ 9. **W2, subagent rows.** DONE (revision: plugins moved host-plane, personal
+   preset removed). coder, tester, researcher pinned to
+   `opencode-go/deepseek-v4-flash`, `maxDepth: 1` (leaf children),
+   per-persona `toolFilter` (board + delegation kept out of children). The
+   `see` tool resolves its model from a `profile` settings namespace
+   (work — meridian/claude-haiku-4-5; personal — opencode-go/qwen3.7-plus,
+   a route with no backing provider yet, TODO).
+10. **W3, MCP rows.** DONE. nostrbook, gitlab, swiggy-food,
+    swiggy-instamart + git (`mcp-server-git` via uvx) mounted in the
+    web-profile host-plane patch.
+11. **W4, hygiene and long-running shell.** DONE. `session-hygiene` prompt
+    section (session-age + compaction-count escalation) mounted host-plane.
+    Long-running shell needs no plugin: `dsh-tool-bash` `run_in_background`
+    + `job_output`/`job_kill` cover the opencode gap.
+12. **W5, AGENTS.md and LAN.** DONE (partial). `$DSH_HOME/AGENTS.md` written
+    (dsh translation). `lang/` holds the systemd unit + Caddyfile + mDNS
+    notes; basic_auth ENABLED with a placeholder password — regenerate before
+    a shared LAN. Caddy/units not yet deployed.
     **Evaluate:** a second device on the LAN connects and receives live
     events. Without the token, a write is refused.
 13. **W6, profiles client.** The Profile submenu in the model seat, the
@@ -891,17 +903,32 @@ same container.
 15. **W8, reject with a comment.** The permission-card extension: a Comment
     field, a normal `'rejected'` answer, and a steering-message injection
     that carries the comment to the agent.
-16. **W9, hashline editing.** Install dsh-better-edit. Confirm the layer it
-    registers into (duplicates within one layer fail; scoped shadows
-    global). `ctx.tools.restrict({ deny: ['read', 'edit'] })` from the
-    personal preset removes the builtin pair. Override the guidance per
-    preset.
-17. **W10, git through MCP only.** The `mcp__git` server row. The bash deny
-    patterns for raw git and the `git` PATH stub. Extend the A4 bypass
-    suite with the escape routes.
-18. **W11, dependencies through a tool only.** The `package` tool with
-    ecosystem autodetect. The manifest and lockfile deny guard on the
-    read/write/edit tools.
+ 16. **W9, hashline editing.** DONE. dsh-better-edit installed into the
+     live web profile (`dsh plugin --profile web add dsh-better-edit`, v0.2.1,
+     layer `# == dsh-better-edit` confirmed). It self-shadows the builtin
+     read/edit on each agent's own scope layer at `agent/session-start` — no
+     preset `restrict` row needed (earlier assumption dropped). Guidance
+     overrides shipped per-preset at `$DSH_HOME/plugins/dsh-better-edit/
+     <preset>/<section>.md` (orders 130-133).
+ 17. **W10, git through MCP only.** DONE (revised to a structural guard).
+     `mcp__git` server row mounted host-plane. Raw git in the model's bash is
+     denied by `bash-guard.js` — an unbash AST walker (via @cad0p/unbash-
+     walker) that matches commands in COMMAND POSITION, not substrings, so
+     `bash -c "git status"` and `$(git …)` catch while `echo git` and reading
+     a path containing `git-` do not. Rule drop-ins in
+     `$DSH_HOME/plugins/guards/*.json` (git, find, grep deny; extends to any
+     command), re-read per call, fail-closed on parse errors. The `git` PATH
+     stub is NOT deliverable through dsh seams (shellEnv carries only DSH_*
+     keys); the deny reason carries the mcp__git__* redirect instead. Extend
+     the A4 bypass suite with the escape routes.
+ 18. **W11, dependencies through a tool only.** DONE. A `package` tool
+     (ecosystem rust/python/nodejs/go, manager autodetect, latest-version
+     resolution, injection-safe) mounted host-plane. The manifest-guard
+     denies direct write/edit of manifests and lockfiles via the
+     `fs/write-intent`/`fs/edit-intent` waterfalls (prepended; covers builtin
+     write/edit and hashline). `requirements.txt` is EXEMPT (user decision:
+     hand-editable bare dependency list). The read-deny is not implemented
+     (read is read-only).
 19. **W12, decommission dotfiles-ai.** After the personal bundle (W0 to
     W11) is verified from `$DSH_HOME` alone, delete the opencode content
     that moved out of dotfiles-ai: the ported skills, the agent
@@ -1026,33 +1053,6 @@ The tkinter board (Ticket P4) and the node-tree renderer (Ticket P5) are dropped
 and the paged read already pin the behavior a board would have exercised, and the web board
 (B3) is the first real one. Throwaway code in a repository you keep does not stay throwaway
 unless someone deletes it on purpose, so Ticket U5 exists to be that someone.
-
-- [x] **Ticket P1: Schema and event log.** Tables for projects, tickets, the evidence kind
-  registry, evidence rows, gate config, and an append-only event log. Current state derives from
-  the log. Author and timestamp are stamped by the writer layer and are never read from caller
-  input. Evidence kinds are namespaced strings, `builtin:*` and `plugin:*`.
-  **Done.** 37 unittest cases pass. I verified three claims against the real artifact rather
-  than trusting the report: a file-backed store reopens with identical state including the
-  original evidence timestamps, the stored author comes from the actor and not from a payload
-  that tries to set one, and a weight change moves every affected score with no row rewritten.
-  Review found two further defects, both fixed: the store never rebuilt its projection on open,
-  so nothing survived a restart, and registry changes were unlogged, so loosening a gate left no
-  audit trace.
-  **Superseded in part.** Ticket P7 replaced the in-memory projection described here with SQL
-  views. Every behavior this ticket pins still holds. The mechanism that delivered it does not.
-
-- [x] **Ticket P2: Gate engine.** A gate names one transition and the evidence kinds it
-  requires. Gate config is data, not code. A refused transition returns the missing kind and the
-  author who must supply it. Confidence score is computed and displayed, and never consulted by
-  a gate.
-  **Done.** Deny by default was absent from the first contract I wrote and is now the most
-  important test in the suite: a transition with no configured gate is refused for every actor,
-  and stays refused even when every registered evidence kind is attached. I ran that case
-  myself. A refused move now appends one audit record that replay ignores, so an attempted
-  bypass is visible rather than silent. Gate config is data, and loosening one needs no
-  migration.
-  **Superseded in part.** Ticket P7 moved the gate lookup into a SQL view. Deny by default and
-  every refusal message this ticket pins are unchanged.
 
 - [ ] **Ticket P3: Agent CLI.** Commands for `plan` (serialize the whole plan to markdown),
   `set_ticket`, `attach_evidence`, and `move_ticket`. Output is JSON on stdout. This is the
@@ -1307,6 +1307,15 @@ work is the tools and the gate enforcement.
   dashboard over them, and your comments and screenshots land as evidence. The workspace
   survives an aidos restart. Clearing removes it from disk and from the database.
 
+- [ ] **Ticket T6: Archived-session cleanup script.** Write a small script that lists and
+  deletes archived dsh sessions. Scope and grill it later — this ticket only records the need.
+  Background: archived sessions have NO UI view or delete (dsh-client-ui-workspace
+  limitation); viewing requires `zstdcat $DSH_HOME/sessions/<workspace-dir>/<session-id>/
+  session.jsonl.zstd` and deleting requires `rm -rf` the session directory. The script should
+  wrap that safely (list with size/date, confirm before delete, never touch the live current
+  session or subagent sessions).
+  **Evaluate:** (to be scoped under grilling).
+
 ---
 
 ## User preferences and special rules
@@ -1365,13 +1374,16 @@ work is the tools and the gate enforcement.
 - [ ] W8 — comment delivery: a steering message versus an upstream rejection-reason field on
   the approval outcome.
 - [ ] W8 — the permission-card seat for the Comment field.
-- [ ] W9 — the layer hashline registers into, and the
-  `restrict({ deny: ['read', 'edit'] })` result on the visible tool list.
-  Plus the guidance override layout per preset.
-- [ ] W10 — the PATH-stub mechanics, and the git-MCP coverage list (push,
-  remotes, stash, rebase, and submodules always go to the user).
-- [ ] W11 — the manifest file list (the `requirements.txt` exception?) and
-  the ecosystem autodetect behavior.
+- [ ] W9 — the hashline tools appear in a personal session (read/edit are the
+  hash-anchored variants, builtin pair shadowed out), and the guidance override
+  files render (tool:read/edit at orders 130-131).
+- [ ] W10 — the bash-guard structural matching: `bash -c "git status"` denied,
+  `echo git status` allowed, `ls` a dir listing paths containing `git` allowed,
+  parse-error commands denied (fail-closed).
+- [ ] W10 — the git-MCP coverage list (push, remotes, stash, rebase, submodules
+  always go to the user) — confirm the notice reads correctly.
+- [ ] W11 — the package tool resolves the latest version and runs the change;
+  manifest-guard denies a direct package.json write but allows requirements.txt.
 - [ ] W12 — the harness runs with zero opencode config left in
   dotfiles-ai, and a fresh clone syncs the same bundle.
 - [ ] B0 — run `npm test` in `packages/aidos/` yourself and skim
@@ -1386,6 +1398,20 @@ work is the tools and the gate enforcement.
   refusal names the ticket whose allowlist must grow; confirm the text.
 - [ ] B3 — the subagent dir/file guard: the child-scope path predicate on
   read/write/edit, and whether bash workdirs are confined in v1.
+- [ ] W-series live — restart `dsh web`, then: the roster shows aidos +
+  PTC (code) + standard (standard/minimal/cordis masked to .bak); the
+  personal bundle's MCP servers, guards, and see tool appear in a session.
+- [ ] W-series — the aidos preset shows its description in the roster next
+  to the name (user reported it missing; the preset.yml carries
+  name/description/order — confirm the roster renders it).
+- [ ] W0 — curl-probe http://127.0.0.1:9000/v1/models once more and confirm
+  the meridian models (incl. claude-fable-5) list in the model picker.
+- [ ] W5 — LAN auth: connect over Caddy, confirm basic_auth prompts, and
+  regenerate the placeholder password before exposing to a shared LAN.
+- [ ] bash-guard — add a drop-in rule for a new command (e.g. `curl`) and
+  confirm it takes effect without restart (rules re-read per call).
+- [ ] see tool — decide the personal profile route (opencode-go/qwen3.7-plus
+  has no backing provider); point it at a real provider or wire a provider.
 
 ---
 

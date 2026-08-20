@@ -1,2 +1,6 @@
 # Editor swap files
 *.kate-swp
+
+# Scratch staging (agent work product; the durable artifacts are in
+# dotfiles-ai/dsh and the plan/checklist files, not here)
+scratch/
