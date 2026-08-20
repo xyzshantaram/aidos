@@ -459,7 +459,13 @@ npm at `0.0.1-rc.1`; the board build depends on them explicitly (verified:
 build emits its bundle in the client module format
 (`window.__ModuleLoader__.load({ id, factory })`). It mounts through the
 slot system (`ctx.slots.inject(...)`). The goal bar in the input dock and
-the plan seat are the precedents. The board does the following:
+the plan seat are the precedents. The board package adds
+`@deepseek-ai/dsh-client-ui-primitives` and
+`@deepseek-ai/dsh-client-ui-slots` at `0.0.1-rc.1` as direct dependencies
+(decided; both are absent from the installed tree, inlined into the
+shipped bundles, referenced by `.d.ts` only — verified:
+`dsh-client-runtime/lib/types/client/slots.d.ts:14-15`). The board does
+the following:
 
 - It registers a **Tickets view tab** beside Chat and Trajectory through the
   `conversation.view` list slot: `ctx.slots.inject("conversation.view", ...)`
@@ -467,18 +473,21 @@ the plan seat are the precedents. The board does the following:
   `dsh-client-ui-trajectory/lib/client.js:7341-7371`, slot declared at
   `dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts:107-111`).
   The tab shows the current workspace's board.
-- It registers a **global Tickets entry** near New Session. The seat is a
-  B3 decision: the New Session button is hardcoded shell chrome
-  (`dsh-client-ui-sidebar/lib/client.js:204-217`) and the sidebar slot
-  inventory has no adjacent additive seat. Options: `sidebar.footer.action`,
-  replace a single seat, or fork the sidebar. The entry opens the
-  cross-workspace board. Both ship in v1.
-- The cross-workspace board reads every session's `aidos.tickets`
-  projection. The client reads projections only for open sessions
+- It registers a **global Tickets entry** in the sidebar footer near
+  settings, through the `sidebar.footer.action` slot. The New Session
+  button is hardcoded shell chrome (`dsh-client-ui-sidebar/lib/
+  client.js:204-217`), so the footer actions are the additive seat. The
+  entry opens the cross-workspace board. Both ship in v1.
+- The Tickets tab reads the live `aidos.tickets` projection of the open
+  session (`useProjection`). The cross-workspace board reads every other
+  session through one new aidos Remote, `aidos.coldTickets(sessionId,
+  opts)`, that runs host-side: it resolves the session and cold-reads its
+  `aidos.tickets` projection via `ctx.sessionProjectionCache.coldSnapshot`.
+  The client itself reads projections only for open sessions
   (`dsh-client-runtime/lib/types/client/contract/sessions.d.ts:126`), and
   `coldSnapshot` is host-only (`dsh-session-projection-cache/lib/
-  index.js:159-197`). B3 adds one aidos Remote that runs the cold read on
-  the host and returns the page.
+  index.js:159-197`). The board fetches per session, lazily on focus, and
+  caches the page.
 - It reads the `aidos.tickets`, `aidos.evidence`, and `aidos.plan`
   projection values (`useProjection(...)` or
   `sessions.binding(id).session.projections.faceOf(key)`, the same read path
@@ -898,19 +907,21 @@ the first board.
   consumption path is verified (the `dsh.client` manifest, the `./client`
   bundle, the roster row). `dsh-client-ui-primitives` and
   `dsh-client-ui-slots` are absent from the installed tree (inlined into
-  the shipped bundles; npm `0.0.1-rc.1`). The board build depends on them
-  explicitly. Budget the monorepo setup in B3.
+  the shipped bundles; npm `0.0.1-rc.1`). Decided: the board package adds
+  both at `0.0.1-rc.1` as direct dependencies. Budget the monorepo setup
+  in B3.
 - **The Tickets tab seat is verified.** The board registers through the
   `conversation.view` list slot (`ctx.slots.inject("conversation.view", ...)`,
-  id `tickets`, order 20), the trajectory precedent. The **global Tickets
-  entry has no seat beside New Session**: the button is hardcoded shell
-  chrome (`dsh-client-ui-sidebar/lib/client.js:204-217`). Options at B3:
-  `sidebar.footer.action`, replace a seat, or fork the sidebar.
+  id `tickets`, order 20), the trajectory precedent. **The global Tickets
+  entry seat is settled:** the New Session button is hardcoded shell chrome
+  (`dsh-client-ui-sidebar/lib/client.js:204-217`), so the entry mounts in
+  `sidebar.footer.action`, near settings.
 - **The cross-workspace board needs a new cold-read Remote.** The client
   reads projections only for open sessions; `coldSnapshot` is host-only
-  (`dsh-session-projection-cache`). B3 adds one aidos Remote that runs the
-  cold read on the host. The "re-read on focus" rule has a latency budget
-  for cold sessions. Fine for v1; keep the read path lazy.
+  (`dsh-session-projection-cache`). Decided: one aidos Remote,
+  `aidos.coldTickets(sessionId, opts)`, runs the cold read on the host.
+  The "re-read on focus" rule has a latency budget for cold sessions. Fine
+  for v1; keep the read path lazy.
 - **dsh-plan-mode is preset-plane.** The web surface ships
   `- id: plan-mode, disabled: true` (`dsh-web-app/cordis.patch.yml`), so
   the plan projection and the "Chat about it" review flow exist only when a
@@ -1324,11 +1335,8 @@ work is the tools and the gate enforcement.
   selection.
 - [ ] W6 — the title rewriter race against the renderer's `DocumentTitle` effect.
 - [ ] W6 — the cost display seat next to the shipped stats strip.
-- [ ] B3 — the global Tickets entry seat: `sidebar.footer.action` versus
-  replacing a seat versus forking the sidebar (the New Session button is
-  hardcoded shell chrome).
-- [ ] B3 — the new cold-read Remote's latency for the "re-read on focus"
-  rule, on a cold session.
+- [ ] B3 — the `aidos.coldTickets` Remote's latency on a cold session for
+  the "re-read on focus" rule.
 - [ ] W7 — dismiss-interrupt semantics: `keepInbox: true` (preserve queued work for the next
   prompt) versus a hard stop.
 - [ ] W7 — the ask-user wrapper's shadowing order against the shipped tool row.
