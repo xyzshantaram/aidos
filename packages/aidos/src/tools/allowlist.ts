@@ -7,7 +7,8 @@
  */
 
 import type { Context } from "@deepseek-ai/cordis";
-import type { ToolGuard } from "@deepseek-ai/dsh-tools";
+import type { ToolExecution, ToolGuard } from "@deepseek-ai/dsh-tools";
+import { isAbsolute, join } from "path";
 import type { TicketView } from "../kernel/projections";
 
 /** The fs write tools the write boundary guards. */
@@ -32,6 +33,13 @@ function readPathArgument(args: unknown): string | undefined {
   if (typeof args !== "object" || args === null) return undefined;
   const path = (args as Record<string, unknown>).file_path;
   return typeof path === "string" && path.length > 0 ? path : undefined;
+}
+
+/** The workdir a bash call carries, when it is a non-empty string. */
+function readWorkdirArgument(args: unknown): string | undefined {
+  if (typeof args !== "object" || args === null) return undefined;
+  const workdir = (args as Record<string, unknown>).workdir;
+  return typeof workdir === "string" && workdir.length > 0 ? workdir : undefined;
 }
 
 /**
@@ -74,6 +82,9 @@ export function installAllowlistGuard(ctx: Context): () => void {
  */
 export function childPathScope(allowed: string[]): ToolGuard {
   return (execution) => {
+    if (execution.name === "bash") {
+      return bashWorkdirClamp(execution, allowed);
+    }
     if (!PATH_TOOLS.has(execution.name)) return undefined;
     const path = readPathArgument(execution.arguments);
     if (path === undefined) return undefined;
@@ -81,4 +92,36 @@ export function childPathScope(allowed: string[]): ToolGuard {
     const roots = allowed.length > 0 ? allowed.join(", ") : "(none)";
     return `path ${path} is outside the allowed root (allowed: ${roots})`;
   };
+}
+
+/**
+ * The bash half of the child scope. A child scoped to a sub-tree cannot
+ * reach outside the scope through `sed -i`, so aidos clamps the bash
+ * WORKDIR to the allowed roots. This stops the workdir, not an absolute
+ * path inside the command string, so it narrows the hole rather than
+ * closing it.
+ */
+function bashWorkdirClamp(execution: ToolExecution, allowed: string[]): string | undefined {
+  const sessionCwd =
+    (execution.agent as
+      | { session?: { header?: { cwd?: string } } }
+      | undefined)?.session?.header?.cwd;
+  const raw = readWorkdirArgument(execution.arguments);
+  // Mirror dsh-tool-bash's resolveWorkdir: a missing workdir runs at the
+  // session cwd, a relative one resolves against it, an absolute one passes through.
+  const workdir =
+    raw === undefined
+      ? sessionCwd
+      : sessionCwd !== undefined && !isAbsolute(raw)
+        ? join(sessionCwd, raw)
+        : raw;
+  if (workdir === undefined) return undefined;
+  // Put the relative roots in the same absolute frame as the workdir.
+  const roots =
+    sessionCwd !== undefined
+      ? allowed.map((root) => (isAbsolute(root) ? root : join(sessionCwd, root)))
+      : allowed;
+  if (pathAllowed(workdir, roots)) return undefined;
+  const shown = allowed.length > 0 ? allowed.join(", ") : "(none)";
+  return `workdir ${workdir} is outside the allowed root (allowed: ${shown})`;
 }

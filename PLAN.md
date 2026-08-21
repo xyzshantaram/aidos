@@ -954,22 +954,19 @@ work is the tools and the gate enforcement.
   orchestrator turns that report into a board change. Identity stays flat:
   every subagent writes as the single author `agent`, and its name is metadata
   on a record rather than an actor of its own.
-  **Status (B1): the structural half is done.** `installAidosGuard` refuses every board
+  **Status: structural half done; bash hang closed.** `installAidosGuard` refuses every board
   tool when `delegationDepthOf(agent) !== 0`, and the refusal names the orchestrator as
   the only actor that may do it. `childPathScope` is the per-child path predicate.
   Presets load as definitions with no code change, which is dsh behavior rather than
   ours. Open: the aidos preset mounts one row and sets no `toolFilter`, so the belt
   exists and the braces do not. The "no author other than agent, user, and system
   after a multi-subagent session" check needs a real session to run against.
-  **The bash hole closes in v1** (decided 2026-08-21). `childPathScope` confines a child's
-  read/write/edit and nothing else. The sandbox does confine bash, but only to the whole
-  workspace root plus temp, and that policy resolves per SESSION, so a child inherits the
-  parent's root unchanged: a child scoped to `src/` cannot `edit` a file in `docs/` but can
-  reach it through `sed -i`. aidos clamps the child's bash workdir to its path scope.
-  `dsh-tool-bash`'s `resolveWorkdir` (`lib/index.js:177`) only makes a relative workdir
-  session-relative and hands an absolute one straight through, so the clamp is ours to write.
-  State the limit in the code: it stops the WORKDIR, not an absolute path inside the command
-  string, so it narrows the hole rather than closing it.
+  **The bash workdir clamp landed** (decided 2026-08-21). `childPathScope` now also
+  clamps the bash WORKDIR to the child's path scope, mirroring `dsh-tool-bash`'s
+  `resolveWorkdir` (missing runs at the session cwd, relative resolves against it),
+  so a child scoped to `src/` cannot reach `docs/` through `sed -i`. It stops the
+  WORKDIR, not an absolute path inside the command string, so it narrows the hole
+  rather than closing it. `b1-allowlist` covers it.
   **Evaluate:** a new definition file becomes a callable subagent with no code change. A
   malformed definition fails to load with a message naming the file and the problem, and does
   not stop the other definitions loading. A subagent that calls any board tool is refused, and
@@ -1204,5 +1201,5 @@ work is the tools and the gate enforcement.
 - [ ] Ticket P7 duplicate creation records — `v_projects` and `v_tickets` carry no `GROUP BY`, unlike the other five views. Two `ticket.created` records sharing one id would return the ticket twice, and the old projection collapsed them by last-write-wins. The store never writes a duplicate, so this needs a hand-written log. Decide whether the views should defend anyway.
 - [ ] B3 — the `aidos.coldTickets` Remote's latency on a cold session for the "re-read on focus" rule.
 - [ ] B1 — container-confirmed (user test log): the six tools appear with the correct constraints, refusals are clean, and the open mask hides write/edit/bash. The remaining half — a signoff unlocking the in-progress tier — needs B2's human surface and is retested then.
-- [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach another through read/write/edit OR through bash. Decided 2026-08-21 to clamp the child's bash workdir in v1, tracked in Ticket A5. The shell seam confines nothing by itself: `ctx.shell.resolve` and `dsh-subprocess-local` pass `workdir` straight through. Judge whether the clamp blocks legitimate child work.
+- [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach another through read/write/edit OR through bash. The bash workdir clamp is in (`childPathScope`), so verify a `src/`-scoped child cannot bash into `docs/`, and judge whether the clamp blocks legitimate child work.
 - [ ] Fresh session (aidos preset) — the six board tools (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import) and `tool:aidos` appear; exercise the state-gated tiers (open tier hides write/edit/bash; awaiting-verification asks on each bash call).

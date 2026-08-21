@@ -7,7 +7,8 @@
  * names the in-progress ticket whose allowlist would need to cover it. Two
  * in-progress tickets union their allowlists. Subagents get the same path
  * predicate as a child-scope guard: `childPathScope(allowed)` refuses a
- * read/write/edit outside the allowed root and names the root.
+ * read/write/edit outside the allowed root and a bash workdir outside the
+ * scope, naming the root.
  */
 
 import { describe, expect, it } from "vitest";
@@ -134,6 +135,34 @@ describe("childPathScope", () => {
   });
 
   it("an unrelated tool is not policed", () => {
+    const scope = childPathScope(["src/"]);
+    const exec = createHarness().makeExec;
+    expect(scope(exec("get_tickets", {}))).toBeUndefined();
+  });
+
+  it("an explicit bash workdir inside the scope is allowed", () => {
+    const harness = createHarness();
+    const scope = childPathScope(["src/"]);
+    expect(scope(harness.makeExec("bash", { command: "ls", workdir: "src" }, harness.agent))).toBeUndefined();
+  });
+
+  it("a bash workdir outside the scope is refused, naming the scope", () => {
+    const harness = createHarness();
+    const scope = childPathScope(["src/"]);
+    const reason = scope(harness.makeExec("bash", { command: "ls", workdir: "docs" }, harness.agent));
+    expect(typeof reason).toBe("string");
+    expect(reason).toMatch(/src\//);
+  });
+
+  it("a bash call with no workdir is refused for a narrow scope (runs at the session cwd)", () => {
+    const harness = createHarness();
+    const scope = childPathScope(["src/"]);
+    const reason = scope(harness.makeExec("bash", { command: "ls" }, harness.agent));
+    expect(typeof reason).toBe("string");
+    expect(reason).toMatch(/src\//);
+  });
+
+  it("a bash call with no agent context cannot be clamped and is allowed", () => {
     const scope = childPathScope(["src/"]);
     const exec = createHarness().makeExec;
     expect(scope(exec("bash", { command: "ls" }))).toBeUndefined();
