@@ -68,6 +68,7 @@ import {
 } from "../kernel/types";
 import type { AidosEvent } from "../kernel/events";
 import { AIDOS_EVENT_TYPES, foldSessionEvent, registerAidosInvariant } from "./invariant";
+import { registerAidosSessionEventTypes } from "./session-events";
 
 /** The session event types the aidos stream owns (the kernel event kinds). */
 export { AIDOS_EVENT_TYPES };
@@ -454,9 +455,13 @@ export class AidosService extends Service {
   private readonly _config: AidosCoreConfig;
   private readonly _caches = new WeakMap<Session, SessionCache>();
   private _resolvedConfig: AidosConfig;
-
   constructor(ctx: Context, config?: AidosCoreConfig) {
     super(ctx, "aidos");
+
+    // Register the aidos session event types with the host reader before any
+    // session bootstrap append (project/created in _ensureProject below) can
+    // happen. Idempotent; see ./session-events for the issue-#52 rationale.
+    registerAidosSessionEventTypes();
     this._config = config ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -493,17 +498,6 @@ export class AidosService extends Service {
       registerAidosInvariant(ctx);
     }
 
-    // The workspace project: bootstrap the session's project at session
-    // start, and for any agent already live when the service mounts.
-    ctx.on("agent/session-start", ({ agent }) => {
-      this._ensureProject(agent);
-    });
-    const agents = ctx.agents;
-    if (agents) {
-      for (const agent of agents.list()) {
-        this._ensureProject(agent);
-      }
-    }
   }
 
   // ---- reads ----
@@ -792,6 +786,9 @@ export class AidosService extends Service {
     const cache = this._cache(session);
     this._sync(session, cache);
     validateAidosEvent(cache.state, event);
+    // The plugin registers the aidos session event types with the host session
+    // reader at startup (see ./session-events.ts, the llm-fallbacks issue #52
+    // pattern), so a durable append here is always readable on a later load.
     session.append(event.kind, event);
     this._sync(session, cache);
   }
