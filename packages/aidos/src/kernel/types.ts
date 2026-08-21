@@ -38,6 +38,10 @@ export interface TicketSnapshot {
   state: TicketState;
   /** Per-ticket file allowlist. The write boundary enforces it from B1. */
   allowlist: string[];
+  /** A durable, per-workspace-unique alias for this ticket. */
+  slug: string;
+  /** The workspace this ticket belongs to. The raw global id is `<workspaceKey>:<slug>`. */
+  workspaceKey: string;
   /** 1 on create, +1 on every set and move. */
   revision: number;
   /** at of the create event. */
@@ -248,8 +252,8 @@ export class EvidenceAuthorRefused extends Error {
 }
 
 export class UnknownTicket extends Error {
-  readonly ticketId: TicketId;
-  constructor(ticketId: TicketId) {
+  readonly ticketId: TicketId | string;
+  constructor(ticketId: TicketId | string) {
     super(`no such ticket: ${ticketId}`);
     this.ticketId = ticketId;
   }
@@ -297,5 +301,27 @@ export class InvariantError extends Error {
   readonly code: "INVARIANT" = "INVARIANT";
   constructor(message: string) {
     super(message);
+  }
+}
+
+/** A slug that one workspace already holds. The duplicate is the hard failure. */
+export class DuplicateSlug extends Error {
+  readonly slug: string;
+  readonly workspaceKey: string;
+  constructor(slug: string, workspaceKey: string) {
+    super(`the slug ${slug} is already used in workspace ${workspaceKey}`);
+    this.slug = slug;
+    this.workspaceKey = workspaceKey;
+  }
+}
+
+/** A write against a ticket in a different workspace. Names the workspace to open. */
+export class ForeignWorkspace extends Error {
+  readonly ticketWorkspaceKey: string;
+  readonly currentWorkspaceKey: string;
+  constructor(ticketWorkspaceKey: string, currentWorkspaceKey: string) {
+    super(`this ticket belongs to workspace ${ticketWorkspaceKey}; open that workspace to write it`);
+    this.ticketWorkspaceKey = ticketWorkspaceKey;
+    this.currentWorkspaceKey = currentWorkspaceKey;
   }
 }

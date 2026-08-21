@@ -5,6 +5,7 @@
 
 import type { AidosEvent } from "./events";
 import { validateAidosEvent } from "./invariants";
+import { normalizeTicketSnapshot } from "./slug";
 import type {
   CommentRecord,
   EvidenceRow,
@@ -25,6 +26,8 @@ export interface AidosState {
   /** Per-ticket non-decreasing at. */
   lastAt: Map<TicketId, number>;
   lastRevision: Map<TicketId, number>;
+  /** The next ticket number to allocate. Advanced on create, never recomputed. */
+  nextTicketId: number;
 }
 
 /** A fresh, empty derived state. */
@@ -38,6 +41,7 @@ export function createInitialState(): AidosState {
     comments: new Map(),
     lastAt: new Map(),
     lastRevision: new Map(),
+    nextTicketId: 1,
   };
 }
 
@@ -50,10 +54,17 @@ export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosStat
   switch (event.kind) {
     case "ticket/change": {
       const id = event.ticket.id;
+      const ticket = normalizeTicketSnapshot(
+        event.ticket as unknown as Record<string, unknown>,
+        (projectId) => state.projects.get(projectId)?.absPath,
+      ) as unknown as TicketSnapshot;
       // Last write wins per ticket id, in seq order.
-      state.tickets.set(id, event.ticket);
+      state.tickets.set(id, ticket);
       state.lastAt.set(id, event.at);
-      state.lastRevision.set(id, event.ticket.revision);
+      state.lastRevision.set(id, ticket.revision);
+      if (event.operation === "create") {
+        state.nextTicketId = Math.max(state.nextTicketId, ticket.id + 1);
+      }
       return state;
     }
     case "evidence/attached": {

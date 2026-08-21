@@ -10,6 +10,7 @@ import type { AidosState } from "./fold";
 import { PLAN_CONTEXT_LIMIT } from "./constants";
 import { isLegalTransition } from "./gates";
 import { InvariantError } from "./types";
+import { normalizeTicketSnapshot, workspaceKeyFromPath } from "./slug";
 import { STATE_ORDER } from "./types";
 import type { PlanValue, TicketId, TicketState } from "./types";
 
@@ -27,6 +28,8 @@ const SNAPSHOT_KEYS = [
   "order",
   "state",
   "allowlist",
+  "slug",
+  "workspaceKey",
   "revision",
   "createdAt",
   "updatedAt",
@@ -147,10 +150,11 @@ function validateTicketChange(
     invariant("ticket/change operation must be create, set, or move");
   }
   expectNumber(raw.at, "ticket/change at");
-  const ticket = raw.ticket;
-  if (!isPlainObject(ticket)) {
+  const rawTicket = raw.ticket;
+  if (!isPlainObject(rawTicket)) {
     invariant("ticket/change ticket must be an object");
   }
+  const ticket = normalizeTicketSnapshot(rawTicket, (projectId) => state.projects.get(projectId)?.absPath);
   expectKeys(ticket, SNAPSHOT_KEYS, "ticket snapshot");
   expectInt(ticket.id, "ticket id", 1);
   expectInt(ticket.projectId, "project id", 1);
@@ -170,13 +174,38 @@ function validateTicketChange(
   expectInt(ticket.revision, "ticket revision", 1);
   expectNumber(ticket.createdAt, "ticket createdAt");
   expectNumber(ticket.updatedAt, "ticket updatedAt");
-
+  expectString(ticket.slug, "ticket slug");
+  expectString(ticket.workspaceKey, "ticket workspaceKey");
+  if ((ticket.slug as string).length === 0) {
+    invariant("ticket slug must not be empty");
+  }
+  if ((ticket.workspaceKey as string).length === 0) {
+    invariant("ticket workspaceKey must not be empty");
+  }
   const id = ticket.id as TicketId;
   const snapshot = ticket as unknown as Record<string, unknown>;
   const at = raw.at as number;
   const prev = state.tickets.get(id);
   const lastAt = state.lastAt.get(id);
   const lastRevision = state.lastRevision.get(id);
+
+  // The workspace key must match the project's key when the project exists.
+  const project = state.projects.get(ticket.projectId as number);
+  if (project !== undefined && (ticket.workspaceKey as string) !== workspaceKeyFromPath(project.absPath)) {
+    invariant(`ticket ${id} workspaceKey must match its project's path`);
+  }
+
+  // Slug uniqueness within one workspace. A different ticket with the same
+  // workspaceKey and slug is the one hard failure.
+  for (const other of state.tickets.values()) {
+    if (
+      other.id !== id &&
+      other.workspaceKey === (ticket.workspaceKey as string) &&
+      other.slug === (ticket.slug as string)
+    ) {
+      invariant(`ticket slug ${ticket.slug as string} is already used in workspace ${ticket.workspaceKey as string}`);
+    }
+  }
 
   // Rule 3: revision continuity. Rule 4: create rules.
   if (operation === "create") {

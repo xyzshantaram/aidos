@@ -282,7 +282,10 @@ function registerSetTicket(ctx: Context): void {
       description:
         "Create or edit one ticket. With no ticketId it creates a ticket in open (title required; the phase is created when absent, titled 'Untitled phase'). With a ticketId it edits the named fields; an absent field leaves its value. It never changes a ticket's state.",
       parameters: {
-        ticketId: { type: "integer", description: "The ticket to edit; absent creates a new ticket." },
+        ticketId: {
+          oneOf: [{ type: "integer" }, { type: "string" }],
+          description: "The ticket to edit, by numeric id or slug; absent creates a new ticket.",
+        },
         projectId: { type: "integer", description: "The project for a new ticket; the session's workspace project when absent." },
         title: { type: "string", description: "The ticket title; required when creating." },
         description: { type: "string", description: "The ticket description." },
@@ -291,6 +294,7 @@ function registerSetTicket(ctx: Context): void {
         phase: { type: "integer", description: "The phase number; defaults to 1 on create." },
         phaseTitle: { type: "string", description: "The title a newly created phase takes; defaults to 'Untitled phase'." },
         order: { type: "integer", description: "The order within the phase; defaults to the next free position on create." },
+        slug: { type: "string", description: "A per-workspace-unique alias for a new ticket; derived from the title when absent." },
       },
       output: {
         schema: {
@@ -325,7 +329,7 @@ function registerAttachEvidence(ctx: Context): void {
       description:
         "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_note, subagent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them.",
       parameters: {
-        ticketId: { type: "integer", required: true, description: "The ticket that receives the evidence." },
+        ticketId: { oneOf: [{ type: "integer" }, { type: "string" }], required: true, description: "The ticket that receives the evidence, by numeric id or slug." },
         kind: {
           type: "string",
           required: true,
@@ -380,7 +384,7 @@ function registerMoveTicket(ctx: Context): void {
       description:
         "Move one ticket along a legal transition. The gate enforces the move: the refusal names the missing evidence kinds and the actors allowed to supply them. An agent never reaches done: only a human marks a ticket done.",
       parameters: {
-        ticketId: { type: "integer", required: true, description: "The ticket to move." },
+        ticketId: { oneOf: [{ type: "integer" }, { type: "string" }], required: true, description: "The ticket to move, by numeric id or slug." },
         to: { type: "string", enum: [...STATE_ORDER], required: true, description: "The target state." },
       },
       output: {

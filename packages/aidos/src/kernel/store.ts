@@ -16,6 +16,7 @@ import { PLAN_CONTEXT_LIMIT } from "./constants";
 import {
   ContextTooLongError,
   EvidenceAuthorRefused,
+  DuplicateSlug,
   GateRefused,
   UnknownKind,
   UnknownProject,
@@ -39,6 +40,7 @@ import type {
   TicketSnapshot,
   TicketState,
 } from "./types";
+import { slugFromTitle, workspaceKeyFromPath } from "./slug";
 
 export interface StoreOptions {
   /** Replay an existing log at construction. */
@@ -204,6 +206,20 @@ export class Store {
       }
     }
     return max + 1;
+  }
+
+  /** Whether one workspace already holds the given slug on another ticket. */
+  private _slugTaken(workspaceKey: string, slug: string, excludeId: TicketId | null): boolean {
+    for (const snapshot of this._state.tickets.values()) {
+      if (
+        snapshot.workspaceKey === workspaceKey &&
+        snapshot.slug === slug &&
+        snapshot.id !== excludeId
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** One ticket row from a folded snapshot. The one read code path. */
@@ -422,18 +438,18 @@ export class Store {
       phase?: number;
       order?: number;
       allowlist?: string[];
+      slug?: string;
     },
   ): TicketId {
     if (!this._state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
-    let max = 0;
-    for (const id of this._state.tickets.keys()) {
-      if (id > max) {
-        max = id;
-      }
+    const ticketId = this._state.nextTicketId;
+    const workspaceKey = workspaceKeyFromPath(this._state.projects.get(projectId)!.absPath);
+    const slug = opts?.slug?.trim() || slugFromTitle(title) || `ticket-${ticketId}`;
+    if (this._slugTaken(workspaceKey, slug, null)) {
+      throw new DuplicateSlug(slug, workspaceKey);
     }
-    const ticketId = max + 1;
     const phase = opts?.phase ?? 1;
     const order = opts?.order ?? this._nextOrder(projectId, phase);
     const at = this._nowFn();
@@ -448,6 +464,8 @@ export class Store {
       order,
       state: "open",
       allowlist: [...(opts?.allowlist ?? [])],
+      slug,
+      workspaceKey,
       revision: 1,
       createdAt: at,
       updatedAt: at,
@@ -473,11 +491,16 @@ export class Store {
       phase?: number;
       order?: number;
       allowlist?: string[];
+      slug?: string;
     },
   ): void {
     const prev = this._state.tickets.get(ticketId);
     if (!prev) {
       throw new UnknownTicket(ticketId);
+    }
+    const nextSlug = opts.slug?.trim() ?? prev.slug;
+    if (nextSlug !== prev.slug && this._slugTaken(prev.workspaceKey, nextSlug, ticketId)) {
+      throw new DuplicateSlug(nextSlug, prev.workspaceKey);
     }
     const at = this._atFor(ticketId, prev.updatedAt);
     const snapshot: TicketSnapshot = {
@@ -489,6 +512,7 @@ export class Store {
       phase: opts.phase ?? prev.phase,
       order: opts.order ?? prev.order,
       allowlist: opts.allowlist ? [...opts.allowlist] : prev.allowlist,
+      slug: nextSlug,
       revision: prev.revision + 1,
       updatedAt: at,
     };

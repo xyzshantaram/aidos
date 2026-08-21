@@ -841,12 +841,20 @@ package is now larger and better tested than its specification.
   project and a later session opens in the new path. The sync script copies dotfiles-ai to
   `$DSH_HOME`. A second run updates rather than duplicating.
 
-- [ ] **Ticket C5: Globally distinct ticket ids.** A ticket id becomes unique across every
+- [x] **Ticket C5: Globally distinct ticket ids.** A ticket id becomes unique across every
   workspace, so one id can never mean two tickets. The raw form is the dsh canonical workspace
   key, a colon, and an id unique inside that workspace:
   `--home-sid-repos-aidos--:distinct-ticket-ids`. The display form shortens the key to its last
   path segment: `aidos:distinct-ticket-ids`. Every ticket also carries a per-workspace number
   that only climbs and is never reassigned, so `aidos:#341` names the same ticket for good.
+  **Done.** Every ticket snapshot now carries a durable `slug` and a `workspaceKey` in the dsh
+  canonical `--...--` form (shared helper `workspaceKeyFromPath`, reused by T5 scratch). The
+  numeric `TicketId` is the internal key and allocates from a folded monotonic `nextTicketId`
+  counter, never `max + 1` over live keys. A tool argument takes the slug or the number; a bare
+  form means the current workspace, `<workspaceKey>:<slug>` crosses workspaces, and a
+  foreign-workspace write is refused naming the workspace to open. Legacy pre-C5 logs replay by
+  synthesizing the two fields at the fold/invariant layer. Covered by `tests/c5-*` (workspace-key,
+  distinct-ids, legacy-replay, clone-state-counter).
   **What exists today.** `TicketId` is a plain `number` (`types.ts:25`), and it is the map key
   for `state.tickets`, the reference in every evidence row, and part of the invariant key list.
   Two allocators compute it as `max + 1` over the live folded state (`store.ts:436`,
@@ -897,7 +905,7 @@ package is now larger and better tested than its specification.
   **Evaluate:** import, serialize, and re-import produces an identical plan. A context section
   over 500 lines is refused with a clear message naming the overage.
 
-- [ ] **Ticket P8: A review is its own evidence kind.** Register `builtin:review_pass`, labelled
+- [x] **Ticket P8: A review is its own evidence kind.** Register `builtin:review_pass`, labelled
   "Review pass", described as "A reviewer read the change and reported findings", weight 1.0. Add
   it to the gate from `in_progress` to `awaiting_verification`, beside `builtin:automated_check`.
   A passing suite says nothing about dead code, a duplicated helper, or scope that grew. A review
@@ -909,6 +917,8 @@ package is now larger and better tested than its specification.
   naming a missing kind, instead of an absence nobody notices.
   The ticket keeps its P-series id on purpose. An id is a stable reference, and C5 exists to make
   that rule permanent.
+  **Done.** `builtin:review_pass` is registered (weight 1.0), the gate requires it beside
+  `automated_check`, and `test-30-tool-review-pass-is-its-own-kind` pins every criterion.
   **Evaluate:** a ticket with a passing check and no review is refused, and the refusal names
   `builtin:review_pass`. The same ticket moves once the review row exists. The number of gates a
   human must satisfy is unchanged.
@@ -1195,6 +1205,7 @@ work is the tools and the gate enforcement.
 
 ## Human review queue
 
+- [ ] C5 — the badge and cross-workspace display need the board (B3): two workspaces whose paths end in the same segment must render distinct badge colors, and a `#number` / bare slug in a session must never reach another workspace. Kernel resolution is unit-tested; the rendering halves ship with the board.
 - [ ] A4 bash-ask — with one ticket in-progress and another awaiting verification, a bash call must NOT ask; with only awaiting-verification, it asks. Exercise both on a live session.
 - [ ] B3 (the board in daily use) — work real tickets through it for one session and say whether the gate refusals help or annoy. That judgment cannot be made from tests. Retargeted from the Python prototype on 2026-08-21, because U5 deletes it.
 - [ ] Ticket P8 — drive a ticket that has a passing check and no review, and say whether the refusal reads clearly at the terminal and names the right kind.

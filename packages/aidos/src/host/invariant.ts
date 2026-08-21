@@ -49,7 +49,7 @@ interface StagedFold {
 }
 
 /** Clone one folded state so a candidate can validate without mutating it. */
-function cloneState(state: AidosState): AidosState {
+export function cloneState(state: AidosState): AidosState {
   const copy = createInitialState();
   for (const [id, project] of state.projects) copy.projects.set(id, { ...project });
   for (const [projectId, phases] of state.phases) {
@@ -72,6 +72,7 @@ function cloneState(state: AidosState): AidosState {
   for (const [id, comments] of state.comments) copy.comments.set(id, [...comments]);
   for (const [id, at] of state.lastAt) copy.lastAt.set(id, at);
   for (const [id, revision] of state.lastRevision) copy.lastRevision.set(id, revision);
+  copy.nextTicketId = state.nextTicketId;
   return copy;
 }
 

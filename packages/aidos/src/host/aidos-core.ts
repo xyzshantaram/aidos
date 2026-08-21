@@ -40,6 +40,7 @@ import { parsePlan, renderPlan } from "../plan/plan";
 import type { PlanPhase, PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
+import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 import type {
   Actor,
   AidosConfig,
@@ -57,6 +58,8 @@ import type {
 import {
   ContextTooLongError,
   EvidenceAuthorRefused,
+  DuplicateSlug,
+  ForeignWorkspace,
   GateRefused,
   ProjectNotEmptyError,
   UnknownKind,
@@ -398,7 +401,7 @@ export interface AidosCoreConfig {
 }
 
 export interface SetTicketArgs {
-  ticketId?: number;
+  ticketId?: number | string;
   projectId?: number;
   title?: string;
   description?: string;
@@ -407,16 +410,17 @@ export interface SetTicketArgs {
   phase?: number;
   phaseTitle?: string;
   order?: number;
+  slug?: string;
 }
 
 export interface AttachEvidenceArgs {
-  ticketId: number;
+  ticketId: number | string;
   kind: string;
   payload?: Record<string, unknown>;
 }
 
 export interface MoveTicketArgs {
-  ticketId: number;
+  ticketId: number | string;
   to: TicketState;
 }
 
@@ -597,12 +601,14 @@ export class AidosService extends Service {
 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   attachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
-    const ticketId = args.ticketId;
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    if (!cache.state.tickets.has(ticketId)) {
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
       throw new UnknownTicket(ticketId);
     }
+    this._assertLocalWorkspace(agent, snapshot);
     // The kind comes first, like the CLI: a human-only kind refuses before
     // the payload is looked at, and an unregistered kind refuses after.
     const def = this._resolveKind(args.kind);
@@ -628,12 +634,13 @@ export class AidosService extends Service {
   } {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    const ticketId = args.ticketId;
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
     const toState = args.to;
     const ticket = cache.state.tickets.get(ticketId);
     if (!ticket) {
       throw new UnknownTicket(ticketId);
     }
+    this._assertLocalWorkspace(agent, ticket);
     const fromState = ticket.state;
 
     // 1. The pair must be legal. An illegal pair is a refusal like any
@@ -900,6 +907,7 @@ export class AidosService extends Service {
       criteria: args.criteria,
       phase,
       order: args.order,
+      slug: args.slug,
     });
     const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
     if (!snapshot) {
@@ -912,10 +920,15 @@ export class AidosService extends Service {
   private _editTicket(agent: Agent, args: SetTicketArgs): TicketRow {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    const ticketId = args.ticketId as TicketId;
+    const ticketId = this._resolveTicketId(agent, args.ticketId as number | string);
     const prev = cache.state.tickets.get(ticketId);
     if (!prev) {
       throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, prev);
+    const nextSlug = args.slug?.trim() ?? prev.slug;
+    if (nextSlug !== prev.slug && this._slugTaken(cache.state, prev.workspaceKey, nextSlug, ticketId)) {
+      throw new DuplicateSlug(nextSlug, prev.workspaceKey);
     }
     const at = this._atFor(agent.session, ticketId, prev.updatedAt);
     const snapshot: TicketSnapshot = {
@@ -926,6 +939,7 @@ export class AidosService extends Service {
       criteria: args.criteria ?? prev.criteria,
       phase: args.phase ?? prev.phase,
       order: args.order ?? prev.order,
+      slug: nextSlug,
       revision: prev.revision + 1,
       updatedAt: at,
     };
@@ -945,11 +959,17 @@ export class AidosService extends Service {
     projectId: ProjectId,
     title: string,
     description: string,
-    opts?: { body?: string; criteria?: string; phase?: number; order?: number },
+    opts?: { body?: string; criteria?: string; phase?: number; order?: number; slug?: string },
   ): TicketId {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const ticketId = this._nextTicketId(cache.state);
+    const project = cache.state.projects.get(projectId);
+    const workspaceKey = workspaceKeyFromPath(project?.absPath ?? this._workspacePath(agent));
+    const slug = opts?.slug?.trim() || slugFromTitle(title) || `ticket-${ticketId}`;
+    if (this._slugTaken(cache.state, workspaceKey, slug, null)) {
+      throw new DuplicateSlug(slug, workspaceKey);
+    }
     const phase = opts?.phase ?? 1;
     const order = opts?.order ?? this._nextOrder(cache.state, projectId, phase);
     const at = this._now();
@@ -964,6 +984,8 @@ export class AidosService extends Service {
       order,
       state: "open",
       allowlist: [],
+      slug,
+      workspaceKey,
       revision: 1,
       createdAt: at,
       updatedAt: at,
@@ -1095,11 +1117,68 @@ export class AidosService extends Service {
   }
 
   private _nextTicketId(state: AidosState): TicketId {
-    let max = 0;
-    for (const id of state.tickets.keys()) {
-      if (id > max) max = id;
+    return state.nextTicketId;
+  }
+
+  /** Whether one workspace already holds the given slug on another ticket. */
+  private _slugTaken(
+    state: AidosState,
+    workspaceKey: string,
+    slug: string,
+    excludeId: TicketId | null,
+  ): boolean {
+    for (const snapshot of state.tickets.values()) {
+      if (
+        snapshot.workspaceKey === workspaceKey &&
+        snapshot.slug === slug &&
+        snapshot.id !== excludeId
+      ) {
+        return true;
+      }
     }
-    return max + 1;
+    return false;
+  }
+
+  /**
+   * Resolve a ticket reference (a numeric id or a slug) to a numeric id.
+   * A bare number or a bare slug means the current workspace; a prefixed
+   * `<workspaceKey>:<slug>` reference resolves across workspaces.
+   */
+  private _resolveTicketId(agent: Agent, ref: number | string): TicketId {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    if (typeof ref === "number") {
+      if (cache.state.tickets.has(ref)) {
+        return ref;
+      }
+      throw new UnknownTicket(ref);
+    }
+    const current = workspaceKeyFromPath(this._workspacePath(agent));
+    const colon = ref.indexOf(":");
+    if (colon >= 0) {
+      const workspaceKey = ref.slice(0, colon);
+      const slug = ref.slice(colon + 1);
+      for (const snapshot of cache.state.tickets.values()) {
+        if (snapshot.workspaceKey === workspaceKey && snapshot.slug === slug) {
+          return snapshot.id;
+        }
+      }
+      throw new UnknownTicket(`${workspaceKey}:${slug}`);
+    }
+    for (const snapshot of cache.state.tickets.values()) {
+      if (snapshot.workspaceKey === current && snapshot.slug === ref) {
+        return snapshot.id;
+      }
+    }
+    throw new UnknownTicket(ref);
+  }
+
+  /** Refuse a write against a ticket whose workspace is not the current one. */
+  private _assertLocalWorkspace(agent: Agent, snapshot: TicketSnapshot): void {
+    const current = workspaceKeyFromPath(this._workspacePath(agent));
+    if (snapshot.workspaceKey !== current) {
+      throw new ForeignWorkspace(snapshot.workspaceKey, current);
+    }
   }
 
   /** The next free order in one phase, counted from 1. */
