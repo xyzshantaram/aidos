@@ -3,7 +3,7 @@
 This file is a bootstrap artifact with a scheduled death. It is the single
 working document for the aidos-on-dsh build. It holds the design (merged
 from the former DSH.md) and the tickets in one place. When the aidos board
-can import this file completely, this file is deleted. That is Ticket P6.
+can import this file completely, this file is deleted. That is build order item B4.
 
 How the work is split: you own the architecture and the verification, and
 the agent writes the implementation. The thinking happens up front, in long
@@ -46,8 +46,10 @@ build.
 
 The sections below are the design. They are the merged former DSH.md. Every
 claim was checked against the installed dsh packages
-(`@deepseek-ai/dsh@0.1.0-rc.7` and its `@deepseek-ai/dsh-*` tree), by
-reading the package READMEs and the compiled plugin sources.
+(`@deepseek-ai/dsh-*` at `0.1.0-rc.8`), by reading the package READMEs and the
+compiled plugin sources. The first pass read rc.7. A re-check against rc.8 ran
+on 2026-08-21. The two claims that moved are recorded in build order item 3
+(B2) and in Ticket A3.
 
 ### The headline
 
@@ -61,7 +63,7 @@ design philosophy is the same one aidos was built around.
   not a design goal.
 - **Derived reads are projections, not queries.** `ctx.sessionProjections`
   drives pure `init/apply/view` functions eagerly over the log. This is
-  Ticket P7's "SQL views own every derived read", including its load-bearing
+  the rule set the Python prototype proved out, including its load-bearing
   rules: `seq` is the ordering authority, state-carrying events carry whole
   values, and the projection rebuilds from the log with no in-memory copy to
   resync.
@@ -90,7 +92,7 @@ What is net-new is small. It is exactly the part of aidos that is aidos:
 
 1. The **ticket/evidence/gate kernel** as a dsh session domain (a service,
    strict replay fold, invariant, projection units, Remote endpoints, and
-   model-facing tools). It is a direct port of the Phase-1 prototype,
+   model-facing tools). It is a direct port of the Python prototype,
    following the dsh-goal domain's pattern.
 2. The **board** as a dsh web client plugin (React, not the Svelte 5 the
    from-scratch plan chose). It is the first board. It consumes the
@@ -116,7 +118,7 @@ There is no SQLite (the session log is the store).
 | Subagent board access | Depth check plus toolFilter | Structural exclusion |
 | T2 tool loader | Defer. Use the existing plugin system. | The loader was a greenfield artifact. Presets and packages cover the need. |
 | Config from git | Defer. Use a sync script. | dsh hot-reloads patches and re-discovers presets and skills live. |
-| MCP servers | nostrbook, gitlab, swiggy-food, swiggy-instamart, git | web_search and web_fetch are native dsh tools. The git row is the model's only git surface (W10). |
+| MCP servers | nostrbook, gitlab, swiggy-food, swiggy-instamart, git | web_search and web_fetch are native dsh tools. The git row is the model's only git surface. |
 | Delivery | Two bundles | aidos is unopinionated and distributable. Personal config lives in dotfiles-ai and syncs to the harness. |
 | Scratch rule | Per-project scratch outside the repo | Agent output never lands in the project repo. It lives in the scratch dir or the ticket board. |
 | Node-tree renderer | Paused. nostr-canvas later | No renderer ships in v1. |
@@ -405,7 +407,7 @@ confines bash to the workspace root. The in-process child derives its cwd
 from the parent session, so the sandbox root is the same workspace; the
 deployment `cwd` override exists only for the out-of-process provider.
 
-#### Projection units (Ticket P7's SQL views, ported)
+#### Projection units
 
 Registered under `ctx.sessionProjections` with `stateVersion`, `init/apply/
 view` and a zod schema each, exactly like the `goal` projection.
@@ -421,7 +423,7 @@ Client carriers already push `session/projection` frames, so the board
 observes live changes. The projection cache plus `restore()` give cold reads
 for other sessions. That is the multi-project global board's read path.
 
-#### Model-facing tools (Ticket P3's CLI, ported)
+#### Model-facing tools
 
 Registered by an agent-preset row `aidos-tools` (a relative-path plugin file
 in the preset directory, or a published package), following `dsh-tool-goal`'s
@@ -492,11 +494,13 @@ the following:
   projection values (`useProjection(...)` or
   `sessions.binding(id).session.projections.faceOf(key)`, the same read path
   the goal bar uses).
-- It renders the ticket grid: title, state, confidence score prominently
-  labeled advisory, gate fraction muted below it, project filter, sort by
-  score or fraction, detail panel (side, not modal). The panel shows
-  evidence grouped by criterion and highlights uncovered criteria (Ticket
-  P9's coverage read, folded into the board).
+- It renders the ticket grid. The shape is settled (2026-08-21), carried over from the
+  prototype board design that was never run: **square ticket tiles** in a **large grid**, not a
+  dense table. Each tile shows the title, the state, the confidence score prominently labeled
+  advisory, and the gate fraction muted below it. **Attached evidence renders as tags on the
+  tile**, one per kind, so coverage is legible without opening the ticket. The grid carries a
+  project filter and sorts by score or by gate fraction. The detail panel opens at the side,
+  not as a modal, and shows evidence grouped by criterion with uncovered criteria highlighted.
 - It acts through the Remote endpoints (`ctx.remote.aidos.<method>(
   sessionId, ...)`, the generated client for the service's typert bindings):
   create and edit fields, attach evidence as `user` (including screenshots
@@ -506,13 +510,13 @@ the following:
 - It re-reads on focus (the prototype's "no timer" rule). The projection
   cache and change frames make this trivial.
 
-The agent-built throwaway dashboards (node-tree, Ticket U4) are **paused**.
-Later work looks at nostr-canvas for the declarative node tree. The prototype
+The agent-built throwaway dashboards (a node-tree renderer) are **dropped from
+v1** (2026-08-21). Later work looks at nostr-canvas. The prototype
 never built a board; the web board (B3) is the first one. The aidos board
 client plugin is unaffected: it is a real product surface, not a throwaway
 dashboard.
 
-#### The plan skill and import (Tickets P11, P6, C4)
+#### The plan skill and import (Tickets P11, C4)
 
 - Ship a `plan` skill (a `SKILL.md` bundle in the aidos preset, following the
   plan-skill structure: Vision, Checklist, Critical context, User preferences
@@ -523,8 +527,7 @@ dashboard.
 - `plan_import` parses markdown (frontmatter plus headings) and lands every
   ticket in `open`. It records the document's claimed state as
   `builtin:imported_state` evidence. The prototype's fix that shut the last
-  path that could reach `done` without a human (Ticket P3's import rule) is
-  ported verbatim.
+  path that could reach `done` without a human is ported verbatim.
 - Phase and order remain first-class ticket fields. The open P11 question
   (keep phases or treat them as ordinary sections) is settled by keeping
   them. The prototype already does, and the dogfooding tests depend on it.
@@ -579,6 +582,8 @@ $DSH_HOME/aidos/scratch/<workspace-key>/
   it without asking. The session context surfaces the scratch path to the
   agent; the `plan` context section can name it. Evidence rows can reference
   files in it by path (never by embedding file contents in the log).
+- The agent writes here FREELY (decided 2026-08-21): no ticket allowlist, no
+  approval, and no read-before-write gate. A scratch file is not a project file.
 - Clearing a workspace's scratch removes the directory and optionally writes
   an evidence row. The workspace registry's durable records stay untouched.
 - The ticket board is the other home. Notes, decisions, and plans that have
@@ -587,10 +592,10 @@ $DSH_HOME/aidos/scratch/<workspace-key>/
 
 **How the port uses it.** The former DSH.md design doc was consumed by this
 file and deleted. PLAN.md is the sanctioned exception to the rule: it is the
-bootstrap ticket source, and Ticket P6 deletes it when the board imports it.
+bootstrap ticket source, and B4 deletes it when the board imports it.
 The dotfiles-ai repo keeps only the user's own tracked content. Once the
 port is verified, the opencode items that moved out are deleted from the
-repo (W12).
+repo. That cleanup is tracked in the dotfiles-ai plan.
 
 **Archived sessions have no UI view or delete.** The web UI can archive a
 session row (it disappears from every list surface), but there is no
@@ -600,164 +605,10 @@ known limitations). View an archived session by decompressing its log:
 Delete one by removing its directory. Session logs are zstd-compressed
 JSONL; each session is one directory under the workspace's sessions dir.
 
-### The workstation port (dotfiles-ai)
-
-This section ports the user's opencode workstation config
-(`~/repos/dotfiles-ai`) into dsh. The port ships as the **personal bundle**,
-separate from the aidos bundle. aidos stays unopinionated. Personal config
-lives in dotfiles-ai and syncs to the harness.
-
-| dotfiles-ai item | dsh port | Where it lives |
-|---|---|---|
-| Skills: grilling, plan, review, software-engineering, ste-writing, etu, caffeine, devtunnel, share-caddy-cert, expense-split | `SKILL.md` bundles. Frontmatter: `name`, `description`, `whenToUse`. Drop the `compatibility: opencode` key. The `question` tool reference becomes dsh's `ask_user_question`. Scripts and assets travel with the skill directory. | Personal bundle skill dir, synced to `$DSH_HOME/skills` |
-| Agents: coder, tester, researcher, see | Subagent tool rows with `agentOptions: { provider, model }`, `toolFilter`, and `persona`. The `.md` bodies become the personas. coder, tester, and researcher pin OpenCode Go `deepseek-v4-flash`. `see` is a thin custom tool that resolves its model from the active profile (Claude Haiku on work, Qwen3.7 Plus on personal). | Personal preset's delegation group |
-| Plugin: opencode-profile | Replaced by the Profile submenu (see "Model profiles"). A client plugin with the Profile submenu, the badge, and the see-model resolver. | Personal bundle client plugin |
-| Plugin: session-hygiene | A small prompt-section plugin. It reads session age (`session.header.createdAt`) and compaction count (compaction events, the `sessionStats` projection) and injects a warning section when the session is old or heavily compacted. | Personal bundle host row |
-| Tool: shell-command-long-running | `dsh-tool-bash` with `run_in_background` gives background jobs with `job_output`/`job_kill`. A thin tmux wrapper is optional via `dsh-tmux-context`. The opencode TUI "bash renderer" problem does not exist in dsh. | Personal preset tool row |
-| Text editing | dsh-better-edit (hashline, npm, MIT): hash-anchored `read`/`edit`/`batch_edit`/`undo_last_edit` replacing the builtin fs `read`/`edit`. Writes go through `ctx.fs`, so the sandbox still confines. Guidance overrides per preset at `$DSH_HOME/plugins/dsh-better-edit/<preset>/`. | Personal bundle plugin add |
-| Git access | Raw git is denied to the model. The official MCP git server (`mcp-server-git` via uvx) exposes status, diff, log, commit, add, reset, branch, checkout, and show as `mcp__git__*` tools. A `git` stub on the model's PATH redirects to those tools or asks the user. The A4 bypass suite covers the escape routes. | Personal bundle patch plus preset |
-| Dependencies | A `package` tool takes the ecosystem, autodetects the package manager, and installs the latest registry version. Manifest and lockfile paths are denied to the read/write/edit tools; the tool is the only path that changes them. | Personal bundle custom tool plus guard |
-| Tab title | A title-rewriter client plugin. The renderer hardcodes `document.title = "<session title> — DeepSeek Harness"`. The plugin observes `document.title` and rewrites it to `dsh | <session title>`. The upstream fix is a configurable product title. | Personal bundle client plugin |
-| Session cost | A `cost` projection unit sums per-model tokens (from `assistant/chunk` usage records) times the price from a price-table settings namespace. A small client component shows it near the stats strip. The strip itself is shipped client code. Our display is a companion. | Personal bundle |
-| MCP servers | `dsh-mcp-client` rows: nostrbook, gitlab, swiggy-food, swiggy-instamart. Skip web_search and fetch: dsh's native `web_search` and `web_fetch` cover them. | Personal bundle patch |
-| AGENTS.md rules | Copy into `$DSH_HOME/AGENTS.md` and the project's `AGENTS.md`. `dsh-agent-instructions` loads them natively. Translate opencode terms (Task tool becomes the subagent tool, `question` becomes `ask_user_question`, compaction stays dsh compaction). | `$DSH_HOME` plus project roots |
-| opencode.json providers | Configurable provider routes in Settings to Models. The opencode-go subscription route (base URL `https://opencode.ai/zen/go/v1`, credential ref `OPENCODE_GO_API_KEY`, model ids `deepseek-v4-pro` and `deepseek-v4-flash`), the direct DeepSeek route, the meridian proxy route (for Claude Haiku), local llama-server and Lemonade routes. | Settings |
-| LAN, systemd, Caddy | `dsh web` behind the same Caddy TLS plus mDNS (`potato.local`), as user systemd units. The opencode-web.service pattern ports directly. The dotfiles README describes the setup in a few lines. The configs stay in the deployed locations. | System config |
-| OPENCODE_SETUP.md, PLAN.md | Port the docs into the personal bundle. PLAN.md's verification-gap analysis is what aidos itself addresses. | Personal bundle |
-
-#### Model profiles
-
-The work and personal split becomes a **Profile submenu** in the model
-selector. dsh's model seat (`conversation.input.model`) and the `/model`
-command come from the shipped `ui-model-selection` client plugin. The
-personal bundle replaces that seat: its patch disables `ui-model-selection`,
-and its own client plugin registers a model seat with a Profile submenu. The
-slot system's shadowing machinery supports the replacement.
-
-**Profiles** (the user's assignment):
-
-| Profile | Orchestrator | coder, tester, researcher | see |
-|---|---|---|---|
-| Work | Meridian Claude proxy (localhost:9000) | OpenCode Go `deepseek-v4-flash` | Claude Haiku 4.5 (via meridian) |
-| Personal | OpenCode Go `deepseek-v4-pro` | OpenCode Go `deepseek-v4-flash` | Qwen3.7 Plus (OpenCode Go) |
-
-**Behavior:**
-
-- Selecting a profile sets the session's provider and model through the
-  session models RPC (`sessions.models(...)`), the same call the shipped
-  selector uses. It changes providers only. It does not touch anything else.
-- A badge shows in the model seat when the current session selection matches
-  a profile. The comparison runs client-side against the profile config. A
-  manual per-session override stays possible: the badge drops when the
-  selection no longer matches a profile.
-- coder, tester, and researcher pin `agentOptions: { provider, model }` in
-  their tool rows. Both profiles use the same flash tier on the Go
-  subscription, so the rows never change.
-- `see` resolves its model from the active profile at call time. A thin
-  custom see tool reads the profile settings and delegates with the right
-  model (Claude Haiku on work, Qwen3.7 Plus on personal).
-
-**Config location.** dsh settings can hold the profiles. A `profile`
-settings namespace carries the definitions, schema-validated and
-revision-gated (`expectedRevision`). A plain file the plugin reads also
-works. Settings is the recommended home because the UI renders it and the
-revision trail audits changes. The plugin reads the resolved value per
-selection and per call.
-
-**The meridian route.** Meridian (`rynfar/meridian`, port 9000) is the work
-AI. It exposes OpenAI-compatible endpoints: `/v1/chat/completions` and
-`/v1/models` (user-verified on port 9000). The opencode config also treats
-it as Anthropic-compatible, and dsh's pi-ai adapter serves the
-`anthropic-messages` protocol, so no adapter plugin is needed either way.
-W0 declares the route through pi-ai with `api: openai-completions` and
-`baseURL: http://127.0.0.1:9000/v1`. That protocol also enables `/models`
-auto-detection in the Models page, which `anthropic-messages` cannot do.
-A dummy `apiKeyEnv` value satisfies the credential check. The exact rows
-are in `docs/w0-providers.md`.
-
-#### Personal AI config
-
-Two behaviors the user wants from the harness. Both ship in the personal
-bundle.
-
-**Dismissed questions interrupt the loop.** Today, closing a question
-rejects the pending ask with code `ASK_CANCELLED` (verified in
-`dsh-host-apiproxy`: the pending promise rejects with that code). The model
-then sees a tool error and keeps going. The personal preset ships its own
-`ask_user_question` tool row that wraps the shipped tool. On `ASK_CANCELLED`
-the wrapper calls `exec.agent.cancel('user-dismissed-question',
-{ keepInbox: true })`. `Agent.cancel` aborts the active turn and the
-between-turn task. `keepInbox` preserves queued and steering work for the
-next user prompt, so a dismissed question stops the run, not the session.
-Plan-review dismissal already stops via `dsh-plan-mode`; the wrapper covers
-the generic question path. Tool shadowing: preset row order decides which
-`ask_user_question` row wins. Confirm at W7.
-
-**Steering is built in.** The `/btw` command idea is dropped. The dsh
-composer already steers a running agent: a user message sent while a turn
-is in flight submits in `steer` mode at the nearest step boundary. No
-custom client plugin needed.
-
-**Reject with a comment.** The approval answer payload is exactly
-`{ sessionId, approvalId, outcome: 'allowed-once' | 'rejected' }` (verified
-in `dsh-host-apiproxy/api/approvals.schema`). There is no comment channel,
-and the model sees only the resulting tool outcome. The personal bundle's
-client plugin extends the permission card with an optional Comment field.
-Reject with a comment answers the approval normally (`'rejected'`) and
-injects a steering user message through
-`sessions.send(sessionId, { mode: 'steer', content })`. The `steer` mode
-submits at the nearest step boundary, so the agent reads the comment at that
-point in the loop. The message reads "The user rejected the <tool> call.
-Comment: <text> Adjust your next action." The upstream end state is an
-optional rejection-reason field on the approval outcome. Confirm the
-permission-card seat at W8.
-
-**Hashline editing (W9).** dsh-better-edit replaces the builtin fs `read`
-and `edit` with hash-anchored `read`/`edit`/`batch_edit`/`undo_last_edit`.
-Every line carries a 3-character content hash. An edit targets hashes, so
-the model never echoes the replaced text (31 to 43 percent fewer output
-tokens) and a stale or ambiguous range is hard-rejected before anything is
-written. Writes go through `ctx.fs`, so the sandbox and the observation
-policy still confine. Guidance overrides per preset live at
-`$DSH_HOME/plugins/dsh-better-edit/<preset>/<section>.md` and are seeded on
-first boot. The builtin `write` and `read_image` stay. The registry rule:
-duplicates within one layer fail, and scoped registrations shadow globals.
-The personal preset removes the conflicting builtins on purpose. Its plugin
-file calls `ctx.tools.restrict({ deny: ['read', 'edit'] })` on the agent
-scope. The restriction removes exactly those global tools from the visible
-surface. hashline's scoped `read` and `edit` stay, because restrictions
-never touch scoped registrations. The result is deterministic and does not
-depend on registration order. The fs plugin has no per-tool disable
-config. Confirm the layer hashline registers into at W9.
-
-**Git through MCP only (W10).** The official `mcp-server-git` (run via
-uvx) exposes status, unstaged and staged diff, log, commit, add, reset,
-branch, checkout, and show as `mcp__git__*` tools. Raw git is denied to the
-model two ways. A `tools/pre-execute` deny refuses bash calls whose command
-matches git patterns. A `git` stub on the model's bash PATH prints "Use the
-mcp__git__* tools. If the operation is not available there, ask the user to
-run it." The MCP server cannot push, fetch, manage remotes, stash, rebase,
-merge, touch submodules, or handle credentials, so those operations always
-route to the user. The A4 bypass suite extends to the escape routes
-(`git -C`, `sh -c`, aliases, scripts, command substitution). The human side
-keeps real git. The PATH-stub mechanics land on `dsh-shell-env`'s
-contributor registry or the sandbox executor's env config. Confirm at W10.
-
-**Dependencies through a tool only (W11).** A `package` tool takes the
-ecosystem (rust, python, nodejs, go, and so on), autodetects the package
-manager (cargo, uv or pip or poetry, npm or pnpm or bun, go, and so on),
-resolves the latest version from the registry, and runs the change. A guard
-denies `read`/`write`/`edit` calls whose path is a manifest or lockfile:
-`package.json`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`,
-`pnpm-lock.yaml`, `bun.lock`, `cargo.toml`, `Cargo.lock`, `pyproject.toml`,
-`poetry.lock`, `Pipfile`, `requirements.txt`, `go.mod`, `go.sum`, and
-`Gemfile`. The model cannot pin an outdated version, because the tool is
-the only writer and it always resolves current. Review the file list at
-W11. `requirements.txt` may deserve an exception.
-
 ### Packaging and delivery
 
-The implementation ships as two dsh bundle additions. No fork is needed.
+The implementation ships as a dsh bundle addition. No fork is needed. The
+personal bundle is a separate package, tracked in the dotfiles-ai plan.
 
 #### The aidos bundle (unopinionated, distributable)
 
@@ -806,16 +657,6 @@ causes that looked like one symptom:**
    a colon. Fixed in both the package `preset.yml` and the sync.sh heredoc
    that writes the deployed copy.
 
-#### The personal bundle (dotfiles-ai)
-
-A second bundle package (or a profile) whose patch mounts the workstation
-port: the skills, the subagent tool rows, the session-hygiene row, the MCP
-rows, the AGENTS.md copy, and the client plugins (the Profile model seat,
-the title rewriter, the cost display, the dismiss-interrupt wrapper, the
-reject-with-comment permission card). It lives in `~/repos/dotfiles-ai`
-and syncs to `$DSH_HOME`. It depends on the aidos bundle only if a session
-runs both.
-
 #### Dev workflow
 
 - The host, agent, and tool packages build as ordinary npm or tsc packages
@@ -830,160 +671,118 @@ runs both.
 
 ### Build order
 
-1. **B0, domain kernel plus tests.** DONE. `packages/aidos/` holds the
-   pure TypeScript kernel (fold, invariant, gate engine, projections,
-   Store, plan parser, plan import and export) plus all 32 ported tests,
-   the constants mirror, and the audit pin. SPEC.md is the contract.
-   122 tests green, both typechecks pass. No UI, no tools. C2 plus C3 and
-   the P-series pins. SPEC.md dies at B1: the kernel consumes it, its
-   decisions fold into this file, and the B1 commit deletes it.
-2. **B1, tools.** DONE. `packages/aidos/` now carries the dsh wiring:
-   the log-backed AidosService (projections, invariant companion, `aidos`
-   settings namespace, workspace bootstrap), the six tools (get_tickets,
-   set_ticket, attach_evidence, move_ticket, plan, plan_import) in the
-   dsh-tool-goal shape, the delegation-depth guard, the state-gated
-   restrict masks keyed on the union of ticket states, the bash-ask
-   pre-execute listener, and the per-ticket allowlist guard with the
-   child path scope. The aidos preset (presets/aidos/) mounts the tools;
-   the bundle patch mounts dsh-invariants + aidos-core. SPEC-B1.md is the
-   contract (SPEC.md deleted). P3 CLI tests ported as tool tests (test_20
-   to 25), P8 pins, and the guard/mask/bash-ask/allowlist policy tests:
-   47 files, 213 tests green. Verified in a podman container (see the
-   B1 human review item).
+**The container test harness.** B1 was verified in a podman container (scratch
+dir `~/.dsh/aidos/scratch/--home-sid-repos-aidos--/podman-b1-test/`): node:24
+plus the dsh CLI, `dsh web` on 127.0.0.1:3090, the aidos package mounted at
+`/opt/aidos` and added to the web profile as a bundle. B2 retests the human walk
+in the same container. Three gotchas, all paid in real time: SELinux needs `:Z`
+on the bind mounts, because container_t cannot write user_home_t; preset
+discovery skips symlinks, so the preset must be a real directory whose
+`agent.cordis.yml` mounts a loader that re-exports the mounted bundle; and the
+shipped web composition mounts no invariants service, so the aidos bundle patch
+mounts `dsh-invariants` itself.
 
-**The container test harness.** B1's plugins were verified in an isolated
-podman container (scratch dir `~/.dsh/aidos/scratch/aidos/
-podman-b1-test/`, tracked in `containers.md`, cleaned with
-`cleanup.sh`): node:24 + the dsh CLI, `dsh web` on 127.0.0.1:3090 (host
-network), the aidos package mounted at `/opt/aidos` and added to the web
-profile as a bundle. Gotchas paid in real time, keep them: SELinux
-requires `:Z` on the bind mounts (container_t cannot write user_home_t);
-preset discovery skips symlinks (`readdir` withFileTypes, `isDirectory()`
-false), so the preset must be a real directory whose `agent.cordis.yml`
-mounts a tiny loader that re-exports the mounted bundle (deps resolve via
-`/opt/aidos/node_modules`); the shipped web composition mounts no
-invariants service, so the aidos bundle patch mounts `dsh-invariants`
-itself. The container proved: the six tools live with correct constraints,
-human-only kinds enforced on attach and move, clean structured refusals,
-the open-tier mask hides write/edit/bash, plan export works, and the
-workspace bootstrap binds the session project. The human-side walk
-(signoff to done, bash-ask, allowlists) needs B2 and is retested in the
-same container.
-3. **B2, human surface.** Remote endpoints plus `userQuestions`-backed
-   flows. Port the lifecycle tests that need two actors (test_08, test_09,
-   test_22, test_27).
-4. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
+1. **B2, human surface.** Scope settled 2026-08-21 by grilling; every claim
+   below was read out of the code or probed against a live host.
+   **Method shape.** One implementation per operation, with the actor pinned
+   at each entry point. Internal `_attachEvidence(agent, args, actor)` and
+   `_moveTicket(agent, args, actor)` hold the logic. Four thin public
+   wrappers call them: `agentAttachEvidence`, `userAttachEvidence`,
+   `agentMoveTicket`, `userMoveTicket`. The `user` pair carries the `@Remote`
+   decorators. No caller chooses the actor, so no tool path can reach a
+   `user` stamp. The kernel needs no change for this: the gate engine and
+   `_attachEvidenceInternal` already take an actor, and `planImport` already
+   passes `system` through the same seam.
+   **The Remote surface.** `userAttachEvidence` and `userMoveTicket` (the two
+   the gates make human-only: `awaiting_verification -> done` needs
+   `builtin:user_verified`, and the send-back edge needs no evidence but is
+   `["user"]`), a comment writer, and `userSetTicket` for field and allowlist
+   edits. The comment writer is net-new on the service: the kernel has
+   `Store.addComment` (`store.ts:619`), the fold and the `aidos.comments`
+   projection both handle the event, and `AidosService` has no path to it.
+   `moveProject` was in scope and was dropped again on the same day (see C1).
+   The allowlist half of `userSetTicket` is Ticket A7 and blocks on it.
+   **One structural change.** `AidosService` extends plain `Service`
+   (`aidos-core.ts:439`). It must extend `TypertRemoteService` and bind its
+   namespace, following `GoalService`.
+   **Verification is container HTTP, not hand review.** You review at B3. The
+   RPC recipe is pinned by probes against the live host: `POST
+   /api/<namespace>/<method>` with body `{"type":"client-request","rpcId":…,
+   "method":"<namespace>/<method>","payload":{"args":{…}}}`. `payload` must
+   carry exactly one plain-object `args` field. The agent scope rides as a
+   session id (`dsh-agent` declares `TypertContext<SessionId>`), and the host
+   resolves it to the live agent, so no author field crosses the wire. The
+   gateway enforces that boundary, not our code.
+   **Three gotchas for the harness.** The scope resolves to a LIVE agent, so
+   a test must open a session first. Session creation is not on the typert
+   bus — only seven services are — so that half uses the older dot-separated
+   apiproxy grammar (`session.create`) rather than the slash-separated typert
+   grammar. The Dockerfile skew is CLOSED (2026-08-21). The image installs
+   `dsh@0.1.0-rc.8`, the stale store was dropped, and the container answers
+   `HTTP 200` on 127.0.0.1:3090. Verified from inside the image, not from the
+   CLI string: `dsh --version`, `dsh-api-gateway`, `dsh-typert-protocol`,
+   `dsh-api-remotes`, and `dsh-typert-registry` all report `0.1.0-rc.8`. Check
+   the image next time, not the CLI version. The rc.7 CLI on the host already
+   carried rc.8 gateway internals, so the version string proves nothing.
+   **The rc.8 re-check (2026-08-21).** Eight of ten design claims hold
+   unchanged, including the RPC envelope above, the session-id scope, and the
+   seven-service typert bus. Two moved. "Descriptors generate the client
+   bindings, so the wire cannot drift" holds only for the strict path: SRC mode
+   gives a host endpoint no client codec and no type projection, so an endpoint
+   can exist with no generated binding. And `toolFilter` on a delegation start
+   request needs the provider to declare the capability, and the out-of-process
+   driver declares `false`.
+   **The dependency B2 needs is installed.** `@deepseek-ai/dsh-typert-protocol`
+   is now an exact-pinned `0.1.0-rc.8` devDependency of `packages/aidos`, and
+   `TypertRemoteService` and `Remote` are real value exports there.
+   `dsh-api-gateway` is NOT needed: `dsh-goal`, the pattern B2 copies, declares
+   only the protocol package, and the only value import of the gateway is the
+   client assembly.
+   Port the lifecycle tests that need two actors (test_08, test_09, test_22,
+   test_27) against the Remote layer, not only the service.
+2. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
    the grid, detail, evidence, signoff, send-back, the active-ticket focus
    control, and the per-ticket allowlist editor. Criterion coverage
-   (Ticket P9's read) lands here. Port the projection and view tests
+   lands here. Port the projection and view tests
    (test_26, test_31, test_32) against the client read model. U5's "every
    behavior has an equivalent test" checklist is the definition of done.
    **Evaluate:** a dropped connection reconnects and the view is correct
    afterward with no refresh.
-5. **B4, plan skill plus import dogfood.** Import this file into the board.
-   Delete this file under a ticket (P6). Keep the benchmarking table alive.
-6. **B5, subagent and job glue plus shell posture checks.** A6 provenance
+3. **B4, plan skill plus import dogfood.** Import this file into the board.
+   Then delete this file in a commit that records why. Keep the
+   benchmarking table alive.
+4. **B5, subagent and job glue plus shell posture checks.** A6 provenance
    attachment. The shell bypass suite (Ticket A4) against the shipped shell
    posture.
- 7. **W0, personal bundle scaffold.** DONE. The sync script
-   (`~/repos/dotfiles-ai/dsh/sync.sh`, idempotent installer: clone + run to
-   converge) syncs the personal bundle into `$DSH_HOME` and writes the
-   web-profile host-plane patch. Provider routes applied live:
-   `opencode-go` (catalog, `OPENCODE_API_KEY`) and `meridian`
-   (`api: openai-completions`, `baseURL: http://127.0.0.1:9000/v1`, 6 models).
-   Default model switched to `opencode-go/deepseek-v4-pro` (was
-   `deepseek-official`). **Evaluate:** two profiles against one provider and
-   `/models` auto-detection — pending human check.
- 8. **W1, skills port.** DONE. All ten opencode skills ported to dsh
-   `SKILL.md` bundles in `~/repos/dotfiles-ai/dsh/skills/`, synced to
-   `$DSH_HOME/skills`. OpenCode terms translated (`question` — dsh
-   `ask_user_question`, MCP `mcp__*` naming). Frontmatter machine-validated.
- 9. **W2, subagent rows.** DONE (revision: plugins moved host-plane, personal
-   preset removed). coder, tester, researcher pinned to
-   `opencode-go/deepseek-v4-flash`, `maxDepth: 1` (leaf children),
-   per-persona `toolFilter` (board + delegation kept out of children). The
-   `see` tool resolves its model from a `profile` settings namespace
-   (work — meridian/claude-haiku-4-5; personal — opencode-go/qwen3.7-plus,
-   a route with no backing provider yet, TODO).
-10. **W3, MCP rows.** DONE. nostrbook, gitlab, swiggy-food,
-    swiggy-instamart + git (`mcp-server-git` via uvx) mounted in the
-    web-profile host-plane patch.
-11. **W4, hygiene and long-running shell.** DONE. `session-hygiene` prompt
-    section (session-age + compaction-count escalation) mounted host-plane.
-    Long-running shell needs no plugin: `dsh-tool-bash` `run_in_background`
-    + `job_output`/`job_kill` cover the opencode gap.
-12. **W5, AGENTS.md and LAN.** DONE (deployed and live under systemd).
-    `$DSH_HOME/AGENTS.md` written (dsh translation). The `lang/` directory was
-    REMOVED from the dotfiles-ai repo per user directive: no config templates
-    ship in the repo, only a prose note in the dotfiles README that rynfar
-    and Caddy are set up. The Caddyfile and systemd units live only in the
-    deployed locations. Deployed: `dsh-web.service` (dsh web on
-    127.0.0.1:3080, trusted-host potato.local:1337) and `caddy.service`
-    (type notify, `caddy run`, 1337-3080), both `WantedBy=user-www.target`;
-    `opencode-web.service` removed, target now exactly caddy+dsh-web+meridian.
-    basic_auth ENABLED (user `shan`), placeholder password until regenerated
-    for a shared LAN. `caddy adapt` clean. The repo `dsh/lang/` deletions
-    are staged, not committed. **Evaluate:** a second device connects to
-    https://potato.local:1337, prompts for basic auth, and receives live
-    events. Without the token, a write is refused.
-13. **W6, profiles client.** The Profile submenu in the model seat, the
-    badge, the per-session override, the cost display, and the title
-    rewriter.
-14. **W7, dismissed questions interrupt the loop.** The personal
-    `ask_user_question` wrapper tool. `Agent.cancel` with `keepInbox: true`
-    on `ASK_CANCELLED`.
-15. **W8, reject with a comment.** The permission-card extension: a Comment
-    field, a normal `'rejected'` answer, and a steering-message injection
-    that carries the comment to the agent.
- 16. **W9, hashline editing.** DONE. dsh-better-edit installed into the
-     live web profile (`dsh plugin --profile web add dsh-better-edit`, v0.2.1,
-     layer `# == dsh-better-edit` confirmed). It self-shadows the builtin
-     read/edit on each agent's own scope layer at `agent/session-start` — no
-     preset `restrict` row needed (earlier assumption dropped). Guidance
-     overrides shipped per-preset at `$DSH_HOME/plugins/dsh-better-edit/
-     <preset>/<section>.md` (orders 130-133).
- 17. **W10, git through MCP only.** DONE (revised to a structural guard).
-     `mcp__git` server row mounted host-plane. Raw git in the model's bash is
-     denied by `bash-guard.js` — an unbash AST walker (via @cad0p/unbash-
-     walker) that matches commands in COMMAND POSITION, not substrings, so
-     `bash -c "git status"` and `$(git …)` catch while `echo git` and reading
-     a path containing `git-` do not. Rule drop-ins in
-     `$DSH_HOME/plugins/guards/*.json` (git, find, grep deny; extends to any
-     command), re-read per call, fail-closed on parse errors. The `git` PATH
-     stub is NOT deliverable through dsh seams (shellEnv carries only DSH_*
-     keys); the deny reason carries the mcp__git__* redirect instead. Extend
-     the A4 bypass suite with the escape routes.
- 18. **W11, dependencies through a tool only.** DONE. A `package` tool
-     (ecosystem rust/python/nodejs/go, manager autodetect, latest-version
-     resolution, injection-safe) mounted host-plane. The manifest-guard
-     denies direct write/edit of manifests and lockfiles via the
-     `fs/write-intent`/`fs/edit-intent` waterfalls (prepended; covers builtin
-     write/edit and hashline). `requirements.txt` is EXEMPT (user decision:
-     hand-editable bare dependency list). The read-deny is not implemented
-     (read is read-only).
-19. **W12, decommission dotfiles-ai.** After the personal bundle (W0 to
-    W11) is verified from `$DSH_HOME` alone, delete the opencode content
-    that moved out of dotfiles-ai: the ported skills, the agent
-    definitions (coder, tester, researcher, see), the opencode plugins,
-    the MCP rows, and the provider config. The repo keeps the user's own
-    tracked content and the sync source for the bundle. The dotfiles
-    README states the new purpose. **Evaluate:** the harness works with no
-    opencode config left, and a fresh clone of dotfiles-ai syncs the same
-    personal bundle.
 
-B0 and the W-series are independent. The personal bundle delivers immediate
-value before the kernel finishes. The board (B3) is the milestone that ships
-the first board.
+The workstation port (the W-series) moved to `~/repos/dotfiles-ai/PLAN.md` on
+2026-08-21. The board (B3) is the milestone that ships the first board.
+
+### Settled rules
+
+- **A guard refuses by THROWING, and `{ prepend: true }` is load-bearing.** The
+  observation policy holds the single decision slot on the `fs/write-intent` and
+  `fs/edit-intent` waterfalls and returns an intent without calling `next()`,
+  which vetoes the rest of the chain, so a guard registered without `prepend` is
+  dead code. Order between two prepended guards does not matter, because both
+  refuse by throwing and only the refusal text changes.
+- **The bash ask is scoped to `awaiting_verification` ALONE** (decided
+  2026-08-21). A concurrent in-progress ticket suppresses it, because a bash call
+  carries no ticket id, so the harness cannot bill the ask to the right ticket.
+  NOT YET IMPLEMENTED: `bash-ask.ts` still tests
+  `states.has("awaiting_verification")`. One condition plus its test, under A4.
+- **Re-running a suite is not verification.** The suite is the agent's own
+  artifact, so a second green run adds no independent signal. Reading the code,
+  breaking it on purpose, and the container walk are the checks that pay.
+- **The Python prototype is dissolved** (2026-08-21). It pinned the kernel behavior before the
+  real kernel existed, and `packages/aidos` now carries 217 tests against the prototype's 135.
+  Its two live decisions moved to Phase 2 as P8 and P11. The build log for the CLI and the SQL
+  views is in `git log` and in `prototype/`.
 
 ### Risks
 
-- **rquickjs embeds C, in-process versus child** is gone. There is no
-  embedded engine.
-- **rig ships no HTTP transport** is gone. dsh's transport is built.
 - **Broad allow patterns reopen the shell bypass** is unchanged. The
   ask-by-default posture is shipped. Write the bypass suite first.
-- **Providers are not uniformly OpenAI compatible** is handled by dsh's
-  adapters. aidos adds nothing.
 - **The board client plugin depends on the client-plugin surface.** The
   consumption path is verified (the `dsh.client` manifest, the `./client`
   bundle, the roster row). `dsh-client-ui-primitives` and
@@ -1011,199 +810,26 @@ the first board.
 - **Settings versus log for gates** is settled (settings namespace). If the
   audit pin later reads stricter, promote kind and gate changes to log-only
   events. Decide before B0 ships if that changes. It touches the fold.
-- **The Go subscription route** is pinned: base URL `https://opencode.ai/zen/go/v1`
-  (the adapter appends `/chat/completions`), model ids `deepseek-v4-pro` and
-  `deepseek-v4-flash` (the docs list more, and
-  `https://opencode.ai/zen/go/v1/models` serves the full catalog for
-  auto-detection). The API key lives in `$DSH_HOME/.credentials.yaml` under
-  `OPENCODE_GO_API_KEY` (or the env var, which wins). Configure the route in
-  W0.
-- **Meridian's protocol** is settled. Meridian exposes OpenAI-compatible
-  `/v1/chat/completions` and `/v1/models` on port 9000 (user-verified).
-  dsh's pi-ai adapter serves both `openai-completions` and
-  `anthropic-messages`, so no adapter plugin is needed. W0 declares the
-  route with `api: openai-completions` and a dummy key. One curl probe
-  before wiring confirms the endpoints.
-- **The Profile seat** replaces the shipped model seat. The slot shadowing
-  must be confirmed in W6, together with the badge comparison against the
-  live session selection.
-- **The title rewriter** races the renderer's `DocumentTitle` effect. A
-  `MutationObserver` on `document.title` wins in practice. The upstream fix
-  (a configurable product title) is the clean end state.
-- **The cost display seat** is a companion to the shipped stats strip. Its
-  exact seat comes from the client slot surface at build time.
-- **The ask-user wrapper shadows the shipped tool.** Preset row order decides
-  which `ask_user_question` row wins. Confirm at W7.
-- **The approval outcome has no rejection-reason channel.** The comment rides
-  a steering message, not the approval result. The upstream end state is an
-  optional reason field on the outcome.
-- **The permission-card seat** is where the Comment field mounts. Confirm at
-  W8.
-- **hashline and the builtin fs tools share `read` and `edit`.** The
-  registry fails duplicates within one layer and lets scoped registrations
-  shadow globals. The deterministic fix: `ctx.tools.restrict({ deny:
-  ['read', 'edit'] })` from the personal preset removes the builtin pair
-  from the visible surface, and hashline's scoped tools stay. Confirm the
-  layer hashline registers into at W9. The builtin `write` and `read_image`
-  stay either way.
-- **The git PATH stub needs an env seam.** `dsh-shell-env`'s contributor
-  registry or the sandbox executor's env config must carry the stub dir and
-  drop git from the model PATH. Confirm at W10. The pre-execute deny is the
-  belt either way.
-- **The MCP git server is early development.** Its tool set is the contract.
-  Operations outside it always route to the user.
-- **The manifest deny must cover the hashline edit path.** hashline writes
-  through `ctx.fs`, so the guard hooks the same write boundary as the
-  builtin tools, not only the tool schemas.
-- **The tool tiers are a UX judgment.** awaiting-verification asks on every
-  bash call while any ticket waits. A concurrent in-progress ticket pays
-  the same ask. Settle before B1 ships.
+- **The markdown renderer lives in the prebuilt shell.** No slot in the
+  conversation contract touches markdown or links, so `aidos://` deeplinking was
+  dropped on 2026-08-21. The board reaches its rows through its own tab instead.
 - **Multiple in-progress tickets union their allowlists** at the write
   boundary. A refusal names the ticket whose allowlist must grow. The
   union semantics and the refusal text need review.
 - **Subagents inherit the mask.** A child spawned in open has no
   implementation tools. One spawned in-progress has them, scoped by the
-  child's own path guard when one is set. The child-scope path guard is
-  the verified seam; confirm whether bash workdirs are confined in v1.
+  child's own path guard. Decided 2026-08-21: bash workdirs ARE confined in
+  v1, clamped to the child's path scope (Ticket A5).
 
 ---
 
 ## Checklist
 
-The tickets below are the contract. The Phase-1 prototype pins the behavior
-its tests assert; the dsh port is checked against them one by one (Ticket
-U5's rule). Phase and order are first-class ticket fields.
+The tickets below are the contract. Phase and order are first-class ticket fields. The Python
+prototype was dissolved on 2026-08-21: it had pinned the behavior it existed to pin, and the dsh
+package is now larger and better tested than its specification.
 
-### Phase 1: Ticket prototype — `in_progress`
-
-**Goal.** A throwaway prototype that pins the behavior of the ticket kernel before anyone
-writes the real one. The repository holds this plan until the board can import it (Ticket P6).
-
-**Constraints.** Python and `sqlite3`. Standard library only. Lives in `prototype/` in this
-repository. It is a behavior specification, not a component. No line of it survives into aidos.
-The tkinter board (Ticket P4) and the node-tree renderer (Ticket P5) are dropped: the 32 tests
-and the paged read already pin the behavior a board would have exercised, and the web board
-(B3) is the first real one. Throwaway code in a repository you keep does not stay throwaway
-unless someone deletes it on purpose, so Ticket U5 exists to be that someone.
-
-- [ ] **Ticket P3: Agent CLI.** Commands for `plan` (serialize the whole plan to markdown),
-  `set_ticket`, `attach_evidence`, and `move_ticket`. Output is JSON on stdout. This is the
-  surface a real agent would call, so it is stamped as the agent author.
-  **Evaluate:** you drive one full ticket from creation to done using only the CLI for the
-  agent's half and the board for yours. `attach_evidence` cannot write a row authored by you.
-  The markdown from `plan` round-trips back through the importer without loss.
-  **Built, awaiting your check.** 111 tests pass. The half of the criterion that needs the
-  board cannot run until the web board exists (B3), so this ticket stays open on purpose. I verified the rest
-  by driving the real CLI: a payload naming an author changes nothing, every non-system actor
-  in the log is `agent`, and both refusal paths print JSON rather than a traceback.
-  Two design points moved during the work. `plan import` now lands every ticket in `open`
-  whatever mark the document carries, and records the document's claim as
-  `builtin:imported_state` evidence. Import was the last path that could reach `done` without
-  a human, and it is now shut. The plan format also grew four state marks, because `[x]` and
-  `[ ]` could only encode two of the four states.
-  Reading the finished code found one defect the 108 tests missed: the unknown-kind refusal
-  read the kind off the command flags, but `plan import` writes an evidence kind and has no
-  such flag, so that path raised a second error inside the error handler and printed the
-  traceback the contract forbids. Fixed, and `test_29` now fails without the fix.
-
-- [ ] **Ticket P8: A review is its own evidence kind.** Register `builtin:review_pass`, labelled
-  "Review pass", described as "A reviewer read the change and reported findings", weight 1.0.
-  Add it to the gate from `in_progress` to `awaiting_verification`, beside
-  `builtin:automated_check`. A passing test suite says nothing about dead code, a duplicated
-  helper, or scope that grew. A review says nothing about whether the thing runs. Those are two
-  claims, so they are two kinds.
-  `builtin:review_note` stays as it is, weight 0.5, for a single remark. The new kind means the
-  pass finished. The agent attaches it, so this adds no step for you. Under Ticket A5 the
-  orchestrator attaches it and the subagent's report is the payload.
-  A limit worth recording rather than hiding: the agent writes this row itself, so the gate
-  cannot tell a real review from an empty claim. What it buys is that a missing review becomes a
-  refusal naming a missing kind, instead of an absence nobody notices. That is the difference
-  between a rule and a habit, and it is smaller than it sounds.
-  **Evaluate:** a ticket with a passing check and no review is refused, and the refusal names
-  `builtin:review_pass`. The same ticket moves once the review row exists. The number of gates a
-  human must satisfy is unchanged, so the change costs you nothing at the keyboard.
-
-- [ ] **Ticket P7: SQL views own every derived read.** Ordered before Ticket P4, and numbered
-  after it so that no committed ticket id changes meaning. The in-memory projection goes away.
-  Every derived read comes from a SQL view over `events`, one view per event kind for
-  uniformity: tickets, projects, phases, plan meta, kinds, gates, and evidence. No view for
-  comments. No comment event type exists, so Ticket P4 adds the type and its view together. A
-  view over an event type that nothing writes is dead code. `seq` is the ordering authority for
-  last-write-wins, and `at` becomes display metadata that no query orders by. Two events can
-  share one `time.time()` value, so ordering by `at` picks an arbitrary winner. Standard
-  library `sqlite3` cannot register a virtual table, because `Connection.create_module` does
-  not exist, so a view is the reachable shape. `json_extract` and SQL window functions are both
-  available and do the work.
-  The store's read surface is explicit query methods, including a paged ticket read taking a
-  project filter, a sort key, a limit, and an offset. That read computes the confidence score
-  and the gate fraction as columns, so the board sorts on either without loading every row.
-  Built in stages, against this ticket's first plan to rewrite everything at once. That plan
-  accepted that nothing would guard the change, because the same hand would edit the queries and
-  the assertions that check them. That was avoidable. The projection stays alive while the views
-  are proven equal to it on a fixture, so the rewrite is checked against something it did not
-  write. The projection dies last, once it has already done that job.
-  Views, the read swap, the paged read, and Unit 4a are done. Unit 4a rewrote every assertion in
-  `tests/test_31_views_match_projection.py` to a hand-derived expected value, while the projection
-  still existed to confirm the two agree. That carries the proven equivalence forward instead of
-  losing it, which is exactly the failure this ticket first walked into. `created_at` stayed
-  non-literal, because `time.time()` is not reproducible; the test pins row order on `seq` and
-  asserts only that `created_at` does not fall.
-  **Built, awaiting your check.** Unit 4b deleted the projection attributes, `_apply_event` and
-  `rebuild_projection`, and moved every call site. `cli.py` lost two helpers that had become pure
-  delegation, and its three membership checks now catch `KeyError` from a read they already
-  needed. Four store methods replaced the attributes: `kinds`, `gates`, `projects` and
-  `tickets_for`, plus `find_project`, which pushes a path lookup into SQL. The five tests that
-  called `rebuild_projection` to prove state derives from the log now close the store and reopen
-  the file. Re-reading through a rebuilt projection was a real claim. Re-reading through a view is
-  a value compared with itself, so only a reopen keeps the claim honest.
-  Two defects came out of review, and the suite found neither. `tickets_for` sorted on the raw
-  view columns while `_fill_ticket_defaults` supplied the defaults afterwards, so a legacy record
-  with no phase and no order sorted ahead of every real row while reporting a filled order.
-  `_SORT_COLUMNS` had the same fault under the `phase` key. Both are fixed, and a test pins the
-  id order. Two smaller ones: the ticket dict was built in three places, and `helpers.reopen`
-  returned an empty store when the store was in memory. 135 tests pass.
-  Tickets P1 and P2 stay `done`. This ticket supersedes the mechanism they describe, and it is
-  recorded as a rework event in the benchmarking table, because the first contract never
-  anticipated paged reads.
-  Why the churn is worth it: aidos's Rust side uses `sqlx` over SQLite, so this view SQL ports to
-  Tickets C2 and C3 unchanged. The derivation gets written once and serves both implementations.
-  (The dsh port supersedes this mechanism: derived reads are session projections, not SQL. The
-  `seq`-over-`at` and whole-value lessons this ticket records are the parts that carry over.)
-  **Evaluate:** the full suite passes with no in-memory projection left in the store. Reopening
-  the database yields identical reads, because no projection exists to rebuild.
-  A test proves last-write-wins follows `seq` and not `at`. The two events must carry
-  *contradicting* `at` values, not merely equal ones. This ticket first asked for two events
-  inside one clock tick, which does not discriminate: equal values leave SQLite free to break
-  the tie either way, and a view deliberately switched to sort by `at` still passed. Inverting
-  the fixture caught it at once.
-  A page of twenty returns exactly twenty rows and the correct total count. Sorting by score and
-  sorting by gate fraction produce different orders on a fixture built to separate them.
-
-- [ ] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
-  shape that the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
-  special rules, Human review queue, and an optional Benchmarking section. That shape is
-  cleaner, and it guides the writer instead of leaving the layout open.
-  This changes the tool, not the ticket format. The phase headings and the checklist shape
-  carry into the board. The design sections above (Critical context) already follow the
-  skill's shape around the ticket phases, and the import (P6) folds them into plan context.
-  The open question is phases. `plan.py` special-cases `## Phase N` headings and gives each
-  phase a number, a title, and a state. The skill has one flat checklist and no phases. Decide
-  whether aidos keeps phases as a first-class field, or treats them as ordinary sections and
-  lets ticket order carry the sequence. Settle this before Ticket P6 runs, because P6 imports
-  into whichever shape wins.
-  A related decision that is now settled: importing a ticket in a state other than `open` does
-  not need to be exercised by this file. Test coverage of `claimed_state` is enough, so the
-  choice of shape is not constrained by dogfooding.
-  **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
-  heading parses without error. The round-trip tests cover the new shape, not only the old one.
-
-- [ ] **Ticket P6: Import this plan and delete this file.** Split PLAN.md into tickets by its
-  YAML frontmatter and headings. Load the context and rules sections.
-  **Evaluate:** every ticket in this file exists in the board with its criteria intact. You
-  confirm the board is usable for daily planning. Only then is PLAN.md deleted, in a commit that
-  also records why.
-
-### Phase 2: aidos core — `pending`
+### Phase 2: aidos core — `in_progress`
 
 **Goal.** The ticket kernel, on dsh. No board yet.
 
@@ -1211,69 +837,174 @@ unless someone deletes it on purpose, so Ticket U5 exists to be that someone.
   session `cwd`. Config lives in the profile and the settings. `move` repoints the workspace
   path and the session `cwd` through a Remote endpoint, not a filesystem move. Config-from-git
   stays optional glue. The personal bundle ships a sync script instead.
+  **Status (B1): the bind is built, the move is not.** `AidosService._workspaceOf`
+  reads `ctx.workspaceRegistry` and falls back to `session.header.cwd`, and
+  `_ensureProject` runs on `agent/session-start` and for every agent already live
+  when the service mounts. Config is the `aidos` settings namespace. The sync script
+  ships and converges on a second run. The `move` half is missing: `Store.moveProject`
+  exists in the kernel, but no endpoint calls it, so a project cannot be repointed
+  from outside a test. **Deferred past B2, decided 2026-08-21.** A read found that
+  the endpoint cannot be a one-line wrapper: `_ensureProject` resolves a session's
+  project by matching `project.absPath` against the dsh workspace path
+  (`aidos-core.ts:850-869`), and `project/moved` rewrites that path in the aidos log
+  only. So after an aidos-side move the next session matches nothing and creates a
+  SECOND project, orphaning every ticket on the first. A correct move either writes
+  the dsh workspace registry too (a registry aidos only reads today) or stops binding
+  by path. Both are larger than B2's lifecycle scope.
   **Evaluate:** a first run attaches the session to its workspace path. `move` repoints a
   project and a later session opens in the new path. The sync script copies dotfiles-ai to
   `$DSH_HOME`. A second run updates rather than duplicating.
 
-- [ ] **Ticket C2: Event log and projection.** On dsh: the session log plus the strict replay
-  fold, the invariant companion, and the projection units. The dsh-goal domain is the pattern.
-  **Evaluate:** a test replays a log and reproduces state exactly. A test asserts no code path
-  outside the write boundary can set an author. Deleting the projection and rebuilding from the
-  log yields identical state.
-
-- [ ] **Ticket C3: Ticket kernel.** On dsh: the `aidos` domain service (see the design's
-  "The ticket domain"). States are a TypeScript exhaustive enum. Evidence rows reference
-  registered kinds. Gate predicates run over rows. The kind registry and gate config live in the
-  `aidos` settings namespace.
-  **Evaluate:** the transition function is exhaustive, so adding a state fails to compile until
-  every arm is handled. A gate referencing an unregistered kind fails at config load, not at
-  gate time. The Phase 1 lifecycle tests are ported and pass against this kernel.
-
+- [ ] **Ticket C5: Globally distinct ticket ids.** A ticket id becomes unique across every
+  workspace, so one id can never mean two tickets. The raw form is the dsh canonical workspace
+  key, a colon, and an id unique inside that workspace:
+  `--home-sid-repos-aidos--:distinct-ticket-ids`. The display form shortens the key to its last
+  path segment: `aidos:distinct-ticket-ids`. Every ticket also carries a per-workspace number
+  that only climbs and is never reassigned, so `aidos:#341` names the same ticket for good.
+  **What exists today.** `TicketId` is a plain `number` (`types.ts:25`), and it is the map key
+  for `state.tickets`, the reference in every evidence row, and part of the invariant key list.
+  Two allocators compute it as `max + 1` over the live folded state (`store.ts:436`,
+  `aidos-core.ts:1097`). No slug field exists anywhere. The event vocabulary carries no ticket
+  delete and no project delete, so the counter climbs by accident rather than by design. A
+  delete event added later would hand a number back and break every reference already written.
+  **Shape to build.** Keep the numeric `TicketId` as the internal key and let it be the
+  per-workspace number, so the existing log stays valid and no evidence row is rewritten. Add
+  two durable fields to the ticket record, both stamped at creation: the slug and the workspace
+  key. Hold the next number as a folded state field that `ticket/created` advances, not as a
+  maximum recomputed from live keys, so no later delete can reissue it.
+  **Settled 2026-08-21 by grilling.**
+  - **The number is the source of truth.** Every stored reference holds the numeric id and
+    nothing else: evidence rows, comments, the projection, the log. The slug is an alias layer
+    resolved at read time, so a rename propagates everywhere for free and no written reference
+    can rot.
+  - **The agent names the slug at creation** and the tool refuses a duplicate inside the
+    workspace. The user may rename it later, and a rename is cheap because nothing stored points
+    at the slug.
+  - **Either form resolves.** A tool argument takes the slug or the number.
+  - **A bare `#341` or a bare slug always means the current workspace.** There is no global
+    fallback, so a bare id can never reach another workspace by accident. A cross-workspace
+    reference must carry the prefix.
+  - **Cross-workspace is read-only.** Any agent or subagent may read any ticket whose id it
+    knows. Every write happens in a session opened on that ticket's own workspace, so one
+    session's guards never govern another workspace's records. Open sub-question for the write
+    path: whether the agent may ask the user for a one-off cross-workspace write, and what
+    record that grant leaves.
+  - **Display is short and the badge carries the difference.** `aidos:#341` renders as a pill
+    whose color is a hash of the FULL workspace key, with the full path on hover. Two workspaces
+    ending in the same segment read alike but never look alike.
+  **Evaluate:** creating a ticket with a slug the workspace already holds is refused. A rename
+  leaves every existing reference resolving to the same ticket. A bare `#341` in a session on
+  workspace A never resolves to a ticket in workspace B. A write against a foreign id is refused
+  and names the workspace to open. Two workspaces whose paths end in the same segment render
+  distinct badge colors.
 - [ ] **Ticket C4: Plan import and serialization.** On dsh: the `plan` and `plan_import` tools
   plus the `plan` skill. Markdown with YAML frontmatter in. Markdown out on demand. The context
   cap applies at the write boundary. This file's design sections are the first real import; the
   importer must handle a context longer than 500 lines (raise the cap for the bootstrap import
   or fold the design into context and rules).
+  **Status (B1): the machine half only.** `src/plan/plan-io.ts` exports `importPlan`
+  and `exportPlan`, both tools are registered, `PLAN_CONTEXT_LIMIT` is 500, and the
+  over-cap error names the overage. test-26 pins the round trip. Two parts stay open.
+  There is no `SKILL.md` anywhere in the package, so the preset ships no skill
+  directory and the writer gets no guidance. The bootstrap import of this file is B4,
+  and this file is far past 500 lines, so the cap decision is still unmade.
   **Evaluate:** import, serialize, and re-import produces an identical plan. A context section
   over 500 lines is refused with a clear message naming the overage.
 
-### Phase 3: HTTP and agent loop — `pending`
+- [ ] **Ticket P8: A review is its own evidence kind.** Register `builtin:review_pass`, labelled
+  "Review pass", described as "A reviewer read the change and reported findings", weight 1.0. Add
+  it to the gate from `in_progress` to `awaiting_verification`, beside `builtin:automated_check`.
+  A passing suite says nothing about dead code, a duplicated helper, or scope that grew. A review
+  says nothing about whether the thing runs. Those are two claims, so they are two kinds.
+  `builtin:review_note` stays at weight 0.5 for a single remark. Under Ticket A5 the orchestrator
+  attaches the row and the subagent report is the payload.
+  A limit worth recording rather than hiding: the agent writes this row itself, so the gate cannot
+  tell a real review from an empty claim. What it buys is that a missing review becomes a refusal
+  naming a missing kind, instead of an absence nobody notices.
+  The ticket keeps its P-series id on purpose. An id is a stable reference, and C5 exists to make
+  that rule permanent.
+  **Evaluate:** a ticket with a passing check and no review is refused, and the refusal names
+  `builtin:review_pass`. The same ticket moves once the review row exists. The number of gates a
+  human must satisfy is unchanged.
+
+- [ ] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
+  shape the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
+  special rules, Human review queue, and an optional Benchmarking section. This changes the tool,
+  not the ticket format.
+  **The open decision.** `plan.ts` special-cases `## Phase N` headings and gives each phase a
+  number, a title, and a state. The skill has one flat checklist and no phases. Decide whether
+  aidos keeps phases as a first-class field, or treats them as ordinary sections and lets ticket
+  order carry the sequence. Settle this before B4 imports this file, because the import lands in
+  whichever shape wins.
+  **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
+  heading parses without error. The round-trip tests cover the new shape, not only the old one.
+
+### Phase 3: HTTP and agent loop — `in_progress`
 
 **Goal.** aidos talks to a model and to a browser. dsh provides the transport and the loop. The
 work is the tools and the gate enforcement.
-
-- [ ] **Ticket A3: Tool dispatch and gate enforcement.** Every state change goes through the
-  kernel. `ctx.tools.register` provides the tools. `ctx.tools.guard` provides the monotonic
-  gate. A tool call that would breach a gate is refused before it runs, with the missing kind
-  named in the error the model reads.
-  **Evaluate:** the agent cannot move a ticket to `done` by any tool path. The refusal text is
-  specific enough that a model corrects itself rather than retrying blindly. The file allowlist
-  is enforced on read and edit tools, not merely recorded.
 
 - [ ] **Ticket A4: Shell tool.** dsh's `tool-bash` plus the sandbox and the approval seam. The
   shipped permission presets bundle the knobs: `workspace-write` is the workspace-write sandbox
   plus ask approval; `danger-full-access` is full access plus never. The bypass suite is a
   verification artifact of the aidos preset's configuration: each listed bypass attempt must ask
   or refuse. The personal bundle extends the deny list to raw git and to
-  manifest and lockfile edits (W10, W11), with the same bypass discipline.
+  manifest and lockfile edits, with the same bypass discipline.
+  **Status (B1): the ask is built, the suite is not.** `src/tools/bash-ask.ts` is a
+  prepended `tools/pre-execute` listener that returns `ask` for the bash tool, and
+  approval outcomes are one-shot, so every call asks again. The personal-bundle deny
+  list ships already (the bash-guard and the manifest guard). Two things stay open.
+  The scope rule changed on 2026-08-21: the listener must ask only when
+  `awaiting_verification` is the ONLY state present, so a concurrent in-progress
+  ticket suppresses the ask. The code still asks whenever ANY ticket waits
+  (`bash-ask.ts` tests `states.has`), so this is an unmade one-line change plus its
+  test. The bypass suite is unwritten, and it carries the real risk of this ticket.
+  It is B5.
+  **Sequencing (2026-08-21): the bash-ask change lands FIRST and alone.** It is one
+  condition plus its test, it touches no other ticket, and it carries no coupling to
+  the allowlist work. It is the next implementation step in this plan.
   **Evaluate:** an unmatched command asks and does not run. `git push` is refused while its gate
   is unmet, and is not reachable through `git -C`, `sh -c`, an alias, or a script. A test suite
   of bypass attempts is written first and each one fails to bypass.
 
 - [ ] **Ticket A5: Subagent definitions.** On dsh: agent presets plus the subagent tool rows with
   `toolFilter`. Board tools refuse `delegationDepthOf > 0`, so only the orchestrator touches the
-  board. Identity stays flat: every subagent writes as the single author `agent`, and its name
-  is metadata on a record rather than an actor of its own.
+  board. A subagent NEVER edits the board. It returns a report, and only the
+  orchestrator turns that report into a board change. Identity stays flat:
+  every subagent writes as the single author `agent`, and its name is metadata
+  on a record rather than an actor of its own.
+  **Status (B1): the structural half is done.** `installAidosGuard` refuses every board
+  tool when `delegationDepthOf(agent) !== 0`, and the refusal names the orchestrator as
+  the only actor that may do it. `childPathScope` is the per-child path predicate.
+  Presets load as definitions with no code change, which is dsh behavior rather than
+  ours. Open: the aidos preset mounts one row and sets no `toolFilter`, so the belt
+  exists and the braces do not. The "no author other than agent, user, and system
+  after a multi-subagent session" check needs a real session to run against.
+  **The bash hole closes in v1** (decided 2026-08-21). `childPathScope` confines a child's
+  read/write/edit and nothing else. The sandbox does confine bash, but only to the whole
+  workspace root plus temp, and that policy resolves per SESSION, so a child inherits the
+  parent's root unchanged: a child scoped to `src/` cannot `edit` a file in `docs/` but can
+  reach it through `sed -i`. aidos clamps the child's bash workdir to its path scope.
+  `dsh-tool-bash`'s `resolveWorkdir` (`lib/index.js:177`) only makes a relative workdir
+  session-relative and hands an absolute one straight through, so the clamp is ours to write.
+  State the limit in the code: it stops the WORKDIR, not an absolute path inside the command
+  string, so it narrows the hole rather than closing it.
   **Evaluate:** a new definition file becomes a callable subagent with no code change. A
   malformed definition fails to load with a message naming the file and the problem, and does
   not stop the other definitions loading. A subagent that calls any board tool is refused, and
   the refusal says the orchestrator is the only actor that may do it. After a session that ran
-  several subagents, the log holds no author other than `agent`, `user`, and `system`.
+  several subagents, the log holds no author other than `agent`, `user`, and `system`. A child
+  scoped to `src/` cannot run a bash command whose workdir falls outside `src/`, and the refusal
+  names the scope.
 
 - [ ] **Ticket A6: Subagents run detached.** On dsh: `ctx.jobs` plus the `job_output`/`job_list`/
   `job_kill` tools. Jobs outlive the parent turn and are listed per session. The orchestrator
   attaches a finished report as `builtin:subagent_report` evidence with the job identifier, the
   subagent name, and the start and end times.
+  **Status: not started.** dsh's half works today, and the mask's delegation tier
+  already names the job tools. The aidos half does not exist. Nothing in `src/` reads
+  `ctx.jobs`, and `subagent_report` appears only as a kind string inside the tool
+  descriptions. No code attaches a finished report as evidence. That glue is B5.
   **Evaluate:** the parent agent spawns a job and takes its next action in the same turn, before
   that job finishes. A status check names the job, its state, and how long it has run. A report
   fetch against a running job is refused with text that tells the parent to check the status
@@ -1283,6 +1014,42 @@ work is the tools and the gate enforcement.
   attached as evidence carries `agent` as its author and the subagent name as metadata, survives
   a restart, and a query by subagent name and date returns it with its job identifier intact.
 
+- [ ] **Ticket A7: The allowlist proposal and its approval.** The agent proposes file paths.
+  You approve, change, or reject them. Only an approved proposal grants write access.
+  Decided 2026-08-21 during the B2 grilling, after a read found the write boundary
+  unreachable.
+  **Why it exists.** `TicketSnapshot.allowlist` is a validated durable field
+  (`types.ts:40`, and the invariant key list) with NO writer. `SetTicketArgs` carries no
+  allowlist field, `_createTicketInternal` hardcodes `[]` at line 966, and `_editTicket`
+  only spreads the previous value. So `allowlistUnion` is always empty, `pathAllowed(path,
+  [])` returns false, and every write refuses the moment a ticket enters in-progress. The
+  mask shows `write` and `edit` in the in-progress tier and the guard then blocks both
+  unconditionally. B1's container walk stopped at signoff, so it never reached this.
+  **The flow.** The agent asks through `ask_user_question` with the paths it wants. You
+  change them until you are satisfied. The agreed list lands as a `builtin:file_allowlist`
+  evidence row. That kind is already registered (weight 1.0, "The files the change may
+  touch.") and nothing reads it today. Once the approved row exists, `agentSetTicket` may
+  write `ticket.allowlist`, and the write boundary refuses any path the approved row does
+  not carry. The approval is a record, not a chat message, so a later reader can see what
+  the agent asked for and what you changed.
+  **Open decision — SETTLED 2026-08-21.** `builtin:file_allowlist` narrows to
+  `allowedAuthors: ["user"]`, and there is NO proposal record. The agent asks
+  through `ask_user_question`, which the session log already records, so only
+  your approval lands as evidence. No second kind and no payload flag. Accept
+  the consequence: the board shows the approved list, not what the agent first
+  asked for.
+  **A3's guard shape moves here too.** `src/tools/allowlist.ts` matches the tool
+  names `write` and `edit` and reads a `file_path` argument, the builtin fs
+  shape, so hashline (`path`), `batch_edit`, and `undo_last_edit` bypass it. The
+  guard moves onto the `fs/write-intent` and `fs/edit-intent` waterfalls, which
+  catch every writer. It ships WITH this ticket, not before: an enforced guard
+  over an always-empty union would block every write until the approval flow can
+  populate one.
+  **Evaluate:** a ticket with no approved row refuses every write, and the refusal names
+  the missing approval rather than an empty union. An `agentSetTicket` call naming a path
+  that no approved row carries is refused. A reworded approval appends a new row and leaves
+  the old one visible. The approval survives replay.
+
 ### Phase 4: Web UI — `pending`
 
 **Goal.** The board you actually use, replacing the Phase 1 prototype.
@@ -1290,8 +1057,10 @@ work is the tools and the gate enforcement.
 - [ ] **Ticket U2: Board.** The aidos board client plugin: the Tickets tab next to Chat and
   Trajectory, the global Tickets entry near New Session, the ticket grid, detail, field
   editing, comments, and state moves. Evidence groups by the criterion it addresses, and
-  uncovered criteria are highlighted (Ticket P9's coverage read, folded here). Gate refusals
+  uncovered criteria are highlighted (criterion coverage, folded here). Gate refusals
   surface as readable text naming the missing kind.
+  **Status: not started.** `packages/` holds exactly one package, `aidos`. No board
+  client plugin exists, so every criterion below is unreachable today.
   **Evaluate:** you run a full ticket lifecycle in the browser without touching the prototype.
   Every refusal is legible without reading logs. A ticket with three criteria and evidence
   naming two shows the third as uncovered. Evidence naming no criterion still attaches and
@@ -1301,52 +1070,110 @@ work is the tools and the gate enforcement.
 - [ ] **Ticket U3: Evidence and screenshots.** `ctx.attachments` stores content-addressed
   images, hash-deduped. Evidence rows reference the attachment refs. Show the confidence score
   and label it advisory.
+  **Status: not started.** Nothing in `src/` reads `ctx.attachments`. The score and
+  the gate fraction are computed already (`src/kernel/projections.ts`), so this ticket
+  is the attachment path plus the rendering, not the arithmetic.
   **Evaluate:** a pasted screenshot attaches and survives a restart. The score is visibly marked
   as advisory and no control anywhere is enabled or disabled by it.
 
-- [ ] **Ticket U4: Node-tree renderer.** Paused. No renderer ships in v1. Later work looks at
-  nostr-canvas for the declarative node tree.
-  **Evaluate:** the agent builds a throwaway review dashboard, you complete it, and the
-  submissions appear as evidence on the right tickets. An unknown node kind renders an error
-  node and does not break the page.
-
-- [ ] **Ticket U5: Delete the prototype.** Remove `prototype/` once the web UI has replaced it.
-  The prototype was always meant to die. This ticket is the only thing that makes that happen.
-  **Evaluate:** you confirm you have run a full ticket lifecycle in the browser, including
-  evidence attach. Every behavior the prototype's tests pin has an equivalent test in the dsh
-  suite, checked one by one against the prototype's test list, not by eye. Only then is
-  `prototype/` removed, in a commit that names the tests that replaced it.
+- [ ] **Ticket U5: Delete the prototype.** Remove `prototype/` from the repository. It was a
+  behavior specification with a scheduled death.
+  **The bar is already met** (verified 2026-08-21). Every one of the 32 prototype tests has a TS
+  counterpart in `packages/aidos/tests/`, checked name by name, plus 8 extra `-tool-` variants
+  the prototype never had. The TS suite is 5,364 test lines against the prototype's 5,090 lines
+  across 39 files. The tkinter board was never run once, so it pins no behavior worth keeping.
+  **What survives the deletion.** The board's UI decisions, recorded in this plan's "The board"
+  section: square tiles, a large grid, evidence as tags, the advisory confidence score, and the
+  sort keys. Those are design, not code.
+  **Cull one TS test with it.** `test-25-every-subcommand-prints-json.test.ts` is 21 lines with
+  no assertion, holding a comment that says the claim belongs to the tool test. The real one is
+  `test-25-tool-every-result-is-json.test.ts`. Every other TS test exercises the kernel or a
+  tool, including the two carrying `cli` in the name, which import `makeStore` and test kernel
+  behavior under a prototype-era filename. Rename those two rather than delete them.
+  **Evaluate:** `prototype/` is gone, the suite still passes, and no TS file imports anything
+  from it. The commit names the port map that replaced it.
 
 ### Phase 5: Tools, scripting, and skills — `pending`
 
 **Goal.** The extension surface.
 
-- [ ] **Ticket T3: Tool types.** The tool API is the standard library: `exec` is the context,
-  output schemas are the util, service calls are the store. The aidos tool packages ship a
-  `.d.ts` for editor completion.
-  **Evaluate:** a tool author gets editor completion and inline type errors against the shipped
-  types. A parameter typo fails schema validation rather than passing silently.
-
 - [ ] **Ticket T4: Skills.** On dsh: `ctx.skills` plus the filesystem provider plus the `skill`
   tool. The preset tool groups are the always-on core; a skill activates a further group.
+  **Status: the dsh half is built, the aidos half is not.** `ctx.skills`, the filesystem
+  provider, and the `skill` tool all ship with dsh. The aidos package contains no
+  `SKILL.md`, so the preset ships no skill directory. This is the same gap C4 records
+  for the plan skill. The token measurement has never been taken.
   **Evaluate:** the always-on core is measurably small in tokens, and the number is recorded. A
   task needing an inactive group triggers activation and then completes.
 
-- [ ] **Ticket T5: Scratch workspaces.** The scratch design in this plan's "Scratch, not the
-  repo": `$DSH_HOME/aidos/scratch/<workspace-key>/`, durable on disk, surfaced to the agent,
-  clearable.
-  **Evaluate:** the agent creates a workspace, writes per-item subdirectories, builds a
-  dashboard over them, and your comments and screenshots land as evidence. The workspace
-  survives an aidos restart. Clearing removes it from disk and from the database.
+- [ ] **Ticket T5: Scratch workspaces and the scratch tool suite.** The scratch design in this
+  plan's "Scratch, not the repo": `$DSH_HOME/aidos/scratch/<workspace-key>/`, durable on disk,
+  surfaced to the agent, clearable. It ships four tools: `scratch_read`, `scratch_write`,
+  `scratch_edit`, `scratch_mkdir`. A relative path resolves against the scratch root, so
+  `scratch_write("foo.md", ...)` lands at `<scratch-root>/foo.md` whatever the session cwd is.
+  The names carry a `scratch_` prefix, so they never collide with the builtin fs tools.
+  **Status: not started in code.** Nothing in `src/` computes or reads a scratch path. The
+  directory is in daily use by hand (the B1 container harness lives under
+  `$DSH_HOME/aidos/scratch/--home-sid-repos-aidos--/`), which is what makes the design look done.
+  **The agent writes here freely** (decided 2026-08-21). No allowlist, no approval, and no
+  read-before-write observation gate. One consequence to build for: the allowlist guard in
+  `src/tools/allowlist.ts` matches on path, so it must exempt the scratch root. Without the
+  exemption the union check refuses every scratch write the moment a ticket enters in-progress.
+  **`scratch_edit` is hash-anchored** (decided 2026-08-21). It takes the same 3-char anchors the
+  personal bundle's hashline tools use, so one editing grammar covers every file the agent
+  touches. `str_replace_editor` semantics are rejected.
+  **It WRAPS hashline. It does not copy it** (decided 2026-08-21). The registry is the seam:
+  `ctx.tools.get(name, scope)` returns the live `ToolDefinition`, and `ctx.tools.execute(input)`
+  runs a nested dispatch through the whole pipeline. So `scratch_edit` resolves the path against
+  the scratch root and then delegates to the already-registered `edit`. Nothing is
+  reimplemented, and the hash grammar can never drift from the real one.
+  **Why the delegation lands correctly, verified 2026-08-21.** hashline's `toCwd`
+  (`paths.js:44`) reads `isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded)`, so an
+  ABSOLUTE path arrives unchanged and the caller's cwd is never consulted. `scratch_edit` passes
+  the resolved absolute path and needs no cwd override at all.
+  **The degradation case, and it is real.** hashline ships in the PERSONAL bundle, and it
+  registers on the agent's own scope layer at `agent/session-start`. aidos is unopinionated, so
+  a person who installs aidos alone has a builtin `edit` that takes `old_string`/`new_string`,
+  not anchors. Decide the fallback: `scratch_edit` delegates to whatever `edit` the scope
+  resolves and inherits its grammar, or it detects the hashline shape and refuses when absent.
+  Delegating is honest, because one editing grammar per session is the point.
+  Do NOT vendor the algorithm. `dsh-better-edit@0.2.1` (MIT) seals `lib/hashline/` behind an
+  `exports` map allowing `.` and `./package.json` only, so a copy would drift from the real
+  engine on every upstream release. `ToolExecutionInput` is `{ callId, rootCallId?, name,
+  arguments, agent?, parent?, signal }`, so a nested dispatch carries the enclosing `rootCallId`
+  and the caller's `signal`.
+  **`mkdir` is not on the seam, verified 2026-08-21.** `ctx.fs` exposes `resolve`, `stat`,
+  `readText`, `streamText`, `writeText`, `editText` and nothing else. The three `mkdir` calls in
+  `dsh-fs-local` are a bare `node:fs/promises` import used for atomic-write staging, declared in
+  no `.d.ts`. So `scratch_mkdir` either adds a seam method upstream or calls `node:fs` directly.
+  The direct call skips the seam's containment, so the tool must clamp the path itself.
+  **Evaluate:** `scratch_write("notes.md", ...)` writes `<scratch-root>/notes.md` from a session
+  whose cwd is any directory. A path that escapes the root, by `../` or by an absolute path, is
+  refused. A scratch write succeeds while a ticket is in-progress and the allowlist union is
+  empty. `scratch_read` returns anchors that `scratch_edit` accepts, and a stale anchor is
+  refused rather than fuzzy-matched. The directory survives a restart, and clearing removes it
+  from disk.
 
-- [ ] **Ticket T6: Archived-session cleanup script.** Write a small script that lists and
-  deletes archived dsh sessions. Scope and grill it later — this ticket only records the need.
-  Background: archived sessions have NO UI view or delete (dsh-client-ui-workspace
-  limitation); viewing requires `zstdcat $DSH_HOME/sessions/<workspace-dir>/<session-id>/
-  session.jsonl.zstd` and deleting requires `rm -rf` the session directory. The script should
-  wrap that safely (list with size/date, confirm before delete, never touch the live current
-  session or subagent sessions).
-  **Evaluate:** (to be scoped under grilling).
+- [ ] **Ticket T6: Archived-session manager.** A client plugin that lists, opens, restores,
+  and deletes archived dsh sessions, plus the host-plane rows it needs. Upgraded from a
+  cleanup script on 2026-08-21: the script was the fallback, the plugin is the thing.
+  **Status: not started, and the seam is half missing.** Verified 2026-08-21 against the
+  RPC map. `workspace.archiveSession` exists, is idempotent, and returns the full
+  `archivedSessionIds` set. `workspace.list` carries that same set, so a client can already
+  READ which sessions are archived. Nothing else is there. The map holds no unarchive
+  method and no session delete at all — `workspace.delete` removes a whole workspace, not a
+  session — so restore and delete cannot come from a client plugin alone. Upstream
+  anticipates the gap: archiving keeps a session in its workspace accounting slot, and the
+  contract says "a future unarchive restores its position". So this ticket is a client
+  plugin PLUS a small host-plane row exposing unarchive and delete, until upstream ships
+  them. Interim, with no plugin: read one with `zstdcat
+  $DSH_HOME/sessions/<workspace-dir>/<session-id>/session.jsonl.zstd`, and delete one by
+  removing its directory.
+  **Evaluate:** the archived list shows each session with its workspace, title, date, and
+  on-disk size. Opening one shows its history read-only and does not unarchive it. Restore
+  puts it back in its original position. Delete removes the directory and the id from the
+  archive set, and the list updates with no refresh. The live current session and every
+  subagent session cannot be selected at all.
 
 ---
 
@@ -1362,112 +1189,48 @@ work is the tools and the gate enforcement.
 - **aidos is opt-in.** The aidos preset sits alongside `standard`. A quick task uses a standard
   session with zero ticket machinery.
 - **Model profiles.** Work uses meridian for the orchestrator; personal uses OpenCode Go
-  `deepseek-v4-pro`. Subagents always run OpenCode Go `deepseek-v4-flash`. See the design's
-  "Model profiles".
-- **Personal AI config.** Dismissing a question interrupts the agent loop (W7). Rejecting a
-  permission request can carry a comment the agent reads at that point in the loop (W8). The
-  model edits through hashline (W9), touches git only through MCP (W10), and changes
-  dependencies only through the package tool (W11).
+  `deepseek-v4-pro`. Subagents always run OpenCode Go `deepseek-v4-flash`. The dotfiles-ai
+  plan owns the profile design.
+- **Personal AI config.** Dismissing a question interrupts the agent loop. Rejecting a
+  permission request can carry a comment the agent reads at that point in the loop. The
+  model edits through hashline, touches git only through MCP, and changes dependencies
+  only through the package tool. The dotfiles-ai plan tracks all of it.
 - **Board scope.** The Tickets tab and the global Tickets entry both ship in v1.
-- The AGENTS.md rules from dotfiles-ai port to `$DSH_HOME/AGENTS.md` (W5).
+- The AGENTS.md rules from dotfiles-ai port to `$DSH_HOME/AGENTS.md`.
+- **Plan budget: about 1200 lines, not the skill's default 3 to 5 percent** (decided
+  2026-08-21). aidos is design-heavy, so its source line count understates it. Roughly 540
+  lines here are settled design that is neither stale nor rederivable from the code. Moving
+  that design to `docs/` was considered and declined: it reads better beside the tickets it
+  governs. Compaction passes trim tickets and stale context, not the design.
 
 ---
 
 ## Human review queue
 
-- [ ] Phase 1 (whole prototype) — use it for one real working session and say whether the gate
-  refusals help or annoy. That judgment cannot be made from tests.
+- [ ] B3 (the board in daily use) — work real tickets through it for one session and say whether
+  the gate refusals help or annoy. That judgment cannot be made from tests. Retargeted from the
+  Python prototype on 2026-08-21, because U5 deletes it.
 - [ ] Ticket P8 — drive a ticket that has a passing check and no review, and say whether the
   refusal reads clearly at the terminal and names the right kind.
-- [ ] Ticket P7 paged read — decide whether the gate fraction is the number the board should
-  sort on, before the board (B3) builds a card around it. It counts only the forward transition,
-  so a ticket in `done` shows nothing at all.
-- [ ] Ticket P7 legacy defaults — decide whether a ticket record that carries no order deserves a
-  stable one. `_fill_ticket_defaults` computes the default at read time, so the value climbs as
-  later tickets appear: a legacy row reported order 2, then order 3 once one more ticket existed.
-  The old projection fixed the value when it replayed the record. Reproducing that in SQL needs a
-  window function over earlier events. The path only matters for a log written before the plan
-  fields existed, so the real question is whether such a log is worth supporting at all.
 - [ ] Ticket P7 duplicate creation records — `v_projects` and `v_tickets` carry no `GROUP BY`,
   unlike the other five views. Two `ticket.created` records sharing one id would return the
   ticket twice, and the old projection collapsed them by last-write-wins. The store never writes
   a duplicate, so this needs a hand-written log. Decide whether the views should defend anyway.
-- [ ] W0 — curl-probe http://127.0.0.1:9000/v1/chat/completions and /v1/models once, and confirm
-  the openai-completions route answers before wiring.
-- [ ] W6 — the Profile seat shadowing and the badge comparison against the live session
-  selection.
-- [ ] W6 — the title rewriter race against the renderer's `DocumentTitle` effect.
-- [ ] W6 — the cost display seat next to the shipped stats strip.
 - [ ] B3 — the `aidos.coldTickets` Remote's latency on a cold session for
   the "re-read on focus" rule.
-- [ ] W7 — dismiss-interrupt semantics: `keepInbox: true` (preserve queued work for the next
-  prompt) versus a hard stop.
-- [ ] W7 — the ask-user wrapper's shadowing order against the shipped tool row.
-- [ ] W8 — comment delivery: a steering message versus an upstream rejection-reason field on
-  the approval outcome.
-- [ ] W8 — the permission-card seat for the Comment field.
-- [ ] W9 — the hashline tools appear in a personal session (read/edit are the
-  hash-anchored variants, builtin pair shadowed out), and the guidance override
-  files render (tool:read/edit at orders 130-131).
-- [ ] W10 — the bash-guard structural matching: `bash -c "git status"` denied,
-  `echo git status` allowed, `ls` a dir listing paths containing `git` allowed,
-  parse-error commands denied (fail-closed).
-- [ ] W10 — the git-MCP coverage list (push, remotes, stash, rebase, submodules
-  always go to the user) — confirm the notice reads correctly.
-- [ ] W11 — the package tool resolves the latest version and runs the change;
-  manifest-guard denies a direct package.json write but allows requirements.txt.
-- [ ] W12 — the harness runs with zero opencode config left in
-  dotfiles-ai, and a fresh clone syncs the same bundle.
-- [ ] B0 — run `npm test` in `packages/aidos/` yourself and skim
-  PORT-MAP.md's "could not port" rows before B1 builds on the kernel.
 - [ ] B1 — container-confirmed (user test log): the six tools appear with
   the correct constraints, refusals are clean, and the open mask hides
   write/edit/bash. The remaining half — a signoff unlocking the
   in-progress tier — needs B2's human surface and is retested then.
-- [ ] B1 — awaiting-verification asks on every bash call; decide whether a
-  concurrent in-progress ticket pays the same ask.
-- [ ] B1 — the union semantics of multiple in-progress tickets: the write
-  refusal names the ticket whose allowlist must grow; confirm the text.
-- [ ] B3 — the subagent dir/file guard: the child-scope path predicate on
-  read/write/edit, and whether bash workdirs are confined in v1.
-- [ ] W-series live — restart `dsh web` (REQUIRED to load the aidos bundle:
-  aidos was added to dsh.profile.bundles in sync.sh step 8b and the bundle
-  layer is static per boot), then: the roster shows aidos + PTC (code) +
-  standard (standard/minimal/cordis masked to .bak); the personal bundle's
-  MCP servers, guards, and see tool appear in a session.
-- [x] W-series — the aidos preset description renders (user-confirmed
-  2026-08-20). The cause was NOT the missing bundle: `preset.yml` had an
-  unquoted colon in the description, so the whole file failed to parse.
-- [ ] W0 — curl-probe http://127.0.0.1:9000/v1/models once more and confirm
-  the meridian models (incl. claude-fable-5) list in the model picker.
-- [ ] W5 — systemd cutover is LIVE: confirm https://potato.local:1337
-  prompts basic auth from a second LAN device (user `shan`) and streams
-  live events; confirm the no-token write is refused. Regenerate the
-  placeholder password before exposing to a shared LAN.
-- [ ] Fresh session — default model: settings.yaml now says
-  opencode-go/deepseek-v4-flash (was deepseek-v4-pro). Confirm the model
-  picker lists opencode-go + meridian (incl. claude-fable-5) and a fresh
-  session opens on the flash default.
+- [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach
+  another through read/write/edit OR through bash. Decided 2026-08-21 to clamp the child's bash
+  workdir in v1, tracked in Ticket A5. The shell seam confines nothing by itself:
+  `ctx.shell.resolve` and `dsh-subprocess-local` pass `workdir` straight through. Judge whether
+  the clamp blocks legitimate child work.
 - [ ] Fresh session (aidos preset) — the six board tools
   (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import)
   and `tool:aidos` appear; exercise the state-gated tiers (open tier hides
   write/edit/bash; awaiting-verification asks on each bash call).
-- [ ] see tool — FIXED + VERIFIED (2026-08-20): the failure was dsh-config, not
-  meridian. The pi-ai adapter only accepts images when a model/route declares
-  image input; the hand-declared meridian models had none, so the see subagent
-  got "model does not declare image input capability" (UNSUPPORTED_CONTENT).
-  Fix: added `defaultInput: [text, image]` to the meridian route in
-  ~/.dsh/settings.yaml, restarted dsh, and the see tool returned a factual
-  image description via claude-haiku-4-5. Work profile verified.
-- [ ] Fresh session — the session-hygiene section is absent (only appears
-  after many compactions; optional to reproduce).
-- [ ] bash-guard — add a drop-in rule for a new command (e.g. `curl`) and
-  confirm it takes effect without restart (rules re-read per call).
-- [ ] see tool — personal profile route: resolves to opencode-go/qwen3.7-plus,
-  which the opencode-go gateway DOES serve (verified via /v1/models, 28 models)
-  and the route IS wired (OPENCODE_API_KEY). Open: whether the opencode-go
-  route declares image input for qwen3.7-plus; if not, add defaultInput like
-  meridian, then verify see on the personal profile.
 
 ---
 
