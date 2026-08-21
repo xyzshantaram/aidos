@@ -4,3 +4,9 @@
 # Scratch staging (agent work product; the durable artifacts are in
 # dotfiles-ai/dsh and the plan/checklist files, not here)
 scratch/
+
+# aidos package build artifacts (moved from packages/aidos/.gitignore)
+node_modules/
+dist/
+coverage/
+presets/aidos/aidos-tools.js

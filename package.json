@@ -35,5 +35,8 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }
