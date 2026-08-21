@@ -638,24 +638,10 @@ Patch layers apply in order: bundle patches, then the profile's
 wins). Patch files hot-reload (`watchUserPatches`). Bundle layers are static
 per boot.
 
-**Two gotchas, hit together in the live cutover (2026-08-20), independent
-causes that looked like one symptom:**
+**Two cutover gotchas (2026-08-20), independent causes:**
 
-1. **The preset did not mount.** The aidos agent preset's tools mount against
-   a host-plane `aidos-core` service. That service comes only from the aidos
-   BUNDLE patch, so the package must be added to the web profile's
-   `dsh.profile.bundles` (`dsh plugin --profile web add <aidos-path>`).
-   Adding only the preset (`.agent-presets/aidos`) leaves it hanging
-   `waiting for aidos`. `dotfiles-ai/dsh/sync.sh` step 8b now does the
-   bundle-add, so a fresh sync converges.
-2. **The roster showed no description.** Unrelated to the bundle. The
-   description scalar carried an unquoted colon-space (`agent: plan`), so
-   YAML read it as a nested mapping and `preset.yml` failed to parse whole
-   (`ScannerError: mapping values are not allowed here`). dsh still
-   discovers a preset by directory name, which is why the tools and tier
-   masks worked with zero display metadata. Quote any description holding
-   a colon. Fixed in both the package `preset.yml` and the sync.sh heredoc
-   that writes the deployed copy.
+1. **The preset did not mount until the bundle was installed.** The aidos tools mount against a host-plane `aidos-core` that comes only from the aidos BUNDLE patch. Adding the preset alone leaves it `waiting for aidos` (`dsh plugin --profile web add <aidos-path>`). `dotfiles-ai/dsh/sync.sh` step 8b does the bundle-add so a fresh sync converges.
+2. **An unquoted colon-space broke preset.yml.** The description `agent: plan` read as nested YAML (`ScannerError`). Quote any description holding a colon. dsh still discovered the preset by directory name, so the tools and tier masks worked with zero display metadata.
 
 #### Dev workflow
 
@@ -954,15 +940,10 @@ work is the tools and the gate enforcement.
   prepended `tools/pre-execute` listener that returns `ask` for the bash tool, and
   approval outcomes are one-shot, so every call asks again. The personal-bundle deny
   list ships already (the bash-guard and the manifest guard). Two things stay open.
-  The scope rule changed on 2026-08-21: the listener must ask only when
+  The bash-ask scope change landed (2026-08-21+): the listener asks only when
   `awaiting_verification` is the ONLY state present, so a concurrent in-progress
-  ticket suppresses the ask. The code still asks whenever ANY ticket waits
-  (`bash-ask.ts` tests `states.has`), so this is an unmade one-line change plus its
-  test. The bypass suite is unwritten, and it carries the real risk of this ticket.
-  It is B5.
-  **Sequencing (2026-08-21): the bash-ask change lands FIRST and alone.** It is one
-  condition plus its test, it touches no other ticket, and it carries no coupling to
-  the allowlist work. It is the next implementation step in this plan.
+  ticket suppresses the ask. `b1-bash-ask` covers it. The bypass suite is
+  unwritten, and it carries the real risk of this ticket. It is B5.
   **Evaluate:** an unmatched command asks and does not run. `git push` is refused while its gate
   is unmet, and is not reachable through `git -C`, `sh -c`, an alias, or a script. A test suite
   of bypass attempts is written first and each one fails to bypass.
@@ -1197,40 +1178,9 @@ work is the tools and the gate enforcement.
   only through the package tool. The dotfiles-ai plan tracks all of it.
 - **Board scope.** The Tickets tab and the global Tickets entry both ship in v1.
 - The AGENTS.md rules from dotfiles-ai port to `$DSH_HOME/AGENTS.md`.
-- **Plan budget: about 1200 lines, not the skill's default 3 to 5 percent** (decided
-  2026-08-21). aidos is design-heavy, so its source line count understates it. Roughly 540
-  lines here are settled design that is neither stale nor rederivable from the code. Moving
-  that design to `docs/` was considered and declined: it reads better beside the tickets it
-  governs. Compaction passes trim tickets and stale context, not the design.
-
----
-
-## Human review queue
-
-- [ ] B3 (the board in daily use) — work real tickets through it for one session and say whether
-  the gate refusals help or annoy. That judgment cannot be made from tests. Retargeted from the
-  Python prototype on 2026-08-21, because U5 deletes it.
-- [ ] Ticket P8 — drive a ticket that has a passing check and no review, and say whether the
-  refusal reads clearly at the terminal and names the right kind.
-- [ ] Ticket P7 duplicate creation records — `v_projects` and `v_tickets` carry no `GROUP BY`,
-  unlike the other five views. Two `ticket.created` records sharing one id would return the
-  ticket twice, and the old projection collapsed them by last-write-wins. The store never writes
-  a duplicate, so this needs a hand-written log. Decide whether the views should defend anyway.
-- [ ] B3 — the `aidos.coldTickets` Remote's latency on a cold session for
-  the "re-read on focus" rule.
-- [ ] B1 — container-confirmed (user test log): the six tools appear with
-  the correct constraints, refusals are clean, and the open mask hides
-  write/edit/bash. The remaining half — a signoff unlocking the
-  in-progress tier — needs B2's human surface and is retested then.
-- [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach
-  another through read/write/edit OR through bash. Decided 2026-08-21 to clamp the child's bash
-  workdir in v1, tracked in Ticket A5. The shell seam confines nothing by itself:
-  `ctx.shell.resolve` and `dsh-subprocess-local` pass `workdir` straight through. Judge whether
-  the clamp blocks legitimate child work.
-- [ ] Fresh session (aidos preset) — the six board tools
-  (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import)
-  and `tool:aidos` appear; exercise the state-gated tiers (open tier hides
-  write/edit/bash; awaiting-verification asks on each bash call).
+- **Plan budget: about 1200 lines, excluding the human review queue** (decided
+  2026-08-21). aidos is design-heavy, so its source line count understates it.
+  Compaction trims tickets and stale context, not the settled design.
 
 ---
 
@@ -1243,3 +1193,16 @@ work is the tools and the gate enforcement.
 | Rework/reopen rate | 7 rounds / 6 tickets | P1 and P2 each needed an extra test-and-fix round because my first contract omitted deny-by-default and said nothing about durability. P3 needed one because my contract told import to preserve a `done` mark and also told the agent it could never reach `done`. Those two rules cannot both hold. A subagent found the conflict by writing tests against the contract, before any code existed. Grilling found none of the three. The fourth round is Ticket P7, which discards P1's in-memory projection entirely: my contract never asked how the board would read twenty tickets at a time, so it specified a structure that cannot paginate. Grilling the UI found it, one question in. The fifth round is Ticket P7 rescoping itself while being built: its contract asked for a comments view over an event type that does not exist, and it accepted up front that nothing would guard the rewrite. Both were found by reading the contract against the code before dispatching, not by grilling. The sixth round is B0: the contract review changed three rules after the dispatches started (self-transitions legal, legacy records strict, allowedAuthors widened), so the kernel pass and the test port each needed a convergence fix. Reading the 32 prototype tests against the contract before code found all three. The seventh round is B1: the invariants dependency surfaced only when the bundle ran in a real composition (the harness provided the service, so the suite stayed green); the container test caught it. |
 | Rough cost | 4 dispatches for P1+P2, 8 for P3, 11 for P7, 2 for B0, 2 for B1 | of P3's 8, three produced nothing: two `coder` dispatches returned empty without writing a file, and one `general` implementation dispatch timed out. The five that worked were a probe, a test-writing round, a contract revision, the plan parser, and the CLI. Splitting the implementation in two after the timeout is what got it finished. P7 spent 7: two `researcher` maps of the store and its call sites, and five `coder` runs. One `coder` run returned empty again, the same failure as P3, and splitting that unit into implementation and tests fixed it. Two research dispatches up front were worth it: they kept 550 lines of store code out of the main session while still yielding the exact call-site counts the ticket needed. Unit 4b spent the other four: implementation, tests, a review pass, and one fix round. Splitting implementation from tests before dispatching avoided the empty return that hit both P3 and an earlier P7 unit. B0 spent two: the kernel and the test port, split before dispatch, both produced. B1 spent two: the host/tools implementation and the tool-test port, both produced. |
 | Contract defects found before code | 5 | the import versus `done` conflict, and Ticket P7 asking for a comments view over an event type nothing writes. Writing tests against a contract, and reading a contract against the code it describes, are the only steps so far that have caught a contradiction rather than a bug. Both happened before any code was dispatched. B0 added three, all from reading the 32 prototype tests against the contract before implementation: self-transitions are legal (test_15 pins a configured gate on a self-pair), legacy records cannot replay in a whole-value fold (the pins become write-boundary pins), and the builtin `allowedAuthors` admit both actors for every kind but the human-only pair and `imported_state`. |
+
+---
+
+## Human review queue
+
+- [ ] A4 bash-ask — with one ticket in-progress and another awaiting verification, a bash call must NOT ask; with only awaiting-verification, it asks. Exercise both on a live session.
+- [ ] B3 (the board in daily use) — work real tickets through it for one session and say whether the gate refusals help or annoy. That judgment cannot be made from tests. Retargeted from the Python prototype on 2026-08-21, because U5 deletes it.
+- [ ] Ticket P8 — drive a ticket that has a passing check and no review, and say whether the refusal reads clearly at the terminal and names the right kind.
+- [ ] Ticket P7 duplicate creation records — `v_projects` and `v_tickets` carry no `GROUP BY`, unlike the other five views. Two `ticket.created` records sharing one id would return the ticket twice, and the old projection collapsed them by last-write-wins. The store never writes a duplicate, so this needs a hand-written log. Decide whether the views should defend anyway.
+- [ ] B3 — the `aidos.coldTickets` Remote's latency on a cold session for the "re-read on focus" rule.
+- [ ] B1 — container-confirmed (user test log): the six tools appear with the correct constraints, refusals are clean, and the open mask hides write/edit/bash. The remaining half — a signoff unlocking the in-progress tier — needs B2's human surface and is retested then.
+- [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach another through read/write/edit OR through bash. Decided 2026-08-21 to clamp the child's bash workdir in v1, tracked in Ticket A5. The shell seam confines nothing by itself: `ctx.shell.resolve` and `dsh-subprocess-local` pass `workdir` straight through. Judge whether the clamp blocks legitimate child work.
+- [ ] Fresh session (aidos preset) — the six board tools (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import) and `tool:aidos` appear; exercise the state-gated tiers (open tier hides write/edit/bash; awaiting-verification asks on each bash call).

@@ -44,6 +44,19 @@ function reachAwaitingVerification(harness: Harness) {
   });
 }
 
+/** One ticket stays in_progress while a second reaches awaiting_verification. */
+function reachAwaitingVerificationWithInProgress(harness: Harness) {
+  const inProgress = harness.service.setTicket(harness.asAgent(), {
+    title: "In flight",
+  });
+  harness.seedEvidence(harness.agent, inProgress.id, "builtin:user_signoff");
+  harness.service.moveTicket(harness.asAgent(), {
+    ticketId: inProgress.id,
+    to: "in_progress",
+  });
+  reachAwaitingVerification(harness);
+}
+
 describe("the bash-ask listener", () => {
   it("asks for bash while a ticket awaits verification", async () => {
     const harness = createHarness();
@@ -60,6 +73,20 @@ describe("the bash-ask listener", () => {
     if (decision.kind === "ask") {
       expect(typeof decision.reason).toBe("string");
     }
+  });
+
+  it("a concurrent in-progress ticket suppresses the ask", async () => {
+    const harness = createHarness();
+    harness.installService();
+    installBashAskListener(asContext(harness.ctx));
+    reachAwaitingVerificationWithInProgress(harness);
+
+    const listener = bashAskListener(harness);
+    const decision = await listener(
+      harness.makeExec("bash", { command: "ls" }, harness.agent),
+      async () => ({ kind: "allow" }),
+    );
+    expect(decision).toEqual({ kind: "allow" });
   });
 
   it("a second bash call asks again (one-shot outcomes)", async () => {
