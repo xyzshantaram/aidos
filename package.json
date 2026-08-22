@@ -39,5 +39,8 @@
   },
   "dependencies": {
     "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.8"
   }
 }

@@ -700,33 +700,80 @@ mounts `dsh-invariants` itself.
    session id (`dsh-agent` declares `TypertContext<SessionId>`), and the host
    resolves it to the live agent, so no author field crosses the wire. The
    gateway enforces that boundary, not our code.
-   **The pinned recipe reaches the wire; the note below from earlier today was
-   wrong (corrected 2026-08-22).** A source trace of
-   `@deepseek-ai/dsh-client-connection` and `@deepseek-ai/dsh-api-gateway`
-   found the actual dispatch path. The host mounts one route at `/api`.
-   `HostConnectionService` checks one registered interceptor for that channel
-   before it falls back to the apiproxy's dot-grammar `UNARY_ROUTES` map.
-   `dsh-api-gateway` registers itself as exactly that interceptor. Its
-   `claimsEndpoint` reads a slash-form `namespace/method` path, checks the
-   typert registry's strict descriptors, then falls back to scanning live
-   Cordis services for a `typertRemote` binding, the marker that
-   `TypertRemoteService` plus `@Remote(...)` installs. A claimed endpoint
-   dispatches straight to the live service instance. The pinned `POST
-   /api/<namespace>/<method>` recipe matches this path exactly.
-   The earlier 404 probe ran against the checked-in
-   `dist/host/aidos-plugin.js`, built before commit `5d22185` and carrying no
-   `TypertRemoteService`/`@Remote` binding. With no live service to claim the
-   endpoint, the interceptor returned false, the request fell through to the
-   apiproxy, and the apiproxy has no such route. That produced the 404. The
-   `goal/complete` 404 in the same probe is unrelated: that endpoint answers
-   only the older dot-grammar (`goal.complete`), so a slash-form probe against
-   it was never going to hit.
-   The WS mux finding (`/api/events.mux`, `426 Upgrade Required` on GET)
-   stands, but it does not apply here. It is the server-push event stream, not
-   the unary RPC path. It never answered this question.
-   Remaining step: rebuild `dist/` (`node build.mjs`) and send one live probe
-   against a host running that fresh build. This has not run yet. Until it
-   runs, B2 is not wire-verified, but the recipe itself needs no change.
+   **A third defect explains the 404; the note above was itself incomplete
+   (corrected again, later the same day, 2026-08-22).** Two problems were
+   real and are now fixed. `build.mjs` had no `target` on either
+   `esbuild.build()` call, so it passed `@Remote(...)` decorator syntax
+   through unlowered. Node cannot execute that syntax, and the container
+   crashed on every boot importing `aidos-core` with `SyntaxError: Invalid
+   or unexpected token`. Fix: add `target: "es2022"` to both calls (done,
+   uncommitted). A rebuilt, crash-free container still 404'd on `POST
+   /api/aidos/userAttachEvidence`, which led to a third, deeper cause.
+   `@Remote(...)` writes a marker into a `WeakMap` defined inside
+   `@deepseek-ai/dsh-typert-protocol`'s own module scope, keyed by the
+   service prototype. `dsh-api-gateway`'s `collectSrcClaims()` reads that
+   same `WeakMap` to decide which endpoints it will dispatch. Node keys its
+   module cache on resolved file path, not package name and version. The B1
+   container bind-mounts this repo straight to `/opt/aidos`, which carries
+   its own `pnpm install` (needed for local `tsc`/`vitest`/`esbuild`) and
+   therefore its own copy of `dsh-typert-protocol`. That copy and the CLI's
+   own copy are two different files sharing one version string. Node loads
+   each as a separate module instance with its own `WeakMap`. `aidos-core.ts`
+   writes its `@Remote` marker into one instance; the gateway reads the
+   other. The lookup finds nothing, silently — no crash, no log line.
+   `claimsEndpoint` returns false and the request falls through to a plain
+   404, indistinguishable from a route that was never registered.
+   Confirmed directly: two decorated dummy classes, one per copy of
+   `dsh-typert-protocol`, resolve to `Object.is(modA, modB) === false`
+   despite identical source text, and `remoteMethods()` under one copy sees
+   no markers written under the other. `settings.describe` confirms
+   `AidosService`'s constructor genuinely ran (it is the only place that
+   registers the `aidos` settings namespace); `goals/clear`, dispatched
+   through the same gateway and the same slash-grammar recipe, returns a
+   real business response (`"no current goal"`), proving the gateway and
+   the recipe both work. Only aidos's own endpoint 404s, and only because
+   of the duplicate module instance.
+   **This is a property of the B1 test harness, not the design.**
+   `dsh-app-boot`'s `healProfilesModuleFallback` maintains a flat symlink
+   farm at `$DSH_HOME/profiles/node_modules`, one link per package in the
+   dsh app's own dependency closure, each pointing at the CLI's real copy.
+   Node's directory walk-up from an installed bundle finds this farm after
+   the bundle's own `node_modules` and lands on the same file the CLI uses,
+   collapsing exactly this kind of split. A real `dsh plugin --profile web
+   add <aidos-bundle>` install places the package under
+   `$DSH_HOME/profiles/web/node_modules/aidos/`, inside that walk-up path.
+   `dsh-typert-protocol` is a `devDependency` only in aidos's `package.json`
+   today, and a package manager never nests a consumed package's own
+   `devDependencies`, so a real install would never materialize a private
+   copy at all; resolution would walk past the empty spot and land on the
+   farm. `/opt/aidos`, the B1 container's raw bind-mount target, sits
+   outside `$DSH_HOME` entirely (reachable only through a symlink at
+   `$DSH_HOME/profiles/web/node_modules/aidos`, and Node's walk-up follows
+   the real path after the symlink, not the symlink's own location), so it
+   can never reach the farm regardless of whether the shadow copy is
+   present. Attempted to confirm by removing the shadow copy directly and
+   re-probing: the mount is read-only (`ext4 ro`), so the removal failed,
+   and the test could not run to completion. The structural argument does
+   not depend on that test — it follows from Node's own resolution
+   algorithm and the two directories' fixed relationship — but it remains
+   unconfirmed by a passing live probe against this exact container.
+   **Net effect on B2.** The recipe, the kernel, the `TypertRemoteService`/
+   `@Remote` structural change, and `aidos-core.ts` are all correct and
+   match `dsh-goal`'s pattern. `build.mjs` needed and now has its `target`
+   fix. Nothing in aidos's design or code caused the 404; the B1
+   container's bind-mount install method broke an assumption the farm
+   mechanism depends on. Two follow-ups, neither blocking B2's design:
+   (1) add `@deepseek-ai/dsh-typert-protocol` to aidos's `package.json` as
+   a `peerDependency` alongside its existing `devDependency`, matching
+   `dsh-goal` exactly — this documents the real contract, though it would
+   not by itself have prevented this container's specific artifact; (2) the
+   B1 harness itself cannot currently prove aidos's own Remote endpoints
+   dispatch end to end, because its bind-mount install method is not the
+   one production or `dsh plugin add` uses. A harness that installs aidos
+   through the real profile-bundle flow (or one with a writable overlay
+   letting the shadow-copy test complete) is needed to close this out with
+   an unambiguous live pass, not architectural inference alone.
+
 
    **Three gotchas for the harness.** The scope resolves to a LIVE agent, so
    a test must open a session first. Session creation is not on the typert
