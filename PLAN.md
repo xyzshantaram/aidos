@@ -700,6 +700,35 @@ mounts `dsh-invariants` itself.
    session id (`dsh-agent` declares `TypertContext<SessionId>`), and the host
    resolves it to the live agent, so no author field crosses the wire. The
    gateway enforces that boundary, not our code.
+   **The pinned recipe reaches the wire; the note below from earlier today was
+   wrong (corrected 2026-08-22).** A source trace of
+   `@deepseek-ai/dsh-client-connection` and `@deepseek-ai/dsh-api-gateway`
+   found the actual dispatch path. The host mounts one route at `/api`.
+   `HostConnectionService` checks one registered interceptor for that channel
+   before it falls back to the apiproxy's dot-grammar `UNARY_ROUTES` map.
+   `dsh-api-gateway` registers itself as exactly that interceptor. Its
+   `claimsEndpoint` reads a slash-form `namespace/method` path, checks the
+   typert registry's strict descriptors, then falls back to scanning live
+   Cordis services for a `typertRemote` binding, the marker that
+   `TypertRemoteService` plus `@Remote(...)` installs. A claimed endpoint
+   dispatches straight to the live service instance. The pinned `POST
+   /api/<namespace>/<method>` recipe matches this path exactly.
+   The earlier 404 probe ran against the checked-in
+   `dist/host/aidos-plugin.js`, built before commit `5d22185` and carrying no
+   `TypertRemoteService`/`@Remote` binding. With no live service to claim the
+   endpoint, the interceptor returned false, the request fell through to the
+   apiproxy, and the apiproxy has no such route. That produced the 404. The
+   `goal/complete` 404 in the same probe is unrelated: that endpoint answers
+   only the older dot-grammar (`goal.complete`), so a slash-form probe against
+   it was never going to hit.
+   The WS mux finding (`/api/events.mux`, `426 Upgrade Required` on GET)
+   stands, but it does not apply here. It is the server-push event stream, not
+   the unary RPC path. It never answered this question.
+   Remaining step: rebuild `dist/` (`node build.mjs`) and send one live probe
+   against a host running that fresh build. This has not run yet. Until it
+   runs, B2 is not wire-verified, but the recipe itself needs no change.
+
+
    **Three gotchas for the harness.** The scope resolves to a LIVE agent, so
    a test must open a session first. Session creation is not on the typert
    bus — only seven services are — so that half uses the older dot-separated
@@ -727,6 +756,25 @@ mounts `dsh-invariants` itself.
    client assembly.
    Port the lifecycle tests that need two actors (test_08, test_09, test_22,
    test_27) against the Remote layer, not only the service.
+   **Stage 1 broke the test transform, fixed 2026-08-22.** The `@Remote`
+   decorators were this repo's first use of TC39 standard decorators.
+   `vitest@4.1.11`'s default resolved `vite@8.2.2` transforms `.ts` files
+   through rolldown's oxc parser, which has no decorator support yet (open
+   upstream: oxc-project/oxc#9170). Every file that imported `aidos-core.ts`,
+   directly or transitively, failed at transform with `SyntaxError: Invalid or
+   unexpected token`, 21 of 54 suites. `tsc --noEmit` and raw `esbuild` both
+   parsed the same syntax cleanly, so this was not a `tsconfig.json` problem.
+   Fix: pin `vite` to `^6.4.3` as an explicit devDependency (it was an unlisted
+   transitive dependency of vitest). Vite 6's esbuild-based transform handles
+   standard decorators correctly against this repo's existing `tsconfig.json`,
+   which never set `experimentalDecorators`. `vitest.config.ts` needed no
+   change in the end; a custom esbuild-plugin workaround was tried and
+   reverted, because forcing `experimentalDecorators: true` in an esbuild
+   override makes esbuild emit the legacy three-argument decorator call, a
+   different calling convention than `@Remote` expects, and produces a
+   malformed decorator context at runtime. All 54 suites, 253 tests, pass
+   after the downgrade.
+
 2. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
    the grid, detail, evidence, signoff, send-back, the active-ticket focus
    control, and the per-ticket allowlist editor. Criterion coverage

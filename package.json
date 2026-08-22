@@ -28,6 +28,7 @@
     "@deepseek-ai/schemastery": "3.18.1",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
+    "vite": "^6.4.3",
     "vitest": "^4.1.11"
   },
   "main": "./dist/host/aidos-plugin.js",
