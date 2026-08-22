@@ -37,7 +37,7 @@ export const BUILTIN_KINDS: readonly KindDef[] = [
     label: "File allowlist",
     description: "The files the change may touch.",
     weight: 1.0,
-    allowedAuthors: ["user", "agent"],
+    allowedAuthors: ["user"],
   },
   {
     id: "builtin:agent_report",

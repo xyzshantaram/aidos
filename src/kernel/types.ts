@@ -325,3 +325,28 @@ export class ForeignWorkspace extends Error {
     this.currentWorkspaceKey = currentWorkspaceKey;
   }
 }
+
+/** A non-user actor that tried to set a ticket's allowlist. */
+export class AllowlistActorRefused extends Error {
+  readonly actor: Actor;
+  constructor(actor: Actor) {
+    super(`only the user may set a ticket's allowlist; actor ${actor} cannot`);
+    this.actor = actor;
+  }
+}
+
+/**
+ * A proposed allowlist that no approved `builtin:file_allowlist` evidence
+ * row on the ticket covers. Names the uncovered paths.
+ */
+export class AllowlistCoverageRefused extends Error {
+  readonly ticketId: TicketId;
+  readonly uncovered: string[];
+  constructor(ticketId: TicketId, uncovered: string[]) {
+    super(
+      `allowlist for ticket ${ticketId} includes paths no builtin:file_allowlist evidence covers: ${uncovered.join(", ")}`,
+    );
+    this.ticketId = ticketId;
+    this.uncovered = uncovered;
+  }
+}

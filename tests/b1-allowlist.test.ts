@@ -13,15 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { installAllowlistGuard, childPathScope } from "../src/tools/allowlist";
+import { installAllowlistGuard, childPathScope, writeBoundaryReason } from "../src/tools/allowlist";
 import { Store } from "../src/kernel/store";
 import { DEFAULT_CONFIG } from "../src/kernel/constants";
 import { FIXED_NOW } from "./helpers";
-import {
-  asContext,
-  createHarness,
-  type Harness,
-} from "./b1-harness";
+import { asContext, createHarness } from "./b1-harness";
 
 /**
  * A harness whose session holds one in-progress ticket with the given
@@ -41,34 +37,69 @@ function harnessWithInProgress(allowlist: string[], title = "Scope the allowlist
   return { harness, ticketId: ticket };
 }
 
-function writeGuard(harness: Harness) {
-  const guard = harness.guards[harness.guards.length - 1];
-  expect(guard).toBeDefined();
-  return guard;
-}
 
 describe("the write union", () => {
   it("a write inside the in-progress allowlist passes", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const guard = writeGuard(harness);
-    const reason = guard(harness.makeExec("write", { file_path: "src/a.ts" }, harness.agent));
+    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "src/a.ts");
     expect(reason).toBeUndefined();
   });
 
   it("a write outside the union refuses and names the ticket", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const guard = writeGuard(harness);
-    const reason = guard(harness.makeExec("write", { file_path: "docs/b.md" }, harness.agent));
+    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md");
     expect(typeof reason).toBe("string");
     expect(reason).toMatch(/in-progress ticket 1/);
   });
 
   it("an edit outside the union refuses the same way", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const guard = writeGuard(harness);
-    const reason = guard(harness.makeExec("edit", { file_path: "docs/b.md" }, harness.agent));
+    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md");
     expect(typeof reason).toBe("string");
     expect(reason).toMatch(/in-progress ticket 1/);
+  });
+
+  it("the guard registers prepended on both fs waterfall events", () => {
+    const { harness } = harnessWithInProgress(["src/"]);
+    expect(harness.listeners["fs/write-intent"]).toHaveLength(1);
+    expect(harness.listeners["fs/edit-intent"]).toHaveLength(1);
+    for (const name of ["fs/write-intent", "fs/edit-intent"]) {
+      const record = harness.listeners[name][0];
+      expect(record).toBeDefined();
+      expect(record.opts?.prepend).toBe(true);
+    }
+  });
+
+  it("both tool families refuse through the same waterfall decision", () => {
+    const { harness } = harnessWithInProgress(["src/"]);
+    const target = { displayPath: "docs/b.md", targetKey: "docs/b.md" };
+    const actor = { agent: harness.agent };
+    // The builtin fs tools (write/edit) and the hashline editors
+    // (path/batch_edit/undo_last_edit) both funnel through these intents.
+    for (const name of ["fs/write-intent", "fs/edit-intent"]) {
+      const record = harness.listeners[name][0];
+      let nextCalled = false;
+      const next = () => {
+        nextCalled = true;
+        return undefined;
+      };
+      expect(() => record.listener(target, actor, next)).toThrow(/in-progress ticket 1/);
+      expect(nextCalled).toBe(false);
+    }
+  });
+
+  it("an allowed write calls through to the observation-policy next", () => {
+    const { harness } = harnessWithInProgress(["src/"]);
+    const target = { displayPath: "src/a.ts", targetKey: "src/a.ts" };
+    const actor = { agent: harness.agent };
+    let nextCalled = 0;
+    const next = () => {
+      nextCalled += 1;
+      return undefined;
+    };
+    const record = harness.listeners["fs/write-intent"][0];
+    record.listener(target, actor, next);
+    expect(nextCalled).toBe(1);
   });
 
   it("two in-progress tickets union their allowlists", () => {
@@ -91,11 +122,12 @@ describe("the write union", () => {
     harness.installService();
     installAllowlistGuard(asContext(harness.ctx));
 
-    const guard = writeGuard(harness);
-    const agent = harness.agent;
-    expect(guard(harness.makeExec("write", { file_path: "src/a.ts" }, agent))).toBeUndefined();
-    expect(guard(harness.makeExec("write", { file_path: "docs/b.md" }, agent))).toBeUndefined();
-    const outside = guard(harness.makeExec("write", { file_path: "lib/c.ts" }, agent));
+    const union = harness.service.allowlistUnion(harness.asAgent());
+    expect(harness.service.allowlistUnion(harness.asAgent())).toEqual(union);
+    expect(union).toEqual(["src/", "docs/"]);
+    expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "src/a.ts")).toBeUndefined();
+    expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md")).toBeUndefined();
+    const outside = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "lib/c.ts");
     expect(typeof outside).toBe("string");
   });
 
@@ -103,6 +135,26 @@ describe("the write union", () => {
     const { harness } = harnessWithInProgress(["src/"]);
     const union = harness.service.allowlistUnion(harness.asAgent());
     expect(union).toEqual(["src/"]);
+  });
+
+  it("a populated allowlist replays and stays in the union", () => {
+    // A legacy snapshot from an older log carries a populated allowlist.
+    // The fold reads it back and it still feeds the write boundary.
+    const harness = createHarness();
+    const store = new Store(DEFAULT_CONFIG, { now: () => FIXED_NOW });
+    const project = store.createProject("/srv/proj/cli", "cli");
+    const ticket = store.createTicket(project, "Replay scope", "d", {
+      actor: "user",
+      allowlist: ["legacy/", "src/"],
+    });
+    store.attachEvidence(ticket, "builtin:user_signoff", {}, "user");
+    store.moveTicket(ticket, "in_progress", "user");
+    harness.seedFromStore(store);
+    harness.installService();
+
+    const union = harness.service.allowlistUnion(harness.asAgent());
+    expect(union).toEqual(["legacy/", "src/"]);
+    expect(harness.service.getTickets(harness.asAgent())[0].id).toBe(ticket);
   });
 });
 

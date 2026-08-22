@@ -56,6 +56,8 @@ import type {
   TicketState,
 } from "../kernel/types";
 import {
+  AllowlistActorRefused,
+  AllowlistCoverageRefused,
   ContextTooLongError,
   EvidenceAuthorRefused,
   DuplicateSlug,
@@ -412,6 +414,12 @@ export interface SetTicketArgs {
   phaseTitle?: string;
   order?: number;
   slug?: string;
+  /**
+   * The file allowlist for this ticket. User-only: the agent tool path
+   * cannot set it, and every path must be covered by an approved
+   * `builtin:file_allowlist` evidence row on this ticket.
+   */
+  allowlist?: string[];
 }
 
 export interface AttachEvidenceArgs {
@@ -588,7 +596,18 @@ export class AidosService extends Service {
   /** Create or edit one ticket. Creates the phase when absent. */
   setTicket(agent: Agent, args: SetTicketArgs): TicketRow {
     if (args.ticketId !== undefined) {
-      return this._editTicket(agent, args);
+      return this._editTicket(agent, args, "agent");
+    }
+    return this._createTicket(agent, args);
+  }
+
+  /**
+   * The user-actor set path. Only this path may set a ticket's allowlist;
+   * the agent path passes the "agent" actor and refuses the field.
+   */
+  userSetTicket(agent: Agent, args: SetTicketArgs): TicketRow {
+    if (args.ticketId !== undefined) {
+      return this._editTicket(agent, args, "user");
     }
     return this._createTicket(agent, args);
   }
@@ -880,6 +899,16 @@ export class AidosService extends Service {
     if (typeof title !== "string" || title.trim() === "") {
       throw new BadPayloadError("set_ticket requires a title to create a ticket");
     }
+    if (args.allowlist !== undefined) {
+      // A new ticket has no ticket id yet, so no approved builtin:file_allowlist
+      // evidence row can exist to cover it. Refuse rather than silently drop the
+      // field: the caller must create the ticket first, then set the allowlist
+      // once a covering row exists.
+      throw new BadPayloadError(
+        "a new ticket cannot carry an allowlist; create it, then set the allowlist once an approved builtin:file_allowlist evidence row exists",
+      );
+    }
+
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const projectId = args.projectId ?? this._ensureProject(agent).projectId;
@@ -913,8 +942,13 @@ export class AidosService extends Service {
     return rowOf(snapshot);
   }
 
-  /** Edit the named fields of one ticket; an absent field leaves its value. */
-  private _editTicket(agent: Agent, args: SetTicketArgs): TicketRow {
+  /**
+   * Edit the named fields of one ticket; an absent field leaves its value.
+   * The allowlist field is user-only: an agent actor that names it is
+   * refused, and a user actor must first attach a covering
+   * `builtin:file_allowlist` evidence row for every proposed path.
+   */
+  private _editTicket(agent: Agent, args: SetTicketArgs, actor: Actor): TicketRow {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const ticketId = this._resolveTicketId(agent, args.ticketId as number | string);
@@ -928,6 +962,18 @@ export class AidosService extends Service {
       throw new DuplicateSlug(nextSlug, prev.workspaceKey);
     }
     const at = this._atFor(agent.session, ticketId, prev.updatedAt);
+    let allowlist: string[] | undefined;
+    if (args.allowlist !== undefined) {
+      if (actor !== "user") {
+        throw new AllowlistActorRefused(actor);
+      }
+      const uncovered = this._uncoveredAllowlistPaths(cache.state.evidence, ticketId, args.allowlist);
+      if (uncovered.length > 0) {
+        throw new AllowlistCoverageRefused(ticketId, uncovered);
+      }
+      // Every requested path is covered; dedupe, keep the requested order.
+      allowlist = [...new Set(args.allowlist)];
+    }
     const snapshot: TicketSnapshot = {
       ...prev,
       title: args.title ?? prev.title,
@@ -937,6 +983,7 @@ export class AidosService extends Service {
       phase: args.phase ?? prev.phase,
       order: args.order ?? prev.order,
       slug: nextSlug,
+      ...(allowlist !== undefined ? { allowlist } : {}),
       revision: prev.revision + 1,
       updatedAt: at,
     };
@@ -948,6 +995,33 @@ export class AidosService extends Service {
       at,
     });
     return rowOf(snapshot);
+  }
+
+  /**
+   * The proposed allowlist paths that no approved `builtin:file_allowlist`
+   * evidence row on this ticket covers, in order. Each coverage row carries
+   * the approved paths under its payload `paths` key (the attach_evidence
+   * caller sends `{ paths: string[] }`; no stricter schema is forced beyond
+   * `additionalProperties: true`). The kind authors the row, so the coverage
+   * check reads existence only and does not re-check the row's author at
+   * read time.
+   */
+  private _uncoveredAllowlistPaths(
+    evidence: ReadonlyMap<TicketId, EvidenceRow[]> | undefined,
+    ticketId: TicketId,
+    proposed: readonly string[],
+  ): string[] {
+    const approved = new Set<string>();
+    for (const row of evidence?.get(ticketId) ?? []) {
+      if (row.kind !== "builtin:file_allowlist") continue;
+      const paths = row.payload?.paths;
+      if (Array.isArray(paths)) {
+        for (const path of paths) {
+          if (typeof path === "string") approved.add(path);
+        }
+      }
+    }
+    return [...new Set(proposed)].filter((path) => !approved.has(path));
   }
 
   /** The shared create: one whole-value ticket/change create record. */

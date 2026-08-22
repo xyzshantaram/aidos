@@ -1003,10 +1003,13 @@ work is the tools and the gate enforcement.
   attached as evidence carries `agent` as its author and the subagent name as metadata, survives
   a restart, and a query by subagent name and date returns it with its job identifier intact.
 
-- [ ] **Ticket A7: The allowlist proposal and its approval.** The agent proposes file paths.
+- [x] **Ticket A7: The allowlist proposal and its approval.** The agent proposes file paths.
+
   You approve, change, or reject them. Only an approved proposal grants write access.
   Decided 2026-08-21 during the B2 grilling, after a read found the write boundary
   unreachable.
+  **Status: implemented 2026-08-21, closed 2026-08-22.**
+
   **Why it exists.** `TicketSnapshot.allowlist` is a validated durable field
   (`types.ts:40`, and the invariant key list) with NO writer. `SetTicketArgs` carries no
   allowlist field, `_createTicketInternal` hardcodes `[]` at line 966, and `_editTicket`
@@ -1016,8 +1019,8 @@ work is the tools and the gate enforcement.
   unconditionally. B1's container walk stopped at signoff, so it never reached this.
   **The flow.** The agent asks through `ask_user_question` with the paths it wants. You
   change them until you are satisfied. The agreed list lands as a `builtin:file_allowlist`
-  evidence row. That kind is already registered (weight 1.0, "The files the change may
-  touch.") and nothing reads it today. Once the approved row exists, `agentSetTicket` may
+  evidence row. That kind is registered (weight 1.0, "The files the change may
+  touch."), and the coverage check reads it. Once an approved row exists, `userSetTicket` may
   write `ticket.allowlist`, and the write boundary refuses any path the approved row does
   not carry. The approval is a record, not a chat message, so a later reader can see what
   the agent asked for and what you changed.
@@ -1038,6 +1041,22 @@ work is the tools and the gate enforcement.
   the missing approval rather than an empty union. An `agentSetTicket` call naming a path
   that no approved row carries is refused. A reworded approval appends a new row and leaves
   the old one visible. The approval survives replay.
+  **Implemented 2026-08-21.** The guard registers prepended on both fs
+  waterfalls and throws to refuse. An allowed write calls `next()`, so the
+  observation-policy staleness bookkeeping still runs. Approved paths ride in
+  the evidence payload under a `paths` key (`{ paths: string[] }`). That
+  convention lives in the coverage check's comment until B2 or B3 gives it a
+  schema home.
+  **Fixed 2026-08-22.** The create-path defect is closed: `_createTicket` now
+  refuses any `allowlist` field on create, and names why: a ticket with no id
+  yet can have no covering `builtin:file_allowlist` row. Verified directly
+  (not by subagent report): `tsc --noEmit` is clean, the five A7 tests pass,
+  and the full suite passes 253/253 across 54 files. Two gaps stay open as
+  B2 scope, not defects: no public user-evidence attach path exists yet, so
+  the coverage gate is satisfiable only through tests until
+  `userAttachEvidence` lands, and `userSetTicket` has no production caller
+  for the same reason.
+
 
 ### Phase 4: Web UI — `pending`
 
@@ -1108,6 +1127,18 @@ work is the tools and the gate enforcement.
   read-before-write observation gate. One consequence to build for: the allowlist guard in
   `src/tools/allowlist.ts` matches on path, so it must exempt the scratch root. Without the
   exemption the union check refuses every scratch write the moment a ticket enters in-progress.
+  **Subagents share the scratch root too** (decided 2026-08-22). The scratch
+  directory is durable memory across agents, not a private ledger for one
+  agent. A delegated child reads and writes the same `<scratch-root>/` tree
+  its parent uses, including writing a file a sibling subagent or the parent
+  later reads, so two agents can hand off state through a plain file, not
+  only through the message channel between them. `childPathScope`
+  (`src/tools/allowlist.ts`), the guard a parent installs on a scoped child,
+  must always include the workspace's scratch root in its allowed list, on
+  top of whatever directory scope the parent grants for the delegated task.
+  A child scoped to `src/` for its ticket can still read and write
+  `<scratch-root>/`.
+
   **`scratch_edit` is hash-anchored** (decided 2026-08-21). It takes the same 3-char anchors the
   personal bundle's hashline tools use, so one editing grammar covers every file the agent
   touches. `str_replace_editor` semantics are rejected.
