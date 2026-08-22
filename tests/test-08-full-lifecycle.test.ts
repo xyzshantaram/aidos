@@ -3,16 +3,19 @@
  *
  * The prototype attached every required kind as the move's actor. The
  * constant table admits both user and agent for every kind the flow
- * attaches, so the same pattern works here: the helper attaches each
- * kind as the move's actor, then moves the ticket. The refusal and the
- * move claims are unchanged.
+ * attaches, so the same pattern works here. The port runs against the
+ * service: an agent-side action goes through agentAttachEvidence /
+ * agentMoveTicket, a user-side action through userAttachEvidence /
+ * userMoveTicket. The refusal and the move claims are unchanged.
  */
 
 import { describe, expect, it } from "vitest";
 
 import { GateRefused } from "../src/kernel/types";
 import type { AidosConfig } from "../src/kernel/types";
-import { expectGateRefused, expectSameItems, makeConfig, makeStore } from "./helpers";
+import { expectGateRefused, expectSameItems, makeConfig } from "./helpers";
+import { createHarness, type Harness } from "./b1-harness";
+import type { AidosService } from "../src/host/aidos-core";
 
 const GATE_CONFIG: AidosConfig = {
   kinds: makeConfig().kinds,
@@ -48,13 +51,19 @@ const GATE_CONFIG: AidosConfig = {
   ],
 };
 
+/** The board-state read on the service: the row's state, or null. */
+function stateOf(harness: Harness, service: AidosService, ticketId: number): string | null {
+  return service.getTickets(harness.asAgent()).find((row) => row.id === ticketId)?.state ?? null;
+}
+
 describe("full lifecycle", () => {
   it("drives open to done", () => {
-    const store = makeStore(GATE_CONFIG);
-    const project = store.createProject("/srv/proj/life", "life");
-    const ticket = store.createTicket(project, "Lifecycle", "d", {
-      actor: "user",
-    });
+    const harness = createHarness();
+    harness.settingsValue = GATE_CONFIG;
+    const service = harness.installService();
+    const agent = harness.asAgent();
+
+    const ticket = service.userSetTicket(agent, { title: "Lifecycle", description: "d" }).id;
 
     const moveAfterAttaching = (
       toState: "in_progress" | "awaiting_verification" | "done",
@@ -62,13 +71,24 @@ describe("full lifecycle", () => {
       moveActor: "user" | "agent",
     ) => {
       const refusal = expectGateRefused(() =>
-        store.moveTicket(ticket, toState, moveActor),
+        moveActor === "user"
+          ? service.userMoveTicket(agent, { ticketId: ticket, to: toState })
+          : service.agentMoveTicket(agent, { ticketId: ticket, to: toState }),
       );
       expectSameItems(refusal.missingKinds, kinds);
       for (const kind of kinds) {
-        store.attachEvidence(ticket, kind, { k: kind }, moveActor);
+        const attach = { ticketId: ticket, kind, payload: { k: kind } };
+        if (moveActor === "user") {
+          service.userAttachEvidence(agent, attach);
+        } else {
+          service.agentAttachEvidence(agent, attach);
+        }
       }
-      store.moveTicket(ticket, toState, moveActor);
+      if (moveActor === "user") {
+        service.userMoveTicket(agent, { ticketId: ticket, to: toState });
+      } else {
+        service.agentMoveTicket(agent, { ticketId: ticket, to: toState });
+      }
     };
 
     moveAfterAttaching(
@@ -76,17 +96,17 @@ describe("full lifecycle", () => {
       ["builtin:eval_criteria", "builtin:file_allowlist", "builtin:user_signoff"],
       "user",
     );
-    expect(store.getTicket(ticket).state).toBe("in_progress");
+    expect(stateOf(harness, service, ticket)).toBe("in_progress");
 
     moveAfterAttaching("awaiting_verification", ["builtin:agent_report"], "agent");
-    expect(store.getTicket(ticket).state).toBe("awaiting_verification");
+    expect(stateOf(harness, service, ticket)).toBe("awaiting_verification");
 
-    const refusal = expectGateRefused(() => store.moveTicket(ticket, "done", "agent"));
+    const refusal = expectGateRefused(() => service.agentMoveTicket(agent, { ticketId: ticket, to: "done" }));
     expect(refusal).toBeInstanceOf(GateRefused);
     expect(refusal.allowedActors).toEqual(["user"]);
-    expect(store.getTicket(ticket).state).toBe("awaiting_verification");
+    expect(stateOf(harness, service, ticket)).toBe("awaiting_verification");
 
     moveAfterAttaching("done", ["builtin:review_pass", "builtin:after_shot"], "user");
-    expect(store.getTicket(ticket).state).toBe("done");
+    expect(stateOf(harness, service, ticket)).toBe("done");
   });
 });

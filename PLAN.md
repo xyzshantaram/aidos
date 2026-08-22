@@ -728,7 +728,6 @@ mounts `dsh-invariants` itself.
    against a host running that fresh build. This has not run yet. Until it
    runs, B2 is not wire-verified, but the recipe itself needs no change.
 
-
    **Three gotchas for the harness.** The scope resolves to a LIVE agent, so
    a test must open a session first. Session creation is not on the typert
    bus — only seven services are — so that half uses the older dot-separated

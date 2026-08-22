@@ -35,10 +35,10 @@ function bashAskListener(harness: Harness): BashAskListener {
 function reachAwaitingVerification(harness: Harness) {
   const ticket = harness.service.setTicket(harness.asAgent(), { title: "Under review" });
   harness.seedEvidence(harness.agent, ticket.id, "builtin:user_signoff");
-  harness.service.moveTicket(harness.asAgent(), { ticketId: ticket.id, to: "in_progress" });
+  harness.service.agentMoveTicket(harness.asAgent(), { ticketId: ticket.id, to: "in_progress" });
   harness.seedEvidence(harness.agent, ticket.id, "builtin:automated_check");
   harness.seedEvidence(harness.agent, ticket.id, "builtin:review_pass");
-  harness.service.moveTicket(harness.asAgent(), {
+  harness.service.agentMoveTicket(harness.asAgent(), {
     ticketId: ticket.id,
     to: "awaiting_verification",
   });
@@ -50,7 +50,7 @@ function reachAwaitingVerificationWithInProgress(harness: Harness) {
     title: "In flight",
   });
   harness.seedEvidence(harness.agent, inProgress.id, "builtin:user_signoff");
-  harness.service.moveTicket(harness.asAgent(), {
+  harness.service.agentMoveTicket(harness.asAgent(), {
     ticketId: inProgress.id,
     to: "in_progress",
   });

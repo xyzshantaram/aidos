@@ -35,13 +35,13 @@ describe("the aidos-core service", () => {
     const service = harness.installService();
 
     const ticket = service.setTicket(harness.asAgent(), { title: "T" });
-    service.attachEvidence(harness.asAgent(), {
+    service.agentAttachEvidence(harness.asAgent(), {
       ticketId: ticket.id,
       kind: "builtin:test_run",
     });
     harness.seedEvidence(harness.agent, ticket.id, "builtin:user_signoff");
     expect(() =>
-      service.moveTicket(harness.asAgent(), { ticketId: ticket.id, to: "in_progress" }),
+      service.agentMoveTicket(harness.asAgent(), { ticketId: ticket.id, to: "in_progress" }),
     ).not.toThrow();
 
     const events = harness.aidosEvents(harness.agent);
@@ -121,13 +121,13 @@ describe("the aidos-core service", () => {
     const service = harness.installService();
     const first = service.setTicket(harness.asAgent(), { title: "One", body: "A" });
     const second = service.setTicket(harness.asAgent(), { title: "Two", phase: 2 });
-    service.attachEvidence(harness.asAgent(), {
+    service.agentAttachEvidence(harness.asAgent(), {
       ticketId: first.id,
       kind: "builtin:test_run",
       payload: { n: 1 },
     });
     harness.seedEvidence(harness.agent, first.id, "builtin:user_signoff");
-    service.moveTicket(harness.asAgent(), { ticketId: first.id, to: "in_progress" });
+    service.agentMoveTicket(harness.asAgent(), { ticketId: first.id, to: "in_progress" });
 
     const before = service.getTickets(harness.asAgent());
     expect(before.length).toBe(2);
@@ -151,7 +151,7 @@ describe("the aidos-core service", () => {
     const service = harness.installService();
     const ticket = service.setTicket(harness.asAgent(), { title: "T" }).id;
 
-    service.attachEvidence(harness.asAgent(), {
+    service.agentAttachEvidence(harness.asAgent(), {
       ticketId: ticket,
       kind: "builtin:test_run",
       payload: { author: "user", actor: "user", note: "three" },

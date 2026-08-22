@@ -37,7 +37,7 @@ function visibleTools(harness: Harness): string[] {
 /** Drive one ticket from open to in_progress (the board supplies the signoff). */
 function moveToInProgress(harness: Harness, ticketId: number) {
   harness.seedEvidence(harness.agent, ticketId, "builtin:user_signoff");
-  harness.service.moveTicket(harness.asAgent(), { ticketId, to: "in_progress" });
+  harness.service.agentMoveTicket(harness.asAgent(), { ticketId, to: "in_progress" });
 }
 
 /** Re-apply the mask over the settled state (the re-apply seam on a change). */
@@ -98,7 +98,7 @@ describe("the state-gated masks", () => {
     moveToInProgress(harness, ticket.id);
     harness.seedEvidence(harness.agent, ticket.id, "builtin:automated_check");
     harness.seedEvidence(harness.agent, ticket.id, "builtin:review_pass");
-    harness.service.moveTicket(harness.asAgent(), {
+    harness.service.agentMoveTicket(harness.asAgent(), {
       ticketId: ticket.id,
       to: "awaiting_verification",
     });

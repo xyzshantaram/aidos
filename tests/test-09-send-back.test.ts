@@ -3,13 +3,23 @@
  *
  * The awaiting_verification to in_progress edge is the one backward move
  * the kernel allows (SPEC decision 3). It needs a comment from the user,
- * and it keeps every row that the earlier gates required.
+ * and it keeps every row that the earlier gates required. The port runs
+ * against the service: the user side goes through userAttachEvidence /
+ * userMoveTicket, the agent side through agentAttachEvidence /
+ * agentMoveTicket.
+ *
+ * The "fix this" remark is an evidence row of kind builtin:comment, not a
+ * comment/added event: the send-back gate reads the ticket's evidence rows,
+ * and a comment event never lands in evidence. So the user attaches it
+ * through userAttachEvidence, not userAddComment.
  */
 
 import { describe, expect, it } from "vitest";
 
 import type { AidosConfig } from "../src/kernel/types";
-import { makeConfig, makeStore } from "./helpers";
+import type { AidosEvent } from "../src/kernel/events";
+import { makeConfig } from "./helpers";
+import { createHarness } from "./b1-harness";
 
 describe("send back", () => {
   it("the evidence survives a send back", () => {
@@ -36,22 +46,48 @@ describe("send back", () => {
         },
       ],
     };
-    const store = makeStore(config);
-    const project = store.createProject("/srv/proj/a", "a");
-    const ticket = store.createTicket(project, "T", "d", { actor: "user" });
+    const harness = createHarness();
+    harness.settingsValue = config;
+    const service = harness.installService();
+    const agent = harness.asAgent();
 
-    store.attachEvidence(ticket, "builtin:user_signoff", { ok: true }, "user");
-    store.moveTicket(ticket, "in_progress", "user");
-    store.attachEvidence(ticket, "builtin:agent_report", { lines: 5 }, "agent");
-    store.moveTicket(ticket, "awaiting_verification", "agent");
+    const ticket = service.userSetTicket(agent, { title: "T", description: "d" }).id;
 
-    store.attachEvidence(ticket, "builtin:comment", { text: "fix this" }, "user");
-    store.moveTicket(ticket, "in_progress", "user");
+    service.userAttachEvidence(agent, {
+      ticketId: ticket,
+      kind: "builtin:user_signoff",
+      payload: { ok: true },
+    });
+    service.userMoveTicket(agent, { ticketId: ticket, to: "in_progress" });
+    service.agentAttachEvidence(agent, {
+      ticketId: ticket,
+      kind: "builtin:agent_report",
+      payload: { lines: 5 },
+    });
+    service.agentMoveTicket(agent, { ticketId: ticket, to: "awaiting_verification" });
 
-    const kinds = new Set(store.evidenceFor(ticket).map((row) => row.kind));
+    service.userAttachEvidence(agent, {
+      ticketId: ticket,
+      kind: "builtin:comment",
+      payload: { text: "fix this" },
+    });
+    service.userMoveTicket(agent, { ticketId: ticket, to: "in_progress" });
+
+    const kinds = new Set(
+      harness
+        .aidosEvents(harness.agent)
+        .filter(
+          (event): event is Extract<AidosEvent, { kind: "evidence/attached" }> =>
+            event.kind === "evidence/attached" && event.ticketId === ticket,
+        )
+        .map((event) => event.row.kind),
+    );
     expect(kinds).toEqual(
       new Set(["builtin:user_signoff", "builtin:agent_report", "builtin:comment"]),
     );
-    expect(store.getTicket(ticket).state).toBe("in_progress");
+    const state = service
+      .getTickets(agent)
+      .find((row) => row.id === ticket)?.state;
+    expect(state).toBe("in_progress");
   });
 });

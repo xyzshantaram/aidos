@@ -89,7 +89,7 @@ describe("the narrowed file_allowlist authoring", () => {
     harness.installService();
     const ticketId = harness.service.setTicket(harness.asAgent(), { title: "T" }).id;
     expect(() =>
-      harness.service.attachEvidence(harness.asAgent(), {
+      harness.service.agentAttachEvidence(harness.asAgent(), {
         ticketId,
         kind: "builtin:file_allowlist",
         payload: { paths: ["src/"] },

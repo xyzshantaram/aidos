@@ -155,7 +155,7 @@ describe("workspace-scoped resolution", () => {
 
     // A bare slug "alpha" does not exist in workspace B.
     expect(() =>
-      serviceB.attachEvidence(harnessB.asAgent(), {
+      serviceB.agentAttachEvidence(harnessB.asAgent(), {
         ticketId: "alpha",
         kind: "builtin:test_run",
       }),
@@ -163,7 +163,7 @@ describe("workspace-scoped resolution", () => {
     // A bare number is scoped to the current workspace, so ticket 1 here is
     // B's own ticket, never A's.
     expect(() =>
-      serviceB.attachEvidence(harnessB.asAgent(), {
+      serviceB.agentAttachEvidence(harnessB.asAgent(), {
         ticketId: 1,
         kind: "builtin:test_run",
       }),
@@ -211,7 +211,7 @@ describe("workspace-scoped resolution", () => {
     // write against that foreign workspace is refused, naming the workspace.
     let caught: unknown;
     try {
-      service.attachEvidence(harness.asAgent(), {
+      service.agentAttachEvidence(harness.asAgent(), {
         ticketId: "--ws-a--:foreign",
         kind: "builtin:test_run",
       });
@@ -260,7 +260,7 @@ describe("a foreign write is refused", () => {
     const service = harness.installService();
 
     expect(() =>
-      service.moveTicket(harness.asAgent(), { ticketId: 1, to: "in_progress" }),
+      service.agentMoveTicket(harness.asAgent(), { ticketId: 1, to: "in_progress" }),
     ).toThrow(ForeignWorkspace);
   });
 });

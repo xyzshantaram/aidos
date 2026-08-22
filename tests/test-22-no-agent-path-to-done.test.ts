@@ -7,14 +7,18 @@
  * and the allowed actors, and leaves the ticket put. The earlier states
  * refuse with the pair named. The imported claim stays a
  * builtin:imported_state row with author system only.
+ *
+ * The port runs against the service: the user side goes through
+ * userAttachEvidence / userMoveTicket, the agent side through
+ * agentAttachEvidence / agentMoveTicket.
  */
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_CONFIG } from "../src/kernel/constants";
 import { GateRefused } from "../src/kernel/types";
-import { importPlan } from "../src/plan/plan-io";
-import { expectGateRefused, makeStore } from "./helpers";
+import type { AidosEvent } from "../src/kernel/events";
+import { expectGateRefused } from "./helpers";
+import { createHarness, type Harness } from "./b1-harness";
 
 /** Every ticket carries the done mark. None of them may land in "done". */
 const ALL_DONE_PLAN = `## Phase 1: Everything claims done — \`done\`
@@ -32,60 +36,69 @@ const AGENT_AUTHORABLE = [
   "builtin:review_pass",
 ];
 
+/** Drive one ticket to awaiting_verification on the service. Returns its id. */
+function driveToAwaitingVerification(harness: Harness): number {
+  const service = harness.service;
+  const agent = harness.asAgent();
+  const ticket = service.setTicket(agent, { title: "Ticket one", body: "A body." }).id;
+
+  service.userAttachEvidence(agent, {
+    ticketId: ticket,
+    kind: "builtin:user_signoff",
+    payload: { ok: true },
+  });
+  service.userMoveTicket(agent, { ticketId: ticket, to: "in_progress" });
+  for (const kind of AGENT_AUTHORABLE) {
+    service.agentAttachEvidence(agent, { ticketId: ticket, kind });
+  }
+  service.userMoveTicket(agent, { ticketId: ticket, to: "awaiting_verification" });
+  return ticket;
+}
+
 describe("no agent path to done", () => {
   it("the setup reaches awaiting_verification", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    const ticket = store.createTicket(project, "Ticket one", "A body.", {
-      actor: "agent",
-    });
-    store.attachEvidence(ticket, "builtin:user_signoff", { ok: true }, "user");
-    store.moveTicket(ticket, "in_progress", "user");
-    for (const kind of AGENT_AUTHORABLE) {
-      store.attachEvidence(ticket, kind, {}, "agent");
-    }
-    store.moveTicket(ticket, "awaiting_verification", "user");
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const ticket = driveToAwaitingVerification(harness);
 
-    expect(store.getTicket(ticket).state).toBe("awaiting_verification");
-    const attached = new Set(store.evidenceFor(ticket).map((row) => row.kind));
+    const state = harness.service
+      .getTickets(agent)
+      .find((row) => row.id === ticket)?.state;
+    expect(state).toBe("awaiting_verification");
+    const attached = new Set(
+      harness
+        .aidosEvents(harness.agent)
+        .filter(
+          (event): event is Extract<AidosEvent, { kind: "evidence/attached" }> =>
+            event.kind === "evidence/attached" && event.ticketId === ticket,
+        )
+        .map((event) => event.row.kind),
+    );
     for (const kind of AGENT_AUTHORABLE) {
       expect(attached.has(kind)).toBe(true);
     }
   });
 
   it("done is refused with every agent kind attached", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    const ticket = store.createTicket(project, "Ticket one", "A body.", {
-      actor: "agent",
-    });
-    store.attachEvidence(ticket, "builtin:user_signoff", { ok: true }, "user");
-    store.moveTicket(ticket, "in_progress", "user");
-    for (const kind of AGENT_AUTHORABLE) {
-      store.attachEvidence(ticket, kind, {}, "agent");
-    }
-    store.moveTicket(ticket, "awaiting_verification", "user");
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const ticket = driveToAwaitingVerification(harness);
 
-    expect(() => store.moveTicket(ticket, "done", "agent")).toThrow(
-      GateRefused,
-    );
+    expect(() =>
+      harness.service.agentMoveTicket(agent, { ticketId: ticket, to: "done" }),
+    ).toThrow(GateRefused);
   });
 
   it("the refusal names the missing kind or the allowed actors", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    const ticket = store.createTicket(project, "Ticket one", "A body.", {
-      actor: "agent",
-    });
-    store.attachEvidence(ticket, "builtin:user_signoff", { ok: true }, "user");
-    store.moveTicket(ticket, "in_progress", "user");
-    for (const kind of AGENT_AUTHORABLE) {
-      store.attachEvidence(ticket, kind, {}, "agent");
-    }
-    store.moveTicket(ticket, "awaiting_verification", "user");
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const ticket = driveToAwaitingVerification(harness);
 
     const refusal = expectGateRefused(() =>
-      store.moveTicket(ticket, "done", "agent"),
+      harness.service.agentMoveTicket(agent, { ticketId: ticket, to: "done" }),
     );
     const missing = refusal.missingKinds;
     const allowed = refusal.allowedActors;
@@ -99,75 +112,89 @@ describe("no agent path to done", () => {
   });
 
   it("the ticket stays in awaiting_verification", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    const ticket = store.createTicket(project, "Ticket one", "A body.", {
-      actor: "agent",
-    });
-    store.attachEvidence(ticket, "builtin:user_signoff", { ok: true }, "user");
-    store.moveTicket(ticket, "in_progress", "user");
-    for (const kind of AGENT_AUTHORABLE) {
-      store.attachEvidence(ticket, kind, {}, "agent");
-    }
-    store.moveTicket(ticket, "awaiting_verification", "user");
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const ticket = driveToAwaitingVerification(harness);
 
-    expect(() => store.moveTicket(ticket, "done", "agent")).toThrow(
-      GateRefused,
-    );
-    expect(store.getTicket(ticket).state).toBe("awaiting_verification");
+    expect(() =>
+      harness.service.agentMoveTicket(agent, { ticketId: ticket, to: "done" }),
+    ).toThrow(GateRefused);
+    const state = harness.service
+      .getTickets(agent)
+      .find((row) => row.id === ticket)?.state;
+    expect(state).toBe("awaiting_verification");
   });
 
   it("done is refused from the earlier states", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    const openTicket = store.createTicket(project, "Still open", "A body.", {
-      actor: "agent",
-    });
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const service = harness.service;
+
+    const openTicket = service.setTicket(agent, { title: "Still open", body: "A body." }).id;
 
     const fromOpen = expectGateRefused(() =>
-      store.moveTicket(openTicket, "done", "agent"),
+      service.agentMoveTicket(agent, { ticketId: openTicket, to: "done" }),
     );
     expect(fromOpen.fromState).toBe("open");
     expect(fromOpen.toState).toBe("done");
-    expect(store.getTicket(openTicket).state).toBe("open");
+    const openState = service.getTickets(agent).find((row) => row.id === openTicket)?.state;
+    expect(openState).toBe("open");
 
-    store.attachEvidence(openTicket, "builtin:user_signoff", { ok: true }, "user");
-    store.moveTicket(openTicket, "in_progress", "user");
+    service.userAttachEvidence(agent, {
+      ticketId: openTicket,
+      kind: "builtin:user_signoff",
+      payload: { ok: true },
+    });
+    service.userMoveTicket(agent, { ticketId: openTicket, to: "in_progress" });
 
     const fromInProgress = expectGateRefused(() =>
-      store.moveTicket(openTicket, "done", "agent"),
+      service.agentMoveTicket(agent, { ticketId: openTicket, to: "done" }),
     );
     expect(fromInProgress.fromState).toBe("in_progress");
     expect(fromInProgress.toState).toBe("done");
-    expect(store.getTicket(openTicket).state).toBe("in_progress");
+    const inProgressState = service.getTickets(agent).find((row) => row.id === openTicket)?.state;
+    expect(inProgressState).toBe("in_progress");
   });
 
   it("a plan import cannot produce a done ticket", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    importPlan(store, project, ALL_DONE_PLAN, "all_done.md");
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const planFile = harness.tempPlanFile(ALL_DONE_PLAN);
+    harness.service.planImport(agent, { file: planFile });
 
-    const tickets = store.ticketsFor(project);
+    const tickets = harness.service.getTickets(agent);
     expect(tickets.length).toBe(2);
     expect(tickets.map((ticket) => ticket.state)).toEqual(["open", "open"]);
   });
 
   it("an import keeps the done claim as evidence only", () => {
-    const store = makeStore(DEFAULT_CONFIG);
-    const project = store.createProject("/srv/proj/cli", "cli");
-    importPlan(store, project, ALL_DONE_PLAN, "all_done.md");
+    const harness = createHarness();
+    harness.installService();
+    const agent = harness.asAgent();
+    const planFile = harness.tempPlanFile(ALL_DONE_PLAN);
+    harness.service.planImport(agent, { file: planFile });
 
     for (const ticketId of [1, 2]) {
-      const rows = store
-        .evidenceFor(ticketId)
-        .filter((row) => row.kind === "builtin:imported_state");
+      const rows = harness
+        .aidosEvents(harness.agent)
+        .filter(
+          (event): event is Extract<AidosEvent, { kind: "evidence/attached" }> =>
+            event.kind === "evidence/attached" && event.ticketId === ticketId,
+        )
+        .filter((event) => event.row.kind === "builtin:imported_state");
       expect(rows.length).toBe(1);
-      expect(rows[0].payload).toEqual({
+      expect(rows[0].row.payload).toEqual({
         claimed_state: "done",
-        source: "all_done.md",
+        source: planFile,
       });
-      expect(rows[0].author).toBe("system");
-      expect(store.getTicket(ticketId).state).toBe("open");
+      expect(rows[0].row.author).toBe("system");
+      const state = harness.service
+        .getTickets(agent)
+        .find((row) => row.id === ticketId)?.state;
+      expect(state).toBe("open");
     }
   });
 });
