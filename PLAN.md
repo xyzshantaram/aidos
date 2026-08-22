@@ -774,6 +774,76 @@ mounts `dsh-invariants` itself.
    letting the shadow-copy test complete) is needed to close this out with
    an unambiguous live pass, not architectural inference alone.
 
+   **Still not wire-verified after a real profile install (2026-08-22, same
+   day, third correction).** The user installed aidos through the real
+   `dotfiles-ai/sync.sh` flow (not the B1 container's bind-mount), which the
+   note above predicted would collapse the module-identity split. Confirmed
+   on disk: `$DSH_HOME/profiles/web/package.json` lists `"aidos":
+   "github:xyzshantaram/aidos#207cfc6203d9"` in `dependencies` and `"aidos"`
+   in `dsh.profile.bundles`; `$DSH_HOME/profiles/web/node_modules/aidos`
+   exists with a fresh `dist/` (timestamps matching the install, not stale).
+   The user restarted the `dsh web` process behind this GUI twice. Despite
+   that, `cordis_inspect_query` against `Service.listService` on the live
+   process still shows no `aidos` key at all — not even a partially loaded
+   or crashed entry, just absent, the same as before the install existed.
+   This is a materially different symptom from the B1 container's history:
+   there the service mounted (confirmed via `settings.describe` showing the
+   `aidos` namespace) and only the Remote-claim step failed silently. Here,
+   nothing suggests the service constructor ran at all. Not yet diagnosed:
+   whether the profile composition actually includes the `aidos-core` row
+   from `cordis.patch.yml` in this real install (unconfirmed whether the
+   patch file is even read from the installed package's own directory
+   versus some cached/stale composition), whether the restart the user
+   performed actually replaced the running process rather than something
+   adjacent to it (e.g., a different `dsh-remote`-managed process than the
+   one this GUI's Cordis Inspect tools talk to), or whether the real
+   install hit a different failure mode than the B1 container did. The
+   session paused here for compaction before further debugging, per user
+   request. **B2 remains open and NOT wire-verified.** Do not treat the
+   `build.mjs` and `peerDependencies` fixes from the same day as sufficient
+   evidence that B2 works — they are necessary but were never confirmed
+   sufficient against a real install; this new finding suggests something
+   else is still wrong, possibly unrelated to the module-identity fix.
+
+
+   **B2 wire-verification closed (2026-08-22, same day, fourth entry;
+   supersedes the note above).** The missing-service alarm above was a false
+   signal from the wrong diagnostic tool, not a real defect. `Service.listService`
+   (queried through `cordis_inspect_query`) reads `ctx.typert.listPackages()`,
+   the generated-reflection package table that `dsh-goal`, `dsh-commands`,
+   `dsh-at-file`, and similar packages populate through a generated
+   `typert.host.js` calling `ctx.typert.register()` with a full
+   `model.services[]` tree. `aidos` has no code-generation step. It hand-writes
+   `@Remote("userAttachEvidence")` decorators directly on `AidosService` and
+   relies only on `dsh-api-gateway`'s SRC/conservative-fallback path, which
+   reads Cordis's live service registry, not the typert package table. A
+   package built this way cannot appear in `Service.listService`, mounted or
+   not. The two restarts changed nothing because nothing was broken.
+
+   Confirmed directly against the live process, with real file and process
+   access: `ctx.get('aidos')` resolves to a live `AidosService` instance
+   carrying every real method (`getTickets`, `userAttachEvidence`,
+   `userMoveTicket`, `_createTicket`, and the rest), with `typertRemote`
+   correctly bound to namespace `aidos`. A direct
+   `typertGateway.invoke({namespace: 'aidos', method: 'userAttachEvidence',
+   args: {agentId, args: {ticketId, kind}}})` call, run from a temporary
+   diagnostic Cordis plugin against the live process, reached the real method
+   body and returned its own business rejection (`"no such ticket:
+   nonexistent-diagnostic-probe-999999"`) rather than a gateway routing error.
+   A business-level rejection, not a dispatch failure, means every layer
+   resolved: descriptor lookup, the `remoteMethods()` marker read on the live
+   service, wire-shape validation, agent-id lookup, and dispatch into the real
+   method.
+
+   **B2 is wire-verified.** The `build.mjs` and `peerDependencies` fixes from
+   earlier the same day were correct and necessary; this closes the loop the
+   note above left open. One wrinkle for anyone reading Cordis Inspect Service
+   catalogs in this repo going forward: `Service.listService` is not a
+   complete list of mounted services. It lists only packages with generated
+   typert reflection. A service can be fully live and correctly wired for RPC
+   while invisible to that one Inspect query. Confirm a hand-written `@Remote`
+   service with `ctx.get(serviceKey)` or a real `typertGateway.invoke()`
+   probe, not `Service.listService`.
 
    **Three gotchas for the harness.** The scope resolves to a LIVE agent, so
    a test must open a session first. Session creation is not on the typert
