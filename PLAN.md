@@ -1226,18 +1226,98 @@ work is the tools and the gate enforcement.
 
 **Goal.** The board you actually use, replacing the Phase 1 prototype.
 
-- [ ] **Ticket U2: Board.** The aidos board client plugin: the Tickets tab next to Chat and
-  Trajectory, the global Tickets entry near New Session, the ticket grid, detail, field
-  editing, comments, and state moves. Evidence groups by the criterion it addresses, and
-  uncovered criteria are highlighted (criterion coverage, folded here). Gate refusals
-  surface as readable text naming the missing kind.
-  **Status: not started.** `packages/` holds exactly one package, `aidos`. No board
-  client plugin exists, so every criterion below is unreachable today.
-  **Evaluate:** you run a full ticket lifecycle in the browser without touching the prototype.
-  Every refusal is legible without reading logs. A ticket with three criteria and evidence
-  naming two shows the third as uncovered. Evidence naming no criterion still attaches and
-  still counts toward its gate. A criterion reworded after evidence was attached leaves that
-  evidence visible as uncovered rather than dropping it silently.
+- [ ] **Ticket U2a: Local Tickets tab and shared board components.** Builds the Tickets tab that
+  reads the open session's own board, plus three components the later Web UI tickets reuse:
+  `FilterPanel`, `TicketView`, and the ticket tile.
+  **Scope.** `FilterPanel` takes an optional `projects` prop. It shows a project checklist only
+  when that prop is present. It always shows a state checklist (default: every state, with `done`
+  sorted last), a sort control (Confidence, Gates, Time updated, Alphabetical, each with its own
+  tiebreak: Confidence ties break by Gates, Gates ties break by Confidence, Time ties break
+  alphabetically, alphabetical ties break by Time), a global ascending/descending toggle, and a
+  debounced title-or-id search box with autocomplete drawn only from already-loaded tickets. Every
+  control stages behind an explicit Apply button. An orange dot marks Apply as dirty until clicked.
+  Reset clears only the staged controls back to hardcoded defaults. Apply persists filter, sort,
+  and search state to storage (per-workspace for the local view) only when clicked.
+  `TicketView` renders the grid: `FilterPanel` as a collapsible sidebar (expanded by default)
+  beside a grid of square tiles. Each tile shows the title, a confidence ring (shadowed track,
+  single-color arc, percentage centered inside, an asterisk with a hover tooltip explaining
+  "advisory," and a greyed empty track with "N/A" centered when the ticket has zero criteria), the
+  gate fraction as plain text ("N/A", sorted last under every sort key, when there are zero
+  criteria), a colored state badge, and evidence tags. U2a ships the tags as static placeholders,
+  since real evidence data is U2b's job. A selected tile shows a visible highlight.
+  `LocalTicketView` wraps `FilterPanel` and `TicketView` for the Tickets tab: no `projects` prop,
+  no pagination, no virtualization, no sync button. It reads the open session's live
+  `aidos.tickets` projection through `useProjection`, so it updates on every change frame with no
+  polling. The tab itself carries a badge with the count of open (non-`done`) tickets.
+  Clicking a tile opens a fully generic placeholder detail panel (same content regardless of which
+  ticket is selected, since the real panel is U2b's job) and pushes `?ticket=<id>` onto the URL
+  (one history entry per selection). Loading that URL directly looks the id up in the
+  already-loaded projection: a match reopens the panel, a miss shows a toast plus the generic
+  panel. Closing the panel, by its close button or by clicking the same tile again, pops the query
+  param and replaces the history entry rather than pushing a new one. A selected ticket that the
+  current filter hides still shows in the (still generic) panel; only its tile disappears from the
+  grid.
+  Autocomplete suggestions appear once typing starts, list title plus ticket-id badge, and jump
+  straight to that ticket's detail panel on selection, bypassing Apply. The search box clears
+  after the jump; other staged controls survive.
+  Loading state is skeleton tiles. A load error is an inline message with a retry button that
+  re-issues the same subscribe call. A grid with zero tickets shows a message plus a hint toward
+  creation. A grid emptied by the active filter or search shows a different message naming the
+  cause plus a clear-filters action. A persistent Create button lives in the grid chrome and in the
+  empty-state hint; both open a modal. U2a's modal shows a stub placeholder only, since the real
+  form is U2c's job.
+  **Out of scope.** Real evidence-tag data (U2b), the real detail panel (U2b), edit/move/signoff/
+  send-back (U2c), the real create form (U2c), the cross-workspace global view and its
+  `coldSnapshot` fetch, workspace badges, sync button, streaming fill, and partial-failure banner
+  (U2d), and the per-ticket allowlist editor (U2e).
+  **Status: not started.**
+  **Evaluate:**
+  - The Tickets tab appears beside Chat and Trajectory. Its badge count changes live when a
+    ticket's state changes, with no page reload.
+  - A ticket created through another path appears in the grid with no reload, proving the live
+    subscription rather than a one-time fetch.
+  - Toggling a filter or sort control shows the orange Apply-dirty dot immediately and clears it
+    after Apply. Reset restores only the staged controls, leaving the last-applied state intact
+    until Apply runs again.
+  - Each of the four sort keys, and each key's documented tiebreak, produces the right order. The
+    ascending/descending toggle reverses it.
+  - A zero-criteria ticket shows "N/A" in the ring and sorts last regardless of the active sort key
+    or direction.
+  - Typing a partial title or id narrows the autocomplete list to loaded tickets only. Picking a
+    suggestion opens that ticket's panel directly and clears the search box.
+  - Selecting a tile sets `?ticket=<id>`. Reloading the page with that param open reopens the same
+    ticket, or shows a not-found toast if the id does not exist.
+  - Closing the panel, either way, pops the query param and does not leave a stray back-button
+    entry.
+  - The two empty-grid messages (no tickets at all, versus filtered-to-nothing) read differently,
+    and the filtered case offers a clear-filters action.
+  - Create opens a modal holding only a stub placeholder, not a working form.
+
+- [ ] **Ticket U2b: Ticket detail panel and evidence.** Replaces U2a's generic placeholder panel
+  with the real detail view: fields, criteria, and evidence grouped by the criterion it addresses,
+  with uncovered criteria highlighted. Builds the real evidence tags U2a's tiles currently show as
+  placeholders. Scope and evaluation criteria are not yet grilled.
+  **Status: not started.**
+
+- [ ] **Ticket U2c: Ticket actions.** Create (replacing U2a's stub modal), field editing, state
+  moves, signoff, and send-back, all through the Remote endpoints. Gate refusals surface as
+  readable text naming the missing kind. Scope and evaluation criteria are not yet grilled.
+  **Status: not started.**
+
+- [ ] **Ticket U2d: Global cross-workspace Tickets entry.** The sidebar-footer entry near New
+  Session. Wraps U2a's `FilterPanel`/`TicketView` with the `projects` filter enabled, the
+  `aidos.coldTickets` Remote fetch per visible session, a colored `aidos#<n>` workspace badge
+  (color from a deterministic hash of the full workspace path, so colliding last-path-segments
+  still differ; hover reveals `aidos/<slug>` plus the full path), a manual sync button that doubles
+  as its own fetch spinner, refetch on tab focus and on visibility change, tiles streaming in per
+  session as each `coldSnapshot` call resolves, and a banner for any session whose fetch failed
+  while the rest of the grid still renders. Load-more pagination, since this view fetches per
+  session over the network rather than reading one live projection.
+  **Status: not started.**
+
+- [ ] **Ticket U2e: Per-ticket allowlist editor.** Scope and evaluation criteria are not yet
+  grilled.
+  **Status: not started.**
 
 - [ ] **Ticket U3: Evidence and screenshots.** `ctx.attachments` stores content-addressed
   images, hash-deduped. Evidence rows reference the attachment refs. Show the confidence score
