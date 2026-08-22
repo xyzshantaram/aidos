@@ -357,7 +357,7 @@ function registerAttachEvidence(ctx: Context): void {
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
         try {
-          const view = ctx.aidos.attachEvidence(agent, {
+          const view = ctx.aidos.agentAttachEvidence(agent, {
             ticketId: args.ticketId,
             kind: args.kind,
             payload: args.payload,
@@ -403,7 +403,7 @@ function registerMoveTicket(ctx: Context): void {
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
         try {
-          const moved = ctx.aidos.moveTicket(agent, { ticketId: args.ticketId, to: args.to });
+          const moved = ctx.aidos.agentMoveTicket(agent, { ticketId: args.ticketId, to: args.to });
           return { ok: true, ticketId: moved.ticketId, fromState: moved.fromState, toState: moved.toState };
         } catch (error) {
           refusal(error);

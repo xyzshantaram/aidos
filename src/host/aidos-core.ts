@@ -10,13 +10,14 @@
  * a payload.
  */
 
-import { Service } from "@deepseek-ai/cordis";
 import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { z as zod } from "zod";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
 import { settingsNamespace } from "@deepseek-ai/dsh-settings";
+// The Remote decorator and the Typert service base: the B2 human surface.
+import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 // Load the Context augmentations the service reads (workspace binding and
 // the projection registry) and the projection table its units merge into.
 import "@deepseek-ai/dsh-workspace";
@@ -433,6 +434,11 @@ export interface MoveTicketArgs {
   to: TicketState;
 }
 
+export interface AddCommentArgs {
+  ticketId: number | string;
+  text: string;
+}
+
 export interface PlanImportArgs {
   file: string;
   projectId?: number;
@@ -447,9 +453,11 @@ export interface EvidenceView {
 /**
  * The ticket service, backed by the owning session log. The constructor
  * registers the four projection units and the invariant companion.
- * B2 adds the typert Remote layer; B1 keeps the plain Service.
+ * The class extends TypertRemoteService, so the Gateway exports the
+ * user-actor entry points under the `aidos` namespace. The agent tool
+ * layer calls the agent-actor methods directly.
  */
-export class AidosService extends Service {
+export class AidosService extends TypertRemoteService {
   static inject = [
     "agents",
     "sessionProjections",
@@ -613,84 +621,52 @@ export class AidosService extends Service {
   }
 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
-  attachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
-    const ticketId = this._resolveTicketId(agent, args.ticketId);
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const snapshot = cache.state.tickets.get(ticketId);
-    if (!snapshot) {
-      throw new UnknownTicket(ticketId);
-    }
-    this._assertLocalWorkspace(agent, snapshot);
-    // The kind comes first, like the CLI: a human-only kind refuses before
-    // the payload is looked at, and an unregistered kind refuses after.
-    const def = this._resolveKind(args.kind);
-    if (!def) {
-      throw new UnknownKind(args.kind);
-    }
-    if (!def.allowedAuthors.includes("agent")) {
-      throw new EvidenceAuthorRefused(args.kind, "agent");
-    }
-    const payload = args.payload ?? {};
-    if (!isPlainRecord(payload)) {
-      throw new BadPayloadError("the payload must be a JSON object");
-    }
-    const attached = this._attachEvidenceInternal(agent, ticketId, def.id, payload, "agent");
-    return { ticketId, kind: args.kind, payload: attached };
+  agentAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
+    return this._attachEvidence(agent, args, "agent");
   }
 
-  /** Move one ticket. The gate enforces; done refuses for any agent. */
-  moveTicket(agent: Agent, args: MoveTicketArgs): {
+  /**
+   * The user-actor attach path, exported over the typert Remote surface.
+   * The human-only kinds (`builtin:user_signoff` and `builtin:user_verified`)
+   * accept rows here and nowhere else. No tool reaches this path.
+   */
+  @Remote("userAttachEvidence")
+  userAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
+    return this._attachEvidence(agent, args, "user");
+  }
+
+  /** Move one ticket as the agent. The gate enforces every transition. */
+  agentMoveTicket(agent: Agent, args: MoveTicketArgs): {
     ticketId: number;
     fromState: TicketState;
     toState: TicketState;
   } {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const ticketId = this._resolveTicketId(agent, args.ticketId);
-    const toState = args.to;
-    const ticket = cache.state.tickets.get(ticketId);
-    if (!ticket) {
-      throw new UnknownTicket(ticketId);
-    }
-    this._assertLocalWorkspace(agent, ticket);
-    const fromState = ticket.state;
+    return this._moveTicket(agent, args, "agent");
+  }
 
-    // 1. The pair must be legal. An illegal pair is a refusal like any
-    //    other: it appends one aidos/refusal record and changes no state.
-    if (!isLegalTransition(fromState, toState)) {
-      this._appendRefusal(agent, ticketId, fromState, toState, "no gate configured for this transition");
-      throw new GateRefused({ noGate: true, fromState, toState, actor: "agent" });
-    }
+  /**
+   * The user-actor move path, exported over the typert Remote surface. The
+   * human-only gates (`awaiting_verification -> done`, and the send-back
+   * edge) accept moves here and nowhere else. No tool reaches this path.
+   */
+  @Remote("userMoveTicket")
+  userMoveTicket(agent: Agent, args: MoveTicketArgs): {
+    ticketId: number;
+    fromState: TicketState;
+    toState: TicketState;
+  } {
+    return this._moveTicket(agent, args, "user");
+  }
 
-    // 2. The gate. A refusal appends one aidos/refusal record, then throws.
-    const evidence = cache.state.evidence.get(ticketId) ?? [];
-    try {
-      checkGate(this._resolvedConfig, ticket, evidence, toState, "agent");
-    } catch (error) {
-      if (error instanceof GateRefused) {
-        this._appendRefusal(agent, ticketId, fromState, toState, refusalReason(error.missingKinds, error.allowedActors));
-        throw error;
-      }
-      throw error;
-    }
+  /** Append one agent-authored comment to one ticket. */
+  agentAddComment(agent: Agent, args: AddCommentArgs): CommentRecord {
+    return this._addComment(agent, args, "agent");
+  }
 
-    // 3. The move itself. One whole-value ticket/change record.
-    const at = this._atFor(agent.session, ticketId, ticket.updatedAt);
-    const snapshot: TicketSnapshot = {
-      ...ticket,
-      state: toState,
-      revision: ticket.revision + 1,
-      updatedAt: at,
-    };
-    this._commit(agent, {
-      kind: "ticket/change",
-      version: 1,
-      operation: "move",
-      ticket: snapshot,
-      at,
-    });
-    return { ticketId, fromState, toState };
+  /** The user-actor comment path, exported over the typert Remote surface. */
+  @Remote("userAddComment")
+  userAddComment(agent: Agent, args: AddCommentArgs): CommentRecord {
+    return this._addComment(agent, args, "user");
   }
 
   /** Import one plan file into an empty project. */
@@ -998,6 +974,121 @@ export class AidosService extends Service {
   }
 
   /**
+   * One evidence attach with the actor pinned at the entry point. The kind
+   * definition's allowedAuthors list decides, so one check accepts a user
+   * row for a human-only kind here and refuses an agent row.
+   */
+  private _attachEvidence(agent: Agent, args: AttachEvidenceArgs, actor: Actor): EvidenceView {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    // The kind comes first, like the CLI: a human-only kind refuses before
+    // the payload is looked at, and an unregistered kind refuses after.
+    const def = this._resolveKind(args.kind);
+    if (!def) {
+      throw new UnknownKind(args.kind);
+    }
+    if (!def.allowedAuthors.includes(actor)) {
+      throw new EvidenceAuthorRefused(args.kind, actor);
+    }
+    const payload = args.payload ?? {};
+    if (!isPlainRecord(payload)) {
+      throw new BadPayloadError("the payload must be a JSON object");
+    }
+    const attached = this._attachEvidenceInternal(agent, ticketId, def.id, payload, actor);
+    return { ticketId, kind: args.kind, payload: attached };
+  }
+
+  /**
+   * One gate-checked move with the actor pinned at the entry point. The
+   * gate's allowedActors list decides, so a human-only edge accepts a user
+   * move here and refuses an agent move on the same check.
+   */
+  private _moveTicket(agent: Agent, args: MoveTicketArgs, actor: Actor): {
+    ticketId: number;
+    fromState: TicketState;
+    toState: TicketState;
+  } {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const toState = args.to;
+    const ticket = cache.state.tickets.get(ticketId);
+    if (!ticket) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, ticket);
+    const fromState = ticket.state;
+
+    // 1. The pair must be legal. An illegal pair is a refusal like any
+    //    other: it appends one aidos/refusal record and changes no state.
+    if (!isLegalTransition(fromState, toState)) {
+      this._appendRefusal(agent, ticketId, fromState, toState, actor, "no gate configured for this transition");
+      throw new GateRefused({ noGate: true, fromState, toState, actor });
+    }
+
+    // 2. The gate. A refusal appends one aidos/refusal record, then throws.
+    const evidence = cache.state.evidence.get(ticketId) ?? [];
+    try {
+      checkGate(this._resolvedConfig, ticket, evidence, toState, actor);
+    } catch (error) {
+      if (error instanceof GateRefused) {
+        this._appendRefusal(agent, ticketId, fromState, toState, actor, refusalReason(error.missingKinds, error.allowedActors));
+        throw error;
+      }
+      throw error;
+    }
+
+    // 3. The move itself. One whole-value ticket/change record.
+    const at = this._atFor(agent.session, ticketId, ticket.updatedAt);
+    const snapshot: TicketSnapshot = {
+      ...ticket,
+      state: toState,
+      revision: ticket.revision + 1,
+      updatedAt: at,
+    };
+    this._commit(agent, {
+      kind: "ticket/change",
+      version: 1,
+      operation: "move",
+      ticket: snapshot,
+      at,
+    });
+    return { ticketId, fromState, toState };
+  }
+
+  /**
+   * One comment appended to one ticket, with the actor pinned at the entry
+   * point. Mirrors Store.addComment's event shape; the fold and the
+   * aidos.comments projection own the read side.
+   */
+  private _addComment(agent: Agent, args: AddCommentArgs, actor: Actor): CommentRecord {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const at = this._now();
+    this._commit(agent, {
+      kind: "comment/added",
+      version: 1,
+      ticketId,
+      text: args.text,
+      author: actor,
+      at,
+    });
+    return { ticketId, text: args.text, author: actor, at };
+  }
+
+  /**
    * The proposed allowlist paths that no approved `builtin:file_allowlist`
    * evidence row on this ticket covers, in order. Each coverage row carries
    * the approved paths under its payload `paths` key (the attach_evidence
@@ -1109,6 +1200,7 @@ export class AidosService extends Service {
     ticketId: TicketId,
     fromState: TicketState,
     toState: TicketState,
+    actor: Actor,
     reason: string,
   ): void {
     this._commit(agent, {
@@ -1117,7 +1209,7 @@ export class AidosService extends Service {
       ticketId,
       fromState,
       toState,
-      actor: "agent",
+      actor,
       reason,
       at: this._now(),
     });
