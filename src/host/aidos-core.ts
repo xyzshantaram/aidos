@@ -317,6 +317,8 @@ const TICKET_VIEW_ZOD = zod.object({
   state: STATE_ENUM,
   confidenceScore: zod.number(),
   gateFraction: zod.number().nullable(),
+  updatedAt: zod.number(),
+  workspaceKey: zod.string(),
 });
 const PLAN_VALUE_ZOD = zod.object({
   frontmatter: zod.string(),
@@ -1425,6 +1427,8 @@ export class AidosService extends TypertRemoteService {
         state: snapshot.state,
         confidenceScore: confidenceScoreOf(config, evidence),
         gateFraction: gateFractionOf(config, snapshot, evidence),
+        updatedAt: snapshot.updatedAt,
+        workspaceKey: snapshot.workspaceKey,
       };
     }
     return out;

@@ -24,6 +24,10 @@ export interface TicketView extends TicketRow {
   confidenceScore: number;
   /** Forward gate only. Null for done and for a missing forward gate. */
   gateFraction: number | null;
+  /** At of the last change. Carried so the board can sort by Time updated. */
+  updatedAt: number;
+  /** The workspace key of the ticket's own workspace. Carried for the board's per-workspace storage key. */
+  workspaceKey: string;
 }
 
 /**
@@ -125,6 +129,8 @@ export function ticketsProjection(
       ...rowFromSnapshot(snapshot),
       confidenceScore: confidenceScoreOf(config, evidence),
       gateFraction: gateFractionOf(config, snapshot, evidence),
+      updatedAt: snapshot.updatedAt,
+      workspaceKey: snapshot.workspaceKey,
     });
   }
   return out;

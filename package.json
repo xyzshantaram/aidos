@@ -9,11 +9,13 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json",
     "test": "vitest run",
     "build": "node build.mjs",
-    "prepare": "node build.mjs"
+    "prepare": "node build.mjs",
+    "typecheck:client": "tsc --noEmit -p tsconfig.client.json"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
     "@deepseek-ai/dsh-agent": "0.1.0-rc.8",
+    "@deepseek-ai/dsh-client-ui-slots": "0.0.1-rc.1",
     "@deepseek-ai/dsh-fs": "0.1.0-rc.8",
     "@deepseek-ai/dsh-invariants": "0.1.0-rc.8",
     "@deepseek-ai/dsh-llm": "0.1.0-rc.8",
@@ -26,7 +28,9 @@
     "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.8",
     "@deepseek-ai/dsh-workspace": "0.1.0-rc.8",
     "@deepseek-ai/schemastery": "3.18.1",
+    "@types/react": "^18.3.31",
     "esbuild": "^0.28.2",
+    "react": "^18.3.1",
     "typescript": "^7.0.2",
     "vite": "^6.4.3",
     "vitest": "^4.1.11"
@@ -35,6 +39,15 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-locale"
+      ]
     }
   },
   "dependencies": {
@@ -42,5 +55,10 @@
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-typert-protocol": "0.1.0-rc.8"
+  },
+  "exports": {
+    ".": "./dist/host/aidos-plugin.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
   }
 }

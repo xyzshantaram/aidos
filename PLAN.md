@@ -450,23 +450,19 @@ tracebacks (Ticket P29).
 
 #### The board (Tickets U2, U3, U4, ported)
 
-A client plugin package (`@aidos/dsh-client-aidos-board`) declares
-`dsh.client` and ships a prebuilt `./client` bundle. The aidos patch inserts
-it into the browser roster. It is written in React against
-`@deepseek-ai/dsh-client-ui-primitives` and
-`@deepseek-ai/dsh-client-ui-slots`. Both are absent from the installed tree
-(inlined into the shipped bundles, referenced by `.d.ts` only) and exist on
-npm at `0.0.1-rc.1`; the board build depends on them explicitly (verified:
-`dsh-client-runtime/lib/types/client/slots.d.ts:14-15`). The dsh frontend
-build emits its bundle in the client module format
-(`window.__ModuleLoader__.load({ id, factory })`). It mounts through the
-slot system (`ctx.slots.inject(...)`). The goal bar in the input dock and
-the plan seat are the precedents. The board package adds
-`@deepseek-ai/dsh-client-ui-primitives` and
-`@deepseek-ai/dsh-client-ui-slots` at `0.0.1-rc.1` as direct dependencies
-(decided; both are absent from the installed tree, inlined into the
-shipped bundles, referenced by `.d.ts` only — verified:
-`dsh-client-runtime/lib/types/client/slots.d.ts:14-15`). The board does
+The board ships as a client bundle inside the aidos package itself
+(decided 2026-08-22, replacing the earlier separate-package plan): the
+package.json declares `dsh.client` (`platform: "web"`) and exports
+`./client` at `lib/client.js`. build.mjs bundles `src/client/` with esbuild
+(browser, cjs, jsx automatic; react and every `@deepseek-ai/*` package
+external — the shell's module table provides them) and wraps the result in
+the `window.__ModuleLoader__.load({ id, factory })` facade, the same
+dotfiles-ai plugins recipe. The UI is hand-rolled React with plain CSS
+classes: `@deepseek-ai/dsh-client-ui-primitives` is not installed anywhere
+reachable (restricted scope, no local `.d.ts`), so depending on it would be
+unverifiable; the shipped plugins in this profile avoid it too. It mounts
+through the slot system (`ctx.slots.inject(...)`). The goal bar in the
+input dock and the plan seat are the precedents. The board does
 the following:
 
 - It registers a **Tickets view tab** beside Chat and Trajectory through the
@@ -620,8 +616,8 @@ personal bundle is a separate package, tracked in the dotfiles-ai plan.
    `cordis.patch.yml`:
    - inserts host rows: `aidos-core` (service, fold, invariant, projection
      units), `aidos-attachment-glue` if needed (evidence-to-attachment refs).
-   - inserts the browser roster row: `aidos-board` to
-     `@aidos/dsh-client-aidos-board`.
+   - the client bundle rides in the same package (no separate roster row:
+     `dsh.client` + the `./client` export are discovered by the scan).
    - inserts the `aidos` settings namespace row for gate and kind config.
 2. The **aidos preset** (agent plane): a directory with `agent.cordis.yml`
    (rows: `aidos-tools` via a relative path, the `tool:aidos` prompt section,
@@ -629,9 +625,8 @@ personal bundle is a separate package, tracked in the dotfiles-ai plan.
    board tools out of children) plus `preset.yml`. It sits alongside
    `standard` in the preset roster. Sessions pick it to opt into the ticket
    flow.
-3. `@aidos/dsh-client-aidos-board`: the React board, built to a `client.js`
-   bundle in the dsh client module format, with the `dsh.client` manifest and
-   `./client` export.
+3. The React board is item 1's own `./client` export (decided
+   2026-08-22; no separate board package).
 
 Patch layers apply in order: bundle patches, then the profile's
 `cordis.patch.yml`, then the home-level `$DSH_HOME/cordis.patch.yml` (home
@@ -1270,7 +1265,21 @@ work is the tools and the gate enforcement.
   send-back (U2c), the real create form (U2c), the cross-workspace global view and its
   `coldSnapshot` fetch, workspace badges, sync button, streaming fill, and partial-failure banner
   (U2d), and the per-ticket allowlist editor (U2e).
-  **Status: not started.**
+  **Implemented 2026-08-22, pending the hands-on GUI check.** Ships as the
+  aidos package's own `./client` export (`src/client/`, bundled to
+  `lib/client.js`): `board-logic.ts` under a 41-test contract
+  (tests/u2a-board-logic.test.ts), `FilterPanel`, the tile and grid, and
+  `LocalTicketView`. The tab badge rides the slot label: a thunk reads a
+  module-level count, and a count change re-registers the identical
+  conversation.view entry to bump the slot version, because the tab header
+  only re-renders on slot mutation and that remounts the view by design.
+  View state lives in a module-level per-session store, so the remount is
+  invisible. Two known limits: the badge count goes stale while the Tickets
+  tab is not mounted (it refreshes on entry), and the label shows the count
+  of the last session whose board mounted. The projection view gained
+  `updatedAt` and `workspaceKey` (host-side) so the Time-updated sort and
+  per-workspace filter storage work from live data. The pure logic is
+  verified; the visual checks below still need eyes on the real GUI.
   **Evaluate:**
   - The Tickets tab appears beside Chat and Trajectory. Its badge count changes live when a
     ticket's state changes, with no page reload.

@@ -8,5 +8,6 @@ scratch/
 # aidos package build artifacts (moved from packages/aidos/.gitignore)
 node_modules/
 dist/
+lib/
 coverage/
 presets/aidos/aidos-tools.js
