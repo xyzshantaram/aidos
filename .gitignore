@@ -5,9 +5,14 @@
 # dotfiles-ai/dsh and the plan/checklist files, not here)
 scratch/
 
-# aidos package build artifacts (moved from packages/aidos/.gitignore)
+# Build-only output that must NOT ship: rebuilt locally via
+# `pnpm build` / the `prepare` script. node_modules/ and coverage/ stay ignored.
 node_modules/
-dist/
-lib/
 coverage/
-presets/aidos/aidos-tools.js
+
+# The bundle artifacts below ARE committed on purpose. aidos is installed
+# from git (github:), and the package manager blocks git-hosted install-time
+# builds until allowBuilds is configured, so lib/client.js,
+# dist/host/aidos-plugin.js and presets/aidos/aidos-tools.js must ship from
+# the repo instead of being generated at install time.
+
