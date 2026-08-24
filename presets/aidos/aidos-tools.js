@@ -14722,6 +14722,7 @@ function date4(params) {
 config(en_default());
 
 // src/host/aidos-core.ts
+import { Session } from "@deepseek-ai/dsh-session";
 import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
@@ -15988,6 +15989,29 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     __publicField(this, "_caches", /* @__PURE__ */ new WeakMap());
     __publicField(this, "_resolvedConfig");
     registerAidosSessionEventTypes();
+    ctx.effect(() => {
+      const originalAppend = Session.prototype.append;
+      Session.prototype.append = function(type, data, ...opts) {
+        if (!AIDOS_EVENT_TYPES.has(type)) return originalAppend.call(this, type, data, ...opts);
+        const originalFreeze = Object.freeze;
+        let injected = false;
+        Object.freeze = function(obj) {
+          if (!injected && obj && typeof obj.type === "string" && AIDOS_EVENT_TYPES.has(obj.type)) {
+            obj.ignorable = true;
+            injected = true;
+          }
+          return originalFreeze.call(this, obj);
+        };
+        try {
+          return originalAppend.call(this, type, data, ...opts);
+        } finally {
+          Object.freeze = originalFreeze;
+        }
+      };
+      return () => {
+        Session.prototype.append = originalAppend;
+      };
+    });
     this._config = config2 ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -16286,6 +16310,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
       if (project.absPath === binding.absPath) {
         return { projectId: projectId2 };
       }
+    }
+    const presets = this.ctx.get("agentPresets");
+    if (presets && presets.composedPreset(agent.ctx) !== "aidos") {
+      throw new Error("aidos: _ensureProject called in non-aidos session");
     }
     const projectId = this._nextProjectId(cache.state);
     this._commit(agent, {

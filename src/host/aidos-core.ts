@@ -14,7 +14,8 @@ import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { z as zod } from "zod";
 import type { Agent } from "@deepseek-ai/dsh-agent";
-import type { Session, SessionEvent } from "@deepseek-ai/dsh-session";
+import { Session } from "@deepseek-ai/dsh-session";
+import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 // The Remote decorator and the Typert service base: the B2 human surface.
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
@@ -23,6 +24,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
+import { AIDOS_EVENT_TYPES } from "./invariant";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
 import { readFileSync } from "fs";
@@ -479,7 +481,32 @@ export class AidosService extends TypertRemoteService {
     // Register the aidos session event types with the host reader before any
     // session bootstrap append (project/created in _ensureProject below) can
     // happen. Idempotent; see ./session-events for the issue-#52 rationale.
-    registerAidosSessionEventTypes();
+registerAidosSessionEventTypes();
+
+    // Stamp ignorable:true onto aidos-typed events before deepFreeze runs.
+    // deepFreeze calls Object.freeze on the envelope first, so a temporary
+    // trap on Object.freeze catches it. Lifecycle-owned: restored on dispose.
+    ctx.effect(() => {
+      const originalAppend = Session.prototype.append;
+      Session.prototype.append = function (type: string, data: any, ...opts: any[]) {
+        if (!AIDOS_EVENT_TYPES.has(type)) return originalAppend.call(this, type, data, ...opts);
+        const originalFreeze = Object.freeze;
+        let injected = false;
+        Object.freeze = function (obj: any) {
+          if (!injected && obj && typeof obj.type === "string" && AIDOS_EVENT_TYPES.has(obj.type)) {
+            obj.ignorable = true;
+            injected = true;
+          }
+          return originalFreeze.call(this, obj);
+        };
+        try {
+          return originalAppend.call(this, type, data, ...opts);
+        } finally {
+          Object.freeze = originalFreeze;
+        }
+      };
+      return () => { Session.prototype.append = originalAppend; };
+    });
     this._config = config ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -856,6 +883,12 @@ export class AidosService extends TypertRemoteService {
       if (project.absPath === binding.absPath) {
         return { projectId };
       }
+}
+    // Gate: only create a project in aidos-preset sessions.  Standard
+    // sessions must never receive aidos events.
+    const presets = this.ctx.get("agentPresets");
+    if (presets && presets.composedPreset(agent.ctx) !== "aidos") {
+      throw new Error("aidos: _ensureProject called in non-aidos session");
     }
     const projectId = this._nextProjectId(cache.state);
     this._commit(agent, {
