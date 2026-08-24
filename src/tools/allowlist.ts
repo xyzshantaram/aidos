@@ -60,6 +60,8 @@ export function writeBoundaryReason(
   } catch {
     rows = [];
   }
+  // No tickets at all → standard session, no ticket machinery → pass through.
+  if (rows.length === 0) return undefined;
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
@@ -100,8 +102,20 @@ function fsIntentListener(
  * staleness bookkeeping.
  */
 export function installAllowlistGuard(ctx: Context): () => void {
-  const listener = (target: FsTarget, actor: object | undefined, next: () => unknown) =>
-    fsIntentListener(ctx, target, actor, next);
+  // Capture the owning session at registration time. During apply(ctx) the
+  // current initiator is the agent whose preset is being mounted. The
+  // listener compares every write's agent session against this reference;
+  // writes from other sessions (including standard sessions) pass through
+  // immediately without calling into the aidos service.
+  const ownSession = ctx.get("agents")?.currentInitiator()?.session;
+
+  const listener = (target: FsTarget, actor: object | undefined, next: () => unknown) => {
+    if (ownSession !== undefined) {
+      const agent = (actor as { agent?: Agent } | undefined)?.agent;
+      if (agent !== undefined && agent.session !== ownSession) return next();
+    }
+    return fsIntentListener(ctx, target, actor, next);
+  };
   const on = ctx.on as unknown as (
     name: string,
     listener: (target: FsTarget, actor: object | undefined, next: () => unknown) => unknown,

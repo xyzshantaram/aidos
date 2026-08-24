@@ -16966,6 +16966,7 @@ function writeBoundaryReason(ctx, agent, path) {
   } catch {
     rows = [];
   }
+  if (rows.length === 0) return void 0;
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
@@ -16982,7 +16983,14 @@ function fsIntentListener(ctx, target, actor, next) {
   return next();
 }
 function installAllowlistGuard(ctx) {
-  const listener = (target, actor, next) => fsIntentListener(ctx, target, actor, next);
+  const ownSession = ctx.get("agents")?.currentInitiator()?.session;
+  const listener = (target, actor, next) => {
+    if (ownSession !== void 0) {
+      const agent = actor?.agent;
+      if (agent !== void 0 && agent.session !== ownSession) return next();
+    }
+    return fsIntentListener(ctx, target, actor, next);
+  };
   const on = ctx.on;
   const writeDisposer = on(WRITE_INTENT, listener, { prepend: true });
   const editDisposer = on(EDIT_INTENT, listener, { prepend: true });
