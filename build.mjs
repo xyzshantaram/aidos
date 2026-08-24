@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import { readFile, writeFile, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 
 // The aidos-tools agent plugin, bundled so the preset directory is
 // self-contained. The dsh packages stay external: the loader resolves them
@@ -45,6 +45,7 @@ await build({
   logLevel: "info",
 });
 {
+  await mkdir("lib", { recursive: true });
   const bundled = (await readFile("dist/client/_client.bundle.js", "utf8")).replace(/\s+$/, "");
   await writeFile(
     "lib/client.js",
