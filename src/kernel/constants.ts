@@ -136,6 +136,6 @@ export const DEFAULT_CONFIG: AidosConfig = {
  * section's heading and text lines) may not exceed this many lines. Both
  * the write boundary (setPlanMeta) and the replay fold enforce it.
  */
-export const PLAN_CONTEXT_LIMIT = 500;
+export const PLAN_CONTEXT_LIMIT = 2000;
 
 export { STATE_ORDER };

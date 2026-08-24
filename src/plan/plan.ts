@@ -33,9 +33,6 @@ const CONTINUATION_PREFIX = "  ";
 
 // The marker that separates the body of a ticket from its criteria.
 const CRITERIA_MARKER = "**Evaluate:**";
-
-const PHASE_HEADING = /^## Phase (\d+):\s*(.+?)\s*\u2014\s*`([^`]*)`\s*$/;
-
 const TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+?)\.\*\*\s?(.*)$/;
 
 export interface PlanTicket {
@@ -47,18 +44,11 @@ export interface PlanTicket {
   order: number;
 }
 
-export interface PlanPhase {
-  number: number;
-  title: string;
-  state: string;
-  tickets: PlanTicket[];
-}
-
 export interface PlanDocument {
   frontmatter: string;
   preamble: string;
-  phases: PlanPhase[];
   contextSections: ContextSection[];
+  tickets: PlanTicket[];
 }
 
 /** The working data of one ticket before its body is complete. */
@@ -76,26 +66,47 @@ export function parsePlan(text: string): PlanDocument {
   const lines = text.split("\n");
   const frontmatter = _takeFrontmatter(lines);
   const preamble = _takePreamble(lines, frontmatter.index);
-  const phases: PlanPhase[] = [];
   const contextSections: ContextSection[] = [];
+  const rawTickets: RawTicket[] = [];
   let index = preamble.index;
   while (index < lines.length) {
-    const match = PHASE_HEADING.exec(lines[index]);
-    if (match) {
-      const phase = _takePhase(match, lines, index);
-      phases.push(phase.phase);
-      index = phase.index;
-    } else {
-      const section = _takeContextSection(lines, index, phases.length);
+    const line = lines[index];
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (_isHeading(line)) {
+      const section = _takeContextSection(lines, index);
       contextSections.push(section.section);
       index = section.index;
+      continue;
     }
+    if (line.startsWith(CONTINUATION_PREFIX)) {
+      if (rawTickets.length === 0) {
+        throw new PlanParseError(
+          index + 1,
+          `line ${index + 1} continues a ticket, but the document holds no ticket yet`,
+        );
+      }
+      rawTickets[rawTickets.length - 1].lines.push(line.trim());
+      index += 1;
+      continue;
+    }
+    const ticketMatch = TICKET_LINE.exec(line);
+    if (!ticketMatch) {
+      throw new PlanParseError(
+        index + 1,
+        `line ${index + 1} is neither a ticket line nor a continuation line`,
+      );
+    }
+    rawTickets.push(_startTicket(ticketMatch, index + 1, rawTickets.length + 1));
+    index += 1;
   }
   return {
     frontmatter: frontmatter.text,
     preamble: preamble.text,
-    phases,
     contextSections,
+    tickets: rawTickets.map((raw) => _finishTicket(raw)),
   };
 }
 
@@ -110,17 +121,11 @@ export function renderPlan(doc: PlanDocument): string {
   if (preamble) {
     blocks.push(preamble);
   }
-  const phases = doc.phases;
-  const sections = doc.contextSections;
-  for (let position = 0; position <= phases.length; position++) {
-    for (const section of sections) {
-      if (_sectionPosition(section, phases.length) === position) {
-        blocks.push(_renderContextSection(section));
-      }
-    }
-    if (position < phases.length) {
-      blocks.push(_renderPhase(phases[position]));
-    }
+  for (const section of doc.contextSections) {
+    blocks.push(_renderContextSection(section));
+  }
+  for (const ticket of doc.tickets) {
+    blocks.push(_renderTicket(ticket).join("\n"));
   }
   if (blocks.length === 0) {
     return "";
@@ -145,73 +150,41 @@ function _takeFrontmatter(
   throw new PlanParseError(1, "the frontmatter never closes");
 }
 
-/** The preamble text and the index of the first heading. */
+/** The preamble text and the index of the first heading or ticket. */
 function _takePreamble(
   lines: readonly string[],
   start: number,
 ): { text: string; index: number } {
   let index = start;
-  while (index < lines.length && !_isHeading(lines[index])) {
+  while (
+    index < lines.length &&
+    !_isHeading(lines[index]) &&
+    !TICKET_LINE.test(lines[index])
+  ) {
     index += 1;
   }
   return { text: _trimBlankLines(lines.slice(start, index)), index };
 }
 
-/** One phase and the index of the line that ends it. */
-function _takePhase(
-  match: RegExpExecArray,
-  lines: readonly string[],
-  start: number,
-): { phase: PlanPhase; index: number } {
-  const rawTickets: RawTicket[] = [];
-  let index = start + 1;
-  while (index < lines.length && !_isHeading(lines[index])) {
-    const line = lines[index];
-    const number = index + 1;
-    if (line.startsWith(CONTINUATION_PREFIX) && line.trim() !== "") {
-      if (rawTickets.length === 0) {
-        throw new PlanParseError(
-          number,
-          `line ${number} continues a ticket, but the phase holds no ticket yet`,
-        );
-      }
-      rawTickets[rawTickets.length - 1].lines.push(line.trim());
-    } else if (line.trim() !== "") {
-      const ticketMatch = TICKET_LINE.exec(line);
-      if (!ticketMatch) {
-        throw new PlanParseError(
-          number,
-          `line ${number} is neither a ticket line nor a continuation line`,
-        );
-      }
-      rawTickets.push(_startTicket(ticketMatch, number, rawTickets.length + 1));
-    }
-    index += 1;
-  }
-  const phase: PlanPhase = {
-    number: parseInt(match[1], 10),
-    title: match[2],
-    state: match[3],
-    tickets: rawTickets.map((raw) => _finishTicket(raw)),
-  };
-  return { phase, index };
-}
 
 /** One context section and the index of the line that ends it. */
 function _takeContextSection(
   lines: readonly string[],
   start: number,
-  phaseCount: number,
 ): { section: ContextSection; index: number } {
   let index = start + 1;
-  while (index < lines.length && !_isHeading(lines[index])) {
+  while (
+    index < lines.length &&
+    !_isHeading(lines[index]) &&
+    !TICKET_LINE.test(lines[index])
+  ) {
     index += 1;
   }
   return {
     section: {
       heading: lines[start].replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
-      index: phaseCount,
+      index: 0,
     },
     index,
   };
@@ -274,12 +247,6 @@ function _trimBlankLines(block: readonly string[]): string {
 
 // ---- writing ----
 
-/** The number of phases that come before one context section. */
-function _sectionPosition(section: ContextSection, phaseCount: number): number {
-  const position = section.index;
-  return Math.max(0, Math.min(position, phaseCount));
-}
-
 /** The text of one context section, heading first. */
 function _renderContextSection(section: ContextSection): string {
   const text = section.text.trim();
@@ -289,19 +256,6 @@ function _renderContextSection(section: ContextSection): string {
   return `${section.heading}\n\n${text}`;
 }
 
-/** The text of one phase, heading first, then every ticket. */
-function _renderPhase(phase: PlanPhase): string {
-  const lines = [
-    `## Phase ${phase.number}: ${phase.title} \u2014 \`${phase.state}\``,
-  ];
-  if (phase.tickets.length > 0) {
-    lines.push("");
-    for (const ticket of phase.tickets) {
-      lines.push(..._renderTicket(ticket));
-    }
-  }
-  return lines.join("\n");
-}
 
 /** The lines of one ticket. Line two onward carry two spaces. */
 function _renderTicket(ticket: PlanTicket): string[] {

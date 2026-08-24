@@ -50,6 +50,7 @@
     }
   },
   "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "0.0.1-rc.3",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

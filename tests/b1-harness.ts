@@ -35,11 +35,14 @@ import type {
   PreToolDecision,
   ToolDefinition,
   ToolExecution,
+  ToolExecutionInput,
+  ToolExecutionResult,
   ToolExecutionToken,
   ToolGuard,
   ToolRestriction,
   ToolRunContext,
 } from "@deepseek-ai/dsh-tools";
+import type { FsTarget } from "@deepseek-ai/dsh-fs";
 
 import { AidosService } from "../src/host/aidos-core";
 import type { AidosCoreConfig } from "../src/host/aidos-core";
@@ -140,6 +143,21 @@ export interface FakeTools {
   guard(guard: ToolGuard): () => void;
   restrict(filter: ToolRestriction): () => void;
   schemas(scope?: unknown): ToolSchema[];
+  execute(exec: ToolExecutionInput): Promise<ToolExecutionResult>;
+}
+
+/** The in-memory fake fs: resolves paths, reads and writes text. */
+export interface FakeFs {
+  resolve(path: string, opts?: { cwd?: string; signal?: AbortSignal }): Promise<FsTarget>;
+  readText(target: FsTarget, signal?: AbortSignal): Promise<string>;
+  writeText(
+    target: FsTarget,
+    content: string,
+    expected?: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ operation: "create" | "update"; version: unknown }>;
+  /** Direct test hook: the current content at one resolved path. */
+  contentOf(path: string): string | undefined;
 }
 
 /** One `systemPrompt.section` registration. */
@@ -437,6 +455,8 @@ export interface HarnessCtx {
   effect(callback: () => (() => void) | void): () => void;
   plugin(definition: unknown, config?: unknown): { dispose(): void };
   aidos?: AidosService;
+  /** The in-memory fake fs the scratch tools read and write through. */
+  fs?: FakeFs;
 }
 
 /** Clone one JSON-safe value so the log never aliases caller data. */
@@ -535,6 +555,44 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
   const tempDirs: string[] = [];
   const workspaces: FakeWorkspace[] = [];
 
+  // The in-memory fake fs backing the scratch tools. Keyed by resolved path;
+  // a missing key is an absent file (readText refuses, writeText creates).
+  const fsFiles = new Map<string, string>();
+  let fsVersionCounter = 0;
+  const fakeFs: FakeFs = {
+    async resolve(path, opts) {
+      const cwdOverride = opts?.cwd;
+      const base = cwdOverride !== undefined ? cwdOverride : cwd;
+      const resolved = path.startsWith("/") ? path : join(base, path);
+      return {
+        targetKey: resolved as unknown as FsTarget["targetKey"],
+        displayPath: resolved,
+      };
+    },
+    async readText(target, _signal) {
+      const key = (target as { displayPath: string }).displayPath;
+      const content = fsFiles.get(key);
+      if (content === undefined) {
+        throw new HarnessError(
+          JSON.stringify({ ok: false, error: "file_not_found", message: `no such file: ${key}` }),
+          "AIDOS_SCRATCH_READ_MISS",
+        );
+      }
+      return content;
+    },
+    async writeText(target, content, _expected, _signal) {
+      const key = (target as { displayPath: string }).displayPath;
+      const operation = fsFiles.has(key) ? "update" : "create";
+      fsFiles.set(key, content);
+      fsVersionCounter += 1;
+      return { operation, version: String(fsVersionCounter) };
+    },
+    contentOf(path) {
+      const resolved = path.startsWith("/") ? path : join(cwd, path);
+      return fsFiles.get(resolved);
+    },
+  };
+
   const approval: FakeApproval = {
     request: async () => "allowed-once",
   };
@@ -618,6 +676,7 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
           };
         },
         schemas: (scope) => shared.tools.schemas(scope),
+        execute: (exec) => shared.tools.execute(exec),
       },
       on: (type, listener, opts) => shared.on(type, listener, opts),
       get: (name) => shared.get(name),
@@ -689,6 +748,36 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
           description: definition.description,
           parameters: definition.parameters,
         }));
+      },
+      async execute(exec) {
+        const definition = toolMap.get(exec.name);
+        if (!definition) {
+          return {
+            isError: true,
+            error: { message: `tool "${exec.name}" is not registered through the harness` },
+            content: [{ type: "text", text: `Error: tool "${exec.name}" is not registered through the harness` }],
+          };
+        }
+        try {
+          const value = await definition.execute(
+            exec.arguments,
+            exec as unknown as ToolRunContext,
+          );
+          const content = definition.output.render(
+            exec.arguments,
+            value as import("@deepseek-ai/dsh-session").JsonValue,
+          );
+          return { isError: false, value: value as import("@deepseek-ai/dsh-session").JsonValue, content };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const info =
+            error instanceof HarnessError ? { name: error.name, code: error.code } : undefined;
+          return {
+            isError: true,
+            error: { message, ...(info ? { info } : {}) },
+            content: [{ type: "text", text: `Error: ${message}` }],
+          };
+        }
       },
     },
     systemPrompt: {
@@ -836,6 +925,7 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
       new ctor(ctx as unknown as Context, pluginConfig);
       return { dispose: () => undefined };
     },
+    fs: fakeFs,
   };
 
   ctxRef = ctx;

@@ -9,10 +9,12 @@ declare module "node:fs" {
   export function mkdtempSync(prefix: string): string;
   export function writeFileSync(path: string, data: string): void;
   export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
+  export function existsSync(path: string): boolean;
 }
 declare module "node:os" {
   export function tmpdir(): string;
 }
 declare module "node:path" {
   export function join(...paths: string[]): string;
+  export function isAbsolute(path: string): boolean;
 }

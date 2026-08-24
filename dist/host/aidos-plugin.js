@@ -14844,7 +14844,7 @@ var DEFAULT_CONFIG = {
   kinds: [...BUILTIN_KINDS],
   gates: [...DEFAULT_GATES]
 };
-var PLAN_CONTEXT_LIMIT = 500;
+var PLAN_CONTEXT_LIMIT = 2e3;
 
 // src/kernel/gates.ts
 function isLegalTransition(fromState, toState) {
@@ -15478,32 +15478,52 @@ var FENCE = "---";
 var HEADING_PREFIX = "## ";
 var CONTINUATION_PREFIX = "  ";
 var CRITERIA_MARKER = "**Evaluate:**";
-var PHASE_HEADING = /^## Phase (\d+):\s*(.+?)\s*\u2014\s*`([^`]*)`\s*$/;
 var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+?)\.\*\*\s?(.*)$/;
 function parsePlan(text) {
   const lines = text.split("\n");
   const frontmatter = _takeFrontmatter(lines);
   const preamble = _takePreamble(lines, frontmatter.index);
-  const phases = [];
   const contextSections = [];
+  const rawTickets = [];
   let index = preamble.index;
   while (index < lines.length) {
-    const match = PHASE_HEADING.exec(lines[index]);
-    if (match) {
-      const phase = _takePhase(match, lines, index);
-      phases.push(phase.phase);
-      index = phase.index;
-    } else {
-      const section = _takeContextSection(lines, index, phases.length);
+    const line = lines[index];
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (_isHeading(line)) {
+      const section = _takeContextSection(lines, index);
       contextSections.push(section.section);
       index = section.index;
+      continue;
     }
+    if (line.startsWith(CONTINUATION_PREFIX)) {
+      if (rawTickets.length === 0) {
+        throw new PlanParseError(
+          index + 1,
+          `line ${index + 1} continues a ticket, but the document holds no ticket yet`
+        );
+      }
+      rawTickets[rawTickets.length - 1].lines.push(line.trim());
+      index += 1;
+      continue;
+    }
+    const ticketMatch = TICKET_LINE.exec(line);
+    if (!ticketMatch) {
+      throw new PlanParseError(
+        index + 1,
+        `line ${index + 1} is neither a ticket line nor a continuation line`
+      );
+    }
+    rawTickets.push(_startTicket(ticketMatch, index + 1, rawTickets.length + 1));
+    index += 1;
   }
   return {
     frontmatter: frontmatter.text,
     preamble: preamble.text,
-    phases,
-    contextSections
+    contextSections,
+    tickets: rawTickets.map((raw) => _finishTicket(raw))
   };
 }
 function renderPlan(doc) {
@@ -15516,17 +15536,11 @@ function renderPlan(doc) {
   if (preamble) {
     blocks.push(preamble);
   }
-  const phases = doc.phases;
-  const sections = doc.contextSections;
-  for (let position = 0; position <= phases.length; position++) {
-    for (const section of sections) {
-      if (_sectionPosition(section, phases.length) === position) {
-        blocks.push(_renderContextSection(section));
-      }
-    }
-    if (position < phases.length) {
-      blocks.push(_renderPhase(phases[position]));
-    }
+  for (const section of doc.contextSections) {
+    blocks.push(_renderContextSection(section));
+  }
+  for (const ticket of doc.tickets) {
+    blocks.push(_renderTicket(ticket).join("\n"));
   }
   if (blocks.length === 0) {
     return "";
@@ -15546,55 +15560,21 @@ function _takeFrontmatter(lines) {
 }
 function _takePreamble(lines, start) {
   let index = start;
-  while (index < lines.length && !_isHeading(lines[index])) {
+  while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
     index += 1;
   }
   return { text: _trimBlankLines(lines.slice(start, index)), index };
 }
-function _takePhase(match, lines, start) {
-  const rawTickets = [];
+function _takeContextSection(lines, start) {
   let index = start + 1;
-  while (index < lines.length && !_isHeading(lines[index])) {
-    const line = lines[index];
-    const number4 = index + 1;
-    if (line.startsWith(CONTINUATION_PREFIX) && line.trim() !== "") {
-      if (rawTickets.length === 0) {
-        throw new PlanParseError(
-          number4,
-          `line ${number4} continues a ticket, but the phase holds no ticket yet`
-        );
-      }
-      rawTickets[rawTickets.length - 1].lines.push(line.trim());
-    } else if (line.trim() !== "") {
-      const ticketMatch = TICKET_LINE.exec(line);
-      if (!ticketMatch) {
-        throw new PlanParseError(
-          number4,
-          `line ${number4} is neither a ticket line nor a continuation line`
-        );
-      }
-      rawTickets.push(_startTicket(ticketMatch, number4, rawTickets.length + 1));
-    }
-    index += 1;
-  }
-  const phase = {
-    number: parseInt(match[1], 10),
-    title: match[2],
-    state: match[3],
-    tickets: rawTickets.map((raw) => _finishTicket(raw))
-  };
-  return { phase, index };
-}
-function _takeContextSection(lines, start, phaseCount) {
-  let index = start + 1;
-  while (index < lines.length && !_isHeading(lines[index])) {
+  while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
     index += 1;
   }
   return {
     section: {
       heading: lines[start].replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
-      index: phaseCount
+      index: 0
     },
     index
   };
@@ -15642,10 +15622,6 @@ function _trimBlankLines(block) {
   }
   return block.slice(start, end).join("\n");
 }
-function _sectionPosition(section, phaseCount) {
-  const position = section.index;
-  return Math.max(0, Math.min(position, phaseCount));
-}
 function _renderContextSection(section) {
   const text = section.text.trim();
   if (!text) {
@@ -15654,18 +15630,6 @@ function _renderContextSection(section) {
   return `${section.heading}
 
 ${text}`;
-}
-function _renderPhase(phase) {
-  const lines = [
-    `## Phase ${phase.number}: ${phase.title} \u2014 \`${phase.state}\``
-  ];
-  if (phase.tickets.length > 0) {
-    lines.push("");
-    for (const ticket of phase.tickets) {
-      lines.push(..._renderTicket(ticket));
-    }
-  }
-  return lines.join("\n");
 }
 function _renderTicket(ticket) {
   const head = `- [${STATE_MARKS[ticket.claimedState]}] **Ticket ${ticket.id}: ${ticket.title}.**`;
@@ -15988,7 +15952,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     registerAidosSessionEventTypes();
     ctx.effect(() => {
       const originalAppend = Session.prototype.append;
-      Session.prototype.append = function(type, data, ...opts) {
+      const patchedAppend = function(type, data, ...opts) {
         if (!AIDOS_EVENT_TYPES.has(type)) return originalAppend.call(this, type, data, ...opts);
         const originalFreeze = Object.freeze;
         let injected = false;
@@ -16005,6 +15969,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
           Object.freeze = originalFreeze;
         }
       };
+      Session.prototype.append = patchedAppend;
       return () => {
         Session.prototype.append = originalAppend;
       };
@@ -16091,25 +16056,19 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
       throw new UnknownProject(projectId);
     }
     const meta3 = this._planMetaOf(projectId, cache.state);
-    const rows = this._ticketsFor(projectId, cache.state);
-    const phases = this._phasesFor(projectId, cache.state).map((phase) => ({
-      number: phase.number,
-      title: phase.title,
-      state: phase.state,
-      tickets: rows.filter((row) => row.phase === phase.number).map((row) => ({
-        id: String(row.id),
-        title: row.title,
-        body: row.body,
-        criteria: row.criteria,
-        claimedState: row.state,
-        order: row.order
-      }))
+    const tickets = this._ticketsFor(projectId, cache.state).map((row) => ({
+      id: String(row.id),
+      title: row.title,
+      body: row.body,
+      criteria: row.criteria,
+      claimedState: row.state,
+      order: row.order
     }));
     return renderPlan({
       frontmatter: meta3.frontmatter,
       preamble: meta3.preamble,
-      phases,
-      contextSections: meta3.contextSections
+      contextSections: meta3.contextSections,
+      tickets
     });
   }
   // ---- writes ----
@@ -16184,34 +16143,22 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
       at: this._now()
     });
     const ticketIds = [];
-    for (const phase of document.phases) {
-      this._commit(agent, {
-        kind: "phase/set",
-        version: 1,
-        projectId,
-        number: phase.number,
-        title: phase.title,
-        state: phase.state,
-        at: this._now()
+    for (const ticket of document.tickets) {
+      const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
+        body: ticket.body,
+        criteria: ticket.criteria,
+        order: ticket.order
       });
-      for (const ticket of phase.tickets) {
-        const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
-          body: ticket.body,
-          criteria: ticket.criteria,
-          phase: phase.number,
-          order: ticket.order
-        });
-        this._attachEvidenceInternal(
-          agent,
-          ticketId,
-          "builtin:imported_state",
-          { claimed_state: ticket.claimedState, source: args.file },
-          "system"
-        );
-        ticketIds.push(ticketId);
-      }
+      this._attachEvidenceInternal(
+        agent,
+        ticketId,
+        "builtin:imported_state",
+        { claimed_state: ticket.claimedState, source: args.file },
+        "system"
+      );
+      ticketIds.push(ticketId);
     }
-    return { phases: document.phases.map((phase) => phase.number), tickets: ticketIds };
+    return { tickets: ticketIds };
   }
   // ---- internals: the session port ----
   /** The per-session fold cache, seeding once from the session log. */
@@ -16592,6 +16539,20 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     if (!def.allowedAuthors.includes(actor)) {
       throw new EvidenceAuthorRefused(kind, actor);
     }
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (snapshot !== void 0 && payload.criteria !== void 0) {
+      const criteria = payload.criteria;
+      if (typeof criteria !== "string") {
+        throw new BadPayloadError("the payload.criteria must be a string");
+      }
+      const lines = criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      const valid = snapshot.criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      for (const line of lines) {
+        if (!valid.includes(line)) {
+          throw new BadPayloadError("evidence criterion " + JSON.stringify(line) + " is not one of the ticket's criteria");
+        }
+      }
+    }
     const row = {
       kind,
       author: actor,
@@ -16643,16 +16604,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     }
     rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
     return rows;
-  }
-  _phasesFor(projectId, state) {
-    const phases = state.phases.get(projectId);
-    if (!phases) return [];
-    return [...phases.entries()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({
-      projectId,
-      number: number4,
-      title: phase.title,
-      state: phase.state
-    }));
   }
   _planMetaOf(projectId, state) {
     const plan = state.plans.get(projectId);

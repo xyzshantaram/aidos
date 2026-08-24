@@ -53,8 +53,8 @@ var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "acce
 
 // src/tools/aidos-tools.ts
 import z3 from "@deepseek-ai/schemastery";
-import { defineTool } from "@deepseek-ai/dsh-tools";
-import { HarnessError } from "@deepseek-ai/dsh-llm";
+import { defineTool as defineTool2 } from "@deepseek-ai/dsh-tools";
+import { HarnessError as HarnessError2 } from "@deepseek-ai/dsh-llm";
 import { delegationDepthOf as delegationDepthOf2 } from "@deepseek-ai/dsh-subagent";
 
 // src/kernel/types.ts
@@ -14847,7 +14847,7 @@ var DEFAULT_CONFIG = {
   kinds: [...BUILTIN_KINDS],
   gates: [...DEFAULT_GATES]
 };
-var PLAN_CONTEXT_LIMIT = 500;
+var PLAN_CONTEXT_LIMIT = 2e3;
 
 // src/kernel/gates.ts
 function isLegalTransition(fromState, toState) {
@@ -15481,32 +15481,52 @@ var FENCE = "---";
 var HEADING_PREFIX = "## ";
 var CONTINUATION_PREFIX = "  ";
 var CRITERIA_MARKER = "**Evaluate:**";
-var PHASE_HEADING = /^## Phase (\d+):\s*(.+?)\s*\u2014\s*`([^`]*)`\s*$/;
 var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+?)\.\*\*\s?(.*)$/;
 function parsePlan(text) {
   const lines = text.split("\n");
   const frontmatter = _takeFrontmatter(lines);
   const preamble = _takePreamble(lines, frontmatter.index);
-  const phases = [];
   const contextSections = [];
+  const rawTickets = [];
   let index = preamble.index;
   while (index < lines.length) {
-    const match = PHASE_HEADING.exec(lines[index]);
-    if (match) {
-      const phase = _takePhase(match, lines, index);
-      phases.push(phase.phase);
-      index = phase.index;
-    } else {
-      const section = _takeContextSection(lines, index, phases.length);
+    const line = lines[index];
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (_isHeading(line)) {
+      const section = _takeContextSection(lines, index);
       contextSections.push(section.section);
       index = section.index;
+      continue;
     }
+    if (line.startsWith(CONTINUATION_PREFIX)) {
+      if (rawTickets.length === 0) {
+        throw new PlanParseError(
+          index + 1,
+          `line ${index + 1} continues a ticket, but the document holds no ticket yet`
+        );
+      }
+      rawTickets[rawTickets.length - 1].lines.push(line.trim());
+      index += 1;
+      continue;
+    }
+    const ticketMatch = TICKET_LINE.exec(line);
+    if (!ticketMatch) {
+      throw new PlanParseError(
+        index + 1,
+        `line ${index + 1} is neither a ticket line nor a continuation line`
+      );
+    }
+    rawTickets.push(_startTicket(ticketMatch, index + 1, rawTickets.length + 1));
+    index += 1;
   }
   return {
     frontmatter: frontmatter.text,
     preamble: preamble.text,
-    phases,
-    contextSections
+    contextSections,
+    tickets: rawTickets.map((raw) => _finishTicket(raw))
   };
 }
 function renderPlan(doc) {
@@ -15519,17 +15539,11 @@ function renderPlan(doc) {
   if (preamble) {
     blocks.push(preamble);
   }
-  const phases = doc.phases;
-  const sections = doc.contextSections;
-  for (let position = 0; position <= phases.length; position++) {
-    for (const section of sections) {
-      if (_sectionPosition(section, phases.length) === position) {
-        blocks.push(_renderContextSection(section));
-      }
-    }
-    if (position < phases.length) {
-      blocks.push(_renderPhase(phases[position]));
-    }
+  for (const section of doc.contextSections) {
+    blocks.push(_renderContextSection(section));
+  }
+  for (const ticket of doc.tickets) {
+    blocks.push(_renderTicket(ticket).join("\n"));
   }
   if (blocks.length === 0) {
     return "";
@@ -15549,55 +15563,21 @@ function _takeFrontmatter(lines) {
 }
 function _takePreamble(lines, start) {
   let index = start;
-  while (index < lines.length && !_isHeading(lines[index])) {
+  while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
     index += 1;
   }
   return { text: _trimBlankLines(lines.slice(start, index)), index };
 }
-function _takePhase(match, lines, start) {
-  const rawTickets = [];
+function _takeContextSection(lines, start) {
   let index = start + 1;
-  while (index < lines.length && !_isHeading(lines[index])) {
-    const line = lines[index];
-    const number4 = index + 1;
-    if (line.startsWith(CONTINUATION_PREFIX) && line.trim() !== "") {
-      if (rawTickets.length === 0) {
-        throw new PlanParseError(
-          number4,
-          `line ${number4} continues a ticket, but the phase holds no ticket yet`
-        );
-      }
-      rawTickets[rawTickets.length - 1].lines.push(line.trim());
-    } else if (line.trim() !== "") {
-      const ticketMatch = TICKET_LINE.exec(line);
-      if (!ticketMatch) {
-        throw new PlanParseError(
-          number4,
-          `line ${number4} is neither a ticket line nor a continuation line`
-        );
-      }
-      rawTickets.push(_startTicket(ticketMatch, number4, rawTickets.length + 1));
-    }
-    index += 1;
-  }
-  const phase = {
-    number: parseInt(match[1], 10),
-    title: match[2],
-    state: match[3],
-    tickets: rawTickets.map((raw) => _finishTicket(raw))
-  };
-  return { phase, index };
-}
-function _takeContextSection(lines, start, phaseCount) {
-  let index = start + 1;
-  while (index < lines.length && !_isHeading(lines[index])) {
+  while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
     index += 1;
   }
   return {
     section: {
       heading: lines[start].replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
-      index: phaseCount
+      index: 0
     },
     index
   };
@@ -15645,10 +15625,6 @@ function _trimBlankLines(block) {
   }
   return block.slice(start, end).join("\n");
 }
-function _sectionPosition(section, phaseCount) {
-  const position = section.index;
-  return Math.max(0, Math.min(position, phaseCount));
-}
 function _renderContextSection(section) {
   const text = section.text.trim();
   if (!text) {
@@ -15657,18 +15633,6 @@ function _renderContextSection(section) {
   return `${section.heading}
 
 ${text}`;
-}
-function _renderPhase(phase) {
-  const lines = [
-    `## Phase ${phase.number}: ${phase.title} \u2014 \`${phase.state}\``
-  ];
-  if (phase.tickets.length > 0) {
-    lines.push("");
-    for (const ticket of phase.tickets) {
-      lines.push(..._renderTicket(ticket));
-    }
-  }
-  return lines.join("\n");
 }
 function _renderTicket(ticket) {
   const head = `- [${STATE_MARKS[ticket.claimedState]}] **Ticket ${ticket.id}: ${ticket.title}.**`;
@@ -15991,7 +15955,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     registerAidosSessionEventTypes();
     ctx.effect(() => {
       const originalAppend = Session.prototype.append;
-      Session.prototype.append = function(type, data, ...opts) {
+      const patchedAppend = function(type, data, ...opts) {
         if (!AIDOS_EVENT_TYPES.has(type)) return originalAppend.call(this, type, data, ...opts);
         const originalFreeze = Object.freeze;
         let injected = false;
@@ -16008,6 +15972,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
           Object.freeze = originalFreeze;
         }
       };
+      Session.prototype.append = patchedAppend;
       return () => {
         Session.prototype.append = originalAppend;
       };
@@ -16094,25 +16059,19 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
       throw new UnknownProject(projectId);
     }
     const meta3 = this._planMetaOf(projectId, cache.state);
-    const rows = this._ticketsFor(projectId, cache.state);
-    const phases = this._phasesFor(projectId, cache.state).map((phase) => ({
-      number: phase.number,
-      title: phase.title,
-      state: phase.state,
-      tickets: rows.filter((row) => row.phase === phase.number).map((row) => ({
-        id: String(row.id),
-        title: row.title,
-        body: row.body,
-        criteria: row.criteria,
-        claimedState: row.state,
-        order: row.order
-      }))
+    const tickets = this._ticketsFor(projectId, cache.state).map((row) => ({
+      id: String(row.id),
+      title: row.title,
+      body: row.body,
+      criteria: row.criteria,
+      claimedState: row.state,
+      order: row.order
     }));
     return renderPlan({
       frontmatter: meta3.frontmatter,
       preamble: meta3.preamble,
-      phases,
-      contextSections: meta3.contextSections
+      contextSections: meta3.contextSections,
+      tickets
     });
   }
   // ---- writes ----
@@ -16187,34 +16146,22 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
       at: this._now()
     });
     const ticketIds = [];
-    for (const phase of document.phases) {
-      this._commit(agent, {
-        kind: "phase/set",
-        version: 1,
-        projectId,
-        number: phase.number,
-        title: phase.title,
-        state: phase.state,
-        at: this._now()
+    for (const ticket of document.tickets) {
+      const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
+        body: ticket.body,
+        criteria: ticket.criteria,
+        order: ticket.order
       });
-      for (const ticket of phase.tickets) {
-        const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
-          body: ticket.body,
-          criteria: ticket.criteria,
-          phase: phase.number,
-          order: ticket.order
-        });
-        this._attachEvidenceInternal(
-          agent,
-          ticketId,
-          "builtin:imported_state",
-          { claimed_state: ticket.claimedState, source: args.file },
-          "system"
-        );
-        ticketIds.push(ticketId);
-      }
+      this._attachEvidenceInternal(
+        agent,
+        ticketId,
+        "builtin:imported_state",
+        { claimed_state: ticket.claimedState, source: args.file },
+        "system"
+      );
+      ticketIds.push(ticketId);
     }
-    return { phases: document.phases.map((phase) => phase.number), tickets: ticketIds };
+    return { tickets: ticketIds };
   }
   // ---- internals: the session port ----
   /** The per-session fold cache, seeding once from the session log. */
@@ -16595,6 +16542,20 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     if (!def.allowedAuthors.includes(actor)) {
       throw new EvidenceAuthorRefused(kind, actor);
     }
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (snapshot !== void 0 && payload.criteria !== void 0) {
+      const criteria = payload.criteria;
+      if (typeof criteria !== "string") {
+        throw new BadPayloadError("the payload.criteria must be a string");
+      }
+      const lines = criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      const valid = snapshot.criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      for (const line of lines) {
+        if (!valid.includes(line)) {
+          throw new BadPayloadError("evidence criterion " + JSON.stringify(line) + " is not one of the ticket's criteria");
+        }
+      }
+    }
     const row = {
       kind,
       author: actor,
@@ -16646,16 +16607,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     }
     rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
     return rows;
-  }
-  _phasesFor(projectId, state) {
-    const phases = state.phases.get(projectId);
-    if (!phases) return [];
-    return [...phases.entries()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({
-      projectId,
-      number: number4,
-      title: phase.title,
-      state: phase.state
-    }));
   }
   _planMetaOf(projectId, state) {
     const plan = state.plans.get(projectId);
@@ -16966,6 +16917,210 @@ function installBashAskListener(ctx) {
   );
 }
 
+// src/tools/scratch.ts
+import { isAbsolute as isAbsolute2, join as join2 } from "path";
+import { mkdirSync } from "fs";
+import { HarnessError } from "@deepseek-ai/dsh-llm";
+import { defineTool } from "@deepseek-ai/dsh-tools";
+import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
+function scratchRootForAgent(agent) {
+  const cwd = agent?.session?.header?.cwd;
+  if (!cwd) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "no_workspace_cwd", message: "the session has no cwd; scratch requires a workspace" }),
+      "AIDOS_NO_WORKSPACE_CWD"
+    );
+  }
+  const workspaceKey = workspaceKeyFromPath(cwd);
+  return dshHomePath("aidos", "scratch", workspaceKey);
+}
+function resolveScratchPath(root, path) {
+  if (path.length === 0) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "empty_path", message: "scratch path must not be empty" }),
+      "AIDOS_SCRATCH_EMPTY_PATH"
+    );
+  }
+  const normalized = isAbsolute2(path) ? path : join2(root, path);
+  if (normalized !== root && !normalized.startsWith(root + "/")) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
+      "AIDOS_SCRATCH_PATH_ESCAPE"
+    );
+  }
+  return normalized;
+}
+function callingAgent(exec) {
+  const agent = exec.agent;
+  if (!agent) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "agent_required",
+        message: "the scratch tools require a calling agent"
+      }),
+      "AIDOS_AGENT_REQUIRED"
+    );
+  }
+  return agent;
+}
+function renderJson(_args, value) {
+  return [{ type: "text", text: JSON.stringify(value) }];
+}
+function registerScratchTools(ctx) {
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_read",
+      description: "Read one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
+      parameters: {
+        path: { type: "string", required: true, description: "The file to read, relative to the scratch root or absolute under it." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true },
+            content: { type: "string", required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
+        const content = await ctx.fs.readText(target, exec.signal);
+        return { ok: true, path: absPath, scratch_root: root, content };
+      }
+    })
+  );
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_write",
+      description: "Write one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused. The agent writes freely here: no allowlist membership is required.",
+      parameters: {
+        path: { type: "string", required: true, description: "The file to write, relative to the scratch root or absolute under it." },
+        content: { type: "string", required: true, description: "The full UTF-8 text content to write." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true },
+            operation: { type: "string", enum: ["create", "update"], required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
+        const outcome = await ctx.fs.writeText(target, args.content, void 0, exec.signal);
+        return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
+      }
+    })
+  );
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_edit",
+      description: "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Accepts the same edit arguments (old_string, new_string, replace_all) plus a scratch-relative path. The path is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
+      parameters: {
+        path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
+        old_string: { type: "string", required: true, description: "The literal text to replace." },
+        new_string: { type: "string", required: true, description: "The literal replacement text." },
+        replace_all: { type: "boolean", description: "When true, replace every match instead of requiring exactly one." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true },
+            message: { type: "string", required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        const editDef = ctx.tools.get("edit", agent);
+        if (!editDef) {
+          throw new HarnessError(
+            JSON.stringify({ ok: false, error: "edit_tool_unavailable", message: "the edit tool is not registered in this scope" }),
+            "AIDOS_EDIT_TOOL_UNAVAILABLE"
+          );
+        }
+        const delegated = await ctx.tools.execute({
+          callId: exec.callId,
+          rootCallId: exec.rootCallId,
+          name: "edit",
+          arguments: {
+            file_path: absPath,
+            old_string: args.old_string,
+            new_string: args.new_string,
+            replace_all: args.replace_all
+          },
+          agent: exec.agent,
+          parent: exec.token,
+          signal: exec.signal
+        });
+        if (delegated.isError) {
+          const code = delegated.error.info?.code;
+          const message2 = delegated.error.message ?? "edit delegation failed";
+          throw new HarnessError(
+            JSON.stringify({ ok: false, error: "edit_delegation_failed", code, message: message2 }),
+            code ?? "AIDOS_EDIT_DELEGATION_FAILED"
+          );
+        }
+        const content = delegated.content[0];
+        const message = content && content.type === "text" ? content.text : "edited";
+        return { ok: true, path: absPath, scratch_root: root, message };
+      }
+    })
+  );
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_mkdir",
+      description: "Create a directory under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
+      parameters: {
+        path: { type: "string", required: true, description: "The directory to create, relative to the scratch root or absolute under it." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        mkdirSync(absPath, { recursive: true });
+        return { ok: true, path: absPath, scratch_root: root };
+      }
+    })
+  );
+}
+
 // src/tools/allowlist.ts
 var WRITE_INTENT = "fs/write-intent";
 var EDIT_INTENT = "fs/edit-intent";
@@ -16986,6 +17141,11 @@ var FsWriteRefused = class extends Error {
 };
 function writeBoundaryReason(ctx, agent, path) {
   if (agent === void 0) return void 0;
+  try {
+    const scratchRoot = scratchRootForAgent(agent);
+    if (path === scratchRoot || path.startsWith(scratchRoot + "/")) return void 0;
+  } catch {
+  }
   const union2 = ctx.aidos ? ctx.aidos.allowlistUnion(agent) : [];
   if (pathAllowed(path, union2)) return void 0;
   let rows = [];
@@ -17073,19 +17233,19 @@ function present(title, kind, rawInput) {
     ...rawInput === void 0 ? {} : { rawInput }
   };
 }
-function renderJson(_args, value) {
+function renderJson2(_args, value) {
   return [{ type: "text", text: JSON.stringify(value) }];
 }
 function orchestratorAgent(exec) {
   const agent = exec.agent;
   if (!agent) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "agent_required", message: "the board tools require a calling agent" }),
       "AIDOS_AGENT_REQUIRED"
     );
   }
   if (delegationDepthOf2(agent) !== 0) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
       "AIDOS_ORCHESTRATOR_ONLY"
     );
@@ -17094,19 +17254,19 @@ function orchestratorAgent(exec) {
 }
 function refusal(error51, overrides) {
   if (error51 instanceof UnknownProject) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "unknown_project", projectId: error51.projectId, message: error51.message }),
       "unknown_project"
     );
   }
   if (error51 instanceof UnknownTicket) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "unknown_ticket", ticketId: error51.ticketId, message: error51.message }),
       "unknown_ticket"
     );
   }
   if (error51 instanceof GateRefused) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({
         ok: false,
         error: "gate_refused",
@@ -17121,14 +17281,14 @@ function refusal(error51, overrides) {
   }
   if (error51 instanceof UnknownKind) {
     const kind = overrides?.kind ?? error51.kind;
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "unknown_kind", kind, message: `no evidence kind with id ${kind}` }),
       "unknown_kind"
     );
   }
   if (error51 instanceof EvidenceAuthorRefused) {
     const kind = overrides?.kind ?? error51.kind;
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({
         ok: false,
         error: "human_only_kind",
@@ -17139,43 +17299,43 @@ function refusal(error51, overrides) {
     );
   }
   if (error51 instanceof PlanParseError) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "plan_parse_error", line: error51.line, message: error51.message }),
       "plan_parse_error"
     );
   }
   if (error51 instanceof ProjectNotEmptyError) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "project_not_empty", projectId: error51.projectId, message: error51.message }),
       "project_not_empty"
     );
   }
   if (error51 instanceof ContextTooLongError) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "context_too_long", overage: error51.overage, message: error51.message }),
       "context_too_long"
     );
   }
   if (error51 instanceof BadPayloadError) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "bad_payload", message: error51.message }),
       "bad_payload"
     );
   }
   if (error51 instanceof FileNotReadError) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "file_not_read", path: error51.path, message: error51.message }),
       "file_not_read"
     );
   }
   if (error51 instanceof InvariantError) {
-    throw new HarnessError(
+    throw new HarnessError2(
       JSON.stringify({ ok: false, error: "invariant", message: error51.message }),
       "INVARIANT"
     );
   }
   const message = error51 instanceof Error ? error51.message : String(error51);
-  throw new HarnessError(
+  throw new HarnessError2(
     JSON.stringify({ ok: false, error: "tool_error", message }),
     "AIDOS_TOOL_ERROR"
   );
@@ -17183,7 +17343,7 @@ function refusal(error51, overrides) {
 var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, subagent_report); user_signoff and user_verified are the human's to supply, never yours. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them.";
 function registerGetTickets(ctx) {
   ctx.tools.register(
-    defineTool({
+    defineTool2({
       name: "get_tickets",
       description: "Read the board rows of the session's project: every ticket with its state, confidence score, and gate fraction, sorted by phase and order.",
       parameters: {
@@ -17201,7 +17361,7 @@ function registerGetTickets(ctx) {
             tickets: { type: "array", required: true, items: TICKET_VIEW_SCHEMA }
           }
         },
-        render: renderJson
+        render: renderJson2
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
@@ -17221,7 +17381,7 @@ function registerGetTickets(ctx) {
 }
 function registerSetTicket(ctx) {
   ctx.tools.register(
-    defineTool({
+    defineTool2({
       name: "set_ticket",
       description: "Create or edit one ticket. With no ticketId it creates a ticket in open (title required; the phase is created when absent, titled 'Untitled phase'). With a ticketId it edits the named fields; an absent field leaves its value. It never changes a ticket's state.",
       parameters: {
@@ -17248,7 +17408,7 @@ function registerSetTicket(ctx) {
             ticket: TICKET_ROW_SCHEMA
           }
         },
-        render: renderJson
+        render: renderJson2
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
@@ -17265,7 +17425,7 @@ function registerSetTicket(ctx) {
 }
 function registerAttachEvidence(ctx) {
   ctx.tools.register(
-    defineTool({
+    defineTool2({
       name: "attach_evidence",
       description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_note, subagent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them.",
       parameters: {
@@ -17292,7 +17452,7 @@ function registerAttachEvidence(ctx) {
             payload: { type: "object", additionalProperties: true, required: true }
           }
         },
-        render: renderJson
+        render: renderJson2
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
@@ -17318,7 +17478,7 @@ function registerAttachEvidence(ctx) {
 }
 function registerMoveTicket(ctx) {
   ctx.tools.register(
-    defineTool({
+    defineTool2({
       name: "move_ticket",
       description: "Move one ticket along a legal transition. The gate enforces the move: the refusal names the missing evidence kinds and the actors allowed to supply them. An agent never reaches done: only a human marks a ticket done.",
       parameters: {
@@ -17336,7 +17496,7 @@ function registerMoveTicket(ctx) {
             toState: { ...STATE_SCHEMA, required: true }
           }
         },
-        render: renderJson
+        render: renderJson2
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
@@ -17353,9 +17513,9 @@ function registerMoveTicket(ctx) {
 }
 function registerPlan(ctx) {
   ctx.tools.register(
-    defineTool({
+    defineTool2({
       name: "plan",
-      description: "Serialize one project's plan as markdown: frontmatter, preamble, phases with the real state marks, and the context sections. The one tool whose result is the plan text, not JSON.",
+      description: "Serialize one project's plan as markdown: frontmatter, preamble, the context sections, and every ticket on its own line with the real state mark. The one tool whose result is the plan text, not JSON.",
       parameters: {
         projectId: {
           type: "integer",
@@ -17380,7 +17540,7 @@ function registerPlan(ctx) {
 }
 function registerPlanImport(ctx) {
   ctx.tools.register(
-    defineTool({
+    defineTool2({
       name: "plan_import",
       description: "Load one plan document into an empty project. The file is read from the session's workspace. A parse error imports nothing and names the line; a project that already holds a ticket refuses; every imported ticket lands in open with the document's claimed state kept as builtin:imported_state evidence.",
       parameters: {
@@ -17400,17 +17560,16 @@ function registerPlanImport(ctx) {
           additionalProperties: false,
           properties: {
             ok: { type: "boolean", const: true, required: true },
-            phases: { type: "array", items: { type: "integer" }, required: true },
             tickets: { type: "array", items: { type: "integer" }, required: true }
           }
         },
-        render: renderJson
+        render: renderJson2
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
         try {
-          const result = ctx.aidos.planImport(agent, { file: args.file, projectId: args.projectId });
-          return { ok: true, phases: result.phases, tickets: result.tickets };
+          const result = await ctx.aidos.planImport(agent, args);
+          return { ok: true, tickets: result.tickets };
         } catch (error51) {
           refusal(error51);
         }
@@ -17423,7 +17582,7 @@ function apply(ctx, config2) {
   ctx.systemPrompt.section({
     name: "tool:aidos",
     order: 113,
-    text: AIDOS_GUIDANCE
+    text: aidosGuidanceText(ctx)
   });
   registerGetTickets(ctx);
   registerSetTicket(ctx);
@@ -17431,11 +17590,26 @@ function apply(ctx, config2) {
   registerMoveTicket(ctx);
   registerPlan(ctx);
   registerPlanImport(ctx);
+  registerScratchTools(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installBashAskListener(ctx);
   installAllowlistGuard(ctx);
   void config2;
+}
+function aidosGuidanceText(ctx) {
+  const agent = ctx.get("agents")?.currentInitiator();
+  let note = "";
+  if (agent !== void 0) {
+    try {
+      const root = scratchRootForAgent(agent);
+      note = ` The scratch workspace for this session is at ${root}.
+`;
+    } catch {
+      note = "";
+    }
+  }
+  return AIDOS_GUIDANCE + note;
 }
 export {
   Config,

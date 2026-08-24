@@ -4,13 +4,12 @@
  */
 
 import { parsePlan, renderPlan } from "./plan";
-import type { PlanPhase, PlanTicket } from "./plan";
+import type { PlanTicket } from "./plan";
 import { ProjectNotEmptyError } from "../kernel/types";
 import type { ProjectId, TicketId } from "../kernel/types";
 import type { Store } from "../kernel/store";
 
 export interface ImportResult {
-  phases: PlanPhase[];
   tickets: TicketId[];
 }
 
@@ -41,32 +40,24 @@ export function importPlan(
   });
 
   const ticketIds: TicketId[] = [];
-  for (const phase of document.phases) {
-    // 5. Phases come from the document, state as a label.
-    store.setPhase(projectId, phase.number, {
-      title: phase.title,
-      state: phase.state,
+  for (const ticket of document.tickets) {
+    // 3 and 5. Every ticket lands in open, order from the document, phase
+    // and ids from the store's defaults.
+    const ticketId = store.createTicket(projectId, ticket.title, "", {
+      body: ticket.body,
+      criteria: ticket.criteria,
+      order: ticket.order,
     });
-    for (const ticket of phase.tickets) {
-      // 3 and 5. Every ticket lands in open, phase and order from the
-      // document, ids from the store's counter.
-      const ticketId = store.createTicket(projectId, ticket.title, "", {
-        body: ticket.body,
-        criteria: ticket.criteria,
-        phase: phase.number,
-        order: ticket.order,
-      });
-      // 4. One imported_state row per ticket, author system.
-      store.attachEvidence(
-        ticketId,
-        "builtin:imported_state",
-        { claimed_state: ticket.claimedState, source },
-        "system",
-      );
-      ticketIds.push(ticketId);
-    }
+    // 4. One imported_state row per ticket, author system.
+    store.attachEvidence(
+      ticketId,
+      "builtin:imported_state",
+      { claimed_state: ticket.claimedState, source },
+      "system",
+    );
+    ticketIds.push(ticketId);
   }
-  return { phases: document.phases, tickets: ticketIds };
+  return { tickets: ticketIds };
 }
 
 /**
@@ -75,26 +66,18 @@ export function importPlan(
  */
 export function exportPlan(store: Store, projectId: ProjectId): string {
   const meta = store.getPlanMeta(projectId);
-  const rows = store.ticketsFor(projectId);
-  const phases: PlanPhase[] = store.phasesFor(projectId).map((phase) => ({
-    number: phase.number,
-    title: phase.title,
-    state: phase.state,
-    tickets: rows
-      .filter((row) => row.phase === phase.number)
-      .map((row): PlanTicket => ({
-        id: String(row.id),
-        title: row.title,
-        body: row.body,
-        criteria: row.criteria,
-        claimedState: row.state,
-        order: row.order,
-      })),
+  const tickets: PlanTicket[] = store.ticketsFor(projectId).map((row): PlanTicket => ({
+    id: String(row.id),
+    title: row.title,
+    body: row.body,
+    criteria: row.criteria,
+    claimedState: row.state,
+    order: row.order,
   }));
   return renderPlan({
     frontmatter: meta.frontmatter,
     preamble: meta.preamble,
-    phases,
     contextSections: meta.contextSections,
+    tickets,
   });
 }

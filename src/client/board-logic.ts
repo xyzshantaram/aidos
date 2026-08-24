@@ -29,6 +29,14 @@ interface TicketLike {
   state: string;
 }
 
+
+/** The evidence fields the board logic reads. EvidenceRow satisfies this. */
+export interface EvidenceRowLike {
+  kind: string;
+  payload: Record<string, unknown>;
+  author?: string;
+}
+
 /** The state checklist order. Done is always last. */
 export const STATE_CHECKLIST_ORDER: TicketState[] = [
   "open",
@@ -197,4 +205,156 @@ export function formatGateFraction(
  */
 export function ringPercent(score: number): number {
   return Math.max(0, Math.min(100, score * 20));
+}
+
+/** One criterion line, trimmed to its text. */
+export interface CriterionLine {
+  label: string;
+  matched: boolean;
+}
+
+/** Parse a criteria string into trimmed, non-empty lines. */
+export function parseCriteria(criteria: string): string[] {
+  return criteria
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * Match one criterion label against one evidence row. The row's payload.criteria
+ * is trimmed and compared with strict equality to the criterion label. Rows
+ * whose payload.criteria is absent fall into the ungrouped bucket.
+ */
+export function criterionMatchesRow(
+  criterion: string,
+  row: EvidenceRowLike,
+): boolean {
+  const raw = row.payload.criteria;
+  if (typeof raw !== "string") return false;
+  return raw.trim() === criterion;
+}
+
+/**
+ * Group evidence rows by criterion. Each criterion line gets its own slot,
+ * even when no row addresses it (those stay matched=false / uncovered). Rows
+ * whose payload.criteria is absent land in the ungrouped bucket. Returns
+ * criteria in their original order, with the ungrouped bucket appended last.
+ */
+export interface EvidenceGroup {
+  criterion: string;
+  matched: boolean;
+  rows: EvidenceRowLike[];
+}
+
+export function groupEvidenceByCriterion(
+  criteria: string,
+  evidence: readonly EvidenceRowLike[],
+): EvidenceGroup[] {
+  const lines = parseCriteria(criteria);
+  const groups: EvidenceGroup[] = lines.map((line) => ({
+    criterion: line,
+    matched: false,
+    rows: [],
+  }));
+  const byLabel = new Map<string, EvidenceGroup>();
+  for (const group of groups) {
+    byLabel.set(group.criterion, group);
+  }
+  const ungrouped: EvidenceRowLike[] = [];
+  for (const row of evidence) {
+    const raw = row.payload.criteria;
+    if (typeof raw !== "string" || raw.trim() === "") {
+      ungrouped.push(row);
+    } else {
+      const label = raw.trim();
+      const group = byLabel.get(label);
+      if (group) {
+        group.rows.push(row);
+        group.matched = true;
+      } else {
+        ungrouped.push(row);
+      }
+    }
+  }
+  if (ungrouped.length > 0) {
+    groups.push({ criterion: "", matched: true, rows: ungrouped });
+  }
+  return groups;
+}
+
+/** The uncovered criteria: those with no evidence rows. */
+export function uncoveredCriteria(
+  criteria: string,
+  evidence: readonly EvidenceRowLike[],
+): string[] {
+  const groups = groupEvidenceByCriterion(criteria, evidence);
+  const out: string[] = [];
+  for (const group of groups) {
+    if (group.criterion === "" || group.matched) continue;
+    out.push(group.criterion);
+  }
+  return out;
+}
+
+/** True when there are more evidence rows than a single screenful. */
+export function evidenceIsMany(
+  evidence: readonly EvidenceRowLike[],
+  threshold = 6,
+): boolean {
+  return evidence.length > threshold;
+}
+
+/**
+ * Deterministic color for a kind name, picked from a fixed palette. The
+ * hash folds over the kind characters and the index is stable for the same
+ * name across renders.
+ */
+const KIND_COLORS = [
+  "var(--dsw-alias-state-success-primary)",
+  "var(--dsw-alias-state-business-primary)",
+  "var(--dsw-alias-state-warn-primary)",
+  "var(--dsw-alias-state-info-primary)",
+  "var(--dsw-alias-state-error-primary)",
+  "var(--dsw-alias-brand-primary)",
+];
+
+export function kindColor(kind: string): string {
+  let hash = 0;
+  for (let i = 0; i < kind.length; i++) {
+    hash = (hash * 31 + kind.charCodeAt(i)) | 0;
+  }
+  const index = Math.abs(hash) % KIND_COLORS.length;
+  return KIND_COLORS[index];
+}
+
+/** One kind-count tag for the tile: the kind name and the row count. */
+export interface KindCount {
+  kind: string;
+  count: number;
+  color: string;
+}
+
+/**
+ * Count evidence rows by kind, sorted by descending count then kind name.
+ * Each tag carries a deterministic color from the kind name.
+ */
+export function evidenceKindCounts(
+  evidence: readonly EvidenceRowLike[],
+): KindCount[] {
+  const counts = new Map<string, number>();
+  for (const row of evidence) {
+    counts.set(row.kind, (counts.get(row.kind) ?? 0) + 1);
+  }
+  const out: KindCount[] = [];
+  for (const [kind, count] of counts) {
+    out.push({ kind, count, color: kindColor(kind) });
+  }
+  out.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    if (a.kind < b.kind) return -1;
+    if (a.kind > b.kind) return 1;
+    return 0;
+  });
+  return out;
 }

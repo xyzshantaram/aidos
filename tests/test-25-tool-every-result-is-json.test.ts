@@ -21,14 +21,12 @@ import {
 } from "./b1-harness";
 
 /** A plan document that imports without an error. */
-const SMALL_PLAN = `## Phase 1: Only phase \u2014 \`open\`
-
-- [ ] **Ticket 1: Do the work.** A body. **Evaluate:** The work is done.
+const SMALL_PLAN = `- [ ] **Ticket 1: Do the work.** A body. **Evaluate:** The work is done.
 `;
 
-/** A plan document whose phase holds a line the parser must reject. */
+/** A plan document that holds a line the parser must reject. */
 const BAD_PLAN_LINES = [
-  "## Phase 1: Groundwork — `open`",
+  "## Notes",
   "",
   "- [ ] **Ticket 1: Read it.** A body. **Evaluate:** The work is done.",
   "",
@@ -175,8 +173,8 @@ describe("every tool renders JSON", () => {
     const text = (first.content[0] as { type: "text"; text: string }).text;
     expect(() => JSON.parse(text)).toThrow();
     expect(text).toContain("Ticket one");
-    expect(text).toMatch(/## Phase /);
-  });
+    expect(text).toMatch(/- \[/);
+    });
 
   it("plan is byte-identical for identical state", async () => {
     const first = await harness.runTool("plan", {});

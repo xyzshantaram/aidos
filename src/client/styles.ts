@@ -64,8 +64,21 @@ export const CSS_TEXT = [
   ".aidos-state-done{color:var(--dsw-alias-state-success-primary);background:var(--dsw-alias-state-success-tertiary);border:1px solid var(--dsw-alias-state-success-secondary)}",
   // placeholder evidence chips
   ".aidos-evidence-row{display:flex;gap:6px;flex-wrap:wrap}",
-  ".aidos-evidence-chip{font-size:10px;line-height:14px;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px}",
-  // empty and error states
+  ".aidos-evidence-tag{font-size:10px;line-height:14px;border:1px solid;border-radius:999px;padding:0 8px}",
+  // detail panel: fields, criteria, evidence
+  ".aidos-detail-note{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);margin:0}",
+  ".aidos-evidence-tags{display:flex;gap:6px;flex-wrap:wrap}",
+  ".aidos-criterion{display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}",
+  ".aidos-criterion-uncovered{background:var(--dsw-alias-bg-warn-soft);opacity:0.7}",
+  ".aidos-criterion-ungrouped{border-style:dashed}",
+  ".aidos-criterion-head{display:flex;align-items:center;justify-content:space-between;gap:8px}",
+  ".aidos-criterion-label{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}",
+  ".aidos-criterion-count{font-size:10px;line-height:14px;color:var(--dsw-alias-label-tertiary)}",
+  ".aidos-evidence-row-item{display:flex;gap:6px;align-items:baseline;font-size:11px;line-height:16px}",
+  ".aidos-evidence-kind{font-weight:600;color:var(--dsw-alias-label-primary)}",
+  ".aidos-evidence-author{color:var(--dsw-alias-label-tertiary)}",
+  ".aidos-evidence-meta{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+  ".aidos-evidence-body{display:flex;flex-direction:column;gap:6px}",
   ".aidos-empty{display:flex;flex-direction:column;align-items:center;gap:10px;padding:40px 16px;text-align:center;color:var(--dsw-alias-label-secondary);border:1px dashed var(--dsw-alias-border-l3);border-radius:12px}",
   ".aidos-empty-title{font-size:14px;font-weight:600;margin:0;color:var(--dsw-alias-label-primary)}",
   ".aidos-empty-note{font-size:12px;line-height:18px;margin:0;color:var(--dsw-alias-label-secondary)}",

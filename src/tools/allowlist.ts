@@ -12,6 +12,7 @@ import type { FsTarget } from "@deepseek-ai/dsh-fs";
 import type { ToolExecution, ToolGuard } from "@deepseek-ai/dsh-tools";
 import { isAbsolute, join } from "path";
 import type { TicketView } from "../kernel/projections";
+import { scratchRootForAgent } from "./scratch";
 
 /** The fs path tools the child-scope guard covers. */
 const PATH_TOOLS = new Set<string>(["read", "write", "edit"]);
@@ -51,6 +52,13 @@ export function writeBoundaryReason(
   path: string,
 ): string | undefined {
   if (agent === undefined) return undefined;
+  // Scratch root is exempt from the allowlist: the agent writes there freely.
+  try {
+    const scratchRoot = scratchRootForAgent(agent);
+    if (path === scratchRoot || path.startsWith(scratchRoot + "/")) return undefined;
+  } catch {
+    // No scratch root (no cwd) → skip the exemption, fall through to union.
+  }
   const union = ctx.aidos ? ctx.aidos.allowlistUnion(agent) : [];
   if (pathAllowed(path, union)) return undefined;
   // Name the in-progress ticket whose allowlist would need to cover it.
@@ -143,7 +151,14 @@ export function childPathScope(allowed: string[]): ToolGuard {
     if (!PATH_TOOLS.has(execution.name)) return undefined;
     const path = readPathArgument(execution.arguments);
     if (path === undefined) return undefined;
-    if (pathAllowed(path, allowed)) return undefined;
+// Scratch root is always allowed in addition to the caller's scope.
+    const extra: string[] = [];
+    try {
+      extra.push(scratchRootForAgent(execution.agent));
+    } catch {
+      // No cwd → no scratch root → skip the exemption.
+    }
+    if (pathAllowed(path, [...allowed, ...extra])) return undefined;
     const roots = allowed.length > 0 ? allowed.join(", ") : "(none)";
     return `path ${path} is outside the allowed root (allowed: ${roots})`;
   };
@@ -176,6 +191,12 @@ function bashWorkdirClamp(execution: ToolExecution, allowed: string[]): string |
     sessionCwd !== undefined
       ? allowed.map((root) => (isAbsolute(root) ? root : join(sessionCwd, root)))
       : allowed;
+  // Scratch root is also an allowed bash workdir.
+  try {
+    roots.push(scratchRootForAgent(execution.agent));
+  } catch {
+    // No cwd → no scratch root → skip the exemption.
+  }
   if (pathAllowed(workdir, roots)) return undefined;
   const shown = allowed.length > 0 ? allowed.join(", ") : "(none)";
   return `workdir ${workdir} is outside the allowed root (allowed: ${shown})`;

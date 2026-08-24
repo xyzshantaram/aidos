@@ -23,9 +23,7 @@ import {
 } from "./b1-harness";
 
 /** Every ticket carries the done mark. None of them may land in "done". */
-const ALL_DONE_PLAN = `## Phase 1: Everything claims done — \`done\`
-
-- [x] **Ticket 1: First claim.** A body. **Evaluate:** A test passes.
+const ALL_DONE_PLAN = `- [x] **Ticket 1: First claim.** A body. **Evaluate:** A test passes.
 - [x] **Ticket 2: Second claim.** A body. **Evaluate:** A test passes.
 `;
 

@@ -1,15 +1,23 @@
 /**
  * One square ticket tile. Shows the title, the confidence ring, the gate
- * fraction, the state badge, and a placeholder evidence row.
+ * fraction, the state badge, and evidence tags (one per kind with a count).
  */
 
 import react from "react";
 
-import { formatGateFraction, hasCriteria, ringPercent, stateLabel } from "./board-logic";
+import {
+  evidenceKindCounts,
+  formatGateFraction,
+  hasCriteria,
+  ringPercent,
+  stateLabel,
+} from "./board-logic";
 import type { TicketView } from "../kernel/projections";
+import type { EvidenceRow } from "../kernel/types";
 
 export interface TicketTileProps {
   ticket: TicketView;
+  evidence: readonly EvidenceRow[];
   selected: boolean;
   onSelect: () => void;
 }
@@ -97,15 +105,23 @@ function renderRing(ticket: TicketView) {
   );
 }
 
-/** The placeholder evidence chips. Real evidence arrives in a later ticket. */
-function renderEvidenceRow() {
-  const chips = [0, 1, 2].map(function (index) {
-    return react.createElement("span", {
-      className: "aidos-evidence-chip",
-      key: index,
-    });
+/** The evidence tags: one per kind with a count, colored from the kind name. */
+function renderEvidenceTags(props: TicketTileProps) {
+  const counts = evidenceKindCounts(props.evidence);
+  const tags = counts.map(function (count) {
+    return react.createElement(
+      "span",
+      {
+        className: "aidos-evidence-tag",
+        key: count.kind,
+        style: { borderColor: count.color, color: count.color },
+      },
+      count.kind + " " + count.count,
+    );
   });
-  return react.createElement("div", { className: "aidos-evidence-row" }, chips);
+  return tags.length === 0
+    ? null
+    : react.createElement("div", { className: "aidos-evidence-row" }, tags);
 }
 
 export function TicketTile(props: TicketTileProps) {
@@ -137,6 +153,6 @@ export function TicketTile(props: TicketTileProps) {
         stateLabel(ticket.state),
       ),
     ),
-    renderEvidenceRow(),
+    renderEvidenceTags(props),
   );
 }

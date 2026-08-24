@@ -10,6 +10,7 @@ import { FilterPanel } from "./filter-panel";
 import type { AppliedState } from "./view-state";
 import { TicketTile } from "./ticket-tile";
 import type { TicketView } from "../kernel/projections";
+import type { EvidenceRow } from "../kernel/types";
 
 export interface TicketViewProps {
   sessionId: string;
@@ -17,6 +18,8 @@ export interface TicketViewProps {
   allTicketsCount: number;
   applied: AppliedState;
   selectedId: number | null;
+  /** Ticket id (string) to its evidence rows. Undefined falls back to empty. */
+  evidenceByTicket?: Record<string, EvidenceRow[]>;
   onSelect: (id: number) => void;
   onApply: (state: AppliedState) => void;
   onJump: (id: number) => void;
@@ -32,6 +35,7 @@ export function TicketView(props: TicketViewProps) {
     return react.createElement(TicketTile, {
       key: ticket.id,
       ticket: ticket,
+      evidence: props.evidenceByTicket?.[String(ticket.id)] ?? [],
       selected: ticket.id === props.selectedId,
       onSelect: function () {
         props.onSelect(ticket.id);

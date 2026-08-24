@@ -14,9 +14,7 @@ import { UnknownKind } from "../src/kernel/types";
 import { importPlan } from "../src/plan/plan-io";
 import { expectThrows, expectUnknownKind, makeStore } from "./helpers";
 
-const PLAN = `## Phase 1: First — \`open\`
-
-- [ ] **Ticket A1: Alpha.** A body **Evaluate:** A test passes.
+const PLAN = `- [ ] **Ticket A1: Alpha.** A body **Evaluate:** A test passes.
 `;
 
 describe("an unknown kind never tracebacks", () => {

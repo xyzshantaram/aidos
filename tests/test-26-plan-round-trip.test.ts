@@ -2,8 +2,9 @@
  * Item 26. A plan document survives an import, an export, and a second
  * import.
  *
- * The fixture holds every part of the format: frontmatter, a preamble, two
- * phases, a done ticket, an open ticket, a ticket with a body of three
+ * The fixture holds every part of the format: frontmatter, a preamble, one
+ * context section, a done ticket, an open ticket, and a ticket with a body of
+ * three lines. An import is never a transition, so
  * lines, and one context section. An import is never a transition, so
  * every ticket lands in open and the claim of the document becomes one
  * builtin:imported_state row. The round trip therefore compares the plan
@@ -30,13 +31,6 @@ owner: sid
 
 # Prototype plan
 
-## Phase 1: Groundwork — \`done\`
-
-- [x] **Ticket 1: Read the kernel.** Read the store and note the API. **Evaluate:** The notes name every public method.
-- [ ] **Ticket 2: Choose the flags.** Pick one spelling for each flag.
-  Keep the spelling the same in every subcommand.
-  Write the choice into a docstring. **Evaluate:** Every flag appears once in the docstring.
-
 ## Notes
 
 This section is not a phase. The parser must keep the text.
@@ -46,8 +40,10 @@ The list below must survive:
 - one
 - two
 
-## Phase 2: Tests — \`open\`
-
+- [x] **Ticket 1: Read the kernel.** Read the store and note the API. **Evaluate:** The notes name every public method.
+- [ ] **Ticket 2: Choose the flags.** Pick one spelling for each flag.
+  Keep the spelling the same in every subcommand.
+  Write the choice into a docstring. **Evaluate:** Every flag appears once in the docstring.
 - [ ] **Ticket 3: Write the suite.** One module for each subject. **Evaluate:** The suite fails on the missing module.
 `;
 
@@ -63,10 +59,10 @@ The list below must survive:
 - one
 - two`;
 
-// One line inside a phase that is neither blank, nor a ticket, nor a
-// continuation. The parser must stop and name the line.
+// One line that is neither blank, nor a ticket, nor a continuation. The
+// parser must stop and name the line.
 const BAD_PLAN_LINES = [
-  "## Phase 1: Groundwork — `open`",
+  "## Notes",
   "",
   "- [ ] **Ticket 1: Read it.** A body. **Evaluate:** The work is done.",
   "",
@@ -146,8 +142,8 @@ describe("plan round trip", () => {
       "Choose the flags",
       "Write the suite",
     ]);
-    expect(rows.map((row) => row.phase)).toEqual([1, 1, 2]);
-    expect(rows.map((row) => row.order)).toEqual([1, 2, 1]);
+    expect(rows.map((row) => row.phase)).toEqual([1, 1, 1]);
+    expect(rows.map((row) => row.order)).toEqual([1, 2, 3]);
     expect(rows.map((row) => row.id)).toEqual([1, 2, 3]);
     expect(rows[0].criteria).toBe("The notes name every public method.");
   });

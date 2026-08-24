@@ -9,8 +9,17 @@
 
 import react from "react";
 
-import { filterTickets, openCount } from "./board-logic";
+import {
+  filterTickets,
+  openCount,
+  evidenceKindCounts,
+  groupEvidenceByCriterion,
+  evidenceIsMany,
+  ringPercent,
+} from "./board-logic";
 import type { SortKey } from "./board-logic";
+
+
 import type { AppliedState } from "./view-state";
 import {
   DEFAULT_APPLIED,
@@ -19,7 +28,10 @@ import {
   setAppliedState,
 } from "./view-state";
 import { TicketView } from "./ticket-view";
+import { DetailPanel } from "./detail-panel";
 import type { TicketView as TicketViewType } from "../kernel/projections";
+import type { EvidenceRow } from "../kernel/types";
+
 
 export interface LocalTicketViewProps {
   sessionId: string;
@@ -120,17 +132,23 @@ export function LocalTicketView(props: LocalTicketViewProps) {
 function ProjectionReader(props: ProjectionReaderProps) {
   const sessionId = props.sessionId;
 
-  const projection = props.useProjection("aidos.tickets");
-  const loaded = projection !== undefined;
+  const ticketsProjection = props.useProjection("aidos.tickets");
+  const evidenceProjection = props.useProjection("aidos.evidence");
+  const loaded = ticketsProjection !== undefined && evidenceProjection !== undefined;
   const rawTickets: TicketViewType[] =
-    projection === undefined
+    ticketsProjection === undefined
       ? []
-      : Object.values(projection as Record<string, TicketViewType>);
+      : Object.values(ticketsProjection as Record<string, TicketViewType>);
+  const rawEvidence: Record<string, EvidenceRow[]> =
+    evidenceProjection === undefined
+      ? {}
+      : (evidenceProjection as Record<string, EvidenceRow[]>);
   const allTicketsCount = rawTickets.length;
   const workspaceKey =
     rawTickets.length > 0 && typeof rawTickets[0].workspaceKey === "string"
       ? rawTickets[0].workspaceKey
       : "default";
+
 
   const [applied, setAppliedStateLocal] = react.useState<AppliedState>(function () {
     return cloneAppliedState(DEFAULT_APPLIED);
@@ -286,31 +304,27 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const selectedTicket =
     selectedId === null ? null : rawTickets.find((ticket) => ticket.id === selectedId) ?? null;
 
+  const selectedEvidence: EvidenceRow[] =
+    selectedTicket === null ? [] : rawEvidence[String(selectedTicket.id)] ?? [];
+
+  const [evidenceCollapsed, setEvidenceCollapsed] = react.useState(function () {
+    return evidenceIsMany(selectedEvidence);
+  });
+
   const detailPanel =
     selectedTicket === null
       ? null
-      : react.createElement(
-          "div",
-          { className: "aidos-detail" },
-          react.createElement(
-            "div",
-            { className: "aidos-detail-head" },
-            react.createElement("h3", { className: "aidos-detail-title" }, selectedTicket.title),
-            react.createElement(
-              "button",
-              { className: "aidos-detail-close", onClick: closeDetail },
-              "\u00d7",
-            ),
-          ),
-          react.createElement(
-            "p",
-            { className: "aidos-detail-body" },
-            "The full detail view arrives in a later update. This panel is a placeholder for ticket " +
-              selectedTicket.id +
-              ".",
-          ),
-        );
-
+      : react.createElement(DetailPanel, {
+          ticket: selectedTicket,
+          evidence: selectedEvidence,
+          evidenceCollapsed: evidenceCollapsed,
+          onToggleEvidence: function () {
+            setEvidenceCollapsed(function (v) {
+              return !v;
+            });
+          },
+          onClose: closeDetail,
+      });
   const createModal = createOpen
     ? react.createElement(
         "div",
@@ -368,6 +382,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       allTicketsCount: allTicketsCount,
       applied: applied,
       selectedId: selectedId,
+      evidenceByTicket: rawEvidence,
       onSelect: selectTicket,
       onApply: applyState,
       onJump: selectTicket,

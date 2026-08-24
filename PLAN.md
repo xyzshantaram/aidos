@@ -1100,6 +1100,23 @@ package is now larger and better tested than its specification.
   order), but the document shape is flat. A document with no phase heading
   parses without error. The round-trip tests cover the new flat shape, not
   only the old phased one.
+  **Implementation contract (designed 2026-08-24, dispatch-ready).**
+  - `PlanDocument` loses `phases`; gains `tickets: PlanTicket[]` (flat,
+    document order). `PlanPhase` is deleted from `src/plan/plan.ts`.
+  - `parsePlan` collects ticket lines wherever they appear into the flat
+    list; `## Heading` lines that are not ticket lines still open context
+    sections. A line inside a context section that is neither a ticket nor a
+    continuation still throws `PlanParseError` naming the line.
+  - `renderPlan` emits frontmatter, preamble, context sections, then the
+    flat ticket list. No `## Phase N` headings ever.
+  - `importPlan` loops `document.tickets`; no `setPhase` calls. Tickets keep
+    their `order` from the document and take the kernel's default phase (1).
+  - `exportPlan` lists tickets in store order (phase then order), no phase
+    grouping in the output.
+  - Service: `plan()` renders the flat shape; `planImport` returns
+    `{ tickets: TicketId[] }` (the `phases` key is dropped from the service
+    return and from the `plan_import` tool output schema).
+  - `PLAN_CONTEXT_LIMIT` moves 500 → 2000 (C4).
   **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
   heading parses without error. The round-trip tests cover the new shape, not only the old one.
 

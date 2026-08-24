@@ -24,7 +24,6 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
-import { AIDOS_EVENT_TYPES } from "./invariant";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
 import { readFileSync } from "fs";
@@ -40,7 +39,7 @@ import {
 } from "../kernel/projections";
 import type { TicketView } from "../kernel/projections";
 import { parsePlan, renderPlan } from "../plan/plan";
-import type { PlanPhase, PlanTicket } from "../plan/plan";
+import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
@@ -50,7 +49,6 @@ import type {
   CommentRecord,
   ContextSection,
   EvidenceRow,
-  PhaseView,
   PlanValue,
   ProjectId,
   TicketId,
@@ -488,8 +486,8 @@ registerAidosSessionEventTypes();
     // trap on Object.freeze catches it. Lifecycle-owned: restored on dispose.
     ctx.effect(() => {
       const originalAppend = Session.prototype.append;
-      Session.prototype.append = function (type: string, data: any, ...opts: any[]) {
-        if (!AIDOS_EVENT_TYPES.has(type)) return originalAppend.call(this, type, data, ...opts);
+      const patchedAppend = function (this: Session, type: string, data: any, ...opts: any[]) {
+        if (!AIDOS_EVENT_TYPES.has(type)) return (originalAppend as any).call(this, type, data, ...opts);
         const originalFreeze = Object.freeze;
         let injected = false;
         Object.freeze = function (obj: any) {
@@ -500,11 +498,12 @@ registerAidosSessionEventTypes();
           return originalFreeze.call(this, obj);
         };
         try {
-          return originalAppend.call(this, type, data, ...opts);
+          return (originalAppend as any).call(this, type, data, ...opts);
         } finally {
           Object.freeze = originalFreeze;
         }
-      };
+      } as unknown as typeof Session.prototype.append;
+      Session.prototype.append = patchedAppend;
       return () => { Session.prototype.append = originalAppend; };
     });
     this._config = config ?? {};
@@ -604,27 +603,19 @@ registerAidosSessionEventTypes();
       throw new UnknownProject(projectId);
     }
     const meta = this._planMetaOf(projectId, cache.state);
-    const rows = this._ticketsFor(projectId, cache.state);
-    const phases: PlanPhase[] = this._phasesFor(projectId, cache.state).map((phase) => ({
-      number: phase.number,
-      title: phase.title,
-      state: phase.state,
-      tickets: rows
-        .filter((row) => row.phase === phase.number)
-        .map((row): PlanTicket => ({
-          id: String(row.id),
-          title: row.title,
-          body: row.body,
-          criteria: row.criteria,
-          claimedState: row.state,
-          order: row.order,
-        })),
+    const tickets: PlanTicket[] = this._ticketsFor(projectId, cache.state).map((row): PlanTicket => ({
+      id: String(row.id),
+      title: row.title,
+      body: row.body,
+      criteria: row.criteria,
+      claimedState: row.state,
+      order: row.order,
     }));
     return renderPlan({
       frontmatter: meta.frontmatter,
       preamble: meta.preamble,
-      phases,
       contextSections: meta.contextSections,
+      tickets,
     });
   }
 
@@ -700,7 +691,6 @@ registerAidosSessionEventTypes();
 
   /** Import one plan file into an empty project. */
   planImport(agent: Agent, args: PlanImportArgs): {
-    phases: number[];
     tickets: number[];
   } {
     const cache = this._cache(agent.session);
@@ -742,38 +732,25 @@ registerAidosSessionEventTypes();
     });
 
     const ticketIds: TicketId[] = [];
-    for (const phase of document.phases) {
-      // Phases come from the document, state as a label.
-      this._commit(agent, {
-        kind: "phase/set",
-        version: 1,
-        projectId,
-        number: phase.number,
-        title: phase.title,
-        state: phase.state,
-        at: this._now(),
+    for (const ticket of document.tickets) {
+      // Every ticket lands in open, order from the document, phase and ids
+      // from the session's defaults.
+      const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
+        body: ticket.body,
+        criteria: ticket.criteria,
+        order: ticket.order,
       });
-      for (const ticket of phase.tickets) {
-        // Every ticket lands in open, phase and order from the document,
-        // ids from the session's counter.
-        const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
-          body: ticket.body,
-          criteria: ticket.criteria,
-          phase: phase.number,
-          order: ticket.order,
-        });
-        // One imported_state row per ticket, author system.
-        this._attachEvidenceInternal(
-          agent,
-          ticketId,
-          "builtin:imported_state",
-          { claimed_state: ticket.claimedState, source: args.file },
-          "system",
-        );
-        ticketIds.push(ticketId);
-      }
+      // One imported_state row per ticket, author system.
+      this._attachEvidenceInternal(
+        agent,
+        ticketId,
+        "builtin:imported_state",
+        { claimed_state: ticket.claimedState, source: args.file },
+        "system",
+      );
+      ticketIds.push(ticketId);
     }
-    return { phases: document.phases.map((phase) => phase.number), tickets: ticketIds };
+    return { tickets: ticketIds };
   }
 
   // ---- internals: the session port ----
@@ -1214,6 +1191,23 @@ registerAidosSessionEventTypes();
     if (!def.allowedAuthors.includes(actor)) {
       throw new EvidenceAuthorRefused(kind, actor);
     }
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (snapshot !== undefined && payload.criteria !== undefined) {
+      const criteria = payload.criteria;
+      if (typeof criteria !== "string") {
+        throw new BadPayloadError("the payload.criteria must be a string");
+      }
+      const lines = criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+      const valid = snapshot.criteria
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+      for (const line of lines) {
+        if (!valid.includes(line)) {
+          throw new BadPayloadError("evidence criterion " + JSON.stringify(line) + " is not one of the ticket's criteria");
+        }
+      }
+    }
     const row: EvidenceRow = {
       kind,
       author: actor,
@@ -1276,19 +1270,6 @@ registerAidosSessionEventTypes();
     }
     rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
     return rows;
-  }
-
-  private _phasesFor(projectId: ProjectId, state: AidosState): PhaseView[] {
-    const phases = state.phases.get(projectId);
-    if (!phases) return [];
-    return [...phases.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([number, phase]) => ({
-        projectId,
-        number,
-        title: phase.title,
-        state: phase.state,
-      }));
   }
 
   private _planMetaOf(

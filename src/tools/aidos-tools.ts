@@ -39,7 +39,7 @@ import { installAidosGuard, ORCHESTRATOR_ONLY_MESSAGE } from "./guard";
 import { installAidosMask } from "./mask";
 import { installBashAskListener } from "./bash-ask";
 import { installAllowlistGuard } from "./allowlist";
-
+import { registerScratchTools, scratchRootForAgent } from "./scratch";
 export const name = "aidos-tools";
 
 export const inject = [
@@ -419,7 +419,7 @@ function registerPlan(ctx: Context): void {
     defineTool({
       name: "plan",
       description:
-        "Serialize one project's plan as markdown: frontmatter, preamble, phases with the real state marks, and the context sections. The one tool whose result is the plan text, not JSON.",
+        "Serialize one project's plan as markdown: frontmatter, preamble, the context sections, and every ticket on its own line with the real state mark. The one tool whose result is the plan text, not JSON.",
       parameters: {
         projectId: {
           type: "integer",
@@ -466,7 +466,6 @@ function registerPlanImport(ctx: Context): void {
           additionalProperties: false,
           properties: {
             ok: { type: "boolean", const: true, required: true },
-            phases: { type: "array", items: { type: "integer" }, required: true },
             tickets: { type: "array", items: { type: "integer" }, required: true },
           },
         },
@@ -475,8 +474,8 @@ function registerPlanImport(ctx: Context): void {
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
         try {
-          const result = ctx.aidos.planImport(agent, { file: args.file, projectId: args.projectId });
-          return { ok: true, phases: result.phases, tickets: result.tickets };
+          const result = await ctx.aidos.planImport(agent, args);
+          return { ok: true, tickets: result.tickets };
         } catch (error) {
           refusal(error);
         }
@@ -491,7 +490,7 @@ export function apply(ctx: Context, config: unknown): void {
   ctx.systemPrompt.section({
     name: "tool:aidos",
     order: 113,
-    text: AIDOS_GUIDANCE,
+    text: aidosGuidanceText(ctx),
   });
   registerGetTickets(ctx);
   registerSetTicket(ctx);
@@ -499,9 +498,30 @@ export function apply(ctx: Context, config: unknown): void {
   registerMoveTicket(ctx);
   registerPlan(ctx);
   registerPlanImport(ctx);
+  registerScratchTools(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installBashAskListener(ctx);
   installAllowlistGuard(ctx);
   void config;
+}
+
+/**
+ * Build the `tool:aidos` system-prompt text. The static guidance is followed by
+ * a one-line note naming the scratch root for the current workspace, computed
+ * at registration time from the current initiator's cwd. A session without a
+ * cwd contributes no note (the scratch tools refuse at call time instead).
+ */
+function aidosGuidanceText(ctx: Context): string {
+  const agent = ctx.get("agents")?.currentInitiator();
+  let note = "";
+  if (agent !== undefined) {
+    try {
+      const root = scratchRootForAgent(agent);
+      note = ` The scratch workspace for this session is at ${root}.\n`;
+    } catch {
+      note = "";
+    }
+  }
+  return AIDOS_GUIDANCE + note;
 }
