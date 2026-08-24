@@ -886,12 +886,13 @@ mounts `dsh-invariants` itself.
    malformed decorator context at runtime. All 54 suites, 253 tests, pass
    after the downgrade.
 
-2. **B3, board client plugin.** The Tickets tab, the global Tickets entry,
-   the grid, detail, evidence, signoff, send-back, the active-ticket focus
-   control, and the per-ticket allowlist editor. Criterion coverage
-   lands here. Port the projection and view tests
-   (test_26, test_31, test_32) against the client read model. U5's "every
-   behavior has an equivalent test" checklist is the definition of done.
+2. **B3, board client plugin.** The Tickets tab (U2a), the detail panel and
+   evidence (U2b), the actions (U2c), the global Tickets entry (U2d), and the
+   per-ticket allowlist editor (U2e). Criterion coverage lands in U2b. Port
+   the projection and view tests (test_26, test_31, test_32) against the
+   client read model. U5's "every behavior has an equivalent test" checklist
+   is the definition of done. U2b through U2e were grilled on 2026-08-24;
+   their scope and evaluation criteria are in the checklist entries.
    **Evaluate:** a dropped connection reconnects and the view is correct
    afterward with no refresh.
 3. **B4, plan skill plus import dogfood.** Import this file into the board.
@@ -971,8 +972,10 @@ The workstation port (the W-series) moved to `~/repos/dotfiles-ai/PLAN.md` on
 
 ## Checklist
 
-The tickets below are the contract. Phase and order are first-class ticket fields. The Python
-prototype was dissolved on 2026-08-21: it had pinned the behavior it existed to pin, and the dsh
+The tickets below are the contract. The plan format is a flat checklist
+(P11, settled 2026-08-24): ticket order carries the sequence, and a series
+uses the ticket title. The kernel keeps `phase` and `order` fields for now.
+The Python prototype was dissolved on 2026-08-21: it had pinned the behavior it existed to pin, and the dsh
 package is now larger and better tested than its specification.
 
 ### Phase 2: aidos core — `in_progress`
@@ -1060,8 +1063,10 @@ package is now larger and better tested than its specification.
   and `exportPlan`, both tools are registered, `PLAN_CONTEXT_LIMIT` is 500, and the
   over-cap error names the overage. test-26 pins the round trip. Two parts stay open.
   There is no `SKILL.md` anywhere in the package, so the preset ships no skill
-  directory and the writer gets no guidance. The bootstrap import of this file is B4,
-  and this file is far past 500 lines, so the cap decision is still unmade.
+  directory and the writer gets no guidance. The bootstrap import of this file is B4.
+  **Cap settled 2026-08-24 by grilling: raise it.** `PLAN_CONTEXT_LIMIT` moves to
+  2000 so the bootstrap import of this file fits. New plans still respect the cap;
+  only the constant changes.
   **Evaluate:** import, serialize, and re-import produces an identical plan. A context section
   over 500 lines is refused with a clear message naming the overage.
 
@@ -1087,11 +1092,14 @@ package is now larger and better tested than its specification.
   shape the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
   special rules, Human review queue, and an optional Benchmarking section. This changes the tool,
   not the ticket format.
-  **The open decision.** `plan.ts` special-cases `## Phase N` headings and gives each phase a
-  number, a title, and a state. The skill has one flat checklist and no phases. Decide whether
-  aidos keeps phases as a first-class field, or treats them as ordinary sections and lets ticket
-  order carry the sequence. Settle this before B4 imports this file, because the import lands in
-  whichever shape wins.
+  **Settled 2026-08-24 by grilling: flat checklist, no phases.** The plan
+  format is a flat checklist. Ticket order carries the sequence. A series of
+  tickets (for example W1-W4) uses the ticket title for the series order.
+  `plan.ts` no longer special-cases `## Phase N` headings. The ticket's
+  `phase` and `order` fields remain in the kernel (importing keeps them in
+  order), but the document shape is flat. A document with no phase heading
+  parses without error. The round-trip tests cover the new flat shape, not
+  only the old phased one.
   **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
   heading parses without error. The round-trip tests cover the new shape, not only the old one.
 
@@ -1305,13 +1313,91 @@ work is the tools and the gate enforcement.
 - [ ] **Ticket U2b: Ticket detail panel and evidence.** Replaces U2a's generic placeholder panel
   with the real detail view: fields, criteria, and evidence grouped by the criterion it addresses,
   with uncovered criteria highlighted. Builds the real evidence tags U2a's tiles currently show as
-  placeholders. Scope and evaluation criteria are not yet grilled.
+  placeholders.
+  **Scope (grilled 2026-08-24).**
+  - **Layout.** The detail panel keeps the side placement. Ticket fields (title,
+    description, state badge, confidence ring, gate fraction) render on top,
+    always visible. Evidence grouped by criterion sits in a collapsible
+    section below, collapsed by default when there are many rows.
+  - **Uncovered criteria** (criteria with no evidence rows) are highlighted
+    with a muted background tint and dimmed text. No icon, no badge.
+  - **Tile evidence tags.** Each evidence kind with at least one row shows as
+    a tag on the tile carrying a count (for example `check 2`). The color is
+    deterministic from the kind name. The placeholder chips in U2a are
+    replaced.
+  - **Criterion addressing (settled 2026-08-24: named criteria with a
+    write-boundary check).** An evidence row's payload carries an optional
+    `criteria` field naming the criterion text it addresses. `attachEvidence`
+    validates at the write boundary: when `payload.criteria` is present, it
+    must exactly match one of the ticket's criterion lines (trimmed). A
+    mismatch refuses, naming the criterion — the same spirit as the
+    allowlist paths check. A test pins the refusal.
+  - **Read-only.** No actions in this ticket. Editing, moves, signoff, and
+    send-back are U2c.
+  - **Remote call path.** The board has no generated typert client bindings
+    (aidos hand-writes `@Remote`). Writes in U2c and later POST the
+    client-request envelope directly to `/api/aidos/<method>` (the recipe
+    pinned in B2). U2b itself is read-only and needs no Remote calls; it
+    reads the `aidos.evidence` projection alongside `aidos.tickets`.
   **Status: not started.**
+  **Evaluate:** a ticket with evidence in two kinds shows two count tags on
+  its tile. A criterion with no rows is tinted and dimmed; one with rows is
+  not. Evidence with a `criteria` payload field groups under that criterion;
+  the board shows an ungrouped bucket for rows written before the check
+  existed. Attaching evidence whose `criteria` names no criterion line
+  refuses, naming the criterion. The detail panel opens at the side, shows
+  fields on top, and the evidence section collapses and expands. A dropped
+  connection reconnects and the view is correct afterward with no refresh.
 
 - [ ] **Ticket U2c: Ticket actions.** Create (replacing U2a's stub modal), field editing, state
   moves, signoff, and send-back, all through the Remote endpoints. Gate refusals surface as
-  readable text naming the missing kind. Scope and evaluation criteria are not yet grilled.
+  readable text naming the missing kind.
+  **Scope (grilled 2026-08-24).**
+  - **Create form.** Title, description, and criteria only. Phase, order, and
+    slug are set later through edit. The modal replaces U2a's stub.
+  - **Edit.** Inline per-field editing: each field (title, description,
+    criteria, phase, order, slug) has an edit button that turns the field
+    into an input with Save and Cancel. One field per save.
+  - **State moves.** User-owned transitions show as buttons always:
+    signoff (`open` to `in_progress`), mark done (`awaiting_verification` to
+    `done`), send-back (`awaiting_verification` to `in_progress`). The other
+    legal transition (`in_progress` to `awaiting_verification`) hides in an
+    advanced modal or spoiler.
+  - **Signoff** opens a confirmation dialog that explains what signoff means
+    (the agent gets write access). Confirm attaches `builtin:user_signoff`
+    and moves the ticket.
+  - **Send-back** requires a reason: a text area, and the reason attaches as
+    a user comment before the move. Two events, one click.
+  - **Mark done** is a two-step modal. Step one shows the criteria reminder.
+    Step two shows the evidence summary (what the agent claims to have done),
+    a final comment field, and Confirm. Confirm attaches
+    `builtin:user_verified`, the comment, and moves the ticket.
+  - **Gate refusals** surface as a toast that auto-dismisses, with the
+    refusal text verbatim.
+  - **Comments.** A collapsible comments section below evidence: the thread
+    newest first, a text area and Send at the bottom, through
+    `userAddComment`.
+  - **Evidence attach.** A plain-text attach form in the detail panel: pick a
+    user-allowed kind, optional note, through `userAttachEvidence`.
+    Screenshots are U3.
+  - **Active-ticket focus.** The ticket moved to `in_progress` becomes the
+    active ticket. A small Active marker shows on its tile and the detail
+    panel defaults to it.
+  - **Host-side prerequisite.** `userSetTicket` exists but is NOT a
+    `@Remote` (`aidos-core.ts:645`). This ticket adds the `@Remote`
+    decorator so the board can create and edit. The write path is the raw
+    client-request POST from U2b's note: `payload.args` carries `{ agentId:
+    <sessionId>, args: <business args> }` (the dsh-agent lookup wire).
   **Status: not started.**
+  **Evaluate:** a ticket created through the modal appears in the grid with
+  no reload. Editing a field saves one field. Signoff with confirm moves
+  `open` to `in_progress` and shows the Active marker. Send-back with no
+  reason is refused; with a reason it comments and moves. Mark done shows
+  criteria then evidence then confirm, and moves on confirm. A gate refusal
+  (for example mark done with no `user_verified`) surfaces as a toast naming
+  the missing kind. The `in_progress` to `awaiting_verification` move hides
+  behind the advanced control. The allowlist half of `userSetTicket` is
+  U2e.
 
 - [ ] **Ticket U2d: Global cross-workspace Tickets entry.** The sidebar-footer entry near New
   Session. Wraps U2a's `FilterPanel`/`TicketView` with the `projects` filter enabled, the
@@ -1322,22 +1408,67 @@ work is the tools and the gate enforcement.
   session as each `coldSnapshot` call resolves, and a banner for any session whose fetch failed
   while the rest of the grid still renders. Load-more pagination, since this view fetches per
   session over the network rather than reading one live projection.
+  **Scope (grilled 2026-08-24).**
+  - **Sessions shown.** Every session that has an aidos project. No picker,
+    no search-to-add. The grid grows as more workspaces use aidos.
+  - **Tile click.** Opens a read-only detail panel for that ticket's fields
+    and evidence. No actions in this view. The panel offers to open the
+    owning workspace's session (a deep link into that session's board) or to
+    create a new session in that workspace.
+  - **Freshness.** Fetch on mount and on tab focus and window focus. A manual
+    sync button refetches all sessions and doubles as its own spinner. No
+    timer.
+  - **Host-side prerequisite.** `aidos.coldTickets(sessionId, opts)` does
+    not exist. This ticket adds it: the host resolves the session and
+    cold-reads its `aidos.tickets` projection via
+    `ctx.sessionProjectionCache.coldSnapshot`. The client reads projections
+    only for open sessions, so this is the cross-workspace read path.
   **Status: not started.**
 
-- [ ] **Ticket U2e: Per-ticket allowlist editor.** Scope and evaluation criteria are not yet
-  grilled.
+- [ ] **Ticket U2e: Per-ticket allowlist editor.**
+  **Scope (grilled 2026-08-24).**
+  - The editor is a modal opened from the detail panel (in-progress tickets
+    only). A text area holds one path per line, plus a preview of the union
+    with the other in-progress tickets' allowlists. Save sends the whole list
+    through `userSetTicket` with the `allowlist` field.
+  - **Approval record.** Saving also writes a `builtin:file_allowlist`
+    evidence row (author `user`, payload `{ paths: string[] }`) with the new
+    paths, matching the A7 design where the row is the durable approval
+    record. The ticket field and the row are written together.
   **Status: not started.**
+  **Evaluate:** adding a path through the modal makes a write to that path
+  succeed while the ticket is in-progress. Removing a path makes it refuse
+  again. The saved list appears both in the ticket's allowlist field and as a
+  `builtin:file_allowlist` evidence row. The union preview names the other
+  in-progress tickets' paths.
 
 - [ ] **Ticket U3: Evidence and screenshots.** `ctx.attachments` stores content-addressed
   images, hash-deduped. Evidence rows reference the attachment refs. Show the confidence score
   and label it advisory.
-  **Status: not started.** Nothing in `src/` reads `ctx.attachments`. The score and
-  the gate fraction are computed already (`src/kernel/projections.ts`), so this ticket
-  is the attachment path plus the rendering, not the arithmetic.
-  **Evaluate:** a pasted screenshot attaches and survives a restart. The score is visibly marked
-  as advisory and no control anywhere is enabled or disabled by it.
+  **Scope (grilled 2026-08-24).**
+  - **A new `builtin:media` kind.** Registered with a typed payload shape:
+    `{ ref: <attachmentId>, mime, caption? }`. Screenshots sort and display
+    distinctly from text evidence.
+  - **Attach flow.** Both a file-picker button in the detail panel's evidence
+    section and clipboard paste (Ctrl/Cmd+V while the panel is focused). The
+    browser reads the file as base64, sends it through an aidos Remote that
+    admits it via the host attachment store, gets back the durable ref, and
+    attaches evidence with the typed `builtin:media` payload.
+  - **Rendering.** Inline thumbnails in the detail panel's evidence section.
+    Clicking a thumbnail opens an expanded viewer. The tile carries a small
+    image icon tag.
+  - **API facts (verified 2026-08-24).** `ctx.attachments` is an
+    `AttachmentStore`: `saveImage(input)` returns a durable
+    `ImageAttachmentRef`; `readImage(ref)` returns verified bytes. The host
+    apiproxy already admits browser uploads through
+    `admitEncodedImages(ctx.attachments, images)`. The aidos Remote for
+    admission is net-new (nothing in `src/` reads `ctx.attachments` today).
+  **Evaluate:** a pasted screenshot attaches as a `builtin:media` row and
+  survives a restart. A screenshot renders as a thumbnail in the detail
+  panel and opens full-size on click. The score is visibly marked advisory
+  and no control anywhere is enabled or disabled by it.
 
-- [ ] **Ticket U5: Delete the prototype.** Remove `prototype/` from the repository. It was a
+- [x] **Ticket U5: Delete the prototype.** Remove `prototype/` from the repository. It was a
   behavior specification with a scheduled death.
   **The bar is already met** (verified 2026-08-21). Every one of the 32 prototype tests has a TS
   counterpart in `packages/aidos/tests/`, checked name by name, plus 8 extra `-tool-` variants
@@ -1353,6 +1484,8 @@ work is the tools and the gate enforcement.
   behavior under a prototype-era filename. Rename those two rather than delete them.
   **Evaluate:** `prototype/` is gone, the suite still passes, and no TS file imports anything
   from it. The commit names the port map that replaced it.
+  **Done:** `prototype/` directory deleted (all 38 tracked files plus both `__pycache__` dirs gone); `test-25-every-subcommand-prints-json.test.ts` culled as a 21-line no-assertion duplicate of the real `test-25-tool-every-result-is-json.test.ts`; `test-20-cli-author-is-agent.test.ts` renamed to `test-20-author-is-agent.test.ts` and `test-21-cli-refuses-human-only-kinds.test.ts` renamed to `test-21-refuses-human-only-kinds.test.ts` (the `cli` prefix was a prototype-era leftover; content unchanged). Port map: the Python prototype was replaced by the TS suite under `packages/aidos/tests/`; no TS file imports from `prototype/` — the only remaining references are historical doc comments in `src/plan/plan.ts:2` and `src/kernel/store.ts:2`.
+
 
 ### Phase 5: Tools, scripting, and skills — `pending`
 
@@ -1407,9 +1540,15 @@ work is the tools and the gate enforcement.
   **The degradation case, and it is real.** hashline ships in the PERSONAL bundle, and it
   registers on the agent's own scope layer at `agent/session-start`. aidos is unopinionated, so
   a person who installs aidos alone has a builtin `edit` that takes `old_string`/`new_string`,
-  not anchors. Decide the fallback: `scratch_edit` delegates to whatever `edit` the scope
-  resolves and inherits its grammar, or it detects the hashline shape and refuses when absent.
-  Delegating is honest, because one editing grammar per session is the point.
+  not anchors.
+  **Settled 2026-08-24 by grilling: delegate.** `scratch_edit` delegates to
+  whatever `edit` the scope resolves and inherits its grammar. With hashline
+  it uses anchors; with the builtin edit it inherits that grammar. One
+  editing grammar per session is the point.
+  **The scratch path reaches the agent through tool results plus a preset
+  note (settled 2026-08-24).** `scratch_read` and `scratch_write` return the
+  resolved scratch root in their results, and the aidos preset's prompt
+  mentions it. No dedicated `scratch_root` tool, no system-prompt stamp.
   Do NOT vendor the algorithm. `dsh-better-edit@0.2.1` (MIT) seals `lib/hashline/` behind an
   `exports` map allowing `.` and `./package.json` only, so a copy would drift from the real
   engine on every upstream release. `ToolExecutionInput` is `{ callId, rootCallId?, name,
@@ -1499,3 +1638,5 @@ work is the tools and the gate enforcement.
 - [ ] B1 — container-confirmed (user test log): the six tools appear with the correct constraints, refusals are clean, and the open mask hides write/edit/bash. The remaining half — a signoff unlocking the in-progress tier — needs B2's human surface and is retested then.
 - [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach another through read/write/edit OR through bash. The bash workdir clamp is in (`childPathScope`), so verify a `src/`-scoped child cannot bash into `docs/`, and judge whether the clamp blocks legitimate child work.
 - [ ] Fresh session (aidos preset) — the six board tools (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import) and `tool:aidos` appear; exercise the state-gated tiers (open tier hides write/edit/bash; awaiting-verification asks on each bash call).
+- [ ] U2b/U2c (the board in daily use) — work real tickets through the detail panel and actions for one session: signoff, mark done, send-back with a reason, comments, evidence attach. Say whether the gate refusals help or annoy. That judgment cannot be made from tests.
+- [ ] P11 flat format — the round trip on a flat plan (no `## Phase` headings) is byte for byte; a document with no phase heading imports without error, and ticket order survives.
