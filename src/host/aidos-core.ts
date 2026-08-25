@@ -1504,7 +1504,8 @@ registerAidosSessionEventTypes();
       const workspace = this._workspacePath(agent);
       target = resolve(workspace, file);
       const rel = relative(workspace, target);
-      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
+      const normRel = rel.replace(/\\/g, "/");
+      if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute(rel))) {
         throw new FileNotReadError(file, `cannot read the plan file ${file}: it escapes the workspace root`);
       }
     }
