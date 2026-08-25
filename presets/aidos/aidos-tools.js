@@ -14722,7 +14722,6 @@ function date4(params) {
 config(en_default());
 
 // src/host/aidos-core.ts
-import { Session } from "@deepseek-ai/dsh-session";
 import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
@@ -16269,30 +16268,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     __publicField(this, "_caches", /* @__PURE__ */ new WeakMap());
     __publicField(this, "_resolvedConfig");
     registerAidosSessionEventTypes();
-    ctx.effect(() => {
-      const originalAppend = Session.prototype.append;
-      const patchedAppend = function(type, data, ...opts) {
-        if (!AIDOS_EVENT_TYPES.has(type)) return originalAppend.call(this, type, data, ...opts);
-        const originalFreeze = Object.freeze;
-        let injected = false;
-        Object.freeze = function(obj) {
-          if (!injected && obj && typeof obj.type === "string" && AIDOS_EVENT_TYPES.has(obj.type)) {
-            obj.ignorable = true;
-            injected = true;
-          }
-          return originalFreeze.call(this, obj);
-        };
-        try {
-          return originalAppend.call(this, type, data, ...opts);
-        } finally {
-          Object.freeze = originalFreeze;
-        }
-      };
-      Session.prototype.append = patchedAppend;
-      return () => {
-        Session.prototype.append = originalAppend;
-      };
-    });
     this._config = config2 ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -16607,6 +16582,28 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new InvariantError(
         "aidos event types are not registered with the host reader; refusing durable append (see src/host/session-events.ts)"
       );
+    }
+    const isAidosType = AIDOS_EVENT_TYPES.has(event.kind);
+    if (isAidosType && !session.__aidosPatched) {
+      const origAppend = session.append.bind(session);
+      session.append = ((type, data, ...opts) => {
+        if (!AIDOS_EVENT_TYPES.has(type)) return origAppend(type, data, ...opts);
+        const origFreeze = Object.freeze;
+        let injected = false;
+        Object.freeze = ((obj) => {
+          if (!injected && obj !== null && typeof obj === "object" && obj.type !== void 0 && AIDOS_EVENT_TYPES.has(obj.type)) {
+            obj.ignorable = true;
+            injected = true;
+          }
+          return origFreeze(obj);
+        });
+        try {
+          return origAppend(type, data, ...opts);
+        } finally {
+          Object.freeze = origFreeze;
+        }
+      });
+      session.__aidosPatched = true;
     }
     session.append(event.kind, event);
     this._sync(session, cache);
