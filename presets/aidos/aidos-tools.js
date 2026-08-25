@@ -14925,13 +14925,6 @@ function workspaceKeyFromPath(cwd) {
   if (readable === "") {
     readable = "root";
   }
-  if (readable.length > 251) {
-    readable = readable.slice(0, 251);
-    const lastTilde = readable.lastIndexOf("~");
-    if (lastTilde >= 247 && !/^~[0-9A-F]{4}$/.test(readable.slice(lastTilde))) {
-      readable = readable.slice(0, lastTilde);
-    }
-  }
   return "--" + readable + "--";
 }
 function normalizeTicketSnapshot(snapshot, resolveAbsPath) {
@@ -15723,6 +15716,45 @@ function _renderTicket(ticket) {
   return lines;
 }
 
+// src/kernel/helpers.ts
+function deepClone(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => deepClone(item));
+  }
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value)) {
+      out[key] = deepClone(value[key]);
+    }
+    return out;
+  }
+  return value;
+}
+function rowOf(snapshot) {
+  return {
+    id: snapshot.id,
+    projectId: snapshot.projectId,
+    title: snapshot.title,
+    description: snapshot.description,
+    body: snapshot.body,
+    criteria: snapshot.criteria,
+    phase: snapshot.phase,
+    order: snapshot.order,
+    state: snapshot.state,
+    dependsOn: [...snapshot.dependsOn]
+  };
+}
+function refusalReason(missing, allowedActors) {
+  const parts = [];
+  if (missing.length > 0) {
+    parts.push(`missing evidence kinds: ${missing.join(", ")}`);
+  }
+  if (allowedActors.length > 0) {
+    parts.push(`allowed actors: ${allowedActors.join(", ")}`);
+  }
+  return parts.join(" ");
+}
+
 // src/host/aidos-core.ts
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 
@@ -16036,6 +16068,9 @@ function registerAidosSessionEventTypes() {
   }
   return registered;
 }
+function aidosSessionEventTypesRegistered() {
+  return registered;
+}
 
 // src/host/aidos-core.ts
 var BadPayloadError = class extends Error {
@@ -16192,44 +16227,7 @@ var COMMENTS_PROJECTION_ZOD = external_exports.record(external_exports.string(),
 function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function deepClone(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => deepClone(item));
-  }
-  if (value !== null && typeof value === "object") {
-    const out = {};
-    for (const key of Object.keys(value)) {
-      out[key] = deepClone(value[key]);
-    }
-    return out;
-  }
-  return value;
-}
-function rowOf(snapshot) {
-  return {
-    id: snapshot.id,
-    projectId: snapshot.projectId,
-    title: snapshot.title,
-    description: snapshot.description,
-    body: snapshot.body,
-    criteria: snapshot.criteria,
-    phase: snapshot.phase,
-    order: snapshot.order,
-    state: snapshot.state,
-    dependsOn: [...snapshot.dependsOn]
-  };
-}
 var DEFAULT_PHASE_TITLE = "Untitled phase";
-function refusalReason(missing, allowedActors) {
-  const parts = [];
-  if (missing.length > 0) {
-    parts.push(`missing evidence kinds: ${missing.join(", ")}`);
-  }
-  if (allowedActors.length > 0) {
-    parts.push(`allowed actors: ${allowedActors.join(", ")}`);
-  }
-  return parts.join(" ");
-}
 var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
 var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
   constructor(ctx, config2) {
@@ -16340,7 +16338,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       } catch {
         states = [];
       }
-      profile = states.some((state) => state === "in_progress") ? "implementation" : "planning";
+      const hasInProgress = states.some((state) => state === "in_progress");
+      const hasAwaiting = states.some((state) => state === "awaiting_verification");
+      if (hasAwaiting && !hasInProgress) {
+        profile = "awaiting_verification";
+      } else {
+        profile = hasInProgress ? "implementation" : "planning";
+      }
     } else {
       const kind = this.subagentKind(agent);
       profile = kind ? `subagent-${kind}` : "subagent-coder";
@@ -16555,12 +16559,17 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const cache = this._cache(session);
     this._sync(session, cache);
     validateAidosEvent(cache.state, event);
+    if (!aidosSessionEventTypesRegistered()) {
+      throw new InvariantError(
+        "aidos event types are not registered with the host reader; refusing durable append (see src/host/session-events.ts)"
+      );
+    }
     session.append(event.kind, event);
     this._sync(session, cache);
   }
   /** The clock, seconds as a float, floored per ticket at the last at. */
   _now() {
-    return Date.now() / 1e3;
+    return this._config.now ? this._config.now() : Date.now() / 1e3;
   }
   _atFor(session, ticketId, floor) {
     const cache = this._cache(session);
@@ -17296,32 +17305,14 @@ function installAidosMask(ctx) {
   };
 }
 
-// src/tools/bash-ask.ts
-var BASH_ASK_REASON = "a ticket awaits verification, so this bash call needs approval before it runs";
-function installBashAskListener(ctx) {
-  return ctx.on(
-    "tools/pre-execute",
-    (exec, next) => {
-      if (exec.name !== "bash" || !exec.agent) return next();
-      const aidos = ctx.aidos;
-      if (!aidos) return next();
-      const states = new Set(aidos.ticketStates(exec.agent));
-      if (states.has("awaiting_verification") && !states.has("in_progress")) {
-        return Promise.resolve({ kind: "ask", reason: BASH_ASK_REASON });
-      }
-      return next();
-    },
-    { prepend: true }
-  );
-}
-
 // src/tools/allowlist.ts
 import { isAbsolute as isAbsolute3, join, relative as relative3, resolve as resolve3 } from "path";
 var WRITE_INTENT = "fs/write-intent";
 var EDIT_INTENT = "fs/edit-intent";
 function isUnder(root, candidate) {
   const rel = relative3(resolve3(root), resolve3(candidate));
-  return rel === "" || !rel.startsWith("../") && rel !== ".." && !isAbsolute3(rel);
+  const norm = rel.replace(/\\/g, "/");
+  return rel === "" || !norm.startsWith("../") && norm !== ".." && !isAbsolute3(rel);
 }
 function pathAllowed(target, roots) {
   for (const root of roots) {
@@ -17352,7 +17343,9 @@ function writeBoundaryReason(ctx, agent, path) {
   } catch {
     rows = [];
   }
-  if (rows.length === 0) return void 0;
+  if (rows.length === 0) {
+    return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it (board is empty \u2014 create and sign off a ticket, or write under scratch)`;
+  }
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
@@ -17797,7 +17790,6 @@ function apply(ctx, config2) {
   registerScratchTools(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
-  installBashAskListener(ctx);
   installAllowlistGuard(ctx);
   void config2;
 }
