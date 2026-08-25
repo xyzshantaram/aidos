@@ -15944,8 +15944,8 @@ function refusalReason(missing, allowedActors) {
   }
   return parts.join(" ");
 }
-var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
+var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -16082,10 +16082,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     }
     return this._createTicket(agent, args);
   }
-  /**
-   * The user-actor set path. Only this path may set a ticket's allowlist;
-   * the agent path passes the "agent" actor and refuses the field.
-   */
   userSetTicket(agent, args) {
     if (args.ticketId !== void 0) {
       return this._editTicket(agent, args, "user");
@@ -16759,6 +16755,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
   }
 };
 _init = __decoratorStart(_a3);
+__decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
@@ -17340,7 +17337,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, subagent_report); user_signoff and user_verified are the human's to supply, never yours. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them.";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, subagent_report); user_signoff and user_verified are the human's to supply, never yours. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them. Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, and plan_import whenever you spawn a subagent or a fork. The depth guard refuses a subagent anyway, so the filter is a second layer.";
 function registerGetTickets(ctx) {
   ctx.tools.register(
     defineTool2({

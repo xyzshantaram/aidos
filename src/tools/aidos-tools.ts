@@ -231,7 +231,9 @@ const AIDOS_GUIDANCE =
   "move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. " +
   "plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
-  "The board tools are the orchestrator's: a subagent cannot use them.";
+  "The board tools are the orchestrator's: a subagent cannot use them. " +
+  "Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, and plan_import whenever you spawn a subagent or a fork. " +
+  "The depth guard refuses a subagent anyway, so the filter is a second layer.";
 
 // ---- the six tools ----
 

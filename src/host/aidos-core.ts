@@ -630,9 +630,12 @@ registerAidosSessionEventTypes();
   }
 
   /**
-   * The user-actor set path. Only this path may set a ticket's allowlist;
-   * the agent path passes the "agent" actor and refuses the field.
+   * The user-actor set path, exported over the typert Remote surface. It
+   * creates a ticket and edits the named fields. It never changes state,
+   * and only this path may set a ticket's allowlist. The agent path passes
+   * the "agent" actor and refuses the field.
    */
+  @Remote("userSetTicket")
   userSetTicket(agent: Agent, args: SetTicketArgs): TicketRow {
     if (args.ticketId !== undefined) {
       return this._editTicket(agent, args, "user");

@@ -1054,7 +1054,7 @@ package is now larger and better tested than its specification.
   workspace A never resolves to a ticket in workspace B. A write against a foreign id is refused
   and names the workspace to open. Two workspaces whose paths end in the same segment render
   distinct badge colors.
-- [ ] **Ticket C4: Plan import and serialization.** On dsh: the `plan` and `plan_import` tools
+- [x] **Ticket C4: Plan import and serialization.** On dsh: the `plan` and `plan_import` tools
   plus the `plan` skill. Markdown with YAML frontmatter in. Markdown out on demand. The context
   cap applies at the write boundary. This file's design sections are the first real import; the
   importer must handle a context longer than 500 lines (raise the cap for the bootstrap import
@@ -1088,7 +1088,7 @@ package is now larger and better tested than its specification.
   `builtin:review_pass`. The same ticket moves once the review row exists. The number of gates a
   human must satisfy is unchanged.
 
-- [ ] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
+- [x] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
   shape the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
   special rules, Human review queue, and an optional Benchmarking section. This changes the tool,
   not the ticket format.
@@ -1153,8 +1153,10 @@ work is the tools and the gate enforcement.
   tool when `delegationDepthOf(agent) !== 0`, and the refusal names the orchestrator as
   the only actor that may do it. `childPathScope` is the per-child path predicate.
   Presets load as definitions with no code change, which is dsh behavior rather than
-  ours. Open: the aidos preset mounts one row and sets no `toolFilter`, so the belt
-  exists and the braces do not. The "no author other than agent, user, and system
+  ours. The braces landed: the prompt guidance tells the orchestrator to pass a
+  spawn-time `toolFilter`, and `b1-toolfilter-braces` covers the filter and the
+  guard. The real-session author audit stays open. The "no author other than
+  agent, user, and system
   after a multi-subagent session" check needs a real session to run against.
   **The bash workdir clamp landed** (decided 2026-08-21). `childPathScope` now also
   clamps the bash WORKDIR to the child's path scope, mirroring `dsh-tool-bash`'s
@@ -1242,11 +1244,11 @@ work is the tools and the gate enforcement.
   for the same reason.
 
 
-### Phase 4: Web UI — `pending`
+### Phase 4: Web UI — `in_progress`
 
 **Goal.** The board you actually use, replacing the Phase 1 prototype.
 
-- [ ] **Ticket U2a: Local Tickets tab and shared board components.** Builds the Tickets tab that
+- [x] **Ticket U2a: Local Tickets tab and shared board components.** Builds the Tickets tab that
   reads the open session's own board, plus three components the later Web UI tickets reuse:
   `FilterPanel`, `TicketView`, and the ticket tile.
   **Scope.** `FilterPanel` takes an optional `projects` prop. It shows a project checklist only
@@ -1327,7 +1329,7 @@ work is the tools and the gate enforcement.
     and the filtered case offers a clear-filters action.
   - Create opens a modal holding only a stub placeholder, not a working form.
 
-- [ ] **Ticket U2b: Ticket detail panel and evidence.** Replaces U2a's generic placeholder panel
+- [x] **Ticket U2b: Ticket detail panel and evidence.** Replaces U2a's generic placeholder panel
   with the real detail view: fields, criteria, and evidence grouped by the criterion it addresses,
   with uncovered criteria highlighted. Builds the real evidence tags U2a's tiles currently show as
   placeholders.
@@ -1405,7 +1407,9 @@ work is the tools and the gate enforcement.
     decorator so the board can create and edit. The write path is the raw
     client-request POST from U2b's note: `payload.args` carries `{ agentId:
     <sessionId>, args: <business args> }` (the dsh-agent lookup wire).
-  **Status: not started.**
+  **Status: host land done, UI not started.** `userSetTicket` carries the
+  `@Remote` marker and the wire-shape tests pass. The live wire check sits
+  with the board in the human review queue.
   **Evaluate:** a ticket created through the modal appears in the grid with
   no reload. Editing a field saves one field. Signoff with confirm moves
   `open` to `in_progress` and shows the Active marker. Send-back with no
@@ -1517,7 +1521,7 @@ work is the tools and the gate enforcement.
   **Evaluate:** the always-on core is measurably small in tokens, and the number is recorded. A
   task needing an inactive group triggers activation and then completes.
 
-- [ ] **Ticket T5: Scratch workspaces and the scratch tool suite.** The scratch design in this
+- [x] **Ticket T5: Scratch workspaces and the scratch tool suite.** The scratch design in this
   plan's "Scratch, not the repo": `$DSH_HOME/aidos/scratch/<workspace-key>/`, durable on disk,
   surfaced to the agent, clearable. It ships four tools: `scratch_read`, `scratch_write`,
   `scratch_edit`, `scratch_mkdir`. A relative path resolves against the scratch root, so
@@ -1655,5 +1659,5 @@ work is the tools and the gate enforcement.
 - [ ] B1 — container-confirmed (user test log): the six tools appear with the correct constraints, refusals are clean, and the open mask hides write/edit/bash. The remaining half — a signoff unlocking the in-progress tier — needs B2's human surface and is retested then.
 - [ ] B3 — the subagent dir/file guard, hands-on: a child scoped to one directory cannot reach another through read/write/edit OR through bash. The bash workdir clamp is in (`childPathScope`), so verify a `src/`-scoped child cannot bash into `docs/`, and judge whether the clamp blocks legitimate child work.
 - [ ] Fresh session (aidos preset) — the six board tools (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import) and `tool:aidos` appear; exercise the state-gated tiers (open tier hides write/edit/bash; awaiting-verification asks on each bash call).
-- [ ] U2b/U2c (the board in daily use) — work real tickets through the detail panel and actions for one session: signoff, mark done, send-back with a reason, comments, evidence attach. Say whether the gate refusals help or annoy. That judgment cannot be made from tests.
+- [ ] U2b/U2c (the board in daily use) — work real tickets through the detail panel and actions for one session: signoff, mark done, send-back with a reason, comments, evidence attach. Say whether the gate refusals help or annoy. That judgment cannot be made from tests. The U2c host half lands here too: POST `/api/aidos/userSetTicket` for a create and an edit on a live session (the envelope and the `agentId` wire are pinned by `b2-user-setticket-remote`; the live check exercises the real gateway and the real agent lookup).
 - [ ] P11 flat format — the round trip on a flat plan (no `## Phase` headings) is byte for byte; a document with no phase heading imports without error, and ticket order survives.

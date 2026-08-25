@@ -15941,8 +15941,8 @@ function refusalReason(missing, allowedActors) {
   }
   return parts.join(" ");
 }
-var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
+var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -16079,10 +16079,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
     }
     return this._createTicket(agent, args);
   }
-  /**
-   * The user-actor set path. Only this path may set a ticket's allowlist;
-   * the agent path passes the "agent" actor and refuses the field.
-   */
   userSetTicket(agent, args) {
     if (args.ticketId !== void 0) {
       return this._editTicket(agent, args, "user");
@@ -16756,6 +16752,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userAttachEvidence
   }
 };
 _init = __decoratorStart(_a3);
+__decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
