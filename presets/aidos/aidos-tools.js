@@ -17116,7 +17116,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const workspace = this._workspacePath(agent);
       target = resolve2(workspace, file2);
       const rel = relative2(workspace, target);
-      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute2(rel))) {
+      const normRel = rel.replace(/\\/g, "/");
+      if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute2(rel))) {
         throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
       }
     }
