@@ -10,9 +10,15 @@
  * is computed from the tools the registry actually holds, so the mask never
  * names an unknown tool. A session with no tickets yet sees the open tier
  * (the agent still has to plan and create the first ticket).
+ *
+ * bash is deliberately NOT masked here: bash-guard owns which commands may
+ * run, and masks it with the full open tier (so the agent can still plan).
+ * The mask also strips denied schemas from the system prompt (skill-gate
+ * pattern) and re-applies on compaction/start, so a gated tool never shows
+ * up in the prompt the model sees.
  */
 
-import type { Context } from "@deepseek-ai/cordis";
+import type { Context, Events } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { Session } from "@deepseek-ai/dsh-session";
 import { scopeOf } from "@deepseek-ai/dsh-scope";
@@ -30,8 +36,12 @@ const PLAN_TOOLS = ["plan", "plan_import"] as const;
 /** The read/research/skill/question tools of the open tier. */
 const RESEARCH_TOOLS = ["read", "read_image", "web_search", "web_fetch", "skill", "ask_user_question"] as const;
 
-/** The implementation tools the in-progress tier adds. */
-const IMPLEMENTATION_TOOLS = ["write", "edit", "bash"] as const;
+/** The implementation tools the in-progress tier adds. bash is owned by
+ * bash-guard, so this mask never names it — aidos restricts only the
+ * ticket/plan/research/delegation tool universe, and lets bash-guard decide
+ * which commands may actually run.
+ */
+const IMPLEMENTATION_TOOLS = ["write", "edit"] as const;
 
 /** The delegation and job tools the in-progress and review tiers add. */
 const DELEGATION_TOOLS = ["subagent", "subagent_fork", "job_output", "job_kill", "job_list"] as const;
@@ -51,7 +61,6 @@ const TIER_TOOLS: Record<TicketState, ReadonlySet<string>> = {
   in_progress: new Set(TOOL_UNIVERSE),
   awaiting_verification: new Set([
     "read",
-    "bash",
     "get_tickets",
     "attach_evidence",
     "move_ticket",
@@ -104,29 +113,36 @@ export function installAidosMask(ctx: Context): () => void {
     }
   };
 
-  const applyMask = (agent: Agent): void => {
-    if (!aidos) return;
+  /**
+   * The deny list for one agent, or null when aidos is absent or not yet
+   * ready. Mirrors the runtime restrict() computation so the system-prompt
+   * schema strip (below) and the runtime mask stay in lockstep.
+   */
+  const denyFor = (agent: Agent): string[] | null => {
+    if (!aidos) return null;
     let states: TicketState[];
     try {
       states = aidos.ticketStates(agent);
     } catch {
       // The service may not be ready yet; the next re-apply covers it.
-      return;
+      return null;
     }
     const present = new Set<TicketState>(states.length === 0 ? ["open"] : states);
     const visible = visibleFor(present);
-    // The deny list names only tools the registry holds and the tier table
-    // covers, so restrict() never fails on an unknown or scope-local name,
-    // and tools outside the universe are not the mask's to hide.
-    const deny = registryTools().filter(
-      (name) => TOOL_UNIVERSE.has(name) && !visible.has(name),
-    );
+    return registryTools()
+      .filter((name) => TOOL_UNIVERSE.has(name) && !visible.has(name))
+      .sort();
+  };
+
+  const applyMask = (agent: Agent): void => {
+    const deny = denyFor(agent);
+    if (deny === null) return; // service not ready; keep the existing restriction
     const previous = disposers.get(agent);
     if (previous) {
       previous();
       disposers.delete(agent);
     }
-    if (deny.length === 0) return;
+    if (deny.length === 0) return; // tier allows everything; restriction stays lifted
     disposers.set(agent, agent.ctx.tools.restrict({ deny }));
   };
 
@@ -144,6 +160,36 @@ export function installAidosMask(ctx: Context): () => void {
       if (agent) applyMask(agent);
     }),
   );
+
+  // Strip denied schemas from the system prompt too (skill-gate pattern):
+  // mask at runtime AND hide the schema, so the model never wastes a call on
+  // a tool it cannot use.
+  // Cast ctx.on to a form that accepts the dsh-tools/dsh-session event names,
+  // which are not in this context's typed Events map.
+  const on = ctx.on as unknown as {
+    (name: string, handler: (assembly: { tools: Array<{ name: string }> }, context: { agent?: Agent }, next: () => void) => void): () => void;
+    (name: string, handler: () => void): () => void;
+  };
+  disposersList.push(
+    on("system-prompt/assemble", (assembly: { tools: Array<{ name: string }> }, context: { agent?: Agent }, next: () => void) => {
+      const agent = context.agent;
+      if (!agent) return next();
+      const deny = denyFor(agent);
+      if (deny === null || deny.length === 0) return next();
+      const blocked = new Set(deny);
+      assembly.tools = assembly.tools.filter((tool) => !blocked.has(tool.name));
+      return next();
+    }),
+  );
+  // Compaction throws away the assembled prompt; re-apply so the rebuilt
+  // prompt reflects the current ticket tiers.
+    disposersList.push(
+      on("compaction/start", () => {
+        const registry = ctx.agents;
+        if (!registry) return;
+        for (const agent of registry.list()) applyMask(agent);
+      }),
+    );
   // Apply to agents already live when the wiring mounts.
   const registry = ctx.agents;
   if (registry) {

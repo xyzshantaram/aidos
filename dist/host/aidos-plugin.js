@@ -15716,6 +15716,25 @@ function _renderTicket(ticket) {
   return lines;
 }
 
+// src/host/aidos-core.ts
+import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+
+// src/tools/scratch.ts
+import { HarnessError } from "@deepseek-ai/dsh-llm";
+import { defineTool } from "@deepseek-ai/dsh-tools";
+import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
+function scratchRootForAgent(agent) {
+  const cwd = agent?.session?.header?.cwd;
+  if (!cwd) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "no_workspace_cwd", message: "the session has no cwd; scratch requires a workspace" }),
+      "AIDOS_NO_WORKSPACE_CWD"
+    );
+  }
+  const workspaceKey = workspaceKeyFromPath(cwd);
+  return dshHomePath("aidos", "scratch", workspaceKey);
+}
+
 // src/host/invariant.ts
 var PACKAGE_NAME = "aidos";
 var AIDOS_EVENT_TYPES = /* @__PURE__ */ new Set([
@@ -16103,6 +16122,51 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       states.add(snapshot.state);
     }
     return STATE_ORDER.filter((state) => states.has(state));
+  }
+  /**
+   * The bash policy context for one agent: which guard profile applies and
+   * where scratch lives. bash-guard reads this to pick a command-ruleset and
+   * to allow writes to the scratch dirs in every phase (no phase may block
+   * scratch — both /tmp/dsh and the aidos durable scratch stay writable).
+   *
+   * Profile derivation:
+   *  - primary agent, no ticket in_progress         => "planning"
+   *  - primary agent, at least one in_progress       => "implementation"
+   *  - subagent (delegation depth > 0), provider p   => `subagent-${p}`
+   *    (an unknown provider falls back to "subagent-coder")
+   */
+  bashContext(agent) {
+    let profile;
+    if (delegationDepthOf(agent) === 0) {
+      let states;
+      try {
+        states = this.ticketStates(agent);
+      } catch {
+        states = [];
+      }
+      profile = states.some((state) => state === "in_progress") ? "implementation" : "planning";
+    } else {
+      const kind = this.subagentKind(agent);
+      profile = kind ? `subagent-${kind}` : "subagent-coder";
+    }
+    let scratchDir;
+    try {
+      scratchDir = scratchRootForAgent(agent);
+    } catch {
+      scratchDir = "";
+    }
+    const workspaceRoot = agent.session?.header?.cwd ?? "";
+    return { profile, scratchDir, workspaceRoot };
+  }
+  /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
+  subagentKind(agent) {
+    const session = agent.session;
+    const events = session?.events;
+    if (!events) return void 0;
+    for (const event of events) {
+      if (event.type === "subagent/descriptor") return event.provider;
+    }
+    return void 0;
   }
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent) {

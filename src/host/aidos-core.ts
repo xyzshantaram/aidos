@@ -43,6 +43,8 @@ import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
+import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+import { scratchRootForAgent } from "../tools/scratch";
 import type {
   Actor,
   AidosConfig,
@@ -592,6 +594,53 @@ registerAidosSessionEventTypes();
       states.add(snapshot.state);
     }
     return STATE_ORDER.filter((state) => states.has(state));
+  }
+
+  /**
+   * The bash policy context for one agent: which guard profile applies and
+   * where scratch lives. bash-guard reads this to pick a command-ruleset and
+   * to allow writes to the scratch dirs in every phase (no phase may block
+   * scratch — both /tmp/dsh and the aidos durable scratch stay writable).
+   *
+   * Profile derivation:
+   *  - primary agent, no ticket in_progress         => "planning"
+   *  - primary agent, at least one in_progress       => "implementation"
+   *  - subagent (delegation depth > 0), provider p   => `subagent-${p}`
+   *    (an unknown provider falls back to "subagent-coder")
+   */
+  bashContext(agent: Agent): { profile: string; scratchDir: string; workspaceRoot: string } {
+    let profile: string;
+    if (delegationDepthOf(agent) === 0) {
+      let states: TicketState[];
+      try {
+        states = this.ticketStates(agent);
+      } catch {
+        states = [];
+      }
+      profile = states.some((state) => state === "in_progress") ? "implementation" : "planning";
+    } else {
+      const kind = this.subagentKind(agent);
+      profile = kind ? `subagent-${kind}` : "subagent-coder";
+    }
+    let scratchDir: string;
+    try {
+      scratchDir = scratchRootForAgent(agent);
+    } catch {
+      scratchDir = "";
+    }
+    const workspaceRoot = (agent.session?.header?.cwd as string | undefined) ?? "";
+    return { profile, scratchDir, workspaceRoot };
+  }
+
+  /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
+  private subagentKind(agent: Agent): string | undefined {
+    const session = agent.session as unknown as { events?: ReadonlyArray<{ type?: string; provider?: string }> } | undefined;
+    const events = session?.events;
+    if (!events) return undefined;
+    for (const event of events) {
+      if (event.type === "subagent/descriptor") return event.provider;
+    }
+    return undefined;
   }
 
   /** The union of the in-progress tickets' allowlists (the write boundary). */

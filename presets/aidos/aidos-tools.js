@@ -55,7 +55,7 @@ var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "acce
 import z3 from "@deepseek-ai/schemastery";
 import { defineTool as defineTool2 } from "@deepseek-ai/dsh-tools";
 import { HarnessError as HarnessError2 } from "@deepseek-ai/dsh-llm";
-import { delegationDepthOf as delegationDepthOf2 } from "@deepseek-ai/dsh-subagent";
+import { delegationDepthOf as delegationDepthOf3 } from "@deepseek-ai/dsh-subagent";
 
 // src/kernel/types.ts
 var STATE_ORDER = [
@@ -14728,7 +14728,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import { readFileSync } from "fs";
-import { isAbsolute, join, basename } from "path";
+import { isAbsolute as isAbsolute2, join as join2, basename } from "path";
 
 // src/kernel/constants.ts
 var BUILTIN_KINDS = [
@@ -15719,6 +15719,213 @@ function _renderTicket(ticket) {
   return lines;
 }
 
+// src/host/aidos-core.ts
+import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+
+// src/tools/scratch.ts
+import { isAbsolute, join } from "path";
+import { mkdirSync } from "fs";
+import { HarnessError } from "@deepseek-ai/dsh-llm";
+import { defineTool } from "@deepseek-ai/dsh-tools";
+import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
+function scratchRootForAgent(agent) {
+  const cwd = agent?.session?.header?.cwd;
+  if (!cwd) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "no_workspace_cwd", message: "the session has no cwd; scratch requires a workspace" }),
+      "AIDOS_NO_WORKSPACE_CWD"
+    );
+  }
+  const workspaceKey = workspaceKeyFromPath(cwd);
+  return dshHomePath("aidos", "scratch", workspaceKey);
+}
+function resolveScratchPath(root, path) {
+  if (path.length === 0) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "empty_path", message: "scratch path must not be empty" }),
+      "AIDOS_SCRATCH_EMPTY_PATH"
+    );
+  }
+  const normalized = isAbsolute(path) ? path : join(root, path);
+  if (normalized !== root && !normalized.startsWith(root + "/")) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
+      "AIDOS_SCRATCH_PATH_ESCAPE"
+    );
+  }
+  return normalized;
+}
+function callingAgent(exec) {
+  const agent = exec.agent;
+  if (!agent) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "agent_required",
+        message: "the scratch tools require a calling agent"
+      }),
+      "AIDOS_AGENT_REQUIRED"
+    );
+  }
+  return agent;
+}
+function renderJson(_args, value) {
+  return [{ type: "text", text: JSON.stringify(value) }];
+}
+function registerScratchTools(ctx) {
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_read",
+      description: "Read one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
+      parameters: {
+        path: { type: "string", required: true, description: "The file to read, relative to the scratch root or absolute under it." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true },
+            content: { type: "string", required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
+        const content = await ctx.fs.readText(target, exec.signal);
+        return { ok: true, path: absPath, scratch_root: root, content };
+      }
+    })
+  );
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_write",
+      description: "Write one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused. The agent writes freely here: no allowlist membership is required.",
+      parameters: {
+        path: { type: "string", required: true, description: "The file to write, relative to the scratch root or absolute under it." },
+        content: { type: "string", required: true, description: "The full UTF-8 text content to write." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true },
+            operation: { type: "string", enum: ["create", "update"], required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
+        const outcome = await ctx.fs.writeText(target, args.content, void 0, exec.signal);
+        return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
+      }
+    })
+  );
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_edit",
+      description: "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Accepts the same edit arguments (old_string, new_string, replace_all) plus a scratch-relative path. The path is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
+      parameters: {
+        path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
+        old_string: { type: "string", required: true, description: "The literal text to replace." },
+        new_string: { type: "string", required: true, description: "The literal replacement text." },
+        replace_all: { type: "boolean", description: "When true, replace every match instead of requiring exactly one." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true },
+            message: { type: "string", required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        const editDef = ctx.tools.get("edit", agent);
+        if (!editDef) {
+          throw new HarnessError(
+            JSON.stringify({ ok: false, error: "edit_tool_unavailable", message: "the edit tool is not registered in this scope" }),
+            "AIDOS_EDIT_TOOL_UNAVAILABLE"
+          );
+        }
+        const delegated = await ctx.tools.execute({
+          callId: exec.callId,
+          rootCallId: exec.rootCallId,
+          name: "edit",
+          arguments: {
+            file_path: absPath,
+            old_string: args.old_string,
+            new_string: args.new_string,
+            replace_all: args.replace_all
+          },
+          agent: exec.agent,
+          parent: exec.token,
+          signal: exec.signal
+        });
+        if (delegated.isError) {
+          const code = delegated.error.info?.code;
+          const message2 = delegated.error.message ?? "edit delegation failed";
+          throw new HarnessError(
+            JSON.stringify({ ok: false, error: "edit_delegation_failed", code, message: message2 }),
+            code ?? "AIDOS_EDIT_DELEGATION_FAILED"
+          );
+        }
+        const content = delegated.content[0];
+        const message = content && content.type === "text" ? content.text : "edited";
+        return { ok: true, path: absPath, scratch_root: root, message };
+      }
+    })
+  );
+  ctx.tools.register(
+    defineTool({
+      name: "scratch_mkdir",
+      description: "Create a directory under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
+      parameters: {
+        path: { type: "string", required: true, description: "The directory to create, relative to the scratch root or absolute under it." }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            path: { type: "string", required: true },
+            scratch_root: { type: "string", required: true }
+          }
+        },
+        render: renderJson
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        const root = scratchRootForAgent(agent);
+        const absPath = resolveScratchPath(root, args.path);
+        mkdirSync(absPath, { recursive: true });
+        return { ok: true, path: absPath, scratch_root: root };
+      }
+    })
+  );
+}
+
 // src/host/invariant.ts
 var PACKAGE_NAME = "aidos";
 var AIDOS_EVENT_TYPES = /* @__PURE__ */ new Set([
@@ -16106,6 +16313,51 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       states.add(snapshot.state);
     }
     return STATE_ORDER.filter((state) => states.has(state));
+  }
+  /**
+   * The bash policy context for one agent: which guard profile applies and
+   * where scratch lives. bash-guard reads this to pick a command-ruleset and
+   * to allow writes to the scratch dirs in every phase (no phase may block
+   * scratch — both /tmp/dsh and the aidos durable scratch stay writable).
+   *
+   * Profile derivation:
+   *  - primary agent, no ticket in_progress         => "planning"
+   *  - primary agent, at least one in_progress       => "implementation"
+   *  - subagent (delegation depth > 0), provider p   => `subagent-${p}`
+   *    (an unknown provider falls back to "subagent-coder")
+   */
+  bashContext(agent) {
+    let profile;
+    if (delegationDepthOf(agent) === 0) {
+      let states;
+      try {
+        states = this.ticketStates(agent);
+      } catch {
+        states = [];
+      }
+      profile = states.some((state) => state === "in_progress") ? "implementation" : "planning";
+    } else {
+      const kind = this.subagentKind(agent);
+      profile = kind ? `subagent-${kind}` : "subagent-coder";
+    }
+    let scratchDir;
+    try {
+      scratchDir = scratchRootForAgent(agent);
+    } catch {
+      scratchDir = "";
+    }
+    const workspaceRoot = agent.session?.header?.cwd ?? "";
+    return { profile, scratchDir, workspaceRoot };
+  }
+  /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
+  subagentKind(agent) {
+    const session = agent.session;
+    const events = session?.events;
+    if (!events) return void 0;
+    for (const event of events) {
+      if (event.type === "subagent/descriptor") return event.provider;
+    }
+    return void 0;
   }
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent) {
@@ -16797,7 +17049,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** Read one plan file, resolved under the session's workspace root. */
   _readPlanFile(agent, file2) {
-    const target = isAbsolute(file2) ? file2 : join(this._workspacePath(agent), file2);
+    const target = isAbsolute2(file2) ? file2 : join2(this._workspacePath(agent), file2);
     try {
       return readFileSync(target, "utf8");
     } catch (error51) {
@@ -16884,7 +17136,7 @@ __publicField(AidosService, "inject", [
 __publicField(AidosService, "Config", z2.object({}));
 
 // src/tools/guard.ts
-import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+import { delegationDepthOf as delegationDepthOf2 } from "@deepseek-ai/dsh-subagent";
 var BOARD_TOOLS = [
   "get_tickets",
   "set_ticket",
@@ -16900,7 +17152,7 @@ function installAidosGuard(ctx) {
     if (!BOARD_TOOL_SET.has(execution.name)) return void 0;
     const agent = execution.agent;
     if (!agent) return "the board tools require a calling agent";
-    if (delegationDepthOf(agent) !== 0) {
+    if (delegationDepthOf2(agent) !== 0) {
       return ORCHESTRATOR_ONLY_MESSAGE;
     }
     return void 0;
@@ -16913,7 +17165,7 @@ var RUN_CODE = "run_code";
 var TICKET_TOOLS = ["get_tickets", "set_ticket", "attach_evidence", "move_ticket"];
 var PLAN_TOOLS = ["plan", "plan_import"];
 var RESEARCH_TOOLS = ["read", "read_image", "web_search", "web_fetch", "skill", "ask_user_question"];
-var IMPLEMENTATION_TOOLS = ["write", "edit", "bash"];
+var IMPLEMENTATION_TOOLS = ["write", "edit"];
 var DELEGATION_TOOLS = ["subagent", "subagent_fork", "job_output", "job_kill", "job_list"];
 var TOOL_UNIVERSE = /* @__PURE__ */ new Set([
   ...TICKET_TOOLS,
@@ -16927,7 +17179,6 @@ var TIER_TOOLS = {
   in_progress: new Set(TOOL_UNIVERSE),
   awaiting_verification: /* @__PURE__ */ new Set([
     "read",
-    "bash",
     "get_tickets",
     "attach_evidence",
     "move_ticket",
@@ -16960,19 +17211,21 @@ function installAidosMask(ctx) {
       return [...TOOL_UNIVERSE];
     }
   };
-  const applyMask = (agent) => {
-    if (!aidos) return;
+  const denyFor = (agent) => {
+    if (!aidos) return null;
     let states;
     try {
       states = aidos.ticketStates(agent);
     } catch {
-      return;
+      return null;
     }
     const present2 = new Set(states.length === 0 ? ["open"] : states);
     const visible = visibleFor(present2);
-    const deny = registryTools().filter(
-      (name2) => TOOL_UNIVERSE.has(name2) && !visible.has(name2)
-    );
+    return registryTools().filter((name2) => TOOL_UNIVERSE.has(name2) && !visible.has(name2)).sort();
+  };
+  const applyMask = (agent) => {
+    const deny = denyFor(agent);
+    if (deny === null) return;
     const previous = disposers.get(agent);
     if (previous) {
       previous();
@@ -16992,6 +17245,25 @@ function installAidosMask(ctx) {
       if (event.type !== "ticket/change") return;
       const agent = agentForSession(ctx, session);
       if (agent) applyMask(agent);
+    })
+  );
+  const on = ctx.on;
+  disposersList.push(
+    on("system-prompt/assemble", (assembly, context, next) => {
+      const agent = context.agent;
+      if (!agent) return next();
+      const deny = denyFor(agent);
+      if (deny === null || deny.length === 0) return next();
+      const blocked = new Set(deny);
+      assembly.tools = assembly.tools.filter((tool) => !blocked.has(tool.name));
+      return next();
+    })
+  );
+  disposersList.push(
+    on("compaction/start", () => {
+      const registry3 = ctx.agents;
+      if (!registry3) return;
+      for (const agent of registry3.list()) applyMask(agent);
     })
   );
   const registry2 = ctx.agents;
@@ -17025,210 +17297,6 @@ function installBashAskListener(ctx) {
       return next();
     },
     { prepend: true }
-  );
-}
-
-// src/tools/scratch.ts
-import { isAbsolute as isAbsolute2, join as join2 } from "path";
-import { mkdirSync } from "fs";
-import { HarnessError } from "@deepseek-ai/dsh-llm";
-import { defineTool } from "@deepseek-ai/dsh-tools";
-import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
-function scratchRootForAgent(agent) {
-  const cwd = agent?.session?.header?.cwd;
-  if (!cwd) {
-    throw new HarnessError(
-      JSON.stringify({ ok: false, error: "no_workspace_cwd", message: "the session has no cwd; scratch requires a workspace" }),
-      "AIDOS_NO_WORKSPACE_CWD"
-    );
-  }
-  const workspaceKey = workspaceKeyFromPath(cwd);
-  return dshHomePath("aidos", "scratch", workspaceKey);
-}
-function resolveScratchPath(root, path) {
-  if (path.length === 0) {
-    throw new HarnessError(
-      JSON.stringify({ ok: false, error: "empty_path", message: "scratch path must not be empty" }),
-      "AIDOS_SCRATCH_EMPTY_PATH"
-    );
-  }
-  const normalized = isAbsolute2(path) ? path : join2(root, path);
-  if (normalized !== root && !normalized.startsWith(root + "/")) {
-    throw new HarnessError(
-      JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
-      "AIDOS_SCRATCH_PATH_ESCAPE"
-    );
-  }
-  return normalized;
-}
-function callingAgent(exec) {
-  const agent = exec.agent;
-  if (!agent) {
-    throw new HarnessError(
-      JSON.stringify({
-        ok: false,
-        error: "agent_required",
-        message: "the scratch tools require a calling agent"
-      }),
-      "AIDOS_AGENT_REQUIRED"
-    );
-  }
-  return agent;
-}
-function renderJson(_args, value) {
-  return [{ type: "text", text: JSON.stringify(value) }];
-}
-function registerScratchTools(ctx) {
-  ctx.tools.register(
-    defineTool({
-      name: "scratch_read",
-      description: "Read one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
-      parameters: {
-        path: { type: "string", required: true, description: "The file to read, relative to the scratch root or absolute under it." }
-      },
-      output: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            ok: { type: "boolean", const: true, required: true },
-            path: { type: "string", required: true },
-            scratch_root: { type: "string", required: true },
-            content: { type: "string", required: true }
-          }
-        },
-        render: renderJson
-      },
-      execute: async (args, exec) => {
-        const agent = callingAgent(exec);
-        const root = scratchRootForAgent(agent);
-        const absPath = resolveScratchPath(root, args.path);
-        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
-        const content = await ctx.fs.readText(target, exec.signal);
-        return { ok: true, path: absPath, scratch_root: root, content };
-      }
-    })
-  );
-  ctx.tools.register(
-    defineTool({
-      name: "scratch_write",
-      description: "Write one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused. The agent writes freely here: no allowlist membership is required.",
-      parameters: {
-        path: { type: "string", required: true, description: "The file to write, relative to the scratch root or absolute under it." },
-        content: { type: "string", required: true, description: "The full UTF-8 text content to write." }
-      },
-      output: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            ok: { type: "boolean", const: true, required: true },
-            path: { type: "string", required: true },
-            scratch_root: { type: "string", required: true },
-            operation: { type: "string", enum: ["create", "update"], required: true }
-          }
-        },
-        render: renderJson
-      },
-      execute: async (args, exec) => {
-        const agent = callingAgent(exec);
-        const root = scratchRootForAgent(agent);
-        const absPath = resolveScratchPath(root, args.path);
-        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
-        const outcome = await ctx.fs.writeText(target, args.content, void 0, exec.signal);
-        return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
-      }
-    })
-  );
-  ctx.tools.register(
-    defineTool({
-      name: "scratch_edit",
-      description: "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Accepts the same edit arguments (old_string, new_string, replace_all) plus a scratch-relative path. The path is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
-      parameters: {
-        path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
-        old_string: { type: "string", required: true, description: "The literal text to replace." },
-        new_string: { type: "string", required: true, description: "The literal replacement text." },
-        replace_all: { type: "boolean", description: "When true, replace every match instead of requiring exactly one." }
-      },
-      output: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            ok: { type: "boolean", const: true, required: true },
-            path: { type: "string", required: true },
-            scratch_root: { type: "string", required: true },
-            message: { type: "string", required: true }
-          }
-        },
-        render: renderJson
-      },
-      execute: async (args, exec) => {
-        const agent = callingAgent(exec);
-        const root = scratchRootForAgent(agent);
-        const absPath = resolveScratchPath(root, args.path);
-        const editDef = ctx.tools.get("edit", agent);
-        if (!editDef) {
-          throw new HarnessError(
-            JSON.stringify({ ok: false, error: "edit_tool_unavailable", message: "the edit tool is not registered in this scope" }),
-            "AIDOS_EDIT_TOOL_UNAVAILABLE"
-          );
-        }
-        const delegated = await ctx.tools.execute({
-          callId: exec.callId,
-          rootCallId: exec.rootCallId,
-          name: "edit",
-          arguments: {
-            file_path: absPath,
-            old_string: args.old_string,
-            new_string: args.new_string,
-            replace_all: args.replace_all
-          },
-          agent: exec.agent,
-          parent: exec.token,
-          signal: exec.signal
-        });
-        if (delegated.isError) {
-          const code = delegated.error.info?.code;
-          const message2 = delegated.error.message ?? "edit delegation failed";
-          throw new HarnessError(
-            JSON.stringify({ ok: false, error: "edit_delegation_failed", code, message: message2 }),
-            code ?? "AIDOS_EDIT_DELEGATION_FAILED"
-          );
-        }
-        const content = delegated.content[0];
-        const message = content && content.type === "text" ? content.text : "edited";
-        return { ok: true, path: absPath, scratch_root: root, message };
-      }
-    })
-  );
-  ctx.tools.register(
-    defineTool({
-      name: "scratch_mkdir",
-      description: "Create a directory under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
-      parameters: {
-        path: { type: "string", required: true, description: "The directory to create, relative to the scratch root or absolute under it." }
-      },
-      output: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            ok: { type: "boolean", const: true, required: true },
-            path: { type: "string", required: true },
-            scratch_root: { type: "string", required: true }
-          }
-        },
-        render: renderJson
-      },
-      execute: async (args, exec) => {
-        const agent = callingAgent(exec);
-        const root = scratchRootForAgent(agent);
-        const absPath = resolveScratchPath(root, args.path);
-        mkdirSync(absPath, { recursive: true });
-        return { ok: true, path: absPath, scratch_root: root };
-      }
-    })
   );
 }
 
@@ -17356,7 +17424,7 @@ function orchestratorAgent(exec) {
       "AIDOS_AGENT_REQUIRED"
     );
   }
-  if (delegationDepthOf2(agent) !== 0) {
+  if (delegationDepthOf3(agent) !== 0) {
     throw new HarnessError2(
       JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
       "AIDOS_ORCHESTRATOR_ONLY"

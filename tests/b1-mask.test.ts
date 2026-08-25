@@ -60,7 +60,7 @@ function maskedHarness(seed?: (harness: Harness) => void) {
 }
 
 describe("the state-gated masks", () => {
-  it("a session with only open tickets lacks write, edit, and bash", () => {
+  it("a session with only open tickets lacks write and edit but keeps bash", () => {
     const harness = maskedHarness();
     harness.service.setTicket(harness.asAgent(), { title: "Still open" });
 
@@ -68,7 +68,7 @@ describe("the state-gated masks", () => {
     expect(visible).toContain("get_tickets");
     expect(visible).not.toContain("write");
     expect(visible).not.toContain("edit");
-    expect(visible).not.toContain("bash");
+    expect(visible).toContain("bash");
   });
 
   it("one in-progress ticket adds write, edit, and bash", () => {
@@ -110,7 +110,7 @@ describe("the state-gated masks", () => {
     expect(visible).not.toContain("edit");
   });
 
-  it("a done-only session sees get_tickets only", () => {
+  it("a done-only session hides the tier tools but keeps bash", () => {
     const harness = maskedHarness((h) => {
       const store = new Store(DEFAULT_CONFIG, { now: () => FIXED_NOW });
       const project = store.createProject("/srv/proj/cli", "cli");
@@ -130,9 +130,10 @@ describe("the state-gated masks", () => {
     for (const name of ["set_ticket", "attach_evidence", "move_ticket", "plan", "plan_import"]) {
       expect(visible, `tool ${name} must hide in done`).not.toContain(name);
     }
-    for (const name of ["write", "edit", "bash"]) {
+    for (const name of ["write", "edit"]) {
       expect(visible).not.toContain(name);
     }
+    expect(visible).toContain("bash");
   });
 
   it("the mask re-applies on a ticket/change event", () => {
@@ -158,7 +159,7 @@ describe("the state-gated masks", () => {
     expect(visible).not.toContain("read");
     expect(visible).not.toContain("write");
     expect(visible).not.toContain("edit");
-    expect(visible).not.toContain("bash");
+    expect(visible).toContain("bash");
     expect(visible).toContain("get_tickets");
   });
 });
