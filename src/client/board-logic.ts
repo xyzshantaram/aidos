@@ -46,7 +46,8 @@ export const STATE_CHECKLIST_ORDER: TicketState[] = [
 ];
 
 /** The sort keys the board offers. */
-export type SortKey = "confidence" | "gates" | "time" | "alpha";
+export type BoardSortKey = "confidence" | "gates" | "time" | "alpha";
+export type SortKey = BoardSortKey; // alias for compat; prefer BoardSortKey
 
 /** One full filter and sort request. */
 export interface FilterState {

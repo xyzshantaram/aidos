@@ -5,16 +5,28 @@
  *
  * The tests run under vitest, which supplies the runtime; these types are
  * the compile-time contract for the synchronous plan-file read and the
- * path resolution under the session workspace. The bare "fs" and "path"
- * specifiers resolve to the node builtins at runtime.
+ * path resolution under the session workspace. Both "fs"/"path" and
+ * "node:fs"/"node:path" resolve via these ambient modules.
  *
  * A merge pass that adds @types/node can delete this file.
  */
+
 declare module "fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
 }
+declare module "node:fs" {
+  export function readFileSync(path: string, encoding: string): string;
+  export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+}
 declare module "path" {
+  export function isAbsolute(path: string): boolean;
+  export function join(...paths: string[]): string;
+  export function relative(from: string, to: string): string;
+  export function resolve(...paths: string[]): string;
+  export function basename(path: string): string;
+}
+declare module "node:path" {
   export function isAbsolute(path: string): boolean;
   export function join(...paths: string[]): string;
   export function relative(from: string, to: string): string;

@@ -14,8 +14,8 @@
  * inherit the path without re-resolving.
  */
 
-import { isAbsolute, relative, resolve } from "path";
-import { mkdirSync } from "fs";
+import { isAbsolute, relative, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import type { Context } from "@deepseek-ai/cordis";
@@ -52,7 +52,9 @@ export function resolveScratchPath(root: string, path: string): string {
   }
   const candidate = resolve(root, path);
   const rel = relative(root, candidate);
-  if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
+  // Windows: rel may use backslash; normalize before parent-escape check.
+  const norm = rel.replace(/\\/g, "/");
+  if (rel !== "" && (norm.startsWith("../") || norm === ".." || isAbsolute(rel))) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
       "AIDOS_SCRATCH_PATH_ESCAPE",
@@ -75,6 +77,18 @@ function callingAgent(exec: ToolRunContext): Agent {
     );
   }
   return agent;
+}
+
+/** Resolve the fs service or throw a structured HarnessError. Harnesses provide it as ctx.fs; production via ctx.get. */
+function requireFs(ctx: Context): { resolve: (p: string, opts?: unknown) => Promise<unknown>; readText: (t: unknown, signal?: AbortSignal) => Promise<string>; writeText: (t: unknown, content: string, u: unknown, signal?: AbortSignal) => Promise<{ operation: string }> } {
+  const direct = (ctx as unknown as { fs?: unknown }).fs;
+  if (direct) return direct as never;
+  const viaGet = (ctx as unknown as { get?: (k: string) => unknown }).get?.call(ctx, "fs");
+  if (viaGet) return viaGet as never;
+  throw new HarnessError(
+    JSON.stringify({ ok: false, error: "fs_unavailable", message: "fs service not available" }),
+    "AIDOS_FS_UNAVAILABLE",
+  );
 }
 
 /** One JSON-text render for the scratch tool results. */
@@ -108,8 +122,9 @@ export function registerScratchTools(ctx: Context): void {
         const agent = callingAgent(exec);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        const target = await ctx.fs!.resolve(absPath, { signal: exec.signal });
-        const content = await ctx.fs!.readText(target, exec.signal);
+        const fs = requireFs(ctx);
+        const target = await fs.resolve(absPath, { signal: exec.signal });
+        const content = await fs.readText(target, exec.signal);
         return { ok: true, path: absPath, scratch_root: root, content };
       },
     }),
@@ -141,9 +156,10 @@ export function registerScratchTools(ctx: Context): void {
         const agent = callingAgent(exec);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        const target = await ctx.fs!.resolve(absPath, { signal: exec.signal });
-        const outcome = await ctx.fs!.writeText(target, args.content, undefined, exec.signal);
-        return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
+        const fs = requireFs(ctx);
+        const target = await fs.resolve(absPath, { signal: exec.signal });
+        const outcome = await fs.writeText(target, args.content, undefined, exec.signal);
+        return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation as "create" | "update" };
       },
     }),
   );
@@ -243,7 +259,26 @@ export function registerScratchTools(ctx: Context): void {
         const agent = callingAgent(exec);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        mkdirSync(absPath, { recursive: true });
+        // Run mkdir off the main thread so the signal can abort; prefer fs.mkdir if available.
+        const fs = (ctx as unknown as { fs?: { mkdir?: (p: string, opts: unknown) => Promise<void> } }).fs;
+        if (fs?.mkdir) {
+          await fs.mkdir(absPath, { recursive: true });
+        } else {
+          // Fallback: use node:fs but yield to event loop so abort signal is observable.
+          await new Promise<void>((resolve, reject) => {
+            if (exec.signal.aborted) return reject(exec.signal.reason);
+            const onAbort = () => reject(exec.signal.reason);
+            exec.signal.addEventListener("abort", onAbort, { once: true });
+            try {
+              mkdirSync(absPath, { recursive: true });
+              exec.signal.removeEventListener("abort", onAbort);
+              resolve();
+            } catch (e) {
+              exec.signal.removeEventListener("abort", onAbort);
+              reject(e);
+            }
+          });
+        }
         return { ok: true, path: absPath, scratch_root: root };
       },
     }),

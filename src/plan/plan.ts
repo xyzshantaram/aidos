@@ -33,7 +33,10 @@ const CONTINUATION_PREFIX = "  ";
 
 // The marker that separates the body of a ticket from its criteria.
 const CRITERIA_MARKER = "**Evaluate:**";
-const TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+?)\.\*\*\s?(.*)$/;
+// M6 fix: title may contain dots; the split between title and body is the
+// last ".\*\*" before body, not the first dot. Capture title greedily up to
+// the final ".\*\*" on the line; verify by requiring the trailing ".\*\*".
+const TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
 
 export interface PlanTicket {
   id: string;
@@ -273,4 +276,3 @@ function _renderTicket(ticket: PlanTicket): string[] {
 }
 
 export { PlanParseError };
-

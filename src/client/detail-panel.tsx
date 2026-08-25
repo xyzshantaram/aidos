@@ -186,7 +186,7 @@ function DependencySection(props: {
     try {
       await callAidosRemote(
         "userSetTicket",
-        { ticketId: props.ticketId, dependsOn: [...current, ref] },
+        { ticketId: props.ticketId, dependsOn: [...new Set([...current, ref])] },
         props.agentId,
       );
       showToast("Dependency added", "success");

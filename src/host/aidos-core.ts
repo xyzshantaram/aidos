@@ -26,8 +26,8 @@ import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
-import { readFileSync } from "fs";
-import { basename, isAbsolute, relative, resolve } from "path";
+import { readFileSync } from "node:fs";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
@@ -1361,7 +1361,10 @@ registerAidosSessionEventTypes();
     const direct = this._resolvedConfig.kinds.find((candidate) => candidate.id === kind);
     if (direct) return direct;
     if (!kind.startsWith("builtin:") && !kind.startsWith("plugin:")) {
-      return this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+      // Deprecated short-name alias (e.g. automated_check). Tool layer should send builtin: prefix.
+      const resolved = this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+      if (resolved) this.ctx.logger?.warn?.(`aidos: short evidence kind "${kind}" resolved to "${resolved.id}" — send the full id`);
+      return resolved;
     }
     return undefined;
   }

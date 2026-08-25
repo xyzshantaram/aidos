@@ -118,7 +118,8 @@ export async function callAidosRemote(
 
   let response: Response;
   try {
-    response = await fetch(`/api/aidos/${method}`, {
+    // URL is derived from method so envelope.method and path cannot drift.
+    response = await fetch(`/api/${envelope.method}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
