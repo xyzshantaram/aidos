@@ -322,12 +322,12 @@ export function evidenceIsMany(
  * name across renders.
  */
 const KIND_COLORS = [
-  "var(--dsw-alias-state-success-primary)",
-  "var(--dsw-alias-state-business-primary)",
-  "var(--dsw-alias-state-warn-primary)",
-  "var(--dsw-alias-state-info-primary)",
-  "var(--dsw-alias-state-error-primary)",
-  "var(--dsw-alias-brand-primary)",
+  "var(--border)",
+  "var(--border-subtle)",
+  "var(--text-secondary)",
+  "var(--text-muted)",
+  "var(--surface-active)",
+  "var(--surface-hover)",
 ];
 
 export function kindColor(kind: string): string {

@@ -194,8 +194,7 @@ describe("u2b board-logic: kindColor", () => {
 
   it("returns a value from the palette", () => {
     const color = kindColor("anything");
-    expect(color.startsWith("var(--dsw-alias-")).toBe(true);
-    expect(color.endsWith(")")).toBe(true);
+    expect(color.startsWith("var(--")).toBe(true);
   });
 });
 

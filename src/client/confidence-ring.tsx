@@ -29,7 +29,7 @@ export function ConfidenceRing({ ticket }: ConfidenceRingProps) {
         cy={32}
         r={radius}
         fill="none"
-        stroke="var(--dsw-alias-border-l2)"
+        stroke="var(--border)"
         strokeWidth={5}
       />
       {has && percent > 0 ? (
@@ -38,7 +38,7 @@ export function ConfidenceRing({ ticket }: ConfidenceRingProps) {
           cy={32}
           r={radius}
           fill="none"
-          stroke="var(--dsw-alias-brand-primary)"
+          stroke="var(--text-secondary)"
           strokeWidth={5}
           strokeLinecap="round"
           strokeDasharray={arcLength + " " + circumference}
