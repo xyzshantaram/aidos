@@ -14577,8 +14577,8 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { readFileSync } from "fs";
-import { basename, isAbsolute, relative, resolve } from "path";
+import { readFileSync } from "node:fs";
+import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "node:path";
 
 // src/kernel/types.ts
 var STATE_ORDER = [
@@ -15104,7 +15104,7 @@ function validateTicketChange(state, raw) {
     for (const other of state.tickets.values()) {
       nodes.add(refOf(other.workspaceKey, other.id));
     }
-    const resolve2 = (ref) => {
+    const resolve3 = (ref) => {
       const colon = ref.lastIndexOf(":");
       if (colon < 0) return null;
       const key = ref.slice(0, colon);
@@ -15118,12 +15118,12 @@ function validateTicketChange(state, raw) {
       if (other.id === id) continue;
       adjacency.set(
         refOf(other.workspaceKey, other.id),
-        (other.dependsOn ?? []).map(resolve2).filter((entry) => entry !== null)
+        (other.dependsOn ?? []).map(resolve3).filter((entry) => entry !== null)
       );
     }
     adjacency.set(
       incomingRef,
-      ticket.dependsOn.map(resolve2).filter((entry) => entry !== null)
+      ticket.dependsOn.map(resolve3).filter((entry) => entry !== null)
     );
     const color = /* @__PURE__ */ new Map();
     for (const node of nodes) color.set(node, 0);
@@ -15547,7 +15547,7 @@ var FENCE = "---";
 var HEADING_PREFIX = "## ";
 var CONTINUATION_PREFIX = "  ";
 var CRITERIA_MARKER = "**Evaluate:**";
-var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+?)\.\*\*\s?(.*)$/;
+var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
 function parsePlan(text) {
   const lines = text.split("\n");
   const frontmatter = _takeFrontmatter(lines);
@@ -15756,6 +15756,8 @@ function refusalReason(missing, allowedActors) {
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 
 // src/tools/scratch.ts
+import { isAbsolute, relative, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
@@ -16774,7 +16776,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const direct = this._resolvedConfig.kinds.find((candidate) => candidate.id === kind);
     if (direct) return direct;
     if (!kind.startsWith("builtin:") && !kind.startsWith("plugin:")) {
-      return this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+      const resolved = this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+      if (resolved) this.ctx.logger?.warn?.(`aidos: short evidence kind "${kind}" resolved to "${resolved.id}" \u2014 send the full id`);
+      return resolved;
     }
     return void 0;
   }
@@ -16872,13 +16876,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /** Read one plan file, resolved under the session's workspace root. */
   _readPlanFile(agent, file2) {
     let target;
-    if (isAbsolute(file2)) {
+    if (isAbsolute2(file2)) {
       target = file2;
     } else {
       const workspace = this._workspacePath(agent);
-      target = resolve(workspace, file2);
-      const rel = relative(workspace, target);
-      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
+      target = resolve2(workspace, file2);
+      const rel = relative2(workspace, target);
+      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute2(rel))) {
         throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
       }
     }

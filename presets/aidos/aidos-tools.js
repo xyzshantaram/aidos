@@ -14727,8 +14727,8 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { readFileSync } from "fs";
-import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "path";
+import { readFileSync } from "node:fs";
+import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "node:path";
 
 // src/kernel/constants.ts
 var BUILTIN_KINDS = [
@@ -15550,7 +15550,7 @@ var FENCE = "---";
 var HEADING_PREFIX = "## ";
 var CONTINUATION_PREFIX = "  ";
 var CRITERIA_MARKER = "**Evaluate:**";
-var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+?)\.\*\*\s?(.*)$/;
+var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
 function parsePlan(text) {
   const lines = text.split("\n");
   const frontmatter = _takeFrontmatter(lines);
@@ -15759,8 +15759,8 @@ function refusalReason(missing, allowedActors) {
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 
 // src/tools/scratch.ts
-import { isAbsolute, relative, resolve } from "path";
-import { mkdirSync } from "fs";
+import { isAbsolute, relative, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
@@ -15784,7 +15784,8 @@ function resolveScratchPath(root, path) {
   }
   const candidate = resolve(root, path);
   const rel = relative(root, candidate);
-  if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
+  const norm = rel.replace(/\\/g, "/");
+  if (rel !== "" && (norm.startsWith("../") || norm === ".." || isAbsolute(rel))) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
       "AIDOS_SCRATCH_PATH_ESCAPE"
@@ -15805,6 +15806,16 @@ function callingAgent(exec) {
     );
   }
   return agent;
+}
+function requireFs(ctx) {
+  const direct = ctx.fs;
+  if (direct) return direct;
+  const viaGet = ctx.get?.call(ctx, "fs");
+  if (viaGet) return viaGet;
+  throw new HarnessError(
+    JSON.stringify({ ok: false, error: "fs_unavailable", message: "fs service not available" }),
+    "AIDOS_FS_UNAVAILABLE"
+  );
 }
 function renderJson(_args, value) {
   return [{ type: "text", text: JSON.stringify(value) }];
@@ -15834,8 +15845,9 @@ function registerScratchTools(ctx) {
         const agent = callingAgent(exec);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
-        const content = await ctx.fs.readText(target, exec.signal);
+        const fs = requireFs(ctx);
+        const target = await fs.resolve(absPath, { signal: exec.signal });
+        const content = await fs.readText(target, exec.signal);
         return { ok: true, path: absPath, scratch_root: root, content };
       }
     })
@@ -15865,8 +15877,9 @@ function registerScratchTools(ctx) {
         const agent = callingAgent(exec);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        const target = await ctx.fs.resolve(absPath, { signal: exec.signal });
-        const outcome = await ctx.fs.writeText(target, args.content, void 0, exec.signal);
+        const fs = requireFs(ctx);
+        const target = await fs.resolve(absPath, { signal: exec.signal });
+        const outcome = await fs.writeText(target, args.content, void 0, exec.signal);
         return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
       }
     })
@@ -15956,7 +15969,24 @@ function registerScratchTools(ctx) {
         const agent = callingAgent(exec);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        mkdirSync(absPath, { recursive: true });
+        const fs = ctx.fs;
+        if (fs?.mkdir) {
+          await fs.mkdir(absPath, { recursive: true });
+        } else {
+          await new Promise((resolve4, reject) => {
+            if (exec.signal.aborted) return reject(exec.signal.reason);
+            const onAbort = () => reject(exec.signal.reason);
+            exec.signal.addEventListener("abort", onAbort, { once: true });
+            try {
+              mkdirSync(absPath, { recursive: true });
+              exec.signal.removeEventListener("abort", onAbort);
+              resolve4();
+            } catch (e) {
+              exec.signal.removeEventListener("abort", onAbort);
+              reject(e);
+            }
+          });
+        }
         return { ok: true, path: absPath, scratch_root: root };
       }
     })
@@ -16966,7 +16996,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const direct = this._resolvedConfig.kinds.find((candidate) => candidate.id === kind);
     if (direct) return direct;
     if (!kind.startsWith("builtin:") && !kind.startsWith("plugin:")) {
-      return this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+      const resolved = this._resolvedConfig.kinds.find((candidate) => candidate.id === `builtin:${kind}`);
+      if (resolved) this.ctx.logger?.warn?.(`aidos: short evidence kind "${kind}" resolved to "${resolved.id}" \u2014 send the full id`);
+      return resolved;
     }
     return void 0;
   }
