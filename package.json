@@ -60,5 +60,8 @@
     ".": "./dist/host/aidos-plugin.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
+  },
+  "overrides": {
+    "@deepseek-ai/dsh-invariants": "0.1.0-rc.8"
   }
 }
