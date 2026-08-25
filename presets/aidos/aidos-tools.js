@@ -15139,13 +15139,15 @@ function validateTicketChange(state, raw) {
         if (nextColor === 2) continue;
         if (nextColor === 1) {
           const start = path.indexOf(next);
-          const cycle = path.slice(start).map((ref) => ref.slice(ref.lastIndexOf(":") + 1));
-          let message = `ticket ${cycle[0]} depends on`;
-          for (let index = 1; index < cycle.length; index += 1) {
-            message += ` ticket ${cycle[index]}`;
+          const cycle = path.slice(start);
+          const allSameWorkspace = cycle.every((ref) => ref.slice(0, ref.lastIndexOf(":")) === cycle[0].slice(0, cycle[0].lastIndexOf(":")));
+          const display = allSameWorkspace ? cycle.map((ref) => ref.slice(ref.lastIndexOf(":") + 1)) : cycle;
+          let message = `ticket ${display[0]} depends on`;
+          for (let index = 1; index < display.length; index += 1) {
+            message += ` ticket ${display[index]}`;
             if (index < cycle.length - 1) message += " which depends on";
           }
-          invariant(`${message} which depends on ticket ${cycle[0]}`);
+          invariant(`${message} which depends on ticket ${display[0]}`);
         }
         visit(next);
       }
@@ -16390,6 +16392,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
   subagentKind(agent) {
+    const direct = agent.descriptor?.provider;
+    if (direct) return direct;
     const session = agent.session;
     const events = session?.events;
     if (!events) return void 0;
@@ -16458,7 +16462,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (!query) return [];
     const results = [];
     for (const session of this.ctx.sessions.list()) {
-      const snap = this.ctx.sessionProjections.snapshot(session);
+      let snap;
+      try {
+        snap = this.ctx.sessionProjections.snapshot(session);
+      } catch {
+        continue;
+      }
       const tickets = snap.values["aidos.tickets"];
       if (!tickets) continue;
       for (const [id, ticket] of Object.entries(tickets)) {
@@ -16478,7 +16487,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   coldTickets(agent, args) {
     const session = this.ctx.sessions.get(args.sessionId);
     if (!session) return [];
-    const snap = this.ctx.sessionProjections.snapshot(session);
+    let snap;
+    try {
+      snap = this.ctx.sessionProjections.snapshot(session);
+    } catch {
+      return [];
+    }
     const tickets = snap.values["aidos.tickets"];
     if (!tickets) return [];
     let rows = Object.values(tickets);
@@ -17193,6 +17207,8 @@ __publicField(AidosService, "Config", z2.object({}));
 
 // src/tools/guard.ts
 import { delegationDepthOf as delegationDepthOf2 } from "@deepseek-ai/dsh-subagent";
+
+// src/tools/board-tools.ts
 var BOARD_TOOLS = [
   "get_tickets",
   "set_ticket",
@@ -17201,7 +17217,10 @@ var BOARD_TOOLS = [
   "plan",
   "plan_import"
 ];
-var BOARD_TOOL_SET = new Set(BOARD_TOOLS);
+
+// src/tools/guard.ts
+var BOARD_TOOLS2 = BOARD_TOOLS;
+var BOARD_TOOL_SET = new Set(BOARD_TOOLS2);
 var ORCHESTRATOR_ONLY_MESSAGE = "the orchestrator is the only actor that may use the board tools; a subagent cannot";
 function installAidosGuard(ctx) {
   return ctx.tools.guard((execution) => {
@@ -17267,6 +17286,9 @@ function installAidosMask(ctx) {
       return [...TOOL_UNIVERSE];
     }
   };
+  for (const name2 of BOARD_TOOLS) {
+    if (!TOOL_UNIVERSE.has(name2)) throw new Error(`BOARD_TOOLS ${name2} missing from TOOL_UNIVERSE`);
+  }
   const denyFor = (agent) => {
     if (!aidos) return null;
     let states;
