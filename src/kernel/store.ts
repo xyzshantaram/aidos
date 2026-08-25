@@ -83,6 +83,9 @@ const SORT_COLUMNS: Record<SortKey, RowGetter[]> = {
 
 /** Compare two sort values. Null sorts before every value (SQLite). */
 function compareValues(a: unknown, b: unknown): number {
+  // Normalize undefined -> null so gateFraction nulls and undefineds sort consistently.
+  if (a === undefined) a = null;
+  if (b === undefined) b = null;
   if (a === null && b === null) {
     return 0;
   }

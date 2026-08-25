@@ -605,6 +605,8 @@ registerAidosSessionEventTypes();
 
   /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
   private subagentKind(agent: Agent): string | undefined {
+    const direct = (agent as unknown as { descriptor?: { provider?: string } }).descriptor?.provider;
+    if (direct) return direct;
     const session = agent.session as unknown as { events?: ReadonlyArray<{ type?: string; provider?: string }> } | undefined;
     const events = session?.events;
     if (!events) return undefined;
@@ -695,7 +697,8 @@ registerAidosSessionEventTypes();
     if (!query) return [];
     const results: TicketSearchResult[] = [];
     for (const session of this.ctx.sessions.list()) {
-      const snap = this.ctx.sessionProjections.snapshot(session);
+      let snap;
+      try { snap = this.ctx.sessionProjections.snapshot(session); } catch { continue; }
       const tickets = snap.values["aidos.tickets"];
       if (!tickets) continue;
       for (const [id, ticket] of Object.entries(tickets)) {
@@ -726,7 +729,8 @@ registerAidosSessionEventTypes();
   coldTickets(agent: Agent, args: { sessionId: string; states?: string[] }): TicketView[] {
     const session = this.ctx.sessions.get(args.sessionId as any);
     if (!session) return [];
-    const snap = this.ctx.sessionProjections.snapshot(session);
+    let snap;
+    try { snap = this.ctx.sessionProjections.snapshot(session); } catch { return []; }
     const tickets = snap.values["aidos.tickets"];
     if (!tickets) return [];
     let rows = Object.values(tickets);

@@ -12,16 +12,10 @@
 
 import type { Context } from "@deepseek-ai/cordis";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+import { BOARD_TOOLS as SHARED_BOARD_TOOLS } from "./board-tools";
 
 /** The six board tools. Shared by the guard and the tool bodies' re-check. */
-export const BOARD_TOOLS = [
-  "get_tickets",
-  "set_ticket",
-  "attach_evidence",
-  "move_ticket",
-  "plan",
-  "plan_import",
-] as const;
+export const BOARD_TOOLS = SHARED_BOARD_TOOLS;
 
 const BOARD_TOOL_SET = new Set<string>(BOARD_TOOLS);
 

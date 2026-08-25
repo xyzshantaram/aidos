@@ -98,6 +98,7 @@ function errorExtra(body: GatewayErrorBody | undefined): Record<string, unknown>
 /**
  * Call one aidos Remote method and resolve with the business result.
  * A refusal or a transport problem rejects with AidosRemoteError.
+ * Times out after 15s so a hung gateway does not hang the UI.
  */
 export async function callAidosRemote(
   method: string,
@@ -116,6 +117,10 @@ export async function callAidosRemote(
     },
   };
 
+  const timeoutMs = 15000;
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : undefined;
+  const timeout = controller ? setTimeout(() => controller.abort(new Error("Remote call timed out after " + timeoutMs + "ms")), timeoutMs) : undefined;
+
   let response: Response;
   try {
     // URL is derived from method so envelope.method and path cannot drift.
@@ -125,8 +130,11 @@ export async function callAidosRemote(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(envelope),
+      signal: controller?.signal,
     });
+    if (timeout !== undefined) clearTimeout(timeout);
   } catch (error) {
+    if (timeout !== undefined) clearTimeout(timeout);
     throw new AidosRemoteError(
       "transport_error",
       `The request to the aidos Remote failed: ${error instanceof Error ? error.message : String(error)}`,

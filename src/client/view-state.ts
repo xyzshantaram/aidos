@@ -88,6 +88,12 @@ export function reportCount(sessionId: string, count: number): void {
   if (changed && bumpCallback !== null) bumpCallback();
 }
 
+/** The tab label for a specific session. Use badgeLabel() for the current session. */
+export function badgeLabelFor(sessionId: string): string {
+  const count = counts.get(sessionId) ?? 0;
+  return count > 0 ? "Tickets (" + count + ")" : "Tickets";
+}
+
 /** The tab label. A nonzero count for the current session adds a suffix. */
 export function badgeLabel(): string {
   const count = currentSessionId === null ? 0 : counts.get(currentSessionId) ?? 0;

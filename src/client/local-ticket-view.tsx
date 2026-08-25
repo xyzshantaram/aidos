@@ -163,15 +163,16 @@ function ProjectionReader(props: ProjectionReaderProps) {
       : (commentsProjection as Record<string, CommentRecord[]>);
   const allTicketsCount = rawTickets.length;
   // Persist the filter under one workspace key. When the board shows tickets
-  // from projects with different workspace keys, fall back to "default" so the
-  // filter is not persisted under a key that belongs to (and poisons) one
-  // project's board over the others.
+  // from projects with different workspace keys, keep the first key but suffix
+  // with sessionId so the shared "default" bucket does not poison across
+  // sessions. M9 fix: mixed boards used to share a single "default" key.
+  const rawWsSet = new Set(rawTickets.map((ticket) => ticket.workspaceKey));
   const workspaceKey =
     rawTickets.length === 0
       ? "default"
-      : new Set(rawTickets.map((ticket) => ticket.workspaceKey)).size === 1
+      : rawWsSet.size === 1
         ? rawTickets[0].workspaceKey
-        : "default";
+        : `default:${sessionId}`;
 
 
   const [applied, setAppliedStateLocal] = react.useState<AppliedState>(function () {
@@ -302,9 +303,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [evidenceCollapsed, setEvidenceCollapsed] = react.useState(function () {
     return evidenceIsMany(selectedEvidence);
   });
-  // The initial state only runs once per mount; re-evaluate it when the
-  // selected ticket changes so one ticket's collapsed state cannot leak
-  // onto the next ticket.
+  // Re-evaluate collapsed state when selected ticket changes so one ticket's state does not leak.
   react.useEffect(function () {
     setEvidenceCollapsed(evidenceIsMany(selectedEvidence));
   }, [selectedTicket?.id]);

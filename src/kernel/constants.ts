@@ -138,4 +138,4 @@ export const DEFAULT_CONFIG: AidosConfig = {
  */
 export const PLAN_CONTEXT_LIMIT = 2000;
 
-export { STATE_ORDER };
+export { STATE_ORDER } from "./types"; // re-export for tests that import from constants; canonical source remains src/kernel/types.ts

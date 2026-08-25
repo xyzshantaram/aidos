@@ -23,6 +23,7 @@ import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { Session } from "@deepseek-ai/dsh-session";
 import { scopeOf } from "@deepseek-ai/dsh-scope";
 import type { TicketState } from "../kernel/types";
+import { BOARD_TOOLS } from "./board-tools";
 
 /** The reserved code-mode transport, which restrictions must never name. */
 const RUN_CODE = "run_code";
@@ -118,6 +119,10 @@ export function installAidosMask(ctx: Context): () => void {
    * ready. Mirrors the runtime restrict() computation so the system-prompt
    * schema strip (below) and the runtime mask stay in lockstep.
    */
+  // M8: every board tool must be in the mask universe — fail fast on drift
+  for (const name of BOARD_TOOLS) {
+    if (!TOOL_UNIVERSE.has(name)) throw new Error(`BOARD_TOOLS ${name} missing from TOOL_UNIVERSE`);
+  }
   const denyFor = (agent: Agent): string[] | null => {
     if (!aidos) return null;
     let states: TicketState[];

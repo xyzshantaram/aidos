@@ -8,6 +8,8 @@
 # The agent plane ships as the aidos preset (presets/aidos/); the
 # deployment mounts it by adding its presets root to dsh-agent-presets
 # (the web profile's home patch or $DSH_HOME/.agent-presets).
+# Order: aidos-invariants must precede aidos-core (session-events registration
+# must happen before invariant seed). Keep this order if adding rows.
 - insert:
     - id: aidos-invariants
       name: '@deepseek-ai/dsh-invariants'
