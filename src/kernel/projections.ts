@@ -110,6 +110,7 @@ function rowFromSnapshot(snapshot: TicketSnapshot): TicketRow {
     phase: snapshot.phase,
     order: snapshot.order,
     state: snapshot.state,
+    dependsOn: [...snapshot.dependsOn],
   };
 }
 

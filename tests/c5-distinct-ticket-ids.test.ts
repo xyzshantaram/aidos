@@ -203,6 +203,7 @@ describe("workspace-scoped resolution", () => {
         updatedAt: 1000,
         slug: "foreign",
         workspaceKey: "--ws-a--",
+        dependsOn: [],
       },
     });
     const service = harness.installService();
@@ -255,6 +256,7 @@ describe("a foreign write is refused", () => {
         updatedAt: 1000,
         slug: "foreign",
         workspaceKey: "--ws-a--",
+        dependsOn: [],
       },
     });
     const service = harness.installService();

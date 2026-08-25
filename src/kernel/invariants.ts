@@ -33,6 +33,7 @@ const SNAPSHOT_KEYS = [
   "revision",
   "createdAt",
   "updatedAt",
+  "dependsOn",
 ];
 const EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 const EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
@@ -171,6 +172,13 @@ function validateTicketChange(
   ) {
     invariant("ticket allowlist must be an array of strings");
   }
+  if (
+    "dependsOn" in rawTicket &&
+    (!Array.isArray(rawTicket.dependsOn) ||
+      rawTicket.dependsOn.some((entry) => typeof entry !== "string"))
+  ) {
+    invariant("ticket dependsOn must be an array of strings");
+  }
   expectInt(ticket.revision, "ticket revision", 1);
   expectNumber(ticket.createdAt, "ticket createdAt");
   expectNumber(ticket.updatedAt, "ticket updatedAt");
@@ -204,6 +212,85 @@ function validateTicketChange(
       other.slug === (ticket.slug as string)
     ) {
       invariant(`ticket slug ${ticket.slug as string} is already used in workspace ${ticket.workspaceKey as string}`);
+    }
+  }
+
+  // D1: a ticket must not depend on itself. The reference names the same
+  // workspace and the same ticket number.
+  const selfRef = (ticket.dependsOn as string[]).find((ref) => {
+    const colon = ref.lastIndexOf(":");
+    if (colon < 0) return false;
+    const refWorkspace = ref.slice(0, colon);
+    const refId = Number(ref.slice(colon + 1));
+    return refWorkspace === (ticket.workspaceKey as string) && refId === id;
+  });
+  if (selfRef !== undefined) {
+    invariant(`ticket ${id} cannot depend on itself (${selfRef})`);
+  }
+
+  // D1: the dependency graph must stay acyclic. The nodes are the folded
+  // tickets plus the incoming snapshot; an unresolvable reference is a leaf
+  // and cannot close a cycle. One DFS pass, three colors per node.
+  {
+    const refOf = (workspaceKey: string, ticketId: number): string =>
+      `${workspaceKey}:${ticketId}`;
+    const incomingRef = refOf(ticket.workspaceKey as string, id);
+    const nodes = new Set<string>([incomingRef]);
+    for (const other of state.tickets.values()) {
+      nodes.add(refOf(other.workspaceKey, other.id));
+    }
+    const resolve = (ref: string): string | null => {
+      const colon = ref.lastIndexOf(":");
+      if (colon < 0) return null;
+      const key = ref.slice(0, colon);
+      const ticketId = Number(ref.slice(colon + 1));
+      if (!Number.isInteger(ticketId) || ticketId < 1) return null;
+      const target = refOf(key, ticketId);
+      return nodes.has(target) ? target : null;
+    };
+    const adjacency = new Map<string, string[]>();
+    for (const other of state.tickets.values()) {
+      if (other.id === id) continue;
+      adjacency.set(
+        refOf(other.workspaceKey, other.id),
+        (other.dependsOn ?? []).map(resolve).filter((entry): entry is string => entry !== null),
+      );
+    }
+    adjacency.set(
+      incomingRef,
+      (ticket.dependsOn as string[]).map(resolve).filter((entry): entry is string => entry !== null),
+    );
+
+    // 0 = unvisited, 1 = on the current path, 2 = done.
+    const color = new Map<string, number>();
+    for (const node of nodes) color.set(node, 0);
+    const path: string[] = [];
+
+    const visit = (node: string): void => {
+      color.set(node, 1);
+      path.push(node);
+      for (const next of adjacency.get(node) ?? []) {
+        const nextColor = color.get(next);
+        if (nextColor === 2) continue;
+        if (nextColor === 1) {
+          // A cycle runs from the first path occurrence of next onward.
+          const start = path.indexOf(next);
+          const cycle = path.slice(start).map((ref) => ref.slice(ref.lastIndexOf(":") + 1));
+          let message = `ticket ${cycle[0]} depends on`;
+          for (let index = 1; index < cycle.length; index += 1) {
+            message += ` ticket ${cycle[index]}`;
+            if (index < cycle.length - 1) message += " which depends on";
+          }
+          invariant(`${message} which depends on ticket ${cycle[0]}`);
+        }
+        visit(next);
+      }
+      path.pop();
+      color.set(node, 2);
+    };
+
+    for (const node of nodes) {
+      if (color.get(node) === 0) visit(node);
     }
   }
 

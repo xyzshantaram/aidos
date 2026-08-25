@@ -234,6 +234,7 @@ export class Store {
       phase: snapshot.phase,
       order: snapshot.order,
       state: snapshot.state,
+      dependsOn: [...snapshot.dependsOn],
     };
   }
 
@@ -438,6 +439,7 @@ export class Store {
       phase?: number;
       order?: number;
       allowlist?: string[];
+      dependsOn?: string[];
       slug?: string;
     },
   ): TicketId {
@@ -464,6 +466,7 @@ export class Store {
       order,
       state: "open",
       allowlist: [...(opts?.allowlist ?? [])],
+      dependsOn: [...(opts?.dependsOn ?? [])],
       slug,
       workspaceKey,
       revision: 1,
@@ -491,6 +494,7 @@ export class Store {
       phase?: number;
       order?: number;
       allowlist?: string[];
+      dependsOn?: string[];
       slug?: string;
     },
   ): void {
@@ -512,6 +516,7 @@ export class Store {
       phase: opts.phase ?? prev.phase,
       order: opts.order ?? prev.order,
       allowlist: opts.allowlist ? [...opts.allowlist] : prev.allowlist,
+      dependsOn: opts.dependsOn ? [...opts.dependsOn] : prev.dependsOn,
       slug: nextSlug,
       revision: prev.revision + 1,
       updatedAt: at,

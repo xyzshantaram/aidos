@@ -42,6 +42,12 @@ export interface TicketSnapshot {
   slug: string;
   /** The workspace this ticket belongs to. The raw global id is `<workspaceKey>:<slug>`. */
   workspaceKey: string;
+  /**
+   * Ticket dependencies as `<workspaceKey>:<ticketId>` references, one per
+   * dependency. Cross-workspace references are allowed. Empty means no
+   * dependencies. Informational only: no gate enforces them.
+   */
+  dependsOn: string[];
   /** 1 on create, +1 on every set and move. */
   revision: number;
   /** at of the create event. */
@@ -130,6 +136,11 @@ export interface TicketRow {
   phase: number;
   order: number;
   state: TicketState;
+  /**
+   * Ticket dependencies as `<workspaceKey>:<ticketId>` references. Empty
+   * means no dependencies. Informational only: no gate enforces them.
+   */
+  dependsOn: string[];
 }
 
 /** One paged ticket row: the ticket fields plus the derived pair. */

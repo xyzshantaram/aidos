@@ -319,6 +319,7 @@ const TICKET_VIEW_ZOD = zod.object({
   gateFraction: zod.number().nullable(),
   updatedAt: zod.number(),
   workspaceKey: zod.string(),
+  dependsOn: zod.array(zod.string()),
 });
 const PLAN_VALUE_ZOD = zod.object({
   frontmatter: zod.string(),
@@ -375,6 +376,7 @@ function rowOf(snapshot: TicketSnapshot): TicketRow {
     phase: snapshot.phase,
     order: snapshot.order,
     state: snapshot.state,
+    dependsOn: [...snapshot.dependsOn],
   };
 }
 
@@ -418,6 +420,12 @@ export interface SetTicketArgs {
   order?: number;
   slug?: string;
   /**
+   * Ticket dependencies as `<workspaceKey>:<ticketId>` references. Empty
+   * or absent leaves the field unchanged on edit. Informational only: no
+   * gate enforces them.
+   */
+  dependsOn?: string[];
+  /**
    * The file allowlist for this ticket. User-only: the agent tool path
    * cannot set it, and every path must be covered by an approved
    * `builtin:file_allowlist` evidence row on this ticket.
@@ -450,6 +458,16 @@ export interface EvidenceView {
   ticketId: number;
   kind: string;
   payload: Record<string, unknown>;
+}
+
+/** One dependency-search hit, carrying the stored reference fields. */
+export interface TicketSearchResult {
+  sessionId: string;
+  ticketId: number;
+  title: string;
+  state: string;
+  workspaceKey: string;
+  dependsOn: string[];
 }
 
 /**
@@ -641,6 +659,61 @@ registerAidosSessionEventTypes();
       return this._editTicket(agent, args, "user");
     }
     return this._createTicket(agent, args);
+  }
+
+  /**
+   * The cross-workspace dependency search, exported over the typert Remote
+   * surface. Matches one query against the title of every live session's
+   * tickets, and returns the stored reference fields the board needs to
+   * render a dependency badge and to add a dependency. Only live sessions
+   * are reachable: a session that is not open right now has no disk-scan
+   * path and contributes nothing.
+   */
+  @Remote("searchTickets")
+  searchTickets(agent: Agent, args: { query: string }): TicketSearchResult[] {
+    const query = (args.query ?? "").toLowerCase().trim();
+    if (!query) return [];
+    const results: TicketSearchResult[] = [];
+    for (const session of this.ctx.sessions.list()) {
+      const snap = this.ctx.sessionProjections.snapshot(session);
+      const tickets = snap.values["aidos.tickets"];
+      if (!tickets) continue;
+      for (const [id, ticket] of Object.entries(tickets)) {
+        if (!ticket.title.toLowerCase().includes(query)) continue;
+        results.push({
+          sessionId: session.id,
+          ticketId: Number(id),
+          title: ticket.title,
+          state: ticket.state,
+          workspaceKey: ticket.workspaceKey,
+          dependsOn: ticket.dependsOn ?? [],
+        });
+      }
+    }
+    return results.slice(0, 50);
+  }
+
+  /**
+   * The cross-workspace board read, exported over the typert Remote surface.
+   * Reads one session's tickets by its session id, through the live session
+   * store and the aidos.tickets projection. The board UI (U2d) calls this
+   * with a session id it does not itself own, so the arg carries the id
+   * instead of the calling agent. Only live sessions are reachable: a
+   * session that is not open right now has no disk-scan path and returns an
+   * empty board (the client treats that as "session not open").
+   */
+  @Remote("coldTickets")
+  coldTickets(agent: Agent, args: { sessionId: string; states?: string[] }): TicketView[] {
+    const session = this.ctx.sessions.get(args.sessionId as any);
+    if (!session) return [];
+    const snap = this.ctx.sessionProjections.snapshot(session);
+    const tickets = snap.values["aidos.tickets"];
+    if (!tickets) return [];
+    let rows = Object.values(tickets);
+    if (args.states && args.states.length > 0) {
+      rows = rows.filter((ticket) => (args.states as string[]).includes(ticket.state));
+    }
+    return rows;
   }
 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
@@ -925,6 +998,7 @@ registerAidosSessionEventTypes();
       phase,
       order: args.order,
       slug: args.slug,
+      dependsOn: args.dependsOn === undefined ? undefined : [...args.dependsOn],
     });
     const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
     if (!snapshot) {
@@ -974,6 +1048,7 @@ registerAidosSessionEventTypes();
       phase: args.phase ?? prev.phase,
       order: args.order ?? prev.order,
       slug: nextSlug,
+      ...(args.dependsOn !== undefined ? { dependsOn: [...args.dependsOn] } : {}),
       ...(allowlist !== undefined ? { allowlist } : {}),
       revision: prev.revision + 1,
       updatedAt: at,
@@ -1136,7 +1211,7 @@ registerAidosSessionEventTypes();
     projectId: ProjectId,
     title: string,
     description: string,
-    opts?: { body?: string; criteria?: string; phase?: number; order?: number; slug?: string },
+    opts?: { body?: string; criteria?: string; phase?: number; order?: number; slug?: string; dependsOn?: string[] },
   ): TicketId {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
@@ -1161,6 +1236,7 @@ registerAidosSessionEventTypes();
       order,
       state: "open",
       allowlist: [],
+      dependsOn: [...(opts?.dependsOn ?? [])],
       slug,
       workspaceKey,
       revision: 1,
@@ -1442,6 +1518,7 @@ registerAidosSessionEventTypes();
         phase: snapshot.phase,
         order: snapshot.order,
         state: snapshot.state,
+        dependsOn: [...(snapshot.dependsOn ?? [])],
         confidenceScore: confidenceScoreOf(config, evidence),
         gateFraction: gateFractionOf(config, snapshot, evidence),
         updatedAt: snapshot.updatedAt,

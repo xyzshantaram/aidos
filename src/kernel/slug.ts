@@ -63,6 +63,10 @@ export function normalizeTicketSnapshot(
   const id = snapshot.id as number;
   const projectId = snapshot.projectId as number;
   const slug = typeof snapshot.slug === "string" ? snapshot.slug : `ticket-${id}`;
+  // A snapshot written before D1 has no dependsOn. Synthesize the empty
+  // list here so strict validation and the fold both treat the record as
+  // its normalized values.
+  const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
   const absPath = resolveAbsPath(projectId);
   const workspaceKey =
     typeof snapshot.workspaceKey === "string"
@@ -70,5 +74,5 @@ export function normalizeTicketSnapshot(
       : absPath === undefined
         ? ""
         : workspaceKeyFromPath(absPath);
-  return { ...snapshot, slug, workspaceKey };
+  return { ...snapshot, slug, workspaceKey, dependsOn };
 }

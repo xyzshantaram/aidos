@@ -70,6 +70,7 @@ const TICKET_ROW_SCHEMA = {
     phase: { type: "integer", required: true },
     order: { type: "integer", required: true },
     state: { ...STATE_SCHEMA, required: true },
+    dependsOn: { type: "array", items: { type: "string" }, required: true },
   },
 } as const;
 
@@ -297,6 +298,12 @@ function registerSetTicket(ctx: Context): void {
         phaseTitle: { type: "string", description: "The title a newly created phase takes; defaults to 'Untitled phase'." },
         order: { type: "integer", description: "The order within the phase; defaults to the next free position on create." },
         slug: { type: "string", description: "A per-workspace-unique alias for a new ticket; derived from the title when absent." },
+        dependsOn: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Ticket dependencies as workspace:ticketId references (e.g., --home-sid-repos-aidos--:42). Empty or absent leaves unchanged.",
+        },
       },
       output: {
         schema: {
