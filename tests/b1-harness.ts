@@ -417,6 +417,7 @@ export interface HarnessCtx {
     currentInitiator(): Agent | undefined;
   };
   sessions: {
+    get(id: SessionIdType): Session | undefined;
     list(): Session[];
   };
   sessionProjections: {
@@ -429,6 +430,7 @@ export interface HarnessCtx {
       stateVersion: number;
     }): () => void;
     onChanged(listener: (session: Session, key: string, value: unknown, seq: number) => void): () => void;
+    snapshot(session: Session): { asOfSeq: number; values: Record<string, unknown> };
   };
   invariants: {
     register(
@@ -830,6 +832,10 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
       },
     },
     sessions: {
+      get(id) {
+        const agent = agents.find((candidate) => candidate.id === id);
+        return agent ? (agent.session as unknown as Session) : undefined;
+      },
       list() {
         return agents.map((agent) => agent.session as unknown as Session);
       },
@@ -847,6 +853,41 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
             projectionListeners.splice(index, 1);
           }
         };
+      },
+      snapshot(session) {
+        const sessionId = (session as unknown as { id: string }).id;
+        const agent = agents.find((candidate) => candidate.id === sessionId);
+        const log = agent ? (agent.session.events as readonly SessionEvent[]) : [];
+        const values: Record<string, unknown> = {};
+        for (const registration of projections) {
+          const key = registration.key;
+          if (key === "aidos.tickets") {
+            let state = registration.definition.init() as { tickets: Record<string, unknown>; evidence: Record<string, unknown[]> };
+            for (const event of log) {
+              state = registration.definition.apply(state, event) as typeof state;
+            }
+            values[key] = registration.definition.view(state);
+          } else if (key === "aidos.evidence") {
+            let state = registration.definition.init() as Record<string, unknown[]>;
+            for (const event of log) {
+              state = registration.definition.apply(state, event) as typeof state;
+            }
+            values[key] = registration.definition.view(state);
+          } else if (key === "aidos.plan") {
+            let state = registration.definition.init() as Record<string, unknown>;
+            for (const event of log) {
+              state = registration.definition.apply(state, event) as typeof state;
+            }
+            values[key] = registration.definition.view(state);
+          } else if (key === "aidos.comments") {
+            let state = registration.definition.init() as Record<string, unknown[]>;
+            for (const event of log) {
+              state = registration.definition.apply(state, event) as typeof state;
+            }
+            values[key] = registration.definition.view(state);
+          }
+        }
+        return { asOfSeq: log.length, values };
       },
     },
     invariants: {
