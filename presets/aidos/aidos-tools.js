@@ -14934,9 +14934,10 @@ function normalizeTicketSnapshot(snapshot, resolveAbsPath) {
   const id = snapshot.id;
   const projectId = snapshot.projectId;
   const slug = typeof snapshot.slug === "string" ? snapshot.slug : `ticket-${id}`;
+  const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
   const absPath = resolveAbsPath(projectId);
   const workspaceKey = typeof snapshot.workspaceKey === "string" ? snapshot.workspaceKey : absPath === void 0 ? "" : workspaceKeyFromPath(absPath);
-  return { ...snapshot, slug, workspaceKey };
+  return { ...snapshot, slug, workspaceKey, dependsOn };
 }
 
 // src/kernel/invariants.ts
@@ -14956,7 +14957,8 @@ var SNAPSHOT_KEYS = [
   "workspaceKey",
   "revision",
   "createdAt",
-  "updatedAt"
+  "updatedAt",
+  "dependsOn"
 ];
 var EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 var EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
@@ -15062,6 +15064,9 @@ function validateTicketChange(state, raw) {
   if (!Array.isArray(ticket.allowlist) || ticket.allowlist.some((entry) => typeof entry !== "string")) {
     invariant("ticket allowlist must be an array of strings");
   }
+  if ("dependsOn" in rawTicket && (!Array.isArray(rawTicket.dependsOn) || rawTicket.dependsOn.some((entry) => typeof entry !== "string"))) {
+    invariant("ticket dependsOn must be an array of strings");
+  }
   expectInt(ticket.revision, "ticket revision", 1);
   expectNumber(ticket.createdAt, "ticket createdAt");
   expectNumber(ticket.updatedAt, "ticket updatedAt");
@@ -15086,6 +15091,72 @@ function validateTicketChange(state, raw) {
   for (const other of state.tickets.values()) {
     if (other.id !== id && other.workspaceKey === ticket.workspaceKey && other.slug === ticket.slug) {
       invariant(`ticket slug ${ticket.slug} is already used in workspace ${ticket.workspaceKey}`);
+    }
+  }
+  const selfRef = ticket.dependsOn.find((ref) => {
+    const colon = ref.lastIndexOf(":");
+    if (colon < 0) return false;
+    const refWorkspace = ref.slice(0, colon);
+    const refId = Number(ref.slice(colon + 1));
+    return refWorkspace === ticket.workspaceKey && refId === id;
+  });
+  if (selfRef !== void 0) {
+    invariant(`ticket ${id} cannot depend on itself (${selfRef})`);
+  }
+  {
+    const refOf = (workspaceKey, ticketId) => `${workspaceKey}:${ticketId}`;
+    const incomingRef = refOf(ticket.workspaceKey, id);
+    const nodes = /* @__PURE__ */ new Set([incomingRef]);
+    for (const other of state.tickets.values()) {
+      nodes.add(refOf(other.workspaceKey, other.id));
+    }
+    const resolve = (ref) => {
+      const colon = ref.lastIndexOf(":");
+      if (colon < 0) return null;
+      const key = ref.slice(0, colon);
+      const ticketId = Number(ref.slice(colon + 1));
+      if (!Number.isInteger(ticketId) || ticketId < 1) return null;
+      const target = refOf(key, ticketId);
+      return nodes.has(target) ? target : null;
+    };
+    const adjacency = /* @__PURE__ */ new Map();
+    for (const other of state.tickets.values()) {
+      if (other.id === id) continue;
+      adjacency.set(
+        refOf(other.workspaceKey, other.id),
+        (other.dependsOn ?? []).map(resolve).filter((entry) => entry !== null)
+      );
+    }
+    adjacency.set(
+      incomingRef,
+      ticket.dependsOn.map(resolve).filter((entry) => entry !== null)
+    );
+    const color = /* @__PURE__ */ new Map();
+    for (const node of nodes) color.set(node, 0);
+    const path = [];
+    const visit = (node) => {
+      color.set(node, 1);
+      path.push(node);
+      for (const next of adjacency.get(node) ?? []) {
+        const nextColor = color.get(next);
+        if (nextColor === 2) continue;
+        if (nextColor === 1) {
+          const start = path.indexOf(next);
+          const cycle = path.slice(start).map((ref) => ref.slice(ref.lastIndexOf(":") + 1));
+          let message = `ticket ${cycle[0]} depends on`;
+          for (let index = 1; index < cycle.length; index += 1) {
+            message += ` ticket ${cycle[index]}`;
+            if (index < cycle.length - 1) message += " which depends on";
+          }
+          invariant(`${message} which depends on ticket ${cycle[0]}`);
+        }
+        visit(next);
+      }
+      path.pop();
+      color.set(node, 2);
+    };
+    for (const node of nodes) {
+      if (color.get(node) === 0) visit(node);
     }
   }
   if (operation === "create") {
@@ -15446,7 +15517,8 @@ function rowFromSnapshot(snapshot) {
     criteria: snapshot.criteria,
     phase: snapshot.phase,
     order: snapshot.order,
-    state: snapshot.state
+    state: snapshot.state,
+    dependsOn: [...snapshot.dependsOn]
   };
 }
 function ticketsProjection(state, config2) {
@@ -15882,7 +15954,8 @@ var TICKET_VIEW_ZOD = external_exports.object({
   confidenceScore: external_exports.number(),
   gateFraction: external_exports.number().nullable(),
   updatedAt: external_exports.number(),
-  workspaceKey: external_exports.string()
+  workspaceKey: external_exports.string(),
+  dependsOn: external_exports.array(external_exports.string())
 });
 var PLAN_VALUE_ZOD = external_exports.object({
   frontmatter: external_exports.string(),
@@ -15930,7 +16003,8 @@ function rowOf(snapshot) {
     criteria: snapshot.criteria,
     phase: snapshot.phase,
     order: snapshot.order,
-    state: snapshot.state
+    state: snapshot.state,
+    dependsOn: [...snapshot.dependsOn]
   };
 }
 var DEFAULT_PHASE_TITLE = "Untitled phase";
@@ -15944,8 +16018,8 @@ function refusalReason(missing, allowedActors) {
   }
   return parts.join(" ");
 }
-var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
+var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -16087,6 +16161,40 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       return this._editTicket(agent, args, "user");
     }
     return this._createTicket(agent, args);
+  }
+  searchTickets(agent, args) {
+    const query = (args.query ?? "").toLowerCase().trim();
+    if (!query) return [];
+    const results = [];
+    for (const session of this.ctx.sessions.list()) {
+      const snap = this.ctx.sessionProjections.snapshot(session);
+      const tickets = snap.values["aidos.tickets"];
+      if (!tickets) continue;
+      for (const [id, ticket] of Object.entries(tickets)) {
+        if (!ticket.title.toLowerCase().includes(query)) continue;
+        results.push({
+          sessionId: session.id,
+          ticketId: Number(id),
+          title: ticket.title,
+          state: ticket.state,
+          workspaceKey: ticket.workspaceKey,
+          dependsOn: ticket.dependsOn ?? []
+        });
+      }
+    }
+    return results.slice(0, 50);
+  }
+  coldTickets(agent, args) {
+    const session = this.ctx.sessions.get(args.sessionId);
+    if (!session) return [];
+    const snap = this.ctx.sessionProjections.snapshot(session);
+    const tickets = snap.values["aidos.tickets"];
+    if (!tickets) return [];
+    let rows = Object.values(tickets);
+    if (args.states && args.states.length > 0) {
+      rows = rows.filter((ticket) => args.states.includes(ticket.state));
+    }
+    return rows;
   }
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
@@ -16305,7 +16413,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       criteria: args.criteria,
       phase,
       order: args.order,
-      slug: args.slug
+      slug: args.slug,
+      dependsOn: args.dependsOn === void 0 ? void 0 : [...args.dependsOn]
     });
     const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
     if (!snapshot) {
@@ -16353,6 +16462,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       phase: args.phase ?? prev.phase,
       order: args.order ?? prev.order,
       slug: nextSlug,
+      ...args.dependsOn !== void 0 ? { dependsOn: [...args.dependsOn] } : {},
       ...allowlist !== void 0 ? { allowlist } : {},
       revision: prev.revision + 1,
       updatedAt: at
@@ -16512,6 +16622,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       order,
       state: "open",
       allowlist: [],
+      dependsOn: [...opts?.dependsOn ?? []],
       slug,
       workspaceKey,
       revision: 1,
@@ -16745,6 +16856,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         phase: snapshot.phase,
         order: snapshot.order,
         state: snapshot.state,
+        dependsOn: [...snapshot.dependsOn ?? []],
         confidenceScore: confidenceScoreOf(config2, evidence),
         gateFraction: gateFractionOf(config2, snapshot, evidence),
         updatedAt: snapshot.updatedAt,
@@ -16756,6 +16868,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
 };
 _init = __decoratorStart(_a3);
 __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
+__decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
+__decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
@@ -17208,7 +17322,8 @@ var TICKET_ROW_SCHEMA = {
     criteria: { type: "string", required: true },
     phase: { type: "integer", required: true },
     order: { type: "integer", required: true },
-    state: { ...STATE_SCHEMA, required: true }
+    state: { ...STATE_SCHEMA, required: true },
+    dependsOn: { type: "array", items: { type: "string" }, required: true }
   }
 };
 var TICKET_VIEW_SCHEMA = {
@@ -17394,7 +17509,12 @@ function registerSetTicket(ctx) {
         phase: { type: "integer", description: "The phase number; defaults to 1 on create." },
         phaseTitle: { type: "string", description: "The title a newly created phase takes; defaults to 'Untitled phase'." },
         order: { type: "integer", description: "The order within the phase; defaults to the next free position on create." },
-        slug: { type: "string", description: "A per-workspace-unique alias for a new ticket; derived from the title when absent." }
+        slug: { type: "string", description: "A per-workspace-unique alias for a new ticket; derived from the title when absent." },
+        dependsOn: {
+          type: "array",
+          items: { type: "string" },
+          description: "Ticket dependencies as workspace:ticketId references (e.g., --home-sid-repos-aidos--:42). Empty or absent leaves unchanged."
+        }
       },
       output: {
         schema: {

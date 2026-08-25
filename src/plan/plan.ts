@@ -1,7 +1,7 @@
 /**
  * The plan document format. A verbatim port of prototype/aidos_proto/plan.py.
  * Pure functions. SPEC.md section 12 is the contract.
- */
+ * If you change this parser, also update skills/aidos-plan/verify-plan.mjs, which mirrors it (and vice versa): keep the two in sync.
 
 import type { ContextSection, TicketState } from "../kernel/types";
 import { PlanParseError } from "../kernel/types";

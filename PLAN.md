@@ -1120,7 +1120,7 @@ package is now larger and better tested than its specification.
   **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
   heading parses without error. The round-trip tests cover the new shape, not only the old one.
 
-### Phase 3: HTTP and agent loop — `in_progress`
+## Phase 3: HTTP and agent loop — `in_progress`
 
 **Goal.** aidos talks to a model and to a browser. dsh provides the transport and the loop. The
 work is the tools and the gate enforcement.
@@ -1149,7 +1149,7 @@ work is the tools and the gate enforcement.
   orchestrator turns that report into a board change. Identity stays flat:
   every subagent writes as the single author `agent`, and its name is metadata
   on a record rather than an actor of its own.
-  **Status: structural half done; bash hang closed.** `installAidosGuard` refuses every board
+  **Evaluate:** structural half done; bash hang closed.** `installAidosGuard` refuses every board
   tool when `delegationDepthOf(agent) !== 0`, and the refusal names the orchestrator as
   the only actor that may do it. `childPathScope` is the per-child path predicate.
   Presets load as definitions with no code change, which is dsh behavior rather than
@@ -1176,7 +1176,7 @@ work is the tools and the gate enforcement.
   `job_kill` tools. Jobs outlive the parent turn and are listed per session. The orchestrator
   attaches a finished report as `builtin:subagent_report` evidence with the job identifier, the
   subagent name, and the start and end times.
-  **Status: not started.** dsh's half works today, and the mask's delegation tier
+  **Evaluate:** not started.** dsh's half works today, and the mask's delegation tier
   already names the job tools. The aidos half does not exist. Nothing in `src/` reads
   `ctx.jobs`, and `subagent_report` appears only as a kind string inside the tool
   descriptions. No code attaches a finished report as evidence. That glue is B5.
@@ -1194,7 +1194,7 @@ work is the tools and the gate enforcement.
   You approve, change, or reject them. Only an approved proposal grants write access.
   Decided 2026-08-21 during the B2 grilling, after a read found the write boundary
   unreachable.
-  **Status: implemented 2026-08-21, closed 2026-08-22.**
+  **Evaluate:** implemented 2026-08-21, closed 2026-08-22.**
 
   **Why it exists.** `TicketSnapshot.allowlist` is a validated durable field
   (`types.ts:40`, and the invariant key list) with NO writer. `SetTicketArgs` carries no
@@ -1244,7 +1244,7 @@ work is the tools and the gate enforcement.
   for the same reason.
 
 
-### Phase 4: Web UI — `in_progress`
+## Phase 4: Web UI — `in_progress`
 
 **Goal.** The board you actually use, replacing the Phase 1 prototype.
 
@@ -1358,7 +1358,7 @@ work is the tools and the gate enforcement.
     client-request envelope directly to `/api/aidos/<method>` (the recipe
     pinned in B2). U2b itself is read-only and needs no Remote calls; it
     reads the `aidos.evidence` projection alongside `aidos.tickets`.
-  **Status: not started.**
+  **Evaluate:** not started.**
   **Evaluate:** a ticket with evidence in two kinds shows two count tags on
   its tile. A criterion with no rows is tinted and dimmed; one with rows is
   not. Evidence with a `criteria` payload field groups under that criterion;
@@ -1407,9 +1407,11 @@ work is the tools and the gate enforcement.
     decorator so the board can create and edit. The write path is the raw
     client-request POST from U2b's note: `payload.args` carries `{ agentId:
     <sessionId>, args: <business args> }` (the dsh-agent lookup wire).
-  **Status: host land done, UI not started.** `userSetTicket` carries the
-  `@Remote` marker and the wire-shape tests pass. The live wire check sits
-  with the board in the human review queue.
+  **Evaluate:** host half landed; ui-B done.** The `userSetTicket` Remote (create/edit/state-move/signoff/send-back) is live and pinned by `b2-user-setticket-remote`. The eight action components are built and wired into DetailView. ui-B (board-level polish: evidence tags, gate-fraction column sort, state checklist, debounced search) is done. Remaining: hands-on verify of the full create/edit/signoff/send-back flow on a live session.
+  modal, signoff dialog, send-back modal, mark-done modal, comments section,
+  evidence attach form, field editor, action bar) are built, wired into a
+  DetailView wrapper around the detail panel, and the placeholder toast and
+  create stub are migrated to the real store and modal.
   **Evaluate:** a ticket created through the modal appears in the grid with
   no reload. Editing a field saves one field. Signoff with confirm moves
   `open` to `in_progress` and shows the Active marker. Send-back with no
@@ -1444,7 +1446,7 @@ work is the tools and the gate enforcement.
     cold-reads its `aidos.tickets` projection via
     `ctx.sessionProjectionCache.coldSnapshot`. The client reads projections
     only for open sessions, so this is the cross-workspace read path.
-  **Status: not started.**
+  **Evaluate:** host half dispatched.** `aidos.coldTickets(sessionId)` Remote (reads one live session's `aidos.tickets` projection) is in flight. The global board UI (U2d-ui: sidebar entry, per-session fetch, workspace badges, sync button, pagination) is the next dispatch, after the host half lands. NOTE: `coldSnapshot` from the plan does not exist in this dsh build — `ctx.sessionProjections.snapshot(session)` (live sessions only; no disk-scan API) is the real read path.
 
 - [ ] **Ticket U2e: Per-ticket allowlist editor.**
   **Scope (grilled 2026-08-24).**
@@ -1456,7 +1458,7 @@ work is the tools and the gate enforcement.
     evidence row (author `user`, payload `{ paths: string[] }`) with the new
     paths, matching the A7 design where the row is the durable approval
     record. The ticket field and the row are written together.
-  **Status: not started.**
+  **Evaluate:** not started.**
   **Evaluate:** adding a path through the modal makes a write to that path
   succeed while the ticket is in-progress. Removing a path makes it refuse
   again. The saved list appears both in the ticket's allowlist field and as a
@@ -1508,13 +1510,13 @@ work is the tools and the gate enforcement.
   **Done:** `prototype/` directory deleted (all 38 tracked files plus both `__pycache__` dirs gone); `test-25-every-subcommand-prints-json.test.ts` culled as a 21-line no-assertion duplicate of the real `test-25-tool-every-result-is-json.test.ts`; `test-20-cli-author-is-agent.test.ts` renamed to `test-20-author-is-agent.test.ts` and `test-21-cli-refuses-human-only-kinds.test.ts` renamed to `test-21-refuses-human-only-kinds.test.ts` (the `cli` prefix was a prototype-era leftover; content unchanged). Port map: the Python prototype was replaced by the TS suite under `packages/aidos/tests/`; no TS file imports from `prototype/` — the only remaining references are historical doc comments in `src/plan/plan.ts:2` and `src/kernel/store.ts:2`.
 
 
-### Phase 5: Tools, scripting, and skills — `pending`
+## Phase 5: Tools, scripting, and skills — `pending`
 
 **Goal.** The extension surface.
 
 - [ ] **Ticket T4: Skills.** On dsh: `ctx.skills` plus the filesystem provider plus the `skill`
   tool. The preset tool groups are the always-on core; a skill activates a further group.
-  **Status: the dsh half is built, the aidos half is not.** `ctx.skills`, the filesystem
+  **Evaluate:** the dsh half is built, the aidos half is not.** `ctx.skills`, the filesystem
   provider, and the `skill` tool all ship with dsh. The aidos package contains no
   `SKILL.md`, so the preset ships no skill directory. This is the same gap C4 records
   for the plan skill. The token measurement has never been taken.
@@ -1527,7 +1529,7 @@ work is the tools and the gate enforcement.
   `scratch_edit`, `scratch_mkdir`. A relative path resolves against the scratch root, so
   `scratch_write("foo.md", ...)` lands at `<scratch-root>/foo.md` whatever the session cwd is.
   The names carry a `scratch_` prefix, so they never collide with the builtin fs tools.
-  **Status: not started in code.** Nothing in `src/` computes or reads a scratch path. The
+  **Evaluate:** not started in code.** Nothing in `src/` computes or reads a scratch path. The
   directory is in daily use by hand (the B1 container harness lives under
   `$DSH_HOME/aidos/scratch/--home-sid-repos-aidos--/`), which is what makes the design look done.
   **The agent writes here freely** (decided 2026-08-21). No allowlist, no approval, and no
@@ -1587,28 +1589,12 @@ work is the tools and the gate enforcement.
   refused rather than fuzzy-matched. The directory survives a restart, and clearing removes it
   from disk.
 
-- [ ] **Ticket T6: Archived-session manager.** A client plugin that lists, opens, restores,
-  and deletes archived dsh sessions, plus the host-plane rows it needs. Upgraded from a
-  cleanup script on 2026-08-21: the script was the fallback, the plugin is the thing.
-  **Status: not started, and the seam is half missing.** Verified 2026-08-21 against the
-  RPC map. `workspace.archiveSession` exists, is idempotent, and returns the full
-  `archivedSessionIds` set. `workspace.list` carries that same set, so a client can already
-  READ which sessions are archived. Nothing else is there. The map holds no unarchive
-  method and no session delete at all — `workspace.delete` removes a whole workspace, not a
-  session — so restore and delete cannot come from a client plugin alone. Upstream
-  anticipates the gap: archiving keeps a session in its workspace accounting slot, and the
-  contract says "a future unarchive restores its position". So this ticket is a client
-  plugin PLUS a small host-plane row exposing unarchive and delete, until upstream ships
-  them. Interim, with no plugin: read one with `zstdcat
-  $DSH_HOME/sessions/<workspace-dir>/<session-id>/session.jsonl.zstd`, and delete one by
-  removing its directory.
-  **Evaluate:** the archived list shows each session with its workspace, title, date, and
-  on-disk size. Opening one shows its history read-only and does not unarchive it. Restore
-  puts it back in its original position. Delete removes the directory and the id from the
-  archive set, and the list updates with no refresh. The live current session and every
-  subagent session cannot be selected at all.
+- [x] **Ticket T6: Archived-session manager.** Done in a separate repo. Dropped from this plan. **Evaluate:** delivered in a separate repo; nothing to implement in this plan.
 
----
+- [ ] **Ticket D1: Dependency tracking.** A ticket carries an informational `dependsOn`
+  list of `<workspaceKey>:<ticketId>` references (cross-workspace allowed). No gate
+  enforces it; the board shows it.
+  **Evaluate:** kernel done; D1-ui dispatched.** The kernel stores and validates the field, the invariant refuses self-dependencies and cycles, and the `set_ticket` tool passes it through. D1-ui (search Remote `aidos.searchTickets` + dependency badges in the tile and detail panel) is in flight; board UI not landed yet.
 
 ## User preferences and special rules
 
