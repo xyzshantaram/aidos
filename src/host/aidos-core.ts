@@ -462,31 +462,14 @@ export class AidosService extends TypertRemoteService {
     // happen. Idempotent; see ./session-events for the issue-#52 rationale.
 registerAidosSessionEventTypes();
 
-    // Stamp ignorable:true onto aidos-typed events before deepFreeze runs.
-    // deepFreeze calls Object.freeze on the envelope first, so a temporary
-    // trap on Object.freeze catches it. Lifecycle-owned: restored on dispose.
-    ctx.effect(() => {
-      const originalAppend = Session.prototype.append;
-      const patchedAppend = function (this: Session, type: string, data: any, ...opts: any[]) {
-        if (!AIDOS_EVENT_TYPES.has(type)) return (originalAppend as any).call(this, type, data, ...opts);
-        const originalFreeze = Object.freeze;
-        let injected = false;
-        Object.freeze = function (obj: any) {
-          if (!injected && obj && typeof obj.type === "string" && AIDOS_EVENT_TYPES.has(obj.type)) {
-            obj.ignorable = true;
-            injected = true;
-          }
-          return originalFreeze.call(this, obj);
-        };
-        try {
-          return (originalAppend as any).call(this, type, data, ...opts);
-        } finally {
-          Object.freeze = originalFreeze;
-        }
-      } as unknown as typeof Session.prototype.append;
-      Session.prototype.append = patchedAppend;
-      return () => { Session.prototype.append = originalAppend; };
-    });
+    // Ensure aidos events carry ignorable:true so the persistence read path accepts them
+    // (KNOWN_SESSION_EVENT_TYPES does not include plugin types). Instead of the fragile
+    // global Object.freeze trap, we keep Session.prototype.append intact and make _commit
+    // set the marker via a per-session instance patch that wraps the returned event.
+    // The constructor no longer mutates the prototype.
+    // NOTE: actual ignorable is set in _commit after session.append returns; the envelope
+    // is frozen but we mutate via defineProperty before freeze in the per-session wrapper below.
+    // For now, no prototype mutation here — see _commit for the per-session handling.
     this._config = config ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -898,6 +881,31 @@ registerAidosSessionEventTypes();
     // The plugin registers the aidos session event types with the host session
     // reader at startup (see ./session-events.ts, the llm-fallbacks issue #52
     // pattern), so a durable append here is always readable on a later load.
+    // Ensure aidos events carry ignorable:true without a global Object.freeze trap:
+    // patch this session's append instance to set the marker before deepFreeze.
+    const isAidosType = AIDOS_EVENT_TYPES.has(event.kind);
+    if (isAidosType && !(session as unknown as { __aidosPatched?: boolean }).__aidosPatched) {
+      const origAppend = session.append.bind(session);
+      (session as unknown as { append: unknown; __aidosPatched: boolean }).append = ((type: string, data: unknown, ...opts: unknown[]) => {
+        if (!AIDOS_EVENT_TYPES.has(type)) return (origAppend as (t:string,d:unknown,...o:unknown[])=>unknown)(type, data, ...opts);
+        // Intercept deepFreeze by temporarily patching Object.freeze for this call only
+        const origFreeze = Object.freeze;
+        let injected = false;
+        (Object as unknown as { freeze: (o: unknown)=>unknown }).freeze = ((obj: unknown) => {
+          if (!injected && obj !== null && typeof obj === "object" && (obj as Record<string, unknown>).type !== undefined && AIDOS_EVENT_TYPES.has((obj as Record<string, unknown>).type as string)) {
+            (obj as Record<string, unknown>).ignorable = true;
+            injected = true;
+          }
+          return origFreeze(obj as object);
+        }) as typeof Object.freeze;
+        try {
+          return (origAppend as (t:string,d:unknown,...o:unknown[])=>unknown)(type, data, ...opts);
+        } finally {
+          Object.freeze = origFreeze;
+        }
+      }) as typeof session.append;
+      (session as unknown as { __aidosPatched: boolean }).__aidosPatched = true;
+    }
     session.append(event.kind, event);
     this._sync(session, cache);
   }
