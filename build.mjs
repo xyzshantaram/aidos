@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
 
 // The aidos-tools agent plugin, bundled so the preset directory is
 // self-contained. The dsh packages stay external: the loader resolves them
@@ -33,14 +34,40 @@ await build({
 // window.__ModuleLoader__.load facade the client-module loader expects. The
 // dotfiles-ai plugins (subscriptions, approval-comment) use the same recipe
 // against this same web profile.
+// A real .css file becomes its text as a string at build time (design copied
+// from dotfiles-ai). The board imports "./board.css" and injects the text
+// once at runtime. dsh ships the CSS as a single string, so there is no
+// bundler-level css loader to rely on.
+const cssTextPlugin = {
+  name: "css-text",
+  setup(build) {
+    build.onResolve({ filter: /\.css$/ }, (args) => ({
+      path: resolve(args.resolveDir, args.path),
+      namespace: "css-text",
+    }));
+    build.onLoad({ filter: /.*/, namespace: "css-text" }, async (args) => {
+      const text = await readFile(args.path, "utf8");
+      return { contents: `export default ${JSON.stringify(text)};`, loader: "js" };
+    });
+  },
+};
+
 await build({
   entryPoints: ["src/client/index.ts"],
   bundle: true,
   platform: "browser",
   format: "cjs",
   target: "es2022",
-  jsx: "automatic",
+  // Classic JSX: esbuild emits react.createElement(...) so the dsh client
+  // runtime (which only supports createElement, not the jsx-runtime) can run
+  // the bundle. The source is written in real JSX; this transform is the only
+  // place it is lowered.
+  jsx: "transform",
+  jsxFactory: "react.createElement",
+  jsxFragment: "react.Fragment",
+  tsconfig: "tsconfig.client.json",
   external: ["react", "react/jsx-runtime", "react-dom/client", "@deepseek-ai/*"],
+  plugins: [cssTextPlugin],
   outfile: "dist/client/_client.bundle.js",
   logLevel: "info",
 });

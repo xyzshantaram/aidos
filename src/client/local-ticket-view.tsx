@@ -10,12 +10,10 @@
 import react from "react";
 
 import {
+  STATE_CHECKLIST_ORDER,
   filterTickets,
   openCount,
-  evidenceKindCounts,
-  groupEvidenceByCriterion,
   evidenceIsMany,
-  ringPercent,
 } from "./board-logic";
 import type { SortKey } from "./board-logic";
 
@@ -76,11 +74,7 @@ function restoreFilter(
     const parsed = JSON.parse(raw) as Partial<AppliedState>;
     const stateIds = Array.isArray(parsed.stateIds)
       ? (parsed.stateIds as AppliedState["stateIds"]).filter(
-          (state) =>
-            state === "open" ||
-            state === "in_progress" ||
-            state === "awaiting_verification" ||
-            state === "done",
+          (state) => STATE_CHECKLIST_ORDER.includes(state),
         )
       : [];
     const projectIds = Array.isArray(parsed.projectIds)
@@ -115,18 +109,30 @@ function ticketIdFromSearch(search: string): number | null {
   return Number(match[1]);
 }
 
+/** Write the ticket id into the query string. Null clears it. */
+function setTicketParam(id: number | null): void {
+  const url = new URL(window.location.href);
+  if (id === null) {
+    url.searchParams.delete("ticket");
+    window.history.replaceState({}, "", url);
+  } else {
+    url.searchParams.set("ticket", String(id));
+    window.history.pushState({}, "", url);
+  }
+}
+
 export function LocalTicketView(props: LocalTicketViewProps) {
   const [retryNonce, setRetryNonce] = react.useState(0);
-  return react.createElement(ProjectionReader, {
-    key: retryNonce,
-    sessionId: props.sessionId,
-    useProjection: props.useProjection,
-    onRetry: function () {
-      setRetryNonce(function (n) {
-        return n + 1;
-      });
-    },
-  });
+  return (
+    <ProjectionReader
+      key={retryNonce}
+      sessionId={props.sessionId}
+      useProjection={props.useProjection}
+      onRetry={() => {
+        setRetryNonce((n) => n + 1);
+      }}
+    />
+  );
 }
 
 function ProjectionReader(props: ProjectionReaderProps) {
@@ -205,11 +211,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   // session or tab.
   react.useEffect(function () {
     return function () {
-      const url = new URL(window.location.href);
-      if (url.searchParams.has("ticket")) {
-        url.searchParams.delete("ticket");
-        window.history.replaceState({}, "", url);
-      }
+      if (new URL(window.location.href).searchParams.has("ticket")) setTicketParam(null);
     };
   }, []);
 
@@ -246,25 +248,14 @@ function ProjectionReader(props: ProjectionReaderProps) {
   );
 
   const error =
-    errorTimedOut && !loaded
-      ? react.createElement(
-          "div",
-          { className: "aidos-error" },
-          react.createElement(
-            "span",
-            null,
-            "The board projection is unavailable. Retry to re-read it.",
-          ),
-          react.createElement(
-            "button",
-            {
-              className: "aidos-btn",
-              onClick: props.onRetry,
-            },
-            "Retry",
-          ),
-        )
-      : null;
+    errorTimedOut && !loaded ? (
+      <div className="aidos-error">
+        <span>The board projection is unavailable. Retry to re-read it.</span>
+        <button className="aidos-btn" onClick={props.onRetry}>
+          Retry
+        </button>
+      </div>
+    ) : null;
 
   const filtered = filterTickets(rawTickets, applied);
 
@@ -289,16 +280,12 @@ function ProjectionReader(props: ProjectionReaderProps) {
       return;
     }
     setSelectedId(id);
-    const url = new URL(window.location.href);
-    url.searchParams.set("ticket", String(id));
-    window.history.pushState({}, "", url);
+    setTicketParam(id);
   }
 
   function closeDetail() {
     setSelectedId(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete("ticket");
-    window.history.replaceState({}, "", url);
+    setTicketParam(null);
   }
 
   const selectedTicket =
@@ -312,97 +299,89 @@ function ProjectionReader(props: ProjectionReaderProps) {
   });
 
   const detailPanel =
-    selectedTicket === null
-      ? null
-      : react.createElement(DetailPanel, {
-          ticket: selectedTicket,
-          evidence: selectedEvidence,
-          evidenceCollapsed: evidenceCollapsed,
-          onToggleEvidence: function () {
-            setEvidenceCollapsed(function (v) {
-              return !v;
-            });
-          },
-          onClose: closeDetail,
-      });
-  const createModal = createOpen
-    ? react.createElement(
-        "div",
-        { className: "aidos-modal-mask", onClick: function () { setCreateOpen(false); } },
-        react.createElement(
-          "div",
-          {
-            className: "aidos-modal",
-            onClick: function (event: react.MouseEvent<HTMLDivElement>) {
-              event.stopPropagation();
-            },
-          },
-          react.createElement(
-            "div",
-            { className: "aidos-modal-head" },
-            react.createElement("h3", { className: "aidos-modal-title" }, "Create a ticket"),
-            react.createElement(
-              "button",
-              { className: "aidos-modal-close", onClick: function () { setCreateOpen(false); } },
-              "\u00d7",
-            ),
-          ),
-          react.createElement(
-            "p",
-            { className: "aidos-modal-body" },
-            "The create form arrives in a later update. This modal is a stub.",
-          ),
-        ),
-      )
-    : null;
+    selectedTicket === null ? null : (
+      <DetailPanel
+        ticket={selectedTicket}
+        evidence={selectedEvidence}
+        evidenceCollapsed={evidenceCollapsed}
+        onToggleEvidence={() => {
+          setEvidenceCollapsed((v) => !v);
+        }}
+        onClose={closeDetail}
+      />
+    );
+  const createModal = createOpen ? (
+    <div
+      className="aidos-modal-mask"
+      onClick={() => {
+        setCreateOpen(false);
+      }}
+    >
+      <div
+        className="aidos-modal"
+        onClick={(event: react.MouseEvent<HTMLDivElement>) => {
+          event.stopPropagation();
+        }}
+      >
+        <div className="aidos-modal-head">
+          <h3 className="aidos-modal-title">Create a ticket</h3>
+          <button
+            className="aidos-close-btn"
+            onClick={() => {
+              setCreateOpen(false);
+            }}
+          >
+            {"\u00d7"}
+          </button>
+        </div>
+        <p className="aidos-modal-body">
+          The create form arrives in a later update. This modal is a stub.
+        </p>
+      </div>
+    </div>
+  ) : null;
 
-  const toastEl =
-    toast === null
-      ? null
-      : react.createElement("div", { className: "aidos-toast" }, toast);
+  const toastEl = toast === null ? null : <div className="aidos-toast">{toast}</div>;
 
   let body;
   if (error !== null) {
     body = error;
   } else if (!loaded) {
-    body = react.createElement(
-      "div",
-      { className: "aidos-skeleton-grid" },
-      [0, 1, 2, 3, 4, 5].map(function (index) {
-        return react.createElement("div", {
-          className: "aidos-skeleton-tile",
-          key: index,
-        });
-      }),
+    body = (
+      <div className="aidos-skeleton-grid">
+        {[0, 1, 2, 3, 4, 5].map((index) => (
+          <div className="aidos-skeleton-tile" key={index} />
+        ))}
+      </div>
     );
   } else {
-    body = react.createElement(TicketView, {
-      sessionId: sessionId,
-      tickets: filtered,
-      allTicketsCount: allTicketsCount,
-      applied: applied,
-      selectedId: selectedId,
-      evidenceByTicket: rawEvidence,
-      onSelect: selectTicket,
-      onApply: applyState,
-      onJump: selectTicket,
-      onClearFilters: clearFilters,
-      onCreate: function () {
-        setCreateOpen(true);
-      },
-    });
+    body = (
+      <TicketView
+        sessionId={sessionId}
+        tickets={filtered}
+        allTicketsCount={allTicketsCount}
+        applied={applied}
+        selectedId={selectedId}
+        evidenceByTicket={rawEvidence}
+        onSelect={selectTicket}
+        onApply={applyState}
+        onJump={selectTicket}
+        onClearFilters={clearFilters}
+        onCreate={() => {
+          setCreateOpen(true);
+        }}
+      />
+    );
   }
 
-  return react.createElement(
-    react.Fragment,
-    null,
-    react.createElement(
-      "div",
-      { className: "aidos-layout" },
-      body,
-      detailPanel,
-    ),
-    createModal,
-    toastEl,
+  return (
+    <>
+      <div className="aidos-layout">
+        {body}
+        {detailPanel}
+      </div>
+      {createModal}
+      {toastEl}
+    </>
   );
 }

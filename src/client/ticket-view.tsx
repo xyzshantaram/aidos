@@ -31,88 +31,72 @@ export interface TicketViewProps {
 export function TicketView(props: TicketViewProps) {
   const [collapsed, setCollapsed] = react.useState(false);
 
-  const tiles = props.tickets.map(function (ticket) {
-    return react.createElement(TicketTile, {
-      key: ticket.id,
-      ticket: ticket,
-      evidence: props.evidenceByTicket?.[String(ticket.id)] ?? [],
-      selected: ticket.id === props.selectedId,
-      onSelect: function () {
+  const tiles = props.tickets.map((ticket) => (
+    <TicketTile
+      key={ticket.id}
+      ticket={ticket}
+      evidence={props.evidenceByTicket?.[String(ticket.id)] ?? []}
+      selected={ticket.id === props.selectedId}
+      onSelect={() => {
         props.onSelect(ticket.id);
-      },
-    });
-  });
+      }}
+    />
+  ));
 
   let content;
   if (props.allTicketsCount === 0) {
-    content = react.createElement(
-      "div",
-      { className: "aidos-empty" },
-      react.createElement("h3", { className: "aidos-empty-title" }, "No tickets yet"),
-      react.createElement(
-        "p",
-        { className: "aidos-empty-note" },
-        "This session holds no tickets. Create the first one to start the board.",
-      ),
-      react.createElement(
-        "button",
-        { className: "aidos-btn aidos-btn-primary", onClick: props.onCreate },
-        "Create a ticket",
-      ),
+    content = (
+      <div className="aidos-empty">
+        <h3 className="aidos-empty-title">No tickets yet</h3>
+        <p className="aidos-empty-note">
+          This session holds no tickets. Create the first one to start the board.
+        </p>
+        <button className="aidos-btn aidos-btn-primary" onClick={props.onCreate}>
+          Create a ticket
+        </button>
+      </div>
     );
   } else if (props.tickets.length === 0) {
-    content = react.createElement(
-      "div",
-      { className: "aidos-empty" },
-      react.createElement("h3", { className: "aidos-empty-title" }, "No tickets match"),
-      react.createElement(
-        "p",
-        { className: "aidos-empty-note" },
-        "The active filters hide every ticket. Clear them to see the board.",
-      ),
-      react.createElement(
-        "button",
-        { className: "aidos-btn", onClick: props.onClearFilters },
-        "Clear filters",
-      ),
+    content = (
+      <div className="aidos-empty">
+        <h3 className="aidos-empty-title">No tickets match</h3>
+        <p className="aidos-empty-note">
+          The active filters hide every ticket. Clear them to see the board.
+        </p>
+        <button className="aidos-btn" onClick={props.onClearFilters}>
+          Clear filters
+        </button>
+      </div>
     );
   } else {
-    content = react.createElement("div", { className: "aidos-board-grid" }, tiles);
+    content = <div className="aidos-board-grid">{tiles}</div>;
   }
 
-  return react.createElement(
-    "div",
-    { className: "aidos-root" },
-    react.createElement(FilterPanel, {
-      sessionId: props.sessionId,
-      projects: props.projects,
-      applied: props.applied,
-      tickets: props.tickets,
-      onApply: props.onApply,
-      onJump: props.onJump,
-      collapsed: collapsed,
-      onToggleCollapsed: function () {
-        setCollapsed(!collapsed);
-      },
-    }),
-    react.createElement(
-      "div",
-      { className: "aidos-grid-wrap" },
-      react.createElement(
-        "div",
-        { className: "aidos-grid-chrome" },
-        react.createElement(
-          "span",
-          { className: "aidos-empty-note" },
-          props.tickets.length + " of " + props.allTicketsCount + " tickets",
-        ),
-        react.createElement(
-          "button",
-          { className: "aidos-btn aidos-btn-primary", onClick: props.onCreate },
-          "Create",
-        ),
-      ),
-      content,
-    ),
+  return (
+    <div className="aidos-root">
+      <FilterPanel
+        sessionId={props.sessionId}
+        projects={props.projects}
+        applied={props.applied}
+        tickets={props.tickets}
+        onApply={props.onApply}
+        onJump={props.onJump}
+        collapsed={collapsed}
+        onToggleCollapsed={() => {
+          setCollapsed(!collapsed);
+        }}
+      />
+      <div className="aidos-grid-wrap">
+        <div className="aidos-grid-chrome">
+          <span className="aidos-empty-note">
+            {props.tickets.length + " of " + props.allTicketsCount + " tickets"}
+          </span>
+          <button className="aidos-btn aidos-btn-primary" onClick={props.onCreate}>
+            Create
+          </button>
+        </div>
+        {content}
+      </div>
+    </div>
   );
 }

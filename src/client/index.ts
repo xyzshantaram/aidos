@@ -4,8 +4,7 @@
  * re-registers the identical entry so the tab header re-reads badgeLabel.
  */
 
-
-import { injectStyles } from "./styles";
+import boardCss from "./board.css";
 import { badgeLabel, setCountCallback } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
 
@@ -14,6 +13,20 @@ export const name = "aidos";
 
 /** Services this bundle reaches through the plugin context. */
 export const inject = ["slots"];
+
+/** Inject the stylesheet once. The data-plugin-css guard prevents duplicates. */
+function injectStyles(): void {
+  if (typeof document === "undefined") return;
+  if (
+    document.querySelector("style[data-plugin-css=\"aidos/board.css\"]") !== null
+  )
+    return;
+  const tag = document.createElement("style");
+  tag.dataset.plugin = "aidos";
+  tag.dataset.pluginCss = "aidos/board.css";
+  tag.textContent = boardCss;
+  document.head.appendChild(tag);
+}
 
 /** Plugin body: inject the styles once and register the Tickets tab. */
 export function apply(ctx: {

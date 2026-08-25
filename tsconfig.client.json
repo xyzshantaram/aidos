@@ -1,5 +1,10 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react",
+    "jsxFactory": "react.createElement",
+    "jsxFragmentFactory": "react.Fragment"
+  },
   "include": ["src/client"],
   "exclude": []
 }

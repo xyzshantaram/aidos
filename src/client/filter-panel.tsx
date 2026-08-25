@@ -8,6 +8,7 @@ import react from "react";
 import { STATE_CHECKLIST_ORDER, autocompleteTickets, stateLabel } from "./board-logic";
 import type { AppliedState } from "./view-state";
 import {
+  cloneAppliedState,
   DEFAULT_APPLIED,
   getStagedState,
   setStagedState,
@@ -115,211 +116,175 @@ export function FilterPanel(props: FilterPanelProps) {
 
   function reset() {
     setSearchInput("");
-    updateStaged({
-      ...DEFAULT_APPLIED,
-      stateIds: [...DEFAULT_APPLIED.stateIds],
-      projectIds: DEFAULT_APPLIED.projectIds === null ? null : [...DEFAULT_APPLIED.projectIds],
-    });
+    updateStaged(cloneAppliedState(DEFAULT_APPLIED));
   }
 
   const projectRows =
     props.projects === undefined
       ? null
-      : react.createElement(
-          "div",
-          { className: "aidos-panel-section" },
-          react.createElement(
-            "div",
-            { className: "aidos-panel-head" },
-            react.createElement("h4", { className: "aidos-panel-title" }, "Projects"),
-          ),
-          react.createElement(
-            "div",
-            { className: "aidos-check-list" },
-            props.projects.map((project) => {
-              const checked =
-                staged.projectIds === null || staged.projectIds.includes(project.id);
-              return react.createElement(
-                "label",
-                { className: "aidos-check-row", key: project.id },
-                react.createElement("input", {
-                  type: "checkbox",
-                  checked: checked,
-                  onChange: function () {
-                    toggleProject(project.id);
-                  },
-                }),
-                react.createElement("span", null, project.name),
-              );
-            }),
-          ),
+      : (
+          <div className="aidos-panel-section">
+            <div className="aidos-panel-head">
+              <h4 className="aidos-panel-title">Projects</h4>
+            </div>
+            <div className="aidos-check-list">
+              {props.projects.map((project) => {
+                const checked =
+                  staged.projectIds === null || staged.projectIds.includes(project.id);
+                return (
+                  <label className="aidos-check-row" key={project.id}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        toggleProject(project.id);
+                      }}
+                    />
+                    <span>{project.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
         );
 
-  const stateRows = react.createElement(
-    "div",
-    { className: "aidos-panel-section" },
-    react.createElement(
-      "div",
-      { className: "aidos-panel-head" },
-      react.createElement("h4", { className: "aidos-panel-title" }, "State"),
-    ),
-    react.createElement(
-      "div",
-      { className: "aidos-check-list" },
-      STATE_CHECKLIST_ORDER.map((state) => {
-        const checked = staged.stateIds.includes(state);
-        const count = props.tickets.filter((t) => t.state === state).length;
-        return react.createElement(
-          "label",
-          { className: "aidos-check-row", key: state },
-          react.createElement("input", {
-            type: "checkbox",
-            checked: checked,
-            onChange: function () {
-              toggleState(state);
-            },
-          }),
-          react.createElement("span", null, stateLabel(state)),
-          react.createElement("span", { className: "aidos-check-count" }, String(count)),
-        );
-      }),
-    ),
+  const stateRows = (
+    <div className="aidos-panel-section">
+      <div className="aidos-panel-head">
+        <h4 className="aidos-panel-title">State</h4>
+      </div>
+      <div className="aidos-check-list">
+        {STATE_CHECKLIST_ORDER.map((state) => {
+          const checked = staged.stateIds.includes(state);
+          const count = props.tickets.filter((t) => t.state === state).length;
+          return (
+            <label className="aidos-check-row" key={state}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={() => {
+                  toggleState(state);
+                }}
+              />
+              <span>{stateLabel(state)}</span>
+              <span className="aidos-check-count">{String(count)}</span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
   );
 
-  const sortRows = react.createElement(
-    "div",
-    { className: "aidos-panel-section" },
-    react.createElement(
-      "div",
-      { className: "aidos-panel-head" },
-      react.createElement("h4", { className: "aidos-panel-title" }, "Sort"),
-    ),
-    react.createElement(
-      "div",
-      { className: "aidos-sort-row" },
-      react.createElement(
-        "select",
-        {
-          value: staged.sortKey,
-          onChange: function (event: react.ChangeEvent<HTMLSelectElement>) {
+  const sortRows = (
+    <div className="aidos-panel-section">
+      <div className="aidos-panel-head">
+        <h4 className="aidos-panel-title">Sort</h4>
+      </div>
+      <div className="aidos-sort-row">
+        <select
+          value={staged.sortKey}
+          onChange={(event: react.ChangeEvent<HTMLSelectElement>) => {
             updateStaged({
               ...staged,
               sortKey: event.target.value as AppliedState["sortKey"],
             });
-          },
-        },
-        SORT_OPTIONS.map((option) =>
-          react.createElement("option", { key: option.key, value: option.key }, option.label),
-        ),
-      ),
-    ),
-    react.createElement(
-      "div",
-      { className: "aidos-actions-row" },
-      react.createElement(
-        "button",
-        {
-          className: "aidos-btn aidos-toggle-btn",
-          onClick: function () {
+          }}
+        >
+          {SORT_OPTIONS.map((option) => (
+            <option key={option.key} value={option.key}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="aidos-actions-row">
+        <button
+          className="aidos-btn aidos-toggle-btn"
+          onClick={() => {
             updateStaged({ ...staged, descending: !staged.descending });
-          },
-        },
-        staged.descending ? "Descending" : "Ascending",
-      ),
-    ),
+          }}
+        >
+          {staged.descending ? "Descending" : "Ascending"}
+        </button>
+      </div>
+    </div>
   );
 
-  const searchSection = react.createElement(
-    "div",
-    { className: "aidos-panel-section" },
-    react.createElement(
-      "div",
-      { className: "aidos-panel-head" },
-      react.createElement("h4", { className: "aidos-panel-title" }, "Search"),
-    ),
-    react.createElement(
-      "div",
-      { className: "aidos-search-box" },
-      react.createElement("input", {
-        className: "aidos-search-input",
-        type: "text",
-        placeholder: "Title or id",
-        value: searchInput,
-        onChange: function (event) {
-          updateSearch(event.target.value);
-        },
-        onFocus: function () {
-          setFocused(true);
-        },
-        onBlur: function () {
-          window.setTimeout(function () {
-            setFocused(false);
-          }, 120);
-        },
-      }),
-      focused && suggestions.length > 0
-        ? react.createElement(
-            "div",
-            { className: "aidos-autocomplete" },
-            suggestions.map((ticket) =>
-              react.createElement(
-                "button",
-                {
-                  className: "aidos-suggestion",
-                  key: ticket.id,
-                  onMouseDown: function (event: react.MouseEvent<HTMLButtonElement>) {
-                    event.preventDefault();
-                    clearSearch();
-                    props.onJump(ticket.id);
-                  },
-                },
-                react.createElement("span", { className: "aidos-suggestion-title" }, ticket.title),
-                react.createElement("span", { className: "aidos-ticket-id-badge" }, "#" + ticket.id),
-              ),
-            ),
-          )
-        : null,
-    ),
+  const searchSection = (
+    <div className="aidos-panel-section">
+      <div className="aidos-panel-head">
+        <h4 className="aidos-panel-title">Search</h4>
+      </div>
+      <div className="aidos-search-box">
+        <input
+          className="aidos-search-input"
+          type="text"
+          placeholder="Title or id"
+          value={searchInput}
+          onChange={(event) => {
+            updateSearch(event.target.value);
+          }}
+          onFocus={() => {
+            setFocused(true);
+          }}
+          onBlur={() => {
+            window.setTimeout(function () {
+              setFocused(false);
+            }, 120);
+          }}
+        />
+        {focused && suggestions.length > 0 ? (
+          <div className="aidos-autocomplete">
+            {suggestions.map((ticket) => (
+              <button
+                className="aidos-suggestion"
+                key={ticket.id}
+                onMouseDown={(event: react.MouseEvent<HTMLButtonElement>) => {
+                  event.preventDefault();
+                  clearSearch();
+                  props.onJump(ticket.id);
+                }}
+              >
+                <span className="aidos-suggestion-title">{ticket.title}</span>
+                <span className="aidos-ticket-id-badge">{"#" + ticket.id}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 
-  const actionRows = react.createElement(
-    "div",
-    { className: "aidos-actions-row" },
-    react.createElement(
-      "button",
-      {
-        className: dirty ? "aidos-btn aidos-btn-dot" : "aidos-btn",
-        onClick: apply,
-      },
-      "Apply",
-    ),
-    react.createElement(
-      "button",
-      { className: "aidos-btn", onClick: reset },
-      "Reset",
-    ),
+  const actionRows = (
+    <div className="aidos-actions-row">
+      <button
+        className={dirty ? "aidos-btn aidos-btn-dot" : "aidos-btn"}
+        onClick={apply}
+      >
+        Apply
+      </button>
+      <button className="aidos-btn" onClick={reset}>
+        Reset
+      </button>
+    </div>
   );
 
-  return react.createElement(
-    "div",
-    { className: "aidos-sidebar" },
-    react.createElement(
-      "div",
-      { className: "aidos-panel-head" },
-      react.createElement("h3", { className: "aidos-panel-title" }, "Filters"),
-      react.createElement(
-        "button",
-        {
-          className: "aidos-btn aidos-sidebar-toggle",
-          onClick: props.onToggleCollapsed,
-        },
-        props.collapsed ? "Show" : "Hide",
-      ),
-    ),
-    props.collapsed ? null : projectRows,
-    props.collapsed ? null : stateRows,
-    props.collapsed ? null : sortRows,
-    props.collapsed ? null : searchSection,
-    props.collapsed ? null : actionRows,
+  return (
+    <div className="aidos-sidebar">
+      <div className="aidos-panel-head">
+        <h3 className="aidos-panel-title">Filters</h3>
+        <button
+          className="aidos-btn aidos-sidebar-toggle"
+          onClick={props.onToggleCollapsed}
+        >
+          {props.collapsed ? "Show" : "Hide"}
+        </button>
+      </div>
+      {props.collapsed ? null : projectRows}
+      {props.collapsed ? null : stateRows}
+      {props.collapsed ? null : sortRows}
+      {props.collapsed ? null : searchSection}
+      {props.collapsed ? null : actionRows}
+    </div>
   );
 }

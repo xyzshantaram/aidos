@@ -72,6 +72,27 @@ export function stateLabel(state: string): string {
       return state;
   }
 }
+
+/** The CSS suffix for one state badge. */
+export function stateClass(state: string): string {
+  switch (state) {
+    case "open":
+      return "open";
+    case "in_progress":
+      return "in-progress";
+    case "awaiting_verification":
+      return "awaiting-verification";
+    case "done":
+      return "done";
+    default:
+      return state;
+  }
+}
+
+/** The full CSS class string for a state badge. */
+export function badgeClass(state: string): string {
+  return "aidos-state-badge aidos-state-" + stateClass(state);
+}
 /** True when the ticket carries a non-empty criteria string. */
 export function hasCriteria<T extends TicketLike>(ticket: T): boolean {
   return ticket.criteria.trim().length > 0;
@@ -208,10 +229,6 @@ export function ringPercent(score: number): number {
 }
 
 /** One criterion line, trimmed to its text. */
-export interface CriterionLine {
-  label: string;
-  matched: boolean;
-}
 
 /** Parse a criteria string into trimmed, non-empty lines. */
 export function parseCriteria(criteria: string): string[] {
@@ -226,14 +243,6 @@ export function parseCriteria(criteria: string): string[] {
  * is trimmed and compared with strict equality to the criterion label. Rows
  * whose payload.criteria is absent fall into the ungrouped bucket.
  */
-export function criterionMatchesRow(
-  criterion: string,
-  row: EvidenceRowLike,
-): boolean {
-  const raw = row.payload.criteria;
-  if (typeof raw !== "string") return false;
-  return raw.trim() === criterion;
-}
 
 /**
  * Group evidence rows by criterion. Each criterion line gets its own slot,
