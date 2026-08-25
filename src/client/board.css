@@ -63,6 +63,16 @@
 .aidos-evidence-row{display:flex;gap:6px;flex-wrap:wrap}
 .aidos-evidence-tag{font-size:10px;line-height:14px;border:1px solid;border-radius:999px;padding:0 8px}
 
+/* dependency badges and search (D1) */
+.aidos-dep-row{display:flex;gap:6px;flex-wrap:wrap}
+.aidos-dep-badge{flex:none;font-size:10px;line-height:14px;color:var(--dsw-alias-state-info-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:999px;padding:0 8px;white-space:nowrap}
+.aidos-dep-search{display:flex;gap:6px}
+.aidos-dep-search-input{box-sizing:border-box;flex:1;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px}
+.aidos-dep-results{display:flex;flex-direction:column;gap:4px}
+.aidos-dep-result{display:flex;align-items:center;gap:8px;width:100%;text-align:left;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:none;border:none;padding:6px 8px;cursor:pointer}
+.aidos-dep-result:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.aidos-dep-result:disabled{cursor:default;opacity:0.6}
+
 /* detail panel: fields, criteria, evidence */
 .aidos-detail-note{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);margin:0}
 .aidos-criterion{display:flex;flex-direction:column;gap:4px;padding:6px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-1)}
@@ -103,3 +113,50 @@
 
 /* the toast */
 .aidos-toast{position:fixed;z-index:200;left:50%;bottom:32px;transform:translateX(-50%);font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-3);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:8px 14px;box-shadow:0 8px 24px var(--dsw-alias-bg-mask-drop)}
+
+/* the toast stack (U2c: replaces the single-string U2a toast) */
+.aidos-toast-stack{position:fixed;z-index:200;left:50%;bottom:32px;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none}
+.aidos-toast-stack .aidos-toast{position:static;transform:none;display:flex;align-items:center;gap:10px;pointer-events:auto;max-width:min(560px,calc(100vw - 32px))}
+.aidos-toast-text{flex:1;min-width:0}
+.aidos-toast-refusal{border-left:3px solid var(--dsw-alias-state-error-primary)}
+.aidos-toast-info{border-left:3px solid var(--dsw-alias-state-info-primary)}
+.aidos-toast-success{border-left:3px solid var(--dsw-alias-state-success-primary)}
+.aidos-toast-dismiss{cursor:pointer;flex:none;border:none;background:none;color:var(--dsw-alias-label-secondary);font-size:16px;line-height:16px;padding:0}
+.aidos-toast-dismiss:hover{color:var(--dsw-alias-label-primary)}
+
+/* the create modal form (U2c) */
+.aidos-modal-form{display:flex;flex-direction:column;gap:10px}
+.aidos-modal-row{display:flex;flex-direction:column;gap:4px}
+.aidos-modal-row label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.aidos-modal-row input,.aidos-modal-row textarea{box-sizing:border-box;width:100%;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px}
+.aidos-modal-row textarea{resize:vertical;min-height:72px}
+
+/* the inline field editor (U2c) */
+.aidos-field-editor{display:flex;flex-direction:column;gap:6px}
+.aidos-field-editor-input{box-sizing:border-box;width:100%;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px}
+
+/* the action buttons (U2c) */
+.aidos-action-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.aidos-action-btn-primary{cursor:pointer;border:1px solid transparent;background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-inverted);border-radius:999px;font-size:12px;line-height:20px;padding:2px 12px}
+.aidos-action-btn-primary:hover{filter:brightness(0.9)}
+.aidos-action-btn-secondary{cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary);border-radius:999px;font-size:12px;line-height:20px;padding:2px 12px}
+.aidos-action-btn-secondary:hover{background:var(--dsw-alias-interactive-bg-hover-accent)}
+
+/* the submit-for-review spoiler (U2c) */
+.aidos-spoiler{display:flex;flex-direction:column;gap:8px}
+.aidos-spoiler-summary{cursor:pointer;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+
+/* the comments section (U2c) */
+.aidos-comments-section{display:flex;flex-direction:column;gap:8px}
+.aidos-comment{font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 8px}
+.aidos-comment-textarea{box-sizing:border-box;width:100%;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;resize:vertical;min-height:56px}
+.aidos-comment-send{cursor:pointer;border:1px solid transparent;background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-inverted);border-radius:999px;font-size:12px;line-height:20px;padding:2px 12px;align-self:flex-start}
+.aidos-comment-send:hover{filter:brightness(0.9)}
+
+/* the active-ticket marker (U2c) */
+.aidos-active-marker{flex:none;font-size:10px;line-height:14px;color:var(--dsw-alias-label-primary-inverted);background:var(--dsw-alias-brand-primary);border-radius:999px;padding:0 8px;white-space:nowrap}
+
+/* the evidence attach form (U2c) */
+.aidos-evidence-attach-form{display:flex;flex-direction:column;gap:8px}
+.aidos-evidence-attach-kind-select{box-sizing:border-box;width:100%;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:2px 4px}
+.aidos-evidence-attach-note{box-sizing:border-box;width:100%;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;resize:vertical;min-height:48px}

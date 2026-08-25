@@ -26,9 +26,13 @@ import {
   setAppliedState,
 } from "./view-state";
 import { TicketView } from "./ticket-view";
-import { DetailPanel } from "./detail-panel";
+import { DetailView } from "./detail-panel";
+import { CreateTicketModal } from "./create-ticket-modal";
+import { activeTicketId } from "./active-ticket";
+import { showToast } from "./toast-store";
+import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
-import type { EvidenceRow } from "../kernel/types";
+import type { CommentRecord, EvidenceRow } from "../kernel/types";
 
 
 export interface LocalTicketViewProps {
@@ -140,7 +144,11 @@ function ProjectionReader(props: ProjectionReaderProps) {
 
   const ticketsProjection = props.useProjection("aidos.tickets");
   const evidenceProjection = props.useProjection("aidos.evidence");
-  const loaded = ticketsProjection !== undefined && evidenceProjection !== undefined;
+  const commentsProjection = props.useProjection("aidos.comments");
+  const loaded =
+    ticketsProjection !== undefined &&
+    evidenceProjection !== undefined &&
+    commentsProjection !== undefined;
   const rawTickets: TicketViewType[] =
     ticketsProjection === undefined
       ? []
@@ -149,6 +157,10 @@ function ProjectionReader(props: ProjectionReaderProps) {
     evidenceProjection === undefined
       ? {}
       : (evidenceProjection as Record<string, EvidenceRow[]>);
+  const rawComments: Record<string, CommentRecord[]> =
+    commentsProjection === undefined
+      ? {}
+      : (commentsProjection as Record<string, CommentRecord[]>);
   const allTicketsCount = rawTickets.length;
   const workspaceKey =
     rawTickets.length > 0 && typeof rawTickets[0].workspaceKey === "string"
@@ -161,11 +173,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
   });
   const [selectedId, setSelectedId] = react.useState<number | null>(null);
   const [createOpen, setCreateOpen] = react.useState(false);
-  const [toast, setToast] = react.useState<string | null>(null);
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
   const restoredRef = react.useRef(false);
-
   // Report the open count to the tab badge store.
   const count = openCount(rawTickets);
   react.useEffect(
@@ -201,7 +211,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       if (exists) {
         setSelectedId(id);
       } else {
-        setToast("Ticket " + id + " not found");
+        showToast("Ticket " + id + " not found", "info");
       }
     },
     [loaded],
@@ -214,20 +224,6 @@ function ProjectionReader(props: ProjectionReaderProps) {
       if (new URL(window.location.href).searchParams.has("ticket")) setTicketParam(null);
     };
   }, []);
-
-  // Auto-dismiss the toast after three seconds.
-  react.useEffect(
-    function () {
-      if (toast === null) return;
-      const timer = window.setTimeout(function () {
-        setToast(null);
-      }, 3000);
-      return function () {
-        window.clearTimeout(timer);
-      };
-    },
-    [toast],
-  );
 
   // The load error. When the projection stays undefined for five seconds,
   // show the error and offer a retry that re-subscribes the projection.
@@ -294,54 +290,44 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const selectedEvidence: EvidenceRow[] =
     selectedTicket === null ? [] : rawEvidence[String(selectedTicket.id)] ?? [];
 
+  const selectedComments: CommentRecord[] =
+    selectedTicket === null ? [] : rawComments[String(selectedTicket.id)] ?? [];
+
   const [evidenceCollapsed, setEvidenceCollapsed] = react.useState(function () {
     return evidenceIsMany(selectedEvidence);
   });
 
+
   const detailPanel =
     selectedTicket === null ? null : (
-      <DetailPanel
+      <DetailView
+        key={selectedTicket.id}
         ticket={selectedTicket}
         evidence={selectedEvidence}
+        comments={selectedComments}
         evidenceCollapsed={evidenceCollapsed}
         onToggleEvidence={() => {
           setEvidenceCollapsed((v) => !v);
         }}
         onClose={closeDetail}
+        agentId={sessionId}
+        onFieldSaved={function () {
+          // The projection frame re-renders the new value automatically.
+        }}
       />
     );
-  const createModal = createOpen ? (
-    <div
-      className="aidos-modal-mask"
-      onClick={() => {
+  const createModal = (
+    <CreateTicketModal
+      open={createOpen}
+      onClose={() => {
         setCreateOpen(false);
       }}
-    >
-      <div
-        className="aidos-modal"
-        onClick={(event: react.MouseEvent<HTMLDivElement>) => {
-          event.stopPropagation();
-        }}
-      >
-        <div className="aidos-modal-head">
-          <h3 className="aidos-modal-title">Create a ticket</h3>
-          <button
-            className="aidos-close-btn"
-            onClick={() => {
-              setCreateOpen(false);
-            }}
-          >
-            {"\u00d7"}
-          </button>
-        </div>
-        <p className="aidos-modal-body">
-          The create form arrives in a later update. This modal is a stub.
-        </p>
-      </div>
-    </div>
-  ) : null;
-
-  const toastEl = toast === null ? null : <div className="aidos-toast">{toast}</div>;
+      onCreated={(id) => {
+        selectTicket(id);
+      }}
+      agentId={sessionId}
+    />
+  );
 
   let body;
   if (error !== null) {
@@ -362,6 +348,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         allTicketsCount={allTicketsCount}
         applied={applied}
         selectedId={selectedId}
+        activeTicketId={activeTicketId(rawTickets)}
         evidenceByTicket={rawEvidence}
         onSelect={selectTicket}
         onApply={applyState}
@@ -381,7 +368,11 @@ function ProjectionReader(props: ProjectionReaderProps) {
         {detailPanel}
       </div>
       {createModal}
-      {toastEl}
+      {/* The toast container is a sibling of the layout, not a child, so it
+          persists across the slot-mutation remount. The single-string toast
+          state and its timer are gone; the module-level toast store owns
+          every toast now. */}
+      <ToastContainer />
     </>
   );
 }

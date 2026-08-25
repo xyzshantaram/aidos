@@ -18,6 +18,7 @@ export interface TicketViewProps {
   allTicketsCount: number;
   applied: AppliedState;
   selectedId: number | null;
+  activeTicketId: number | null;
   /** Ticket id (string) to its evidence rows. Undefined falls back to empty. */
   evidenceByTicket?: Record<string, EvidenceRow[]>;
   onSelect: (id: number) => void;
@@ -37,6 +38,7 @@ export function TicketView(props: TicketViewProps) {
       ticket={ticket}
       evidence={props.evidenceByTicket?.[String(ticket.id)] ?? []}
       selected={ticket.id === props.selectedId}
+      active={ticket.id === props.activeTicketId}
       onSelect={() => {
         props.onSelect(ticket.id);
       }}

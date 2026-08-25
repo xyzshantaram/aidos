@@ -242,6 +242,7 @@ describe("the userSetTicket Remote surface", () => {
         updatedAt: 1000,
         slug: "foreign",
         workspaceKey: "--ws-a--",
+        dependsOn: [],
       },
     });
     harness.installService();

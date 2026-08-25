@@ -367,3 +367,14 @@ export function evidenceKindCounts(
   });
   return out;
 }
+
+/**
+ * The display form of one stored dependency reference. A reference is
+ * `<workspaceKey>:<ticketId>`; the board renders it as `aidos#<ticketId>`
+ * (the workspace key is stripped, no colon after `aidos`). A reference that
+ * is not in that shape passes through unchanged.
+ */
+export function displayDep(ref: string): string {
+  return ref.replace(/^--.*--:/, "aidos#");
+}
+
