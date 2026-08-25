@@ -2,6 +2,101 @@
 # preset loader resolves a relative name from this preset's own directory,
 # so the aidos-tools plugin file travels with the preset.
 #
+# Tool rows are mounted BEFORE the final ./aidos-tools.js row so the
+# aidos-tools masks/guards (src/tools/mask.ts, guard.ts, bash-ask.ts) find
+# real tool schemas at assemble time. See SPEC-B1.md §4 (tool universe) and
+# src/tools/mask.ts D06: bash is deliberately NOT in TOOL_UNIVERSE — bash-guard
+# owns it, but tool-bash must still be present for the schema to ship and the
+# guard to fire. Keep ./aidos-tools.js LAST.
+
+# ── shell ───────────────────────────────────────────────────────────────────
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── background jobs ────────────────────────────────────────────────────────
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── skills ──────────────────────────────────────────────────────────────────
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── web ─────────────────────────────────────────────────────────────────────
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: false
+    searchTimeoutMs: 60000
+
+# ── ask-user ────────────────────────────────────────────────────────────────
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+# ── delegation and workflows ────────────────────────────────────────────────
+# Host singletons (subagents registry) stay on host plane; this preset only
+# contributes the delegation tools + workflow engine. Mirrors standard preset's
+# `delegation` group so DELEGATION_TOOLS (src/tools/mask.ts) are real tools for
+# restrict() to manage.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+      agentOptions:
+        provider: opencode
+        model: deepseek-v4-flash-free
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+      agentOptions:
+        provider: opencode
+        model: deepseek-v4-flash-free
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── aidos ───────────────────────────────────────────────────────────────────
 # The single row mounts the aidos-tools plugin, which registers the six
 # board tools, the tool:aidos prompt section, the delegation-depth guard,
 # the state-gated tool masks, the bash-ask listener, and the per-ticket

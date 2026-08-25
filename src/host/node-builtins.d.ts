@@ -17,6 +17,7 @@ declare module "fs" {
 declare module "path" {
   export function isAbsolute(path: string): boolean;
   export function join(...paths: string[]): string;
+  export function relative(from: string, to: string): string;
+  export function resolve(...paths: string[]): string;
   export function basename(path: string): string;
 }
-

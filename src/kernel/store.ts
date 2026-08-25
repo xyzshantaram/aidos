@@ -102,11 +102,7 @@ type RowGetter = (row: TicketPageRow) => unknown;
 const SORT_COLUMNS: Record<SortKey, RowGetter[]> = {
   id: [(row) => row.id],
   title: [(row) => row.title],
-  phase: [
-    (row) => row.phase,
-    (row) => (row.order === null ? 1 : 0),
-    (row) => row.order,
-  ],
+  phase: [(row) => row.phase, (row) => row.order],
   score: [(row) => row.score],
   gate_fraction: [(row) => row.gateFraction],
 };

@@ -20,8 +20,9 @@ const EMPTY_COMMENTS: CommentRecord[] = [];
 
 export function CommentsSection(props: CommentsSectionProps) {
   const comments = props.comments ?? EMPTY_COMMENTS;
-  const expandedDefault = comments.length > 1;
-  const [collapsed, setCollapsed] = react.useState(!expandedDefault);
+  // Collapse only the single-comment case. Zero comments (a new ticket) and
+  // two or more stay expanded so the composer stays visible.
+  const [collapsed, setCollapsed] = react.useState(comments.length === 1);
   const [draft, setDraft] = react.useState("");
   const [sending, setSending] = react.useState(false);
 
@@ -51,7 +52,7 @@ export function CommentsSection(props: CommentsSectionProps) {
   }
 
   const rows = newestFirst.map((comment, index) => {
-    const time = new Date(comment.at).toLocaleString();
+    const time = new Date(comment.at * 1000).toLocaleString();
     return (
       <div className="aidos-comment" key={index}>
         <div>

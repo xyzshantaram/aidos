@@ -44,6 +44,13 @@ export function workspaceKeyFromPath(cwd: string): string {
   }
   if (readable.length > 251) {
     readable = readable.slice(0, 251);
+    // Truncation must not land inside a `~XXXX` hex escape: a `~` in the
+    // last 4 chars can only be a partial escape, so trim back to it. The
+    // result stays under the 251 cap.
+    const lastTilde = readable.lastIndexOf("~");
+    if (lastTilde >= 247 && !/^~[0-9A-F]{4}$/.test(readable.slice(lastTilde))) {
+      readable = readable.slice(0, lastTilde);
+    }
   }
   return "--" + readable + "--";
 }

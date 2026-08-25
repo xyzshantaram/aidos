@@ -14578,7 +14578,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import { readFileSync } from "fs";
-import { isAbsolute, join, basename } from "path";
+import { basename, isAbsolute, relative, resolve } from "path";
 
 // src/kernel/types.ts
 var STATE_ORDER = [
@@ -14663,11 +14663,11 @@ var UnknownProject = class extends Error {
 };
 var PlanParseError = class extends Error {
   line;
-  message;
+  detail;
   constructor(line, message) {
     super(`line ${line}: ${message}`);
     this.line = line;
-    this.message = message;
+    this.detail = message;
   }
 };
 var ProjectNotEmptyError = class extends Error {
@@ -14680,7 +14680,7 @@ var ProjectNotEmptyError = class extends Error {
 var ContextTooLongError = class extends Error {
   overage;
   constructor(overage) {
-    super(`plan context exceeds 500 lines by ${overage}`);
+    super(`plan context exceeds 2000 lines by ${overage}`);
     this.overage = overage;
   }
 };
@@ -14924,6 +14924,10 @@ function workspaceKeyFromPath(cwd) {
   }
   if (readable.length > 251) {
     readable = readable.slice(0, 251);
+    const lastTilde = readable.lastIndexOf("~");
+    if (lastTilde >= 247 && !/^~[0-9A-F]{4}$/.test(readable.slice(lastTilde))) {
+      readable = readable.slice(0, lastTilde);
+    }
   }
   return "--" + readable + "--";
 }
@@ -15107,7 +15111,7 @@ function validateTicketChange(state, raw) {
     for (const other of state.tickets.values()) {
       nodes.add(refOf(other.workspaceKey, other.id));
     }
-    const resolve = (ref) => {
+    const resolve2 = (ref) => {
       const colon = ref.lastIndexOf(":");
       if (colon < 0) return null;
       const key = ref.slice(0, colon);
@@ -15121,12 +15125,12 @@ function validateTicketChange(state, raw) {
       if (other.id === id) continue;
       adjacency.set(
         refOf(other.workspaceKey, other.id),
-        (other.dependsOn ?? []).map(resolve).filter((entry) => entry !== null)
+        (other.dependsOn ?? []).map(resolve2).filter((entry) => entry !== null)
       );
     }
     adjacency.set(
       incomingRef,
-      ticket.dependsOn.map(resolve).filter((entry) => entry !== null)
+      ticket.dependsOn.map(resolve2).filter((entry) => entry !== null)
     );
     const color = /* @__PURE__ */ new Map();
     for (const node of nodes) color.set(node, 0);
@@ -15565,7 +15569,7 @@ function parsePlan(text) {
       continue;
     }
     if (_isHeading(line)) {
-      const section = _takeContextSection(lines, index);
+      const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
       continue;
@@ -15637,7 +15641,7 @@ function _takePreamble(lines, start) {
   }
   return { text: _trimBlankLines(lines.slice(start, index)), index };
 }
-function _takeContextSection(lines, start) {
+function _takeContextSection(lines, start, sectionNumber) {
   let index = start + 1;
   while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
     index += 1;
@@ -15646,7 +15650,7 @@ function _takeContextSection(lines, start) {
     section: {
       heading: lines[start].replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
-      index: 0
+      index: sectionNumber
     },
     index
   };
@@ -16858,7 +16862,17 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** Read one plan file, resolved under the session's workspace root. */
   _readPlanFile(agent, file2) {
-    const target = isAbsolute(file2) ? file2 : join(this._workspacePath(agent), file2);
+    let target;
+    if (isAbsolute(file2)) {
+      target = file2;
+    } else {
+      const workspace = this._workspacePath(agent);
+      target = resolve(workspace, file2);
+      const rel = relative(workspace, target);
+      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
+        throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
+      }
+    }
     try {
       return readFileSync(target, "utf8");
     } catch (error51) {

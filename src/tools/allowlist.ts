@@ -10,7 +10,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { FsTarget } from "@deepseek-ai/dsh-fs";
 import type { ToolExecution, ToolGuard } from "@deepseek-ai/dsh-tools";
-import { isAbsolute, join } from "path";
+import { isAbsolute, join, relative, resolve } from "path";
 import type { TicketView } from "../kernel/projections";
 import { scratchRootForAgent } from "./scratch";
 
@@ -21,13 +21,18 @@ const PATH_TOOLS = new Set<string>(["read", "write", "edit"]);
 const WRITE_INTENT = "fs/write-intent";
 const EDIT_INTENT = "fs/edit-intent";
 
+/** Whether one path sits under (or equals) a root, after both are normalized. */
+function isUnder(root: string, candidate: string): boolean {
+  const rel = relative(resolve(root), resolve(candidate));
+  return rel === "" || (!rel.startsWith("../") && rel !== ".." && !isAbsolute(rel));
+}
+
 /** Whether one target path sits under one of the allowed roots. */
 function pathAllowed(target: string, roots: readonly string[]): boolean {
-  const normalized = target.replace(/\/+$/, "");
   for (const root of roots) {
     const base = root.replace(/\/+$/, "");
     if (base === "") continue;
-    if (normalized === base || normalized.startsWith(base + "/")) return true;
+    if (isUnder(base, target)) return true;
   }
   return false;
 }
@@ -55,7 +60,7 @@ export function writeBoundaryReason(
   // Scratch root is exempt from the allowlist: the agent writes there freely.
   try {
     const scratchRoot = scratchRootForAgent(agent);
-    if (path === scratchRoot || path.startsWith(scratchRoot + "/")) return undefined;
+    if (isUnder(scratchRoot, path)) return undefined;
   } catch {
     // No scratch root (no cwd) → skip the exemption, fall through to union.
   }

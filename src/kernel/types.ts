@@ -278,14 +278,15 @@ export class UnknownProject extends Error {
   }
 }
 
-/** One line of a plan document that the parser refuses. */
+/** One line of a plan document that the parser refuses. `detail` is the raw
+ * parser message; `message` (from Error) is `line <n>: <detail>`. */
 export class PlanParseError extends Error {
   readonly line: number;
-  readonly message: string;
+  readonly detail: string;
   constructor(line: number, message: string) {
     super(`line ${line}: ${message}`);
     this.line = line;
-    this.message = message;
+    this.detail = message;
   }
 }
 
@@ -298,11 +299,11 @@ export class ProjectNotEmptyError extends Error {
   }
 }
 
-/** A plan context that exceeds the 500-line cap. */
+/** A plan context that exceeds the 2000-line cap. */
 export class ContextTooLongError extends Error {
   readonly overage: number;
   constructor(overage: number) {
-    super(`plan context exceeds 500 lines by ${overage}`);
+    super(`plan context exceeds 2000 lines by ${overage}`);
     this.overage = overage;
   }
 }

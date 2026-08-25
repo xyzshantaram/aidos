@@ -140,11 +140,11 @@ var UnknownProject = class extends Error {
 };
 var PlanParseError = class extends Error {
   line;
-  message;
+  detail;
   constructor(line, message) {
     super(`line ${line}: ${message}`);
     this.line = line;
-    this.message = message;
+    this.detail = message;
   }
 };
 var ProjectNotEmptyError = class extends Error {
@@ -157,7 +157,7 @@ var ProjectNotEmptyError = class extends Error {
 var ContextTooLongError = class extends Error {
   overage;
   constructor(overage) {
-    super(`plan context exceeds 500 lines by ${overage}`);
+    super(`plan context exceeds 2000 lines by ${overage}`);
     this.overage = overage;
   }
 };
@@ -14728,7 +14728,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import { readFileSync } from "fs";
-import { isAbsolute as isAbsolute2, join as join2, basename } from "path";
+import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "path";
 
 // src/kernel/constants.ts
 var BUILTIN_KINDS = [
@@ -14927,6 +14927,10 @@ function workspaceKeyFromPath(cwd) {
   }
   if (readable.length > 251) {
     readable = readable.slice(0, 251);
+    const lastTilde = readable.lastIndexOf("~");
+    if (lastTilde >= 247 && !/^~[0-9A-F]{4}$/.test(readable.slice(lastTilde))) {
+      readable = readable.slice(0, lastTilde);
+    }
   }
   return "--" + readable + "--";
 }
@@ -15110,7 +15114,7 @@ function validateTicketChange(state, raw) {
     for (const other of state.tickets.values()) {
       nodes.add(refOf(other.workspaceKey, other.id));
     }
-    const resolve = (ref) => {
+    const resolve4 = (ref) => {
       const colon = ref.lastIndexOf(":");
       if (colon < 0) return null;
       const key = ref.slice(0, colon);
@@ -15124,12 +15128,12 @@ function validateTicketChange(state, raw) {
       if (other.id === id) continue;
       adjacency.set(
         refOf(other.workspaceKey, other.id),
-        (other.dependsOn ?? []).map(resolve).filter((entry) => entry !== null)
+        (other.dependsOn ?? []).map(resolve4).filter((entry) => entry !== null)
       );
     }
     adjacency.set(
       incomingRef,
-      ticket.dependsOn.map(resolve).filter((entry) => entry !== null)
+      ticket.dependsOn.map(resolve4).filter((entry) => entry !== null)
     );
     const color = /* @__PURE__ */ new Map();
     for (const node of nodes) color.set(node, 0);
@@ -15568,7 +15572,7 @@ function parsePlan(text) {
       continue;
     }
     if (_isHeading(line)) {
-      const section = _takeContextSection(lines, index);
+      const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
       continue;
@@ -15640,7 +15644,7 @@ function _takePreamble(lines, start) {
   }
   return { text: _trimBlankLines(lines.slice(start, index)), index };
 }
-function _takeContextSection(lines, start) {
+function _takeContextSection(lines, start, sectionNumber) {
   let index = start + 1;
   while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
     index += 1;
@@ -15649,7 +15653,7 @@ function _takeContextSection(lines, start) {
     section: {
       heading: lines[start].replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
-      index: 0
+      index: sectionNumber
     },
     index
   };
@@ -15723,7 +15727,7 @@ function _renderTicket(ticket) {
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 
 // src/tools/scratch.ts
-import { isAbsolute, join } from "path";
+import { isAbsolute, relative, resolve } from "path";
 import { mkdirSync } from "fs";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import { defineTool } from "@deepseek-ai/dsh-tools";
@@ -15746,14 +15750,15 @@ function resolveScratchPath(root, path) {
       "AIDOS_SCRATCH_EMPTY_PATH"
     );
   }
-  const normalized = isAbsolute(path) ? path : join(root, path);
-  if (normalized !== root && !normalized.startsWith(root + "/")) {
+  const candidate = resolve(root, path);
+  const rel = relative(root, candidate);
+  if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
       "AIDOS_SCRATCH_PATH_ESCAPE"
     );
   }
-  return normalized;
+  return candidate;
 }
 function callingAgent(exec) {
   const agent = exec.agent;
@@ -17049,7 +17054,17 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** Read one plan file, resolved under the session's workspace root. */
   _readPlanFile(agent, file2) {
-    const target = isAbsolute2(file2) ? file2 : join2(this._workspacePath(agent), file2);
+    let target;
+    if (isAbsolute2(file2)) {
+      target = file2;
+    } else {
+      const workspace = this._workspacePath(agent);
+      target = resolve2(workspace, file2);
+      const rel = relative2(workspace, target);
+      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute2(rel))) {
+        throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
+      }
+    }
     try {
       return readFileSync(target, "utf8");
     } catch (error51) {
@@ -17301,14 +17316,18 @@ function installBashAskListener(ctx) {
 }
 
 // src/tools/allowlist.ts
+import { isAbsolute as isAbsolute3, join, relative as relative3, resolve as resolve3 } from "path";
 var WRITE_INTENT = "fs/write-intent";
 var EDIT_INTENT = "fs/edit-intent";
+function isUnder(root, candidate) {
+  const rel = relative3(resolve3(root), resolve3(candidate));
+  return rel === "" || !rel.startsWith("../") && rel !== ".." && !isAbsolute3(rel);
+}
 function pathAllowed(target, roots) {
-  const normalized = target.replace(/\/+$/, "");
   for (const root of roots) {
     const base = root.replace(/\/+$/, "");
     if (base === "") continue;
-    if (normalized === base || normalized.startsWith(base + "/")) return true;
+    if (isUnder(base, target)) return true;
   }
   return false;
 }
@@ -17322,7 +17341,7 @@ function writeBoundaryReason(ctx, agent, path) {
   if (agent === void 0) return void 0;
   try {
     const scratchRoot = scratchRootForAgent(agent);
-    if (path === scratchRoot || path.startsWith(scratchRoot + "/")) return void 0;
+    if (isUnder(scratchRoot, path)) return void 0;
   } catch {
   }
   const union2 = ctx.aidos ? ctx.aidos.allowlistUnion(agent) : [];

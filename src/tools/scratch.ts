@@ -14,7 +14,7 @@
  * inherit the path without re-resolving.
  */
 
-import { isAbsolute, join } from "path";
+import { isAbsolute, relative, resolve } from "path";
 import { mkdirSync } from "fs";
 
 import { HarnessError } from "@deepseek-ai/dsh-llm";
@@ -50,14 +50,15 @@ export function resolveScratchPath(root: string, path: string): string {
       "AIDOS_SCRATCH_EMPTY_PATH",
     );
   }
-  const normalized = isAbsolute(path) ? path : join(root, path);
-  if (normalized !== root && !normalized.startsWith(root + "/")) {
+  const candidate = resolve(root, path);
+  const rel = relative(root, candidate);
+  if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "path_escape", message: `scratch path must stay under ${root}` }),
       "AIDOS_SCRATCH_PATH_ESCAPE",
     );
   }
-  return normalized;
+  return candidate;
 }
 
 /** The calling agent is the current session's workspace owner, so scratch does not check orchestrator depth. */

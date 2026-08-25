@@ -27,7 +27,7 @@ import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
 import { readFileSync } from "fs";
-import { isAbsolute, join, basename } from "path";
+import { basename, isAbsolute, relative, resolve } from "path";
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
@@ -1505,7 +1505,23 @@ registerAidosSessionEventTypes();
 
   /** Read one plan file, resolved under the session's workspace root. */
   private _readPlanFile(agent: Agent, file: string): string {
-    const target = isAbsolute(file) ? file : join(this._workspacePath(agent), file);
+  /** Read one plan file, resolved under the session's workspace root.
+   * Absolute paths are taken verbatim (tool contract: "relative to the
+   * workspace or absolute") — only relative paths are confined to the
+   * workspace so `../` cannot escape. See the `plan_import` file param. */
+    // workspace or absolute") — only relative paths are confined to the
+    // workspace so `../` cannot escape. See the `plan_import` file param.
+    let target: string;
+    if (isAbsolute(file)) {
+      target = file;
+    } else {
+      const workspace = this._workspacePath(agent);
+      target = resolve(workspace, file);
+      const rel = relative(workspace, target);
+      if (rel !== "" && (rel.startsWith("../") || rel === ".." || isAbsolute(rel))) {
+        throw new FileNotReadError(file, `cannot read the plan file ${file}: it escapes the workspace root`);
+      }
+    }
     try {
       return readFileSync(target, "utf8");
     } catch (error) {

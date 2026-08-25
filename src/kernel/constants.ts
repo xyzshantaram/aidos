@@ -133,7 +133,7 @@ export const DEFAULT_CONFIG: AidosConfig = {
 
 /**
  * The plan context cap. A plan/change context (the preamble plus every
- * section's heading and text lines) may not exceed this many lines. Both
+ * section's heading and text lines) may not exceed 2000 lines. Both
  * the write boundary (setPlanMeta) and the replay fold enforce it.
  */
 export const PLAN_CONTEXT_LIMIT = 2000;

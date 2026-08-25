@@ -76,7 +76,7 @@ export function parsePlan(text: string): PlanDocument {
       continue;
     }
     if (_isHeading(line)) {
-      const section = _takeContextSection(lines, index);
+      const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
       continue;
@@ -171,6 +171,7 @@ function _takePreamble(
 function _takeContextSection(
   lines: readonly string[],
   start: number,
+  sectionNumber: number,
 ): { section: ContextSection; index: number } {
   let index = start + 1;
   while (
@@ -184,7 +185,7 @@ function _takeContextSection(
     section: {
       heading: lines[start].replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
-      index: 0,
+      index: sectionNumber,
     },
     index,
   };

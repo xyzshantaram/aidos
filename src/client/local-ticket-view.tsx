@@ -80,7 +80,7 @@ function restoreFilter(
       ? (parsed.stateIds as AppliedState["stateIds"]).filter(
           (state) => STATE_CHECKLIST_ORDER.includes(state),
         )
-      : [];
+      : [...DEFAULT_APPLIED.stateIds];
     const projectIds = Array.isArray(parsed.projectIds)
       ? intersectProjectIds(
           parsed.projectIds.filter((id): id is number => typeof id === "number"),
@@ -162,10 +162,16 @@ function ProjectionReader(props: ProjectionReaderProps) {
       ? {}
       : (commentsProjection as Record<string, CommentRecord[]>);
   const allTicketsCount = rawTickets.length;
+  // Persist the filter under one workspace key. When the board shows tickets
+  // from projects with different workspace keys, fall back to "default" so the
+  // filter is not persisted under a key that belongs to (and poisons) one
+  // project's board over the others.
   const workspaceKey =
-    rawTickets.length > 0 && typeof rawTickets[0].workspaceKey === "string"
-      ? rawTickets[0].workspaceKey
-      : "default";
+    rawTickets.length === 0
+      ? "default"
+      : new Set(rawTickets.map((ticket) => ticket.workspaceKey)).size === 1
+        ? rawTickets[0].workspaceKey
+        : "default";
 
 
   const [applied, setAppliedStateLocal] = react.useState<AppliedState>(function () {
@@ -296,6 +302,12 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [evidenceCollapsed, setEvidenceCollapsed] = react.useState(function () {
     return evidenceIsMany(selectedEvidence);
   });
+  // The initial state only runs once per mount; re-evaluate it when the
+  // selected ticket changes so one ticket's collapsed state cannot leak
+  // onto the next ticket.
+  react.useEffect(function () {
+    setEvidenceCollapsed(evidenceIsMany(selectedEvidence));
+  }, [selectedTicket?.id]);
 
 
   const detailPanel =
