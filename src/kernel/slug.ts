@@ -19,6 +19,11 @@ export function slugFromTitle(title: string): string {
  * `projectKey(cwd)` transform: separators collapse to one `-`, safe characters
  * pass through, every other character becomes `~` plus its zero-padded uppercase
  * hex charCode, and the whole readable core is wrapped in `--`.
+ *
+ * No length cap: per your grill answer we keep the full readable core so two
+ * deep workspace paths never collide. Previously this capped at 251 chars and
+ * truncated, which could make two different workspaces share the same scratch
+ * directory.
  */
 export function workspaceKeyFromPath(cwd: string): string {
   let readable = "";
@@ -42,26 +47,26 @@ export function workspaceKeyFromPath(cwd: string): string {
   if (readable === "") {
     readable = "root";
   }
-  if (readable.length > 251) {
-    readable = readable.slice(0, 251);
-    // Truncation must not land inside a `~XXXX` hex escape: a `~` in the
-    // last 4 chars can only be a partial escape, so trim back to it. The
-    // result stays under the 251 cap.
-    const lastTilde = readable.lastIndexOf("~");
-    if (lastTilde >= 247 && !/^~[0-9A-F]{4}$/.test(readable.slice(lastTilde))) {
-      readable = readable.slice(0, lastTilde);
-    }
-  }
   return "--" + readable + "--";
 }
 
 /**
- * Normalize one raw ticket snapshot into a complete shape. A snapshot written
- * before C5 has no `slug` or `workspaceKey`; synthesize those here so the
- * strict validation and the fold both treat the record as its normalized
- * values. A missing slug becomes `ticket-<id>`; a missing workspaceKey becomes
- * the canonical key of the owning project's path (the normal case) or an empty
- * string when no such project exists in state.
+ * Normalize one raw ticket snapshot into a complete shape.
+ *
+ * Why this exists (the "legacy" you asked about):
+ * Tickets created before C5 had no `slug` or `workspaceKey`; before D1 they
+ * had no `dependsOn`. No real aidos ticket has been created yet in prod, but
+ * the test suite synthesizes old-format records (see tests/c5-legacy-replay.test.ts
+ * and tests/c5-legacy-replay.test.ts) to prove that an old log still replays
+ * after the schema grew. This helper fills those legacy gaps:
+ *   - missing slug -> `ticket-<id>`
+ *   - missing workspaceKey -> canonical key of the owning project's path (or "" if unknown)
+ *   - missing dependsOn -> []
+ *
+ * New code always writes all three fields; this is only for replay of old logs.
+ * The strict invariant (invariants.ts) calls this too, so an old log is not
+ * treated as corrupt. New writes are validated at the service/store boundary
+ * before they ever reach the invariant.
  */
 export function normalizeTicketSnapshot(
   snapshot: Record<string, unknown>,
@@ -70,9 +75,6 @@ export function normalizeTicketSnapshot(
   const id = snapshot.id as number;
   const projectId = snapshot.projectId as number;
   const slug = typeof snapshot.slug === "string" ? snapshot.slug : `ticket-${id}`;
-  // A snapshot written before D1 has no dependsOn. Synthesize the empty
-  // list here so strict validation and the fold both treat the record as
-  // its normalized values.
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
   const absPath = resolveAbsPath(projectId);
   const workspaceKey =

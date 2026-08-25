@@ -11,7 +11,6 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import { apply } from "../src/tools/aidos-tools";
 import { installAidosGuard } from "../src/tools/guard";
 import { installAidosMask } from "../src/tools/mask";
-import { installBashAskListener } from "../src/tools/bash-ask";
 import { installAllowlistGuard } from "../src/tools/allowlist";
 import { registerAidosService } from "../src/host/aidos-core";
 import { registerAidosInvariant } from "../src/host/invariant";
@@ -52,7 +51,7 @@ describe("the aidos-tools plugin", () => {
     expect((section?.text ?? "").length).toBeGreaterThan(0);
   });
 
-  it("apply installs the guard, the mask, the bash-ask listener, and the allowlist guard", () => {
+  it("apply installs the guard, the mask, and the allowlist guard", () => {
     const harness = createHarness();
     harness.installService();
     // The tier tools give the mask a universe to mask; the six board tools
@@ -61,7 +60,7 @@ describe("the aidos-tools plugin", () => {
     apply(asContext(harness.ctx), {});
 
     expect(harness.guards.length).toBeGreaterThan(0);
-    expect(harness.listeners["tools/pre-execute"]?.length ?? 0).toBeGreaterThan(0);
+    // bash-ask listener removed; awaiting_verification now via bash-guard profile
     expect(harness.restrictions.length).toBeGreaterThan(0);
   });
 
@@ -69,7 +68,6 @@ describe("the aidos-tools plugin", () => {
     const harness = createHarness();
     expect(typeof installAidosGuard(asContext(harness.ctx))).toBe("function");
     expect(typeof installAidosMask(asContext(harness.ctx))).toBe("function");
-    expect(typeof installBashAskListener(asContext(harness.ctx))).toBe("function");
     expect(typeof installAllowlistGuard(asContext(harness.ctx))).toBe("function");
   });
 

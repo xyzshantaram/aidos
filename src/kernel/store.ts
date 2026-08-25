@@ -41,6 +41,7 @@ import type {
   TicketState,
 } from "./types";
 import { slugFromTitle, workspaceKeyFromPath } from "./slug";
+import { deepClone, refusalReason, rowOf } from "./helpers";
 
 export interface StoreOptions {
   /** Replay an existing log at construction. */
@@ -56,21 +57,6 @@ const EMPTY_PLAN: PlanValue = {
   rules: "",
 };
 
-/** Clone one JSON-safe value. The log must never alias caller data. */
-function deepClone<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((item) => deepClone(item)) as unknown as T;
-  }
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>)) {
-      out[key] = deepClone((value as Record<string, unknown>)[key]);
-    }
-    return out as T;
-  }
-  return value;
-}
-
 /** Freeze one value and everything it holds. */
 function deepFreeze<T>(value: T): T {
   if (value === null || typeof value !== "object") {
@@ -81,18 +67,6 @@ function deepFreeze<T>(value: T): T {
     deepFreeze(record[key]);
   }
   return Object.freeze(value);
-}
-
-/** The refusal reason string of the prototype's _refusal_reason. */
-function refusalReason(missing: string[], allowedActors: string[]): string {
-  const parts: string[] = [];
-  if (missing.length > 0) {
-    parts.push(`missing evidence kinds: ${missing.join(", ")}`);
-  }
-  if (allowedActors.length > 0) {
-    parts.push(`allowed actors: ${allowedActors.join(", ")}`);
-  }
-  return parts.join(" ");
 }
 
 /** One column getter of the tickets page sort. */

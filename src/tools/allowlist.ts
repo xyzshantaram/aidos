@@ -24,7 +24,9 @@ const EDIT_INTENT = "fs/edit-intent";
 /** Whether one path sits under (or equals) a root, after both are normalized. */
 function isUnder(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate));
-  return rel === "" || (!rel.startsWith("../") && rel !== ".." && !isAbsolute(rel));
+  // Windows: rel may contain backslash; normalize before checking parent escape.
+  const norm = rel.replace(/\\/g, "/");
+  return rel === "" || (!norm.startsWith("../") && norm !== ".." && !isAbsolute(rel));
 }
 
 /** Whether one target path sits under one of the allowed roots. */
@@ -73,8 +75,14 @@ export function writeBoundaryReason(
   } catch {
     rows = [];
   }
-  // No tickets at all → standard session, no ticket machinery → pass through.
-  if (rows.length === 0) return undefined;
+  // No tickets at all: per-grill answer "allow writes only under scratch root
+  // when board is empty". Scratch already passed above; any non-scratch
+  // write is outside the union when there is no in_progress ticket to
+  // cover it. Do not pass through — an empty aidos board is not a
+  // standard session.
+  if (rows.length === 0) {
+    return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it (board is empty \u2014 create and sign off a ticket, or write under scratch)`;
+  }
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;

@@ -1,6 +1,6 @@
 /**
  * The aidos-tools agent plugin: the six model-facing tools, the
- * `tool:aidos` prompt section, and the guard, mask, bash-ask, and
+ * `tool:aidos` prompt section, and the guard, mask, and
  * allowlist wiring. The dsh-tool-goal shape. SPEC-B1.md is the contract.
  *
  * Every tool body executes as the agent: it passes `exec.agent` to the
@@ -37,7 +37,6 @@ import {
 } from "../kernel/types";
 import { installAidosGuard, ORCHESTRATOR_ONLY_MESSAGE } from "./guard";
 import { installAidosMask } from "./mask";
-import { installBashAskListener } from "./bash-ask";
 import { installAllowlistGuard } from "./allowlist";
 import { registerScratchTools, scratchRootForAgent } from "./scratch";
 export const name = "aidos-tools";
@@ -494,7 +493,10 @@ function registerPlanImport(ctx: Context): void {
   );
 }
 
-/** Register the six tools, the prompt section, and the policy wiring. */
+/** Register the six tools, the prompt section, and the policy wiring.
+ * bash-ask was removed; awaiting_verification now uses bash-guard's
+ * profile-awaiting_verification overlay (see src/host/aidos-core.ts#bashContext).
+ */
 export function apply(ctx: Context, config: unknown): void {
   ctx.systemPrompt.section({
     name: "tool:aidos",
@@ -510,7 +512,6 @@ export function apply(ctx: Context, config: unknown): void {
   registerScratchTools(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
-  installBashAskListener(ctx);
   installAllowlistGuard(ctx);
   void config;
 }

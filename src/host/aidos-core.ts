@@ -43,6 +43,7 @@ import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
+import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { scratchRootForAgent } from "../tools/scratch";
 import type {
@@ -59,6 +60,7 @@ import type {
   TicketState,
 } from "../kernel/types";
 import {
+  InvariantError,
   AllowlistActorRefused,
   AllowlistCoverageRefused,
   ContextTooLongError,
@@ -73,7 +75,7 @@ import {
 } from "../kernel/types";
 import type { AidosEvent } from "../kernel/events";
 import { AIDOS_EVENT_TYPES, foldSessionEvent, registerAidosInvariant } from "./invariant";
-import { registerAidosSessionEventTypes } from "./session-events";
+import { aidosSessionEventTypesRegistered, registerAidosSessionEventTypes } from "./session-events";
 
 /** The session event types the aidos stream owns (the kernel event kinds). */
 export { AIDOS_EVENT_TYPES };
@@ -351,51 +353,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Clone one JSON-safe value; the log must never alias caller data. */
-function deepClone<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map((item) => deepClone(item)) as unknown as T;
-  }
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>)) {
-      out[key] = deepClone((value as Record<string, unknown>)[key]);
-    }
-    return out as T;
-  }
-  return value;
-}
-
-/** One ticket row from a folded snapshot. The one read code path. */
-function rowOf(snapshot: TicketSnapshot): TicketRow {
-  return {
-    id: snapshot.id,
-    projectId: snapshot.projectId,
-    title: snapshot.title,
-    description: snapshot.description,
-    body: snapshot.body,
-    criteria: snapshot.criteria,
-    phase: snapshot.phase,
-    order: snapshot.order,
-    state: snapshot.state,
-    dependsOn: [...snapshot.dependsOn],
-  };
-}
-
 /** The title a newly created phase takes when none is named. */
 const DEFAULT_PHASE_TITLE = "Untitled phase";
-
-/** The refusal reason string, mirroring the prototype's _refusal_reason. */
-function refusalReason(missing: string[], allowedActors: string[]): string {
-  const parts: string[] = [];
-  if (missing.length > 0) {
-    parts.push(`missing evidence kinds: ${missing.join(", ")}`);
-  }
-  if (allowedActors.length > 0) {
-    parts.push(`allowed actors: ${allowedActors.join(", ")}`);
-  }
-  return parts.join(" ");
-}
 
 // ---- the service ----
 
@@ -408,6 +367,8 @@ interface SessionCache {
 export interface AidosCoreConfig {
   /** The project name a session takes when it binds its workspace. */
   defaultProjectName?: string;
+  /** Clock for `at`/`updatedAt`, seconds as float. Default Date.now()/1000. Injectable for deterministic tests. */
+  now?: () => number;
 }
 
 export interface SetTicketArgs {
@@ -617,7 +578,17 @@ registerAidosSessionEventTypes();
       } catch {
         states = [];
       }
-      profile = states.some((state) => state === "in_progress") ? "implementation" : "planning";
+      const hasInProgress = states.some((state) => state === "in_progress");
+      const hasAwaiting = states.some((state) => state === "awaiting_verification");
+      // Awaiting-verification without concurrent in_progress moves bash
+      // into the awaiting_verification profile (replaces bash-ask.ts).
+      // dotfiles-ai provides guards/profile-awaiting_verification which asks
+      // on every command except scratch. See the dotfiles prompt.
+      if (hasAwaiting && !hasInProgress) {
+        profile = "awaiting_verification";
+      } else {
+        profile = hasInProgress ? "implementation" : "planning";
+      }
     } else {
       const kind = this.subagentKind(agent);
       profile = kind ? `subagent-${kind}` : "subagent-coder";
@@ -912,6 +883,14 @@ registerAidosSessionEventTypes();
     const cache = this._cache(session);
     this._sync(session, cache);
     validateAidosEvent(cache.state, event);
+    // Hard-fail per grill (C3): if event types are not registered the
+    // durable append would make the log unreadable on restart. Refuse
+    // the append rather than write an unreadable event.
+    if (!aidosSessionEventTypesRegistered()) {
+      throw new InvariantError(
+        "aidos event types are not registered with the host reader; refusing durable append (see src/host/session-events.ts)",
+      );
+    }
     // The plugin registers the aidos session event types with the host session
     // reader at startup (see ./session-events.ts, the llm-fallbacks issue #52
     // pattern), so a durable append here is always readable on a later load.
@@ -921,7 +900,7 @@ registerAidosSessionEventTypes();
 
   /** The clock, seconds as a float, floored per ticket at the last at. */
   private _now(): number {
-    return Date.now() / 1000;
+    return this._config.now ? this._config.now() : Date.now() / 1000;
   }
 
   private _atFor(session: Session, ticketId: TicketId, floor?: number): number {

@@ -37,6 +37,11 @@ export function FieldEditor(props: FieldEditorProps) {
     try {
       const field = props.field;
       const raw = draft;
+      if ((field === "phase" || field === "order") && !/^\d+$/.test(raw.trim())) {
+        showToast("phase and order must be integers ≥ 0", "refusal");
+        setSaving(false);
+        return;
+      }
       const value =
         field === "phase" || field === "order"
           ? Number(raw)

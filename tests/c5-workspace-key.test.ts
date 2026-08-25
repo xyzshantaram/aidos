@@ -44,7 +44,9 @@ describe("workspaceKeyFromPath", () => {
   it("caps the readable core at 251 characters", () => {
     const long = "/" + "a".repeat(300);
     const core = workspaceKeyFromPath(long).slice(2, -2);
-    expect(core.length).toBe(251);
-    expect(workspaceKeyFromPath(long)).toBe("--" + "a".repeat(251) + "--");
+    // No cap per grill answer "No cap — full-length keys": deep paths
+    // must not collide on truncated scratch dirs. Core keeps full length.
+    expect(core.length).toBe(300);
+    expect(workspaceKeyFromPath(long)).toBe("--" + "a".repeat(300) + "--");
   });
 });

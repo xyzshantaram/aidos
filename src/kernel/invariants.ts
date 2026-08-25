@@ -3,6 +3,13 @@
  * `aidos/invariant` companion can mount it at B1. SPEC.md section 8
  * lists every rule. `validateAidosEvent` throws InvariantError (code
  * "INVARIANT") on the first violation.
+ *
+ * Note on "legacy" handling: tickets created before C5 had no `slug` or
+ * `workspaceKey`; before D1 they had no `dependsOn`. No real ticket has
+ * been created yet, but tests/c5-legacy-replay.test.ts synthesizes those
+ * old records to prove an old log still replays. normalizeTicketSnapshot()
+ * in slug.ts fills those gaps so replay is not treated as corrupt. See
+ * src/kernel/slug.ts for the full explanation.
  */
 
 import type { AidosEvent } from "./events";
@@ -155,6 +162,11 @@ function validateTicketChange(
   if (!isPlainObject(rawTicket)) {
     invariant("ticket/change ticket must be an object");
   }
+  // Replay normalization: old logs (pre-C5/pre-D1) may lack slug,
+  // workspaceKey, or dependsOn. normalizeTicketSnapshot fills them
+  // from the owning project's path so replay is not treated as
+  // corrupt. See slug.ts. New writes always include these fields;
+  // their absence is only tolerated here for legacy replay.
   const ticket = normalizeTicketSnapshot(rawTicket, (projectId) => state.projects.get(projectId)?.absPath);
   expectKeys(ticket, SNAPSHOT_KEYS, "ticket snapshot");
   expectInt(ticket.id, "ticket id", 1);
