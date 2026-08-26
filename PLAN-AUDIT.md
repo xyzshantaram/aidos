@@ -43,31 +43,6 @@ its owner re-pins it after this sweep lands.
   the browser console at `debug` and confirm a normal session reads clearly and
   does not flood.
 
-- [ ] **A-UI1 — Fix the ticket-board layout and the filter-panel controls.**
-  Three separate defects in the Tickets tab, all client-side
-  (`src/client/board.css` for style, and the component that renders the
-  `FILTERS` / `SORT` / `SEARCH` panel for markup; grep the `Descending` label
-  to find it).
-  1. **Width and height.** The board today sits in a narrow centered column
-     with a large empty gutter on the left and a tall dead area under the
-     content. Make it fill the full width and stop just short of the chat
-     input, the same way the Trajectory tab already does. Copy the Trajectory
-     tab's container sizing rather than inventing new values.
-  2. **Apply and Reset alignment.** Both buttons sit left-aligned at the
-     bottom of the filter panel. Right-align the pair.
-  3. **Sort direction control.** The `Descending` text button sits on its own
-     row below the sort dropdown. Replace it with an icon button placed inline
-     with the dropdown, on the same row. The icon shows the *current* state:
-     an up arrow for ascending, a down arrow for descending. The hover title
-     names the state the click will move to, for example
-     `Sort ascending` while descending is active.
-  **Evaluate:** `npm run build` passes and `npm test` stays green. Human
-  review, since this is pure visual work: open the Tickets tab and confirm the
-  board spans the full width and clears the chat input, Apply and Reset sit at
-  the right edge of the panel, and the direction icon sits beside the dropdown,
-  points the right way for each state, and its hover text names the other
-  state.
-
 ## Critical context
 
 - `dist/host/aidos-plugin.js` and `presets/aidos/aidos-tools.js` are committed on
@@ -104,3 +79,8 @@ its owner re-pins it after this sweep lands.
       after the id-generation change.
 - [ ] A-LOG2 — open the board panel with the console at `debug`, confirm the log
       is readable and not flooded.
+- [ ] A-UI1 — open the Tickets tab and confirm the board spans the full width
+      and clears the chat input, Apply and Reset sit at the right edge of the
+      filter panel, and the sort-direction icon sits beside the dropdown,
+      points the right way for each state, and its hover text names the
+      other state.

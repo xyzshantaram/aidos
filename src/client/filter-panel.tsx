@@ -196,15 +196,15 @@ export function FilterPanel(props: FilterPanelProps) {
             </option>
           ))}
         </select>
-      </div>
-      <div className="aidos-actions-row">
         <button
           className="aidos-btn aidos-toggle-btn"
+          title={staged.descending ? "Sort ascending" : "Sort descending"}
+          aria-label={staged.descending ? "Sort ascending" : "Sort descending"}
           onClick={() => {
             updateStaged({ ...staged, descending: !staged.descending });
           }}
         >
-          {staged.descending ? "Descending" : "Ascending"}
+          {staged.descending ? "↓" : "↑"}
         </button>
       </div>
     </div>
