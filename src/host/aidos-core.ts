@@ -1206,7 +1206,7 @@ registerAidosSessionEventTypes();
       throw new UnknownTicket(ticketId);
     }
     this._assertLocalWorkspace(agent, snapshot);
-    const at = this._now();
+    const at = this._atFor(agent.session, ticketId);
     this._commit(agent, {
       kind: "comment/added",
       version: 1,

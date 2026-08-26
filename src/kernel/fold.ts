@@ -95,6 +95,9 @@ export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosStat
       } else {
         state.comments.set(event.ticketId, [record]);
       }
+      // A comment is a write to the ticket. It must advance the ticket's
+      // timeline so later writes cannot fall below it.
+      state.lastAt.set(event.ticketId, event.at);
       return state;
     }
     case "aidos/refusal": {

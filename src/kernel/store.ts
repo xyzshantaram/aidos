@@ -561,7 +561,7 @@ export class Store {
           return order * direction;
         }
       }
-      return a.id - b.id;
+      return (a.id - b.id) * direction;
     });
 
     return {
@@ -584,6 +584,9 @@ export class Store {
     }
     if (!def.allowedAuthors.includes(actor)) {
       throw new EvidenceAuthorRefused(kind, actor);
+    }
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
     }
     const at = this._atFor(ticketId);
     this._append({
@@ -619,13 +622,16 @@ export class Store {
   }
 
   addComment(ticketId: TicketId, text: string, author: Actor): void {
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
     this._append({
       kind: "comment/added",
       version: 1,
       ticketId,
       text,
       author,
-      at: this._nowFn(),
+      at: this._atFor(ticketId),
     });
   }
 

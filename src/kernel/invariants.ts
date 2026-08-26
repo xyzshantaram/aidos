@@ -381,12 +381,9 @@ function validateEvidence(
   if (!isPlainObject(row.payload)) {
     invariant("evidence payload must be an object");
   }
-  // Rule 7: at must not fall for that ticket. Also, evidence for an unknown ticket is an orphan (store would refuse).
-  // Allow orphan only during legacy replay of a ticket that was deleted/never created — for strictness, enforce unless the ticket exists or no ticket has been created yet in state (empty log replay).
-  // For now, warn strictly: if ticket does not exist and state has at least one ticket, it is an orphan that fold should surface as corrupt.
-  // Tests: no orphan-evidence test currently fails on this, so gate lightly.
-  // We enforce: if state.tickets.size > 0 and !state.tickets.has(raw.ticketId as TicketId), warn via invariant only when no lastAt either (truly orphan, not just out-of-order append before ticket folds).
-  // To avoid breaking legacy replay order (evidence may arrive before ticket/change in log), do not throw here — the service boundary enforces. Keep as soft check: no throw yet, just at check.
+  // Rule 7: at must not fall for that ticket. The service boundary refuses
+  // evidence on an unknown ticket. Replay keeps that check soft: a legacy
+  // log may carry an orphan before the ticket folds, so we do not throw here.
   const lastAt = state.lastAt.get(raw.ticketId as TicketId);
   if (lastAt !== undefined && (row.at as number) < lastAt) {
     invariant(`evidence at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
@@ -438,7 +435,7 @@ function validatePlanChange(
   }
 }
 
-function validateComment(_state: AidosState, raw: Record<string, unknown>): void {
+function validateComment(state: AidosState, raw: Record<string, unknown>): void {
   expectKeys(raw, COMMENT_KEYS, "comment/added");
   if (raw.version !== 1) {
     invariant("comment/added version must be 1");
@@ -447,6 +444,13 @@ function validateComment(_state: AidosState, raw: Record<string, unknown>): void
   expectString(raw.text, "comment text");
   expectActor(raw.author, "comment author");
   expectNumber(raw.at, "comment at");
+  // A comment is a write to the ticket. Its at must not fall. The service
+  // boundary refuses a comment on an unknown ticket. Replay keeps the orphan
+  // check soft: a legacy log may carry it before the ticket folds.
+  const lastAt = state.lastAt.get(raw.ticketId as TicketId);
+  if (lastAt !== undefined && (raw.at as number) < lastAt) {
+    invariant(`comment at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+  }
 }
 
 function validateRefusal(_state: AidosState, raw: Record<string, unknown>): void {

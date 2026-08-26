@@ -436,7 +436,7 @@ exists, and signoff is yours" guidance).
 - `set_ticket` creates or edits ticket fields (title, description, criteria,
   phase, order).
 - `attach_evidence` attaches agent-authored evidence for agent-allowed kinds
-  (`automated_check`, `review_pass`, `review_note`, `subagent_report`).
+  (`automated_check`, `review_pass`, `review_note`, `agent_report`).
 - `move_ticket` moves `open to in-progress` (needs `builtin:user_signoff`),
   `in-progress to awaiting-verification` (needs `builtin:automated_check`
   plus `builtin:review_pass`), and refuses `awaiting-verification to done`
@@ -541,7 +541,7 @@ dashboard.
 - **Detached jobs:** the orchestrator spawns work with the subagent tool in
   `backgroundMode: continuable` (or plain jobs). Status comes via
   `job_output` and `job_list`. A finished report is fetched. The orchestrator
-  attaches it as `builtin:subagent_report` evidence (author `agent`, payload
+  attaches it as `builtin:agent_report` evidence (author `agent`, payload
   carrying the job id, subagent name, start and end times). Ticket A6's
   provenance query by name and date reads the projection. Jobs outlive the
   parent turn and are listed per session natively.
@@ -1174,11 +1174,11 @@ work is the tools and the gate enforcement.
 
 - [ ] **Ticket A6: Subagents run detached.** On dsh: `ctx.jobs` plus the `job_output`/`job_list`/
   `job_kill` tools. Jobs outlive the parent turn and are listed per session. The orchestrator
-  attaches a finished report as `builtin:subagent_report` evidence with the job identifier, the
+  attaches a finished report as `builtin:agent_report` evidence with the job identifier, the
   subagent name, and the start and end times.
   **Evaluate:** not started.** dsh's half works today, and the mask's delegation tier
   already names the job tools. The aidos half does not exist. Nothing in `src/` reads
-  `ctx.jobs`, and `subagent_report` appears only as a kind string inside the tool
+  `ctx.jobs`, and `agent_report` appears only as a kind string inside the tool
   descriptions. No code attaches a finished report as evidence. That glue is B5.
   **Evaluate:** the parent agent spawns a job and takes its next action in the same turn, before
   that job finishes. A status check names the job, its state, and how long it has run. A report

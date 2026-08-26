@@ -41,7 +41,7 @@ export function workspaceKeyFromPath(cwd: string): string {
       readable += character;
       continue;
     }
-    readable += "~" + character.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0");
+    readable += "~" + character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0");
   }
   readable = readable.replace(/^-+/, "");
   if (readable === "") {

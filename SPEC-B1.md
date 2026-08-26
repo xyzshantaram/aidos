@@ -49,7 +49,7 @@ endpoints (B2), no board (B3). What lands:
    structured JSON errors, never tracebacks (test_25, P29). `plan` is the
    one exception: its result is the plan markdown.
 3. **`attach_evidence` offers only the agent-allowed kinds.**
-   `automated_check`, `review_pass`, `review_note`, `subagent_report`. A
+   `automated_check`, `review_pass`, `review_note`, `agent_report`. A
    human-only kind (`user_signoff`, `user_verified`) refuses with
    `human_only_kind`; an unregistered kind refuses with `unknown_kind`
    naming the kind (P29). The kernel's `allowedAuthors` check backs the
@@ -375,7 +375,7 @@ rules above.
   Payload defaults to `{}`.
 - Only the agent-allowed kinds are offered (decision 3). The tool takes
   the short kind names (`automated_check`, `review_pass`, `review_note`,
-  `subagent_report`); the service resolves a short name to its registered
+  `agent_report`); the service resolves a short name to its registered
   `builtin:` kind id, and a full id resolves exactly. The stored row
   carries the resolved id, so the gate's required kinds match; the result
   echoes the kind the caller passed. The service stamps `actor: "agent"`.

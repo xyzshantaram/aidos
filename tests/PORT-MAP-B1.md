@@ -128,7 +128,7 @@ tests (test-00 to test-32) are untouched and stay green.
 
 | Claim | Prototype / SPEC | Why it cannot port | Ticket |
 |---|---|---|---|
-| `attach_evidence` offers a kind named `subagent_report` | SPEC-B1 decision 3 | The kernel constant table registers `builtin:agent_report`, not `builtin:subagent_report`; the short name `subagent_report` cannot resolve to a registered kind. The tests use the B0 five-kind agent-authorable list. | B1 |
+| `attach_evidence` offers a kind named `subagent_report` | SPEC-B1 decision 3 | Fixed in A-B5: the name is gone. The kernel constant table registers `builtin:agent_report`, not `builtin:subagent_report`; the tool and the spec now offer the short name `agent_report`, which `_resolveKind` accepts. The tests use the B0 five-kind agent-authorable list. | B1 |
 | The CLI flag spellings, exit codes, stderr, and the subprocess | test_20, 23, 25, 27 | The tool layer has no flags and no exit codes; refusal state is `isError` and the refusal is a `HarnessError` with a JSON message. | B1 |
 | `show`'s ticket object with an `evidence` list | test_24, 25 | The board read model is `get_tickets` (projection rows with `confidenceScore`/`gateFraction`); the per-ticket evidence view is B3 board surface. | B3 |
 | A second `init` keeps the tickets by reading them back | test_24 | The bootstrap only binds the project; ticket persistence across service mounts is the log (tested by the rebuild test in `b1-service`). | B1 |

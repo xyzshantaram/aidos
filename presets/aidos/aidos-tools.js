@@ -14918,7 +14918,7 @@ function workspaceKeyFromPath(cwd) {
       readable += character;
       continue;
     }
-    readable += "~" + character.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0");
+    readable += "~" + character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
   }
   readable = readable.replace(/^-+/, "");
   if (readable === "") {
@@ -15261,7 +15261,7 @@ function validatePlanChange(_state, raw) {
     invariant(`plan context exceeds ${PLAN_CONTEXT_LIMIT} lines`);
   }
 }
-function validateComment(_state, raw) {
+function validateComment(state, raw) {
   expectKeys(raw, COMMENT_KEYS, "comment/added");
   if (raw.version !== 1) {
     invariant("comment/added version must be 1");
@@ -15270,6 +15270,10 @@ function validateComment(_state, raw) {
   expectString(raw.text, "comment text");
   expectActor(raw.author, "comment author");
   expectNumber(raw.at, "comment at");
+  const lastAt = state.lastAt.get(raw.ticketId);
+  if (lastAt !== void 0 && raw.at < lastAt) {
+    invariant(`comment at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+  }
 }
 function validateRefusal(_state, raw) {
   expectKeys(raw, REFUSAL_KEYS, "aidos/refusal");
@@ -15426,6 +15430,7 @@ function foldAidosEvents(state, event) {
       } else {
         state.comments.set(event.ticketId, [record2]);
       }
+      state.lastAt.set(event.ticketId, event.at);
       return state;
     }
     case "aidos/refusal": {
@@ -15719,17 +15724,7 @@ function _renderTicket(ticket) {
 
 // src/kernel/helpers.ts
 function deepClone(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => deepClone(item));
-  }
-  if (value !== null && typeof value === "object") {
-    const out = {};
-    for (const key of Object.keys(value)) {
-      out[key] = deepClone(value[key]);
-    }
-    return out;
-  }
-  return value;
+  return structuredClone(value);
 }
 function rowOf(snapshot) {
   return {
@@ -16871,7 +16866,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new UnknownTicket(ticketId);
     }
     this._assertLocalWorkspace(agent, snapshot);
-    const at = this._now();
+    const at = this._atFor(agent.session, ticketId);
     this._commit(agent, {
       kind: "comment/added",
       version: 1,
@@ -17584,7 +17579,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, subagent_report); user_signoff and user_verified are the human's to supply, never yours. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them. Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, and plan_import whenever you spawn a subagent or a fork. The depth guard refuses a subagent anyway, so the filter is a second layer.";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them. Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, and plan_import whenever you spawn a subagent or a fork. The depth guard refuses a subagent anyway, so the filter is a second layer.";
 function registerGetTickets(ctx) {
   ctx.tools.register(
     defineTool2({
@@ -17676,13 +17671,13 @@ function registerAttachEvidence(ctx) {
   ctx.tools.register(
     defineTool2({
       name: "attach_evidence",
-      description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_note, subagent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them.",
+      description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them.",
       parameters: {
         ticketId: { oneOf: [{ type: "integer" }, { type: "string" }], required: true, description: "The ticket that receives the evidence, by numeric id or slug." },
         kind: {
           type: "string",
           required: true,
-          description: "The evidence kind: one of the agent-allowed kinds (automated_check, review_pass, review_note, subagent_report)."
+          description: "The evidence kind: one of the agent-allowed kinds (automated_check, review_pass, review_note, agent_report)."
         },
         payload: {
           type: "object",

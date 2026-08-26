@@ -14915,7 +14915,7 @@ function workspaceKeyFromPath(cwd) {
       readable += character;
       continue;
     }
-    readable += "~" + character.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0");
+    readable += "~" + character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
   }
   readable = readable.replace(/^-+/, "");
   if (readable === "") {
@@ -15258,7 +15258,7 @@ function validatePlanChange(_state, raw) {
     invariant(`plan context exceeds ${PLAN_CONTEXT_LIMIT} lines`);
   }
 }
-function validateComment(_state, raw) {
+function validateComment(state, raw) {
   expectKeys(raw, COMMENT_KEYS, "comment/added");
   if (raw.version !== 1) {
     invariant("comment/added version must be 1");
@@ -15267,6 +15267,10 @@ function validateComment(_state, raw) {
   expectString(raw.text, "comment text");
   expectActor(raw.author, "comment author");
   expectNumber(raw.at, "comment at");
+  const lastAt = state.lastAt.get(raw.ticketId);
+  if (lastAt !== void 0 && raw.at < lastAt) {
+    invariant(`comment at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+  }
 }
 function validateRefusal(_state, raw) {
   expectKeys(raw, REFUSAL_KEYS, "aidos/refusal");
@@ -15423,6 +15427,7 @@ function foldAidosEvents(state, event) {
       } else {
         state.comments.set(event.ticketId, [record2]);
       }
+      state.lastAt.set(event.ticketId, event.at);
       return state;
     }
     case "aidos/refusal": {
@@ -15716,17 +15721,7 @@ function _renderTicket(ticket) {
 
 // src/kernel/helpers.ts
 function deepClone(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => deepClone(item));
-  }
-  if (value !== null && typeof value === "object") {
-    const out = {};
-    for (const key of Object.keys(value)) {
-      out[key] = deepClone(value[key]);
-    }
-    return out;
-  }
-  return value;
+  return structuredClone(value);
 }
 function rowOf(snapshot) {
   return {
@@ -16651,7 +16646,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new UnknownTicket(ticketId);
     }
     this._assertLocalWorkspace(agent, snapshot);
-    const at = this._now();
+    const at = this._atFor(agent.session, ticketId);
     this._commit(agent, {
       kind: "comment/added",
       version: 1,
