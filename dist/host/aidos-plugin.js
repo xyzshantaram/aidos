@@ -14923,13 +14923,10 @@ function workspaceKeyFromPath(cwd) {
   }
   return "--" + readable + "--";
 }
-function normalizeTicketSnapshot(snapshot, resolveAbsPath) {
-  const id = snapshot.id;
-  const projectId = snapshot.projectId;
-  const slug = typeof snapshot.slug === "string" ? snapshot.slug : `ticket-${id}`;
+function normalizeTicketSnapshot(snapshot) {
+  const slug = snapshot.slug;
+  const workspaceKey = snapshot.workspaceKey;
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
-  const absPath = resolveAbsPath(projectId);
-  const workspaceKey = typeof snapshot.workspaceKey === "string" ? snapshot.workspaceKey : absPath === void 0 ? "" : workspaceKeyFromPath(absPath);
   return { ...snapshot, slug, workspaceKey, dependsOn };
 }
 
@@ -15043,7 +15040,7 @@ function validateTicketChange(state, raw) {
   if (!isPlainObject2(rawTicket)) {
     invariant("ticket/change ticket must be an object");
   }
-  const ticket = normalizeTicketSnapshot(rawTicket, (projectId) => state.projects.get(projectId)?.absPath);
+  const ticket = normalizeTicketSnapshot(rawTicket);
   expectKeys(ticket, SNAPSHOT_KEYS, "ticket snapshot");
   expectInt(ticket.id, "ticket id", 1);
   expectInt(ticket.projectId, "project id", 1);
@@ -15213,9 +15210,13 @@ function validateEvidence(state, raw) {
   if (!isPlainObject2(row.payload)) {
     invariant("evidence payload must be an object");
   }
-  const lastAt = state.lastAt.get(raw.ticketId);
+  const ticketId = raw.ticketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`evidence references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
   if (lastAt !== void 0 && row.at < lastAt) {
-    invariant(`evidence at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
 function validatePlanChange(_state, raw) {
@@ -15267,9 +15268,13 @@ function validateComment(state, raw) {
   expectString(raw.text, "comment text");
   expectActor(raw.author, "comment author");
   expectNumber(raw.at, "comment at");
-  const lastAt = state.lastAt.get(raw.ticketId);
+  const ticketId = raw.ticketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`comment references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
   if (lastAt !== void 0 && raw.at < lastAt) {
-    invariant(`comment at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+    invariant(`comment at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
 function validateRefusal(_state, raw) {
@@ -15389,8 +15394,7 @@ function foldAidosEvents(state, event) {
     case "ticket/change": {
       const id = event.ticket.id;
       const ticket = normalizeTicketSnapshot(
-        event.ticket,
-        (projectId) => state.projects.get(projectId)?.absPath
+        event.ticket
       );
       state.tickets.set(id, ticket);
       state.lastAt.set(id, event.at);

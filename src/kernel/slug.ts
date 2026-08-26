@@ -1,8 +1,8 @@
 /**
  * Ticket slug and workspace-key helpers. One shared home for the slugger, the
- * canonical workspace key, and the legacy-snapshot normalization, so the
- * store, the service, the fold, and the invariant never carry a second copy of
- * the same logic.
+ * canonical workspace key, and snapshot normalization, so the store, the
+ * service, the fold, and the invariant never carry a second copy of the same
+ * logic.
  */
 
 /** The kebab-case slug derived from a title: empty on no usable text. */
@@ -51,37 +51,25 @@ export function workspaceKeyFromPath(cwd: string): string {
 }
 
 /**
- * Normalize one raw ticket snapshot into a complete shape.
+ * Normalize one raw ticket snapshot by filling pre-D1 gaps only.
  *
- * Why this exists (the "legacy" you asked about):
- * Tickets created before C5 had no `slug` or `workspaceKey`; before D1 they
- * had no `dependsOn`. No real aidos ticket has been created yet in prod, but
- * the test suite synthesizes old-format records (see tests/c5-legacy-replay.test.ts
- * and tests/c5-legacy-replay.test.ts) to prove that an old log still replays
- * after the schema grew. This helper fills those legacy gaps:
- *   - missing slug -> `ticket-<id>`
- *   - missing workspaceKey -> canonical key of the owning project's path (or "" if unknown)
+ * Why this exists:
+ * Tickets created before D1 had no `dependsOn` field. No real aidos ticket has
+ * been created yet in prod, but the test suite synthesizes old-format records
+ * (see tests/d1-depends-on.test.ts) to prove that an old log still replays
+ * after the schema grew. This helper fills that legacy gap:
  *   - missing dependsOn -> []
  *
- * New code always writes all three fields; this is only for replay of old logs.
- * The strict invariant (invariants.ts) calls this too, so an old log is not
- * treated as corrupt. New writes are validated at the service/store boundary
- * before they ever reach the invariant.
+ * As of C5, `slug` and `workspaceKey` are required fields with no fallback.
+ * New code always writes all three fields. The strict invariant (invariants.ts)
+ * calls this too, so the dependsOn gap is not treated as corrupt. New writes are
+ * validated at the service/store boundary before they ever reach the invariant.
  */
 export function normalizeTicketSnapshot(
   snapshot: Record<string, unknown>,
-  resolveAbsPath: (projectId: number) => string | undefined,
 ): Record<string, unknown> {
-  const id = snapshot.id as number;
-  const projectId = snapshot.projectId as number;
-  const slug = typeof snapshot.slug === "string" ? snapshot.slug : `ticket-${id}`;
+  const slug = snapshot.slug;
+  const workspaceKey = snapshot.workspaceKey;
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
-  const absPath = resolveAbsPath(projectId);
-  const workspaceKey =
-    typeof snapshot.workspaceKey === "string"
-      ? snapshot.workspaceKey
-      : absPath === undefined
-        ? ""
-        : workspaceKeyFromPath(absPath);
   return { ...snapshot, slug, workspaceKey, dependsOn };
 }

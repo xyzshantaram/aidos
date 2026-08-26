@@ -43,18 +43,6 @@ its owner re-pins it after this sweep lands.
   the browser console at `debug` and confirm a normal session reads clearly and
   does not flood.
 
-- [ ] **A-HYG2 — Delete the pre-C5 legacy-replay accommodation.**
-  No real log predates the current schema, so the code that tolerates an old
-  record shape is dead weight and widens the bug surface. Remove the legacy
-  normalization in `src/kernel/slug.ts`, the tolerance for a missing `slug` and
-  `workspaceKey` at `src/kernel/invariants.ts:165-169`, and the two soft orphan
-  checks in `validateEvidence` and `validateComment` (make both hard). Delete
-  `tests/c5-legacy-replay.test.ts`, which exists only to prove the
-  accommodation works.
-  **Evaluate:** a grep for "legacy" in `src/` returns nothing. Evidence or a
-  comment on an unknown ticket now throws during a fold, covered by a test.
-  `npm test` green with the legacy test removed.
-
 - [ ] **A-UI1 — Fix the ticket-board layout and the filter-panel controls.**
   Three separate defects in the Tickets tab, all client-side
   (`src/client/board.css` for style, and the component that renders the
@@ -92,6 +80,11 @@ its owner re-pins it after this sweep lands.
 - `prototype/` no longer exists. Two comments still reference it
   (`store.ts:2` and the `plan.py` reference). Drop those lines as a drive-by in
   whichever ticket touches those files.
+- A-HYG2 closed the pre-C5 legacy tolerance (`slug`/`workspaceKey` fallback,
+  soft orphan checks) but left the pre-D1 `dependsOn` fallback in
+  `normalizeTicketSnapshot` alone, at your request, to keep the sweep to a
+  workable clean state first. `grep -rn legacy src/` still returns two
+  `dependsOn`-related hits for that reason.
 - Logging level convention for both repos:
   `error` = the operation failed and the caller is affected.
   `warn` = a fallback fired or a refusal happened.

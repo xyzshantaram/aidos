@@ -4,12 +4,12 @@
  * lists every rule. `validateAidosEvent` throws InvariantError (code
  * "INVARIANT") on the first violation.
  *
- * Note on "legacy" handling: tickets created before C5 had no `slug` or
- * `workspaceKey`; before D1 they had no `dependsOn`. No real ticket has
- * been created yet, but tests/c5-legacy-replay.test.ts synthesizes those
- * old records to prove an old log still replays. normalizeTicketSnapshot()
- * in slug.ts fills those gaps so replay is not treated as corrupt. See
- * src/kernel/slug.ts for the full explanation.
+ * Note on "legacy" handling: tickets created before D1 had no `dependsOn`
+ * field. No real ticket has been created yet, but tests/d1-depends-on.test.ts
+ * synthesizes those old records to prove an old log still replays.
+ * normalizeTicketSnapshot() in slug.ts fills that gap so replay is not
+ * treated as corrupt. See src/kernel/slug.ts for the full explanation.
+ * Slug and workspaceKey are required with no fallback.
  */
 
 import type { AidosEvent } from "./events";
@@ -162,12 +162,12 @@ function validateTicketChange(
   if (!isPlainObject(rawTicket)) {
     invariant("ticket/change ticket must be an object");
   }
-  // Replay normalization: old logs (pre-C5/pre-D1) may lack slug,
-  // workspaceKey, or dependsOn. normalizeTicketSnapshot fills them
-  // from the owning project's path so replay is not treated as
-  // corrupt. See slug.ts. New writes always include these fields;
-  // their absence is only tolerated here for legacy replay.
-  const ticket = normalizeTicketSnapshot(rawTicket, (projectId) => state.projects.get(projectId)?.absPath);
+  // Replay normalization: old logs (pre-D1) may lack dependsOn.
+  // normalizeTicketSnapshot fills that gap so replay is not treated
+  // as corrupt. See slug.ts. Slug and workspaceKey are required fields
+  // with no fallback; their absence is a hard invariant violation
+  // (checked by expectString calls below).
+  const ticket = normalizeTicketSnapshot(rawTicket);
   expectKeys(ticket, SNAPSHOT_KEYS, "ticket snapshot");
   expectInt(ticket.id, "ticket id", 1);
   expectInt(ticket.projectId, "project id", 1);
@@ -381,12 +381,14 @@ function validateEvidence(
   if (!isPlainObject(row.payload)) {
     invariant("evidence payload must be an object");
   }
-  // Rule 7: at must not fall for that ticket. The service boundary refuses
-  // evidence on an unknown ticket. Replay keeps that check soft: a legacy
-  // log may carry an orphan before the ticket folds, so we do not throw here.
-  const lastAt = state.lastAt.get(raw.ticketId as TicketId);
+  // Rule 7: at must not fall for that ticket. Ticket must exist.
+  const ticketId = raw.ticketId as TicketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`evidence references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
   if (lastAt !== undefined && (row.at as number) < lastAt) {
-    invariant(`evidence at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
 
@@ -444,12 +446,14 @@ function validateComment(state: AidosState, raw: Record<string, unknown>): void 
   expectString(raw.text, "comment text");
   expectActor(raw.author, "comment author");
   expectNumber(raw.at, "comment at");
-  // A comment is a write to the ticket. Its at must not fall. The service
-  // boundary refuses a comment on an unknown ticket. Replay keeps the orphan
-  // check soft: a legacy log may carry it before the ticket folds.
-  const lastAt = state.lastAt.get(raw.ticketId as TicketId);
+  // A comment is a write to the ticket. Its at must not fall. Ticket must exist.
+  const ticketId = raw.ticketId as TicketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`comment references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
   if (lastAt !== undefined && (raw.at as number) < lastAt) {
-    invariant(`comment at for ticket ${raw.ticketId} must not fall below ${lastAt}`);
+    invariant(`comment at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
 

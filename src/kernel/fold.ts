@@ -56,7 +56,6 @@ export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosStat
       const id = event.ticket.id;
       const ticket = normalizeTicketSnapshot(
         event.ticket as unknown as Record<string, unknown>,
-        (projectId) => state.projects.get(projectId)?.absPath,
       ) as unknown as TicketSnapshot;
       // Last write wins per ticket id, in seq order.
       state.tickets.set(id, ticket);
