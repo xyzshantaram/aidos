@@ -22,12 +22,6 @@ its owner re-pins it after this sweep lands.
   **Evaluate:** a written finding that names a concrete alternative or states why
   none exists. Decide the follow-up ticket after reading it.
 
-- [ ] **A-W3 — Replace `Date.now() + Math.random()` id generation.**
-  `src/client/remote.ts:81` and `src/client/toast-store.ts:34`. Use
-  `crypto.randomUUID()`.
-  **Evaluate:** `npm run build` passes. Human review: open the board panel and
-  confirm toasts and remote calls still behave.
-
 - [ ] **A-W4 — Wire `src/plan/plan-io.ts` into the live import path.**
   `importPlan`/`exportPlan` are imported only by `tests/test-26` and
   `tests/test-29` today, and duplicate the inline logic at

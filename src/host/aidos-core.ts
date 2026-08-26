@@ -1497,14 +1497,13 @@ registerAidosSessionEventTypes();
     return max + 1;
   }
 
-  /** Read one plan file, resolved under the session's workspace root. */
-  private _readPlanFile(agent: Agent, file: string): string {
-  /** Read one plan file, resolved under the session's workspace root.
+  /**
+   * Read one plan file, resolved under the session's workspace root.
    * Absolute paths are taken verbatim (tool contract: "relative to the
    * workspace or absolute") — only relative paths are confined to the
-   * workspace so `../` cannot escape. See the `plan_import` file param. */
-    // workspace or absolute") — only relative paths are confined to the
-    // workspace so `../` cannot escape. See the `plan_import` file param.
+   * workspace so `../` cannot escape. See the `plan_import` file param.
+   */
+  private _readPlanFile(agent: Agent, file: string): string {
     let target: string;
     if (isAbsolute(file)) {
       target = file;

@@ -73,12 +73,9 @@ export class AidosRemoteError extends Error {
   }
 }
 
-/** A fresh rpc id. crypto.randomUUID when present, else a time-based fallback. */
+/** A fresh rpc id. */
 function makeRpcId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return Date.now() + "-" + Math.random();
+  return crypto.randomUUID();
 }
 
 /** Read one string field from the error body. Empty string when absent. */

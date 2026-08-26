@@ -26,12 +26,9 @@ export interface Toast {
 /** How long one toast stays visible before it auto-dismisses. */
 export const TOAST_DURATION_MS = 6_000;
 
-/** A fresh toast id. crypto.randomUUID when present, else a time-based fallback. */
+/** A fresh toast id. */
 function makeToastId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return Date.now() + "-" + Math.random();
+  return crypto.randomUUID();
 }
 
 let toasts: Toast[] = [];
