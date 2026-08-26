@@ -546,13 +546,22 @@ registerAidosSessionEventTypes();
    * to allow writes to the scratch dirs in every phase (no phase may block
    * scratch — both /tmp/dsh and the aidos durable scratch stay writable).
    *
-   * Profile derivation:
+   * A session that does not run the `aidos` preset gets no profile at all:
+   * `{ profile: "none", scratchDir: "", workspaceRoot: "" }`, computed before
+   * any session-cache, ticket, or delegation-depth logic runs. bash-guard
+   * treats "none" as "base guards only, no overlay."
+   *
+   * Profile derivation, aidos-preset sessions only:
    *  - primary agent, no ticket in_progress         => "planning"
    *  - primary agent, at least one in_progress       => "implementation"
    *  - subagent (delegation depth > 0), provider p   => `subagent-${p}`
    *    (an unknown provider falls back to "subagent-coder")
    */
   bashContext(agent: Agent): { profile: string; scratchDir: string; workspaceRoot: string } {
+    const presets = this.ctx.get("agentPresets");
+    if (presets && presets.composedPreset(agent.ctx) !== "aidos") {
+      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+    }
     let profile: string;
     if (delegationDepthOf(agent) === 0) {
       let states: TicketState[];
