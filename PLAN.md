@@ -1059,9 +1059,11 @@ package is now larger and better tested than its specification.
   cap applies at the write boundary. This file's design sections are the first real import; the
   importer must handle a context longer than 500 lines (raise the cap for the bootstrap import
   or fold the design into context and rules).
-  **Status (B1): the machine half only.** `src/plan/plan-io.ts` exports `importPlan`
-  and `exportPlan`, both tools are registered, `PLAN_CONTEXT_LIMIT` is 500, and the
-  over-cap error names the overage. test-26 pins the round trip. Two parts stay open.
+  **Status (B1): the machine half only.** `AidosService.plan`/`planImport` in
+  `aidos-core.ts` implement import and export directly against the session log,
+  both tools are registered, `PLAN_CONTEXT_LIMIT` is 500, and the over-cap error
+  names the overage. test-26 pins the round trip against the live tools. Two
+  parts stay open.
   There is no `SKILL.md` anywhere in the package, so the preset ships no skill
   directory and the writer gets no guidance. The bootstrap import of this file is B4.
   **Cap settled 2026-08-24 by grilling: raise it.** `PLAN_CONTEXT_LIMIT` moves to

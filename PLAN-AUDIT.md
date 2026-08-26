@@ -22,14 +22,6 @@ its owner re-pins it after this sweep lands.
   **Evaluate:** a written finding that names a concrete alternative or states why
   none exists. Decide the follow-up ticket after reading it.
 
-- [ ] **A-W4 — Wire `src/plan/plan-io.ts` into the live import path.**
-  `importPlan`/`exportPlan` are imported only by `tests/test-26` and
-  `tests/test-29` today, and duplicate the inline logic at
-  `aidos-core.ts:776-837`. Make the service call the module and delete the
-  duplicated inline logic.
-  **Evaluate:** the `plan` and `plan_import` tools still round trip a document.
-  `npm test` green. A grep shows one import implementation, not two.
-
 - [ ] **A-LOG1 — Host-layer logging: gaps and happy paths.**
   Add leveled `ctx.logger` calls across `src/kernel`, `src/tools`, and
   `src/host`. Cover the happy paths, not only the failures: tool invocation
