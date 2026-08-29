@@ -35,6 +35,15 @@ export function apply(ctx: {
     register: (options: unknown, component: unknown) => unknown;
   };
 }): void {
+  // Only register the Tickets tab for sessions that run the aidos preset.
+  // The client context may not expose agentPresets; when it is absent we keep
+  // the current behavior (register anyway) so a missing service never hides
+  // the board in a genuine aidos project.
+  const maybeGet = (ctx as unknown as { get?: (s: string) => unknown }).get;
+  const presets = maybeGet
+    ? (maybeGet("agentPresets") as { composedPreset: (c: unknown) => string } | undefined)
+    : undefined;
+  if (presets && presets.composedPreset(ctx as unknown) !== "aidos") return;
   injectStyles();
 
   let disposeRegistration: (() => void) | null = null;

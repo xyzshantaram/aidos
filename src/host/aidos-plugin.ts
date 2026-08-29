@@ -21,6 +21,10 @@ export const Config = z.object({});
 
 /** Mount the service on the host plane. */
 export function apply(ctx: Context, config: unknown): () => void {
+  // Do not provide the aidos service for sessions that do not run the aidos
+  // preset. A non-aidos project gets no service and no session-event types.
+  const presets = ctx.get("agentPresets");
+  if (presets && presets.composedPreset(ctx) !== "aidos") return () => {};
   // Registering the aidos event types with the host session reader happens in
   // the AidosService constructor (see aidos-core.ts / session-events.ts); the
   // service mounts here, before any lazy session load. The persistence read

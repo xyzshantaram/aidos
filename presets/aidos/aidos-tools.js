@@ -17886,6 +17886,8 @@ function registerPlanImport(ctx) {
   );
 }
 function apply(ctx, config2) {
+  const presets = ctx.get("agentPresets");
+  if (presets && presets.composedPreset(ctx) !== "aidos") return;
   ctx.systemPrompt.section({
     name: "tool:aidos",
     order: 113,

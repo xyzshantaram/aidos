@@ -517,6 +517,13 @@ function registerPlanImport(ctx: Context): void {
  * profile-awaiting_verification overlay (see src/host/aidos-core.ts#bashContext).
  */
 export function apply(ctx: Context, config: unknown): void {
+  // Do not activate aidos for sessions that do not run the aidos preset.
+  // Mirrors the per-agent gate in aidos-core.ts (bashContext / project
+  // creation): a non-aidos project gets no tools, no prompt section, no
+  // mask, and no write boundary. When agentPresets is absent the check
+  // short-circuits and aidos installs as before (audit-bash1 behavior).
+  const presets = ctx.get("agentPresets");
+  if (presets && presets.composedPreset(ctx) !== "aidos") return;
   ctx.systemPrompt.section({
     name: "tool:aidos",
     order: 113,

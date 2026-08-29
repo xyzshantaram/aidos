@@ -17029,6 +17029,9 @@ var inject = [
 ];
 var Config = z3.object({});
 function apply(ctx, config2) {
+  const presets = ctx.get("agentPresets");
+  if (presets && presets.composedPreset(ctx) !== "aidos") return () => {
+  };
   return registerAidosService(ctx, config2);
 }
 export {
