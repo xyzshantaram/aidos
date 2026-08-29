@@ -13,13 +13,6 @@ its owner re-pins it after this sweep lands.
 
 ## Checklist
 
-- [ ] **A-LOG2 — Client-layer logging.**
-  Add the same leveled logging to `src/client` (about 24 files). Cover the happy
-  paths: panel mount, data load, each user action that reaches the host, and
-  each response. Keep routine chatter at `debug`.
-  **Evaluate:** `npm run build` passes. Human review: open the board panel with
-  the browser console at `debug` and confirm a normal session reads clearly and
-  does not flood.
 
 ## Critical context
 

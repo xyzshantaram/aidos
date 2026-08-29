@@ -22,6 +22,8 @@
 
 import type { JsonValue } from "@deepseek-ai/dsh-session";
 
+import { logDebug, logError, logInfo, logWarn } from "./log";
+
 /** One client-request envelope for the aidos Remote surface. */
 interface ClientRequestEnvelope {
   type: "client-request";
@@ -92,6 +94,41 @@ function errorExtra(body: GatewayErrorBody | undefined): Record<string, unknown>
   return body.details as Record<string, unknown>;
 }
 
+/** One-line summary of one argument value for the trace log. Long strings
+ * truncate; arrays and objects collapse to their shape, never their payload.
+ */
+function summarizeValue(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    return value.length > 60 ? value.slice(0, 57) + "..." : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return "[" + value.length + " items]";
+  if (typeof value === "object") {
+    const keys = Object.keys(value as Record<string, unknown>);
+    const shown = keys.slice(0, 4);
+    return "{" + shown.join(",") + (keys.length > 4 ? ",..." : "") + "}";
+  }
+  return String(value);
+}
+
+/** One-line args summary for the trace log. Never dumps payload blobs. */
+function summarizeArgs(args: Record<string, unknown>): string {
+  const parts = Object.keys(args).map(function (key) {
+    return key + "=" + summarizeValue(args[key]);
+  });
+  return parts.length === 0 ? "{}" : parts.join(" ");
+}
+
+/**
+ * Log an error-level transport failure and return the thrown error. One
+ * place so every transport path reaches the error log.
+ */
+function transportFailure(message: string): AidosRemoteError {
+  logError("remote failed: " + message);
+  return new AidosRemoteError("transport_error", message);
+}
+
 /**
  * Call one aidos Remote method and resolve with the business result.
  * A refusal or a transport problem rejects with AidosRemoteError.
@@ -102,6 +139,7 @@ export async function callAidosRemote(
   args: Record<string, unknown>,
   agentId: string,
 ): Promise<JsonValue> {
+  logDebug("remote " + method + " args: " + summarizeArgs(args));
   const envelope: ClientRequestEnvelope = {
     type: "client-request",
     rpcId: makeRpcId(),
@@ -132,47 +170,36 @@ export async function callAidosRemote(
     if (timeout !== undefined) clearTimeout(timeout);
   } catch (error) {
     if (timeout !== undefined) clearTimeout(timeout);
-    throw new AidosRemoteError(
-      "transport_error",
+    throw transportFailure(
       `The request to the aidos Remote failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 
   if (!response.ok) {
-    throw new AidosRemoteError(
-      "transport_error",
-      `The aidos Remote answered with HTTP ${response.status}.`,
-    );
+    throw transportFailure(`The aidos Remote answered with HTTP ${response.status}.`);
   }
 
   let body: ServerResponseEnvelope;
   try {
     body = (await response.json()) as ServerResponseEnvelope;
   } catch {
-    throw new AidosRemoteError(
-      "transport_error",
-      "The aidos Remote answered with a body that is not JSON.",
-    );
+    throw transportFailure("The aidos Remote answered with a body that is not JSON.");
   }
 
   if (body.type !== "server-response") {
-    throw new AidosRemoteError(
-      "transport_error",
-      "The aidos Remote answered with an unexpected response shape.",
-    );
+    throw transportFailure("The aidos Remote answered with an unexpected response shape.");
   }
 
   const result = body.result;
   if (result === undefined) {
-    throw new AidosRemoteError(
-      "transport_error",
-      "The aidos Remote answered without a result.",
-    );
+    throw transportFailure("The aidos Remote answered without a result.");
   }
 
   if (result.ok === true) {
     const value = result.value;
+    logInfo("remote " + method + " ok");
     if (value === undefined) return null;
+    logDebug("remote " + method + " result: " + summarizeValue(value));
     return value as JsonValue;
   }
 
@@ -180,11 +207,9 @@ export async function callAidosRemote(
     const errorBody = result.error;
     const code = typeof errorBody?.code === "string" ? errorBody.code : "refused";
     const message = errorText(errorBody) || `The aidos Remote refused the request (${code}).`;
+    logWarn("remote " + method + " refused " + code + ": " + message);
     throw new AidosRemoteError(code, message, errorExtra(errorBody));
   }
 
-  throw new AidosRemoteError(
-    "transport_error",
-    "The aidos Remote answered with an unrecognized result.",
-  );
+  throw transportFailure("The aidos Remote answered with an unrecognized result.");
 }

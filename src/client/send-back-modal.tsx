@@ -5,6 +5,7 @@
 
 import react from "react";
 
+import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 
@@ -19,6 +20,10 @@ export interface SendBackModalProps {
 export function SendBackModal(props: SendBackModalProps) {
   const [reason, setReason] = react.useState("");
   const [working, setWorking] = react.useState(false);
+
+  react.useEffect(function () {
+    if (props.open) logDebug("send back modal opened");
+  }, [props.open]);
 
   if (!props.open) return null;
 

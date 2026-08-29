@@ -5,6 +5,7 @@
 
 import react from "react";
 
+import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 
@@ -19,6 +20,10 @@ export interface SignoffDialogProps {
 
 export function SignoffDialog(props: SignoffDialogProps) {
   const [working, setWorking] = react.useState(false);
+
+  react.useEffect(function () {
+    if (props.open) logDebug("signoff dialog opened");
+  }, [props.open]);
 
   if (!props.open) return null;
 

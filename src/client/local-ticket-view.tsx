@@ -29,6 +29,7 @@ import { TicketView } from "./ticket-view";
 import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { activeTicketId } from "./active-ticket";
+import { logDebug } from "./log";
 import { showToast } from "./toast-store";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -127,6 +128,11 @@ function setTicketParam(id: number | null): void {
 
 export function LocalTicketView(props: LocalTicketViewProps) {
   const [retryNonce, setRetryNonce] = react.useState(0);
+
+  react.useEffect(function () {
+    logDebug("board view mounted");
+  }, []);
+
   return (
     <ProjectionReader
       key={retryNonce}
@@ -191,6 +197,15 @@ function ProjectionReader(props: ProjectionReaderProps) {
       reportCount(sessionId, count);
     },
     [sessionId, loaded, count],
+  );
+
+  // A-LOG2: the projections flip from undefined to loaded once per mount.
+  react.useEffect(
+    function () {
+      if (!loaded) return;
+      logDebug("board loaded: " + allTicketsCount + " tickets");
+    },
+    [loaded],
   );
 
   // Restore the persisted filter once the real workspace key is known.

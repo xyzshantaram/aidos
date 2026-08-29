@@ -6,6 +6,7 @@
 
 import react from "react";
 
+import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import type { CommentRecord } from "../kernel/types";
@@ -25,6 +26,10 @@ export function CommentsSection(props: CommentsSectionProps) {
   const [collapsed, setCollapsed] = react.useState(comments.length === 1);
   const [draft, setDraft] = react.useState("");
   const [sending, setSending] = react.useState(false);
+
+  react.useEffect(function () {
+    logDebug("comments section mounted");
+  }, []);
 
   const newestFirst = [...comments].sort((a, b) => b.at - a.at);
 

@@ -27,6 +27,7 @@ import { EvidenceAttachForm } from "./evidence-attach-form";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
+import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import type { TicketView } from "../kernel/projections";
@@ -357,6 +358,10 @@ export function DetailView(props: DetailViewProps) {
 
   const ticket = props.ticket;
   const agentId = props.agentId;
+
+  react.useEffect(function () {
+    logDebug("detail view: ticket " + ticket.id);
+  }, []);
 
   async function submitForReview() {
     if (submitting) return;

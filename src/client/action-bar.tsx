@@ -7,6 +7,7 @@
 import react from "react";
 
 import { actionsFor, type ActionId } from "./action-visibility";
+import { logDebug } from "./log";
 import type { TicketView } from "../kernel/projections";
 
 export interface ActionBarProps {
@@ -27,6 +28,11 @@ const OPENERS: Record<ActionId, keyof ActionBarProps> = {
 
 export function ActionBar(props: ActionBarProps) {
   const actions = actionsFor(props.ticket);
+
+  react.useEffect(function () {
+    logDebug("action bar mounted");
+  }, []);
+
   if (actions.length === 0) return null;
 
   const buttons = actions.map((action) => {

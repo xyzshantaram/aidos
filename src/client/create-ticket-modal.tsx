@@ -9,6 +9,7 @@
 
 import react from "react";
 
+import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 
@@ -24,6 +25,10 @@ export function CreateTicketModal(props: CreateTicketModalProps) {
   const [description, setDescription] = react.useState("");
   const [criteria, setCriteria] = react.useState("");
   const [saving, setSaving] = react.useState(false);
+
+  react.useEffect(function () {
+    if (props.open) logDebug("create ticket modal opened");
+  }, [props.open]);
 
   if (!props.open) return null;
 

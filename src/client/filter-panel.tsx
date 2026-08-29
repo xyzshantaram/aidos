@@ -6,6 +6,7 @@
 import react from "react";
 
 import { STATE_CHECKLIST_ORDER, autocompleteTickets, stateLabel } from "./board-logic";
+import { logDebug } from "./log";
 import type { AppliedState } from "./view-state";
 import {
   cloneAppliedState,
@@ -81,6 +82,10 @@ export function FilterPanel(props: FilterPanelProps) {
     setSearchInput("");
     updateStaged({ ...stagedRef.current, search: "" });
   }
+
+  react.useEffect(function () {
+    logDebug("filter panel mounted");
+  }, []);
 
   react.useEffect(function () {
     return function () {

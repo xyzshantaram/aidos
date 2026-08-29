@@ -14,6 +14,8 @@
  * replaces it. The U2a timing was three seconds; the U2c contract is six.
  */
 
+import { logDebug, logWarn } from "./log";
+
 export type ToastKind = "refusal" | "info" | "success";
 
 export interface Toast {
@@ -62,6 +64,8 @@ function removeToast(id: string): void {
  * through dismissToast. The default kind is info.
  */
 export function showToast(text: string, kind: ToastKind = "info"): string {
+  if (kind === "refusal") logWarn("toast refusal: " + text);
+  else logDebug("toast: " + text);
   const id = makeToastId();
   const toast: Toast = {
     id,

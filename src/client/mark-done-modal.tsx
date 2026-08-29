@@ -9,6 +9,7 @@
 
 import react from "react";
 
+import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import type { TicketView } from "../kernel/projections";
@@ -28,6 +29,10 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
   const [step, setStep] = react.useState<1 | 2>(1);
   const [finalComment, setFinalComment] = react.useState("");
   const [working, setWorking] = react.useState(false);
+
+  react.useEffect(function () {
+    if (props.open) logDebug("mark done modal opened");
+  }, [props.open]);
 
   if (!props.open) return null;
 
