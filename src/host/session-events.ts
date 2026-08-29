@@ -29,6 +29,7 @@
  */
 
 import * as dshSession from "@deepseek-ai/dsh-session";
+import type { Context } from "@deepseek-ai/cordis";
 
 import { AIDOS_EVENT_TYPES } from "./invariant";
 
@@ -42,7 +43,7 @@ let registered = false;
  *
  * @returns whether registration is in effect (all aidos types are readable).
  */
-export function registerAidosSessionEventTypes(): boolean {
+export function registerAidosSessionEventTypes(ctx?: Context): boolean {
   if (registered) return true;
   const known = (dshSession as { KNOWN_SESSION_EVENT_TYPES?: ReadonlySet<string> })
     .KNOWN_SESSION_EVENT_TYPES;
@@ -50,7 +51,8 @@ export function registerAidosSessionEventTypes(): boolean {
   try {
     for (const type of AIDOS_EVENT_TYPES) (known as Set<string>).add(type);
     registered = [...AIDOS_EVENT_TYPES].every((type) => known.has(type));
-  } catch {
+  } catch (error) {
+    ctx?.logger?.warn?.(`aidos: failed to register session event types: ${error instanceof Error ? error.message : String(error)}`);
     registered = false;
   }
   return registered;

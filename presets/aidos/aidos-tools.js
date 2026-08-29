@@ -15843,11 +15843,14 @@ function registerScratchTools(ctx) {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_read called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_read path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         const content = await fs.readText(target, exec.signal);
+        ctx.logger?.info?.(`aidos: scratch_read read ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, content };
       }
     })
@@ -15875,11 +15878,14 @@ function registerScratchTools(ctx) {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_write called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_write path ${args.path}, content length ${args.content.length}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         const outcome = await fs.writeText(target, args.content, void 0, exec.signal);
+        ctx.logger?.info?.(`aidos: scratch_write ${outcome.operation} ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
       }
     })
@@ -15909,6 +15915,8 @@ function registerScratchTools(ctx) {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_edit called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_edit path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         const editDef = ctx.tools.get("edit", agent);
@@ -15942,6 +15950,7 @@ function registerScratchTools(ctx) {
         }
         const content = delegated.content[0];
         const message = content && content.type === "text" ? content.text : "edited";
+        ctx.logger?.info?.(`aidos: scratch_edit edited ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, message };
       }
     })
@@ -15967,6 +15976,8 @@ function registerScratchTools(ctx) {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_mkdir called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_mkdir path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         const fs = ctx.fs;
@@ -15987,6 +15998,7 @@ function registerScratchTools(ctx) {
             }
           });
         }
+        ctx.logger?.info?.(`aidos: scratch_mkdir created ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root };
       }
     })
@@ -16086,14 +16098,15 @@ function registerAidosInvariant(ctx) {
 // src/host/session-events.ts
 import * as dshSession from "@deepseek-ai/dsh-session";
 var registered = false;
-function registerAidosSessionEventTypes() {
+function registerAidosSessionEventTypes(ctx) {
   if (registered) return true;
   const known = dshSession.KNOWN_SESSION_EVENT_TYPES;
   if (!(known instanceof Set)) return false;
   try {
     for (const type of AIDOS_EVENT_TYPES) known.add(type);
     registered = [...AIDOS_EVENT_TYPES].every((type) => known.has(type));
-  } catch {
+  } catch (error51) {
+    ctx?.logger?.warn?.(`aidos: failed to register session event types: ${error51 instanceof Error ? error51.message : String(error51)}`);
     registered = false;
   }
   return registered;
@@ -16135,7 +16148,7 @@ var AIDOS_SETTINGS_SCHEMA = z2.object({
     })
   ).default([])
 });
-function resolveConfig(settings) {
+function resolveConfig(settings, ctx) {
   const kinds = settings.kinds.map((kind) => ({
     id: kind.id,
     label: kind.label,
@@ -16153,9 +16166,9 @@ function resolveConfig(settings) {
   for (const gate of gates) {
     for (const kind of gate.requiredKinds) {
       if (!known.has(kind)) {
-        throw new Error(
-          `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`
-        );
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
       }
     }
   }
@@ -16266,7 +16279,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     __publicField(this, "_config");
     __publicField(this, "_caches", /* @__PURE__ */ new WeakMap());
     __publicField(this, "_resolvedConfig");
-    registerAidosSessionEventTypes();
+    registerAidosSessionEventTypes(ctx);
     this._config = config2 ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -16282,9 +16295,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         AIDOS_SETTINGS_SCHEMA,
         { base: DEFAULT_CONFIG }
       );
-      this._resolvedConfig = resolveConfig(scope.get());
+      this._resolvedConfig = resolveConfig(scope.get(), ctx);
       scope.watch((next) => {
-        this._resolvedConfig = resolveConfig(next);
+        this._resolvedConfig = resolveConfig(next, ctx);
       });
     });
     ctx.inject(["sessionProjections"], (projectionCtx) => {
@@ -16350,7 +16363,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       let states;
       try {
         states = this.ticketStates(agent);
-      } catch {
+      } catch (error51) {
+        this.ctx.logger?.warn?.(`aidos: ticketStates failed in bashContext: ${error51 instanceof Error ? error51.message : String(error51)}`);
         states = [];
       }
       const hasInProgress = states.some((state) => state === "in_progress");
@@ -16367,7 +16381,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     let scratchDir;
     try {
       scratchDir = scratchRootForAgent(agent);
-    } catch {
+    } catch (error51) {
+      this.ctx.logger?.warn?.(`aidos: scratchRootForAgent failed in bashContext: ${error51 instanceof Error ? error51.message : String(error51)}`);
       scratchDir = "";
     }
     const workspaceRoot = agent.session?.header?.cwd ?? "";
@@ -16448,7 +16463,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       let snap;
       try {
         snap = this.ctx.sessionProjections.snapshot(session);
-      } catch {
+      } catch (error51) {
+        this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
         continue;
       }
       const tickets = snap.values["aidos.tickets"];
@@ -16473,7 +16489,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     let snap;
     try {
       snap = this.ctx.sessionProjections.snapshot(session);
-    } catch {
+    } catch (error51) {
+      this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
       return [];
     }
     const tickets = snap.values["aidos.tickets"];
@@ -16614,6 +16631,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       session.__aidosPatched = true;
     }
     session.append(event.kind, event);
+    this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
     this._sync(session, cache);
   }
   /** The clock, seconds as a float, floored per ticket at the last at. */
@@ -16647,7 +16665,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
             return { absPath: workspace.path, name: workspace.title };
           }
         }
-      } catch {
+      } catch (error51) {
+        this.ctx.logger?.warn?.(`aidos: workspaceRegistry unavailable in _workspaceOf: ${error51 instanceof Error ? error51.message : String(error51)}`);
       }
     }
     const cwd = agent.session.header.cwd;
@@ -16690,6 +16709,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       name: binding.name,
       at: this._now()
     });
+    this.ctx.logger?.info?.(`aidos: project ${projectId} created for session ${agent.session.id}`);
     return { projectId };
   }
   // ---- internals: ticket writes ----
@@ -16849,6 +16869,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       }
       throw error51;
     }
+    this.ctx.logger?.info?.(`aidos: gate passed for ticket ${ticketId} -> ${toState}`);
     const at = this._atFor(agent.session, ticketId, ticket.updatedAt);
     const snapshot = {
       ...ticket,
@@ -17293,7 +17314,8 @@ function installAidosMask(ctx) {
   const registryTools = () => {
     try {
       return ctx.tools.schemas(scopeOf(ctx)).map((schema) => schema.name).filter((name2) => name2 !== RUN_CODE);
-    } catch {
+    } catch (error51) {
+      ctx.logger?.warn?.(`aidos: registry tools unavailable, falling back to the static universe: ${error51 instanceof Error ? error51.message : String(error51)}`);
       return [...TOOL_UNIVERSE];
     }
   };
@@ -17305,7 +17327,8 @@ function installAidosMask(ctx) {
     let states;
     try {
       states = aidos.ticketStates(agent);
-    } catch {
+    } catch (error51) {
+      ctx.logger?.warn?.(`aidos: ticketStates unavailable in denyFor: ${error51 instanceof Error ? error51.message : String(error51)}`);
       return null;
     }
     const present2 = new Set(states.length === 0 ? ["open"] : states);
@@ -17364,7 +17387,8 @@ function installAidosMask(ctx) {
     for (const dispose of disposers.values()) {
       try {
         dispose();
-      } catch {
+      } catch (error51) {
+        ctx.logger?.warn?.(`aidos: restriction dispose failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
       }
     }
   };
@@ -17398,14 +17422,16 @@ function writeBoundaryReason(ctx, agent, path) {
   try {
     const scratchRoot = scratchRootForAgent(agent);
     if (isUnder(scratchRoot, path)) return void 0;
-  } catch {
+  } catch (error51) {
+    ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
   const union2 = ctx.aidos ? ctx.aidos.allowlistUnion(agent) : [];
   if (pathAllowed(path, union2)) return void 0;
   let rows = [];
   try {
     rows = ctx.aidos ? ctx.aidos.getTickets(agent) : [];
-  } catch {
+  } catch (error51) {
+    ctx.logger?.warn?.(`aidos: getTickets failed in writeBoundaryReason: ${error51 instanceof Error ? error51.message : String(error51)}`);
     rows = [];
   }
   if (rows.length === 0) {
@@ -17622,11 +17648,14 @@ function registerGetTickets(ctx) {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: get_tickets called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: get_tickets args ${JSON.stringify(args)}`);
         try {
           const tickets = ctx.aidos.getTickets(
             agent,
             args.projectId === void 0 ? void 0 : { projectId: args.projectId }
           );
+          ctx.logger?.info?.(`aidos: get_tickets returned ${tickets.length} ticket(s) for agent ${agent.session?.id}`);
           return { ok: true, tickets };
         } catch (error51) {
           refusal(error51);
@@ -17674,8 +17703,11 @@ function registerSetTicket(ctx) {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: set_ticket called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: set_ticket args ${JSON.stringify(args)}`);
         try {
           const ticket = ctx.aidos.setTicket(agent, { ...args });
+          ctx.logger?.info?.(`aidos: set_ticket wrote ticket ${ticket.id} for agent ${agent.session?.id}`);
           return { ok: true, ticket };
         } catch (error51) {
           refusal(error51);
@@ -17718,12 +17750,15 @@ function registerAttachEvidence(ctx) {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: attach_evidence called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: attach_evidence args ${JSON.stringify(args)}`);
         try {
           const view = ctx.aidos.agentAttachEvidence(agent, {
             ticketId: args.ticketId,
             kind: args.kind,
             payload: args.payload
           });
+          ctx.logger?.info?.(`aidos: attach_evidence recorded ${view.kind} for ticket ${view.ticketId}`);
           return {
             ok: true,
             ticketId: view.ticketId,
@@ -17762,8 +17797,11 @@ function registerMoveTicket(ctx) {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: move_ticket called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: move_ticket args ${JSON.stringify(args)}`);
         try {
           const moved = ctx.aidos.agentMoveTicket(agent, { ticketId: args.ticketId, to: args.to });
+          ctx.logger?.info?.(`aidos: move_ticket moved ticket ${moved.ticketId} ${moved.fromState} -> ${moved.toState}`);
           return { ok: true, ticketId: moved.ticketId, fromState: moved.fromState, toState: moved.toState };
         } catch (error51) {
           refusal(error51);
@@ -17790,8 +17828,12 @@ function registerPlan(ctx) {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: plan called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: plan args ${JSON.stringify(args)}`);
         try {
-          return ctx.aidos.plan(agent, args.projectId === void 0 ? void 0 : { projectId: args.projectId });
+          const planText = ctx.aidos.plan(agent, args.projectId === void 0 ? void 0 : { projectId: args.projectId });
+          ctx.logger?.info?.(`aidos: plan serialized for agent ${agent.session?.id}`);
+          return planText;
         } catch (error51) {
           refusal(error51);
         }
@@ -17829,8 +17871,11 @@ function registerPlanImport(ctx) {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: plan_import called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: plan_import args ${JSON.stringify(args)}`);
         try {
           const result = await ctx.aidos.planImport(agent, args);
+          ctx.logger?.info?.(`aidos: plan_import landed ${result.tickets.length} ticket(s) for agent ${agent.session?.id}`);
           return { ok: true, tickets: result.tickets };
         } catch (error51) {
           refusal(error51);
@@ -17866,7 +17911,8 @@ function aidosGuidanceText(ctx) {
       const root = scratchRootForAgent(agent);
       note = ` The scratch workspace for this session is at ${root}.
 `;
-    } catch {
+    } catch (error51) {
+      ctx.logger?.warn?.(`aidos: scratch root unavailable for the guidance note: ${error51 instanceof Error ? error51.message : String(error51)}`);
       note = "";
     }
   }

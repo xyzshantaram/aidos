@@ -13,28 +13,6 @@ its owner re-pins it after this sweep lands.
 
 ## Checklist
 
-- [ ] **A-B3 — Research only: is the global `Object.freeze` swap replaceable?**
-  `aidos-core.ts:886-908` replaces the global `Object.freeze` for the duration of
-  every append, to mark a session envelope ignorable. Commit `9767492` claimed to
-  remove this and did not. Do not change code in this ticket. Report whether a
-  non-global mechanism (a `WeakSet` of envelopes, a marker property, a dsh-side
-  hook) can carry the same signal, and what would break.
-  **Evaluate:** a written finding that names a concrete alternative or states why
-  none exists. Decide the follow-up ticket after reading it.
-
-- [ ] **A-LOG1 — Host-layer logging: gaps and happy paths.**
-  Add leveled `ctx.logger` calls across `src/kernel`, `src/tools`, and
-  `src/host`. Cover the happy paths, not only the failures: tool invocation
-  start and end for the six board tools (`aidos-tools.ts`) and the four scratch
-  tools (`scratch.ts`), gate pass (`aidos-core.ts:1185-1192`,
-  `store.ts:680-686`), project bootstrap (`aidos-core.ts:971-996`), the append
-  boundary (`_commit`, `aidos-core.ts:868-911`), and the config-load refusal at
-  `aidos-core.ts:216-218`. Give the silent catch blocks listed in Critical
-  context a `warn`. Follow the level convention in Critical context.
-  **Evaluate:** run one manual flow (create a ticket, attach evidence, move it)
-  and confirm the log shows the tool calls, the gate result, and the append.
-  `npm test` green.
-
 - [ ] **A-LOG2 — Client-layer logging.**
   Add the same leveled logging to `src/client` (about 24 files). Cover the happy
   paths: panel mount, data load, each user action that reaches the host, and
@@ -66,6 +44,8 @@ its owner re-pins it after this sweep lands.
   `info` = a state change a person would want in a normal-volume log.
   `debug` = per-call trace and payload detail.
 
+  - A-B3 finding: the global `Object.freeze` swap in `_commit` (`src/host/aidos-core.ts`, ~896-940) is replaceable. `Session.append` cannot write `ignorable`, but `src/host/session-events.ts` already mutates the host's shared `KNOWN_SESSION_EVENT_TYPES` Set at startup, so the persistence reader accepts aidos types with no `ignorable` marker. The swap only adds resilience for a reader that loads the persisted log WITHOUT the aidos plugin applied (cross-version or standalone log tools): there it prevents a hard-refuse of aidos events. Follow-up A-B3-FIX removes the swap and depends on registration.
+
 ## User preferences and special rules
 
 - Never commit without explicit approval.
@@ -79,6 +59,8 @@ its owner re-pins it after this sweep lands.
       after the id-generation change.
 - [ ] A-LOG2 — open the board panel with the console at `debug`, confirm the log
       is readable and not flooded.
+- [ ] A-LOG1 — run a board flow (create a ticket, attach evidence, move it) and confirm the log at `info` shows the tool calls, the gate result, and the append.
+
 - [ ] A-UI1 — open the Tickets tab and confirm the board spans the full width
       and clears the chat input, Apply and Reset sit at the right edge of the
       filter panel, and the sort-direction icon sits beside the dropdown,

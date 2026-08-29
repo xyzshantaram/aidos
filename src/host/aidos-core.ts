@@ -195,7 +195,7 @@ export const AIDOS_SETTINGS_SCHEMA = z.object({
  * A gate referencing an unregistered kind fails here, at config load, not at
  * gate time (SPEC-B1 decision 14).
  */
-function resolveConfig(settings: AidosSettings): AidosConfig {
+function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
   const kinds = settings.kinds.map((kind) => ({
     id: kind.id,
     label: kind.label,
@@ -213,9 +213,9 @@ function resolveConfig(settings: AidosSettings): AidosConfig {
   for (const gate of gates) {
     for (const kind of gate.requiredKinds) {
       if (!known.has(kind)) {
-        throw new Error(
-          `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`,
-        );
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
       }
     }
   }
@@ -460,7 +460,7 @@ export class AidosService extends TypertRemoteService {
     // Register the aidos session event types with the host reader before any
     // session bootstrap append (project/created in _ensureProject below) can
     // happen. Idempotent; see ./session-events for the issue-#52 rationale.
-registerAidosSessionEventTypes();
+registerAidosSessionEventTypes(ctx);
 
     // Ensure aidos events carry ignorable:true so the persistence read path accepts them
     // (KNOWN_SESSION_EVENT_TYPES does not include plugin types). Instead of the fragile
@@ -490,9 +490,9 @@ registerAidosSessionEventTypes();
         AIDOS_SETTINGS_SCHEMA,
         { base: DEFAULT_CONFIG },
       );
-      this._resolvedConfig = resolveConfig(scope.get());
+      this._resolvedConfig = resolveConfig(scope.get(), ctx);
       scope.watch((next) => {
-        this._resolvedConfig = resolveConfig(next);
+        this._resolvedConfig = resolveConfig(next, ctx);
       });
     });
 
@@ -567,7 +567,8 @@ registerAidosSessionEventTypes();
       let states: TicketState[];
       try {
         states = this.ticketStates(agent);
-      } catch {
+      } catch (error) {
+        this.ctx.logger?.warn?.(`aidos: ticketStates failed in bashContext: ${error instanceof Error ? error.message : String(error)}`);
         states = [];
       }
       const hasInProgress = states.some((state) => state === "in_progress");
@@ -588,7 +589,8 @@ registerAidosSessionEventTypes();
     let scratchDir: string;
     try {
       scratchDir = scratchRootForAgent(agent);
-    } catch {
+    } catch (error) {
+      this.ctx.logger?.warn?.(`aidos: scratchRootForAgent failed in bashContext: ${error instanceof Error ? error.message : String(error)}`);
       scratchDir = "";
     }
     const workspaceRoot = (agent.session?.header?.cwd as string | undefined) ?? "";
@@ -690,7 +692,12 @@ registerAidosSessionEventTypes();
     const results: TicketSearchResult[] = [];
     for (const session of this.ctx.sessions.list()) {
       let snap;
-      try { snap = this.ctx.sessionProjections.snapshot(session); } catch { continue; }
+      try {
+        snap = this.ctx.sessionProjections.snapshot(session);
+      } catch (error) {
+        this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       const tickets = snap.values["aidos.tickets"];
       if (!tickets) continue;
       for (const [id, ticket] of Object.entries(tickets)) {
@@ -722,7 +729,12 @@ registerAidosSessionEventTypes();
     const session = this.ctx.sessions.get(args.sessionId as any);
     if (!session) return [];
     let snap;
-    try { snap = this.ctx.sessionProjections.snapshot(session); } catch { return []; }
+    try {
+      snap = this.ctx.sessionProjections.snapshot(session);
+    } catch (error) {
+      this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
     const tickets = snap.values["aidos.tickets"];
     if (!tickets) return [];
     let rows = Object.values(tickets);
@@ -890,8 +902,15 @@ registerAidosSessionEventTypes();
     // The plugin registers the aidos session event types with the host session
     // reader at startup (see ./session-events.ts, the llm-fallbacks issue #52
     // pattern), so a durable append here is always readable on a later load.
-    // Ensure aidos events carry ignorable:true without a global Object.freeze trap:
-    // patch this session's append instance to set the marker before deepFreeze.
+    // Mark aidos events ignorable so a reader that does not recognize the type
+    // can skip them. Session.append cannot write the ignorable marker itself,
+    // so we swap the GLOBAL Object.freeze for the duration of ONE session.append
+    // call (restored in the finally below) and set ignorable on the envelope as
+    // it is frozen. This stays as a deliberate safety net for readers that load
+    // the persisted log WITHOUT the aidos plugin applied; the in-host reader
+    // already accepts these types via the KNOWN_SESSION_EVENT_TYPES registration
+    // in ./session-events.ts.
+
     const isAidosType = AIDOS_EVENT_TYPES.has(event.kind);
     if (isAidosType && !(session as unknown as { __aidosPatched?: boolean }).__aidosPatched) {
       const origAppend = session.append.bind(session);
@@ -916,6 +935,7 @@ registerAidosSessionEventTypes();
       (session as unknown as { __aidosPatched: boolean }).__aidosPatched = true;
     }
     session.append(event.kind, event);
+    this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
     this._sync(session, cache);
   }
 
@@ -953,7 +973,8 @@ registerAidosSessionEventTypes();
             return { absPath: workspace.path, name: workspace.title };
           }
         }
-      } catch {
+      } catch (error) {
+        this.ctx.logger?.warn?.(`aidos: workspaceRegistry unavailable in _workspaceOf: ${error instanceof Error ? error.message : String(error)}`);
         // The registry may be unavailable mid-bootstrap; fall through.
       }
     }
@@ -1001,6 +1022,7 @@ registerAidosSessionEventTypes();
       name: binding.name,
       at: this._now(),
     });
+    this.ctx.logger?.info?.(`aidos: project ${projectId} created for session ${agent.session.id}`);
     return { projectId };
   }
 
@@ -1182,6 +1204,7 @@ registerAidosSessionEventTypes();
       }
       throw error;
     }
+    this.ctx.logger?.info?.(`aidos: gate passed for ticket ${ticketId} -> ${toState}`);
 
     // 3. The move itself. One whole-value ticket/change record.
     const at = this._atFor(agent.session, ticketId, ticket.updatedAt);
@@ -1614,7 +1637,8 @@ export function registerAidosService(ctx: Context, config?: AidosCoreConfig): ()
     disposed = true;
     try {
       ctx.reflect.set("aidos", undefined);
-    } catch {
+    } catch (error) {
+      ctx.logger?.warn?.(`aidos: could not lift the aidos service off the context: ${error instanceof Error ? error.message : String(error)}`);
       // The owning fiber may already be unloading; the registration dies
       // with it, so there is nothing left to lift.
     }

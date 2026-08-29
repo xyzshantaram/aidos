@@ -109,7 +109,8 @@ export function installAidosMask(ctx: Context): () => void {
         .schemas(scopeOf(ctx))
         .map((schema) => schema.name)
         .filter((name) => name !== RUN_CODE);
-    } catch {
+    } catch (error) {
+      ctx.logger?.warn?.(`aidos: registry tools unavailable, falling back to the static universe: ${error instanceof Error ? error.message : String(error)}`);
       return [...TOOL_UNIVERSE];
     }
   };
@@ -128,7 +129,8 @@ export function installAidosMask(ctx: Context): () => void {
     let states: TicketState[];
     try {
       states = aidos.ticketStates(agent);
-    } catch {
+    } catch (error) {
+      ctx.logger?.warn?.(`aidos: ticketStates unavailable in denyFor: ${error instanceof Error ? error.message : String(error)}`);
       // The service may not be ready yet; the next re-apply covers it.
       return null;
     }
@@ -206,7 +208,8 @@ export function installAidosMask(ctx: Context): () => void {
     for (const dispose of disposers.values()) {
       try {
         dispose();
-      } catch {
+      } catch (error) {
+        ctx.logger?.warn?.(`aidos: restriction dispose failed: ${error instanceof Error ? error.message : String(error)}`);
         // The agent may already be disposed; its restriction dies with it.
       }
     }

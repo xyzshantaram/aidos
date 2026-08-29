@@ -120,11 +120,14 @@ export function registerScratchTools(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_read called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_read path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         const content = await fs.readText(target, exec.signal);
+        ctx.logger?.info?.(`aidos: scratch_read read ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, content };
       },
     }),
@@ -154,11 +157,14 @@ export function registerScratchTools(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_write called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_write path ${args.path}, content length ${args.content.length}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         const outcome = await fs.writeText(target, args.content, undefined, exec.signal);
+        ctx.logger?.info?.(`aidos: scratch_write ${outcome.operation} ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation as "create" | "update" };
       },
     }),
@@ -190,6 +196,8 @@ export function registerScratchTools(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_edit called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_edit path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
 
@@ -229,7 +237,7 @@ export function registerScratchTools(ctx: Context): void {
         // The delegated edit returns content blocks; surface the first as a message.
         const content = delegated.content[0];
         const message = content && content.type === "text" ? content.text : "edited";
-
+        ctx.logger?.info?.(`aidos: scratch_edit edited ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, message };
       },
     }),
@@ -257,6 +265,8 @@ export function registerScratchTools(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = callingAgent(exec);
+        ctx.logger?.info?.(`aidos: scratch_mkdir called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: scratch_mkdir path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         // Run mkdir off the main thread so the signal can abort; prefer fs.mkdir if available.
@@ -279,6 +289,7 @@ export function registerScratchTools(ctx: Context): void {
             }
           });
         }
+        ctx.logger?.info?.(`aidos: scratch_mkdir created ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root };
       },
     }),

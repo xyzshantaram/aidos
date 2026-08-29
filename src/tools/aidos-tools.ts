@@ -262,11 +262,14 @@ function registerGetTickets(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: get_tickets called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: get_tickets args ${JSON.stringify(args)}`);
         try {
           const tickets = ctx.aidos.getTickets(
             agent,
             args.projectId === undefined ? undefined : { projectId: args.projectId },
           );
+          ctx.logger?.info?.(`aidos: get_tickets returned ${tickets.length} ticket(s) for agent ${agent.session?.id}`);
           return { ok: true, tickets };
         } catch (error) {
           refusal(error);
@@ -317,8 +320,11 @@ function registerSetTicket(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: set_ticket called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: set_ticket args ${JSON.stringify(args)}`);
         try {
           const ticket = ctx.aidos.setTicket(agent, { ...args });
+          ctx.logger?.info?.(`aidos: set_ticket wrote ticket ${ticket.id} for agent ${agent.session?.id}`);
           return { ok: true, ticket };
         } catch (error) {
           refusal(error);
@@ -364,12 +370,15 @@ function registerAttachEvidence(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: attach_evidence called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: attach_evidence args ${JSON.stringify(args)}`);
         try {
           const view = ctx.aidos.agentAttachEvidence(agent, {
             ticketId: args.ticketId,
             kind: args.kind,
             payload: args.payload,
           });
+          ctx.logger?.info?.(`aidos: attach_evidence recorded ${view.kind} for ticket ${view.ticketId}`);
           return {
             ok: true,
             ticketId: view.ticketId,
@@ -410,8 +419,11 @@ function registerMoveTicket(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: move_ticket called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: move_ticket args ${JSON.stringify(args)}`);
         try {
           const moved = ctx.aidos.agentMoveTicket(agent, { ticketId: args.ticketId, to: args.to });
+          ctx.logger?.info?.(`aidos: move_ticket moved ticket ${moved.ticketId} ${moved.fromState} -> ${moved.toState}`);
           return { ok: true, ticketId: moved.ticketId, fromState: moved.fromState, toState: moved.toState };
         } catch (error) {
           refusal(error);
@@ -440,8 +452,12 @@ function registerPlan(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: plan called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: plan args ${JSON.stringify(args)}`);
         try {
-          return ctx.aidos.plan(agent, args.projectId === undefined ? undefined : { projectId: args.projectId });
+          const planText = ctx.aidos.plan(agent, args.projectId === undefined ? undefined : { projectId: args.projectId });
+          ctx.logger?.info?.(`aidos: plan serialized for agent ${agent.session?.id}`);
+          return planText;
         } catch (error) {
           refusal(error);
         }
@@ -481,8 +497,11 @@ function registerPlanImport(ctx: Context): void {
       },
       execute: async (args, exec) => {
         const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: plan_import called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: plan_import args ${JSON.stringify(args)}`);
         try {
           const result = await ctx.aidos.planImport(agent, args);
+          ctx.logger?.info?.(`aidos: plan_import landed ${result.tickets.length} ticket(s) for agent ${agent.session?.id}`);
           return { ok: true, tickets: result.tickets };
         } catch (error) {
           refusal(error);
@@ -529,7 +548,8 @@ function aidosGuidanceText(ctx: Context): string {
     try {
       const root = scratchRootForAgent(agent);
       note = ` The scratch workspace for this session is at ${root}.\n`;
-    } catch {
+    } catch (error) {
+      ctx.logger?.warn?.(`aidos: scratch root unavailable for the guidance note: ${error instanceof Error ? error.message : String(error)}`);
       note = "";
     }
   }

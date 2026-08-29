@@ -63,7 +63,8 @@ export function writeBoundaryReason(
   try {
     const scratchRoot = scratchRootForAgent(agent);
     if (isUnder(scratchRoot, path)) return undefined;
-  } catch {
+  } catch (error) {
+    ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error instanceof Error ? error.message : String(error)}`);
     // No scratch root (no cwd) → skip the exemption, fall through to union.
   }
   const union = ctx.aidos ? ctx.aidos.allowlistUnion(agent) : [];
@@ -72,7 +73,8 @@ export function writeBoundaryReason(
   let rows: TicketView[] = [];
   try {
     rows = ctx.aidos ? ctx.aidos.getTickets(agent) : [];
-  } catch {
+  } catch (error) {
+    ctx.logger?.warn?.(`aidos: getTickets failed in writeBoundaryReason: ${error instanceof Error ? error.message : String(error)}`);
     rows = [];
   }
   // No tickets at all: per-grill answer "allow writes only under scratch root
@@ -168,7 +170,8 @@ export function childPathScope(allowed: string[]): ToolGuard {
     const extra: string[] = [];
     try {
       extra.push(scratchRootForAgent(execution.agent));
-    } catch {
+    } catch (error) {
+      execution.agent?.ctx?.logger?.warn?.(`aidos: scratch root unavailable in childPathScope: ${error instanceof Error ? error.message : String(error)}`);
       // No cwd → no scratch root → skip the exemption.
     }
     if (pathAllowed(path, [...allowed, ...extra])) return undefined;
@@ -207,7 +210,8 @@ function bashWorkdirClamp(execution: ToolExecution, allowed: string[]): string |
   // Scratch root is also an allowed bash workdir.
   try {
     roots.push(scratchRootForAgent(execution.agent));
-  } catch {
+  } catch (error) {
+    execution.agent?.ctx?.logger?.warn?.(`aidos: scratch root unavailable in bashWorkdirClamp: ${error instanceof Error ? error.message : String(error)}`);
     // No cwd → no scratch root → skip the exemption.
   }
   if (pathAllowed(workdir, roots)) return undefined;

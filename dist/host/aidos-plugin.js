@@ -15866,14 +15866,15 @@ function registerAidosInvariant(ctx) {
 // src/host/session-events.ts
 import * as dshSession from "@deepseek-ai/dsh-session";
 var registered = false;
-function registerAidosSessionEventTypes() {
+function registerAidosSessionEventTypes(ctx) {
   if (registered) return true;
   const known = dshSession.KNOWN_SESSION_EVENT_TYPES;
   if (!(known instanceof Set)) return false;
   try {
     for (const type of AIDOS_EVENT_TYPES) known.add(type);
     registered = [...AIDOS_EVENT_TYPES].every((type) => known.has(type));
-  } catch {
+  } catch (error51) {
+    ctx?.logger?.warn?.(`aidos: failed to register session event types: ${error51 instanceof Error ? error51.message : String(error51)}`);
     registered = false;
   }
   return registered;
@@ -15915,7 +15916,7 @@ var AIDOS_SETTINGS_SCHEMA = z2.object({
     })
   ).default([])
 });
-function resolveConfig(settings) {
+function resolveConfig(settings, ctx) {
   const kinds = settings.kinds.map((kind) => ({
     id: kind.id,
     label: kind.label,
@@ -15933,9 +15934,9 @@ function resolveConfig(settings) {
   for (const gate of gates) {
     for (const kind of gate.requiredKinds) {
       if (!known.has(kind)) {
-        throw new Error(
-          `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`
-        );
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
       }
     }
   }
@@ -16046,7 +16047,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     __publicField(this, "_config");
     __publicField(this, "_caches", /* @__PURE__ */ new WeakMap());
     __publicField(this, "_resolvedConfig");
-    registerAidosSessionEventTypes();
+    registerAidosSessionEventTypes(ctx);
     this._config = config2 ?? {};
     this._resolvedConfig = {
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
@@ -16062,9 +16063,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         AIDOS_SETTINGS_SCHEMA,
         { base: DEFAULT_CONFIG }
       );
-      this._resolvedConfig = resolveConfig(scope.get());
+      this._resolvedConfig = resolveConfig(scope.get(), ctx);
       scope.watch((next) => {
-        this._resolvedConfig = resolveConfig(next);
+        this._resolvedConfig = resolveConfig(next, ctx);
       });
     });
     ctx.inject(["sessionProjections"], (projectionCtx) => {
@@ -16130,7 +16131,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       let states;
       try {
         states = this.ticketStates(agent);
-      } catch {
+      } catch (error51) {
+        this.ctx.logger?.warn?.(`aidos: ticketStates failed in bashContext: ${error51 instanceof Error ? error51.message : String(error51)}`);
         states = [];
       }
       const hasInProgress = states.some((state) => state === "in_progress");
@@ -16147,7 +16149,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     let scratchDir;
     try {
       scratchDir = scratchRootForAgent(agent);
-    } catch {
+    } catch (error51) {
+      this.ctx.logger?.warn?.(`aidos: scratchRootForAgent failed in bashContext: ${error51 instanceof Error ? error51.message : String(error51)}`);
       scratchDir = "";
     }
     const workspaceRoot = agent.session?.header?.cwd ?? "";
@@ -16228,7 +16231,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       let snap;
       try {
         snap = this.ctx.sessionProjections.snapshot(session);
-      } catch {
+      } catch (error51) {
+        this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
         continue;
       }
       const tickets = snap.values["aidos.tickets"];
@@ -16253,7 +16257,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     let snap;
     try {
       snap = this.ctx.sessionProjections.snapshot(session);
-    } catch {
+    } catch (error51) {
+      this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
       return [];
     }
     const tickets = snap.values["aidos.tickets"];
@@ -16394,6 +16399,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       session.__aidosPatched = true;
     }
     session.append(event.kind, event);
+    this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
     this._sync(session, cache);
   }
   /** The clock, seconds as a float, floored per ticket at the last at. */
@@ -16427,7 +16433,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
             return { absPath: workspace.path, name: workspace.title };
           }
         }
-      } catch {
+      } catch (error51) {
+        this.ctx.logger?.warn?.(`aidos: workspaceRegistry unavailable in _workspaceOf: ${error51 instanceof Error ? error51.message : String(error51)}`);
       }
     }
     const cwd = agent.session.header.cwd;
@@ -16470,6 +16477,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       name: binding.name,
       at: this._now()
     });
+    this.ctx.logger?.info?.(`aidos: project ${projectId} created for session ${agent.session.id}`);
     return { projectId };
   }
   // ---- internals: ticket writes ----
@@ -16629,6 +16637,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       }
       throw error51;
     }
+    this.ctx.logger?.info?.(`aidos: gate passed for ticket ${ticketId} -> ${toState}`);
     const at = this._atFor(agent.session, ticketId, ticket.updatedAt);
     const snapshot = {
       ...ticket,
@@ -17003,7 +17012,8 @@ function registerAidosService(ctx, config2) {
     disposed = true;
     try {
       ctx.reflect.set("aidos", void 0);
-    } catch {
+    } catch (error51) {
+      ctx.logger?.warn?.(`aidos: could not lift the aidos service off the context: ${error51 instanceof Error ? error51.message : String(error51)}`);
     }
     void service;
   };
