@@ -517,13 +517,17 @@ function registerPlanImport(ctx: Context): void {
  * profile-awaiting_verification overlay (see src/host/aidos-core.ts#bashContext).
  */
 export function apply(ctx: Context, config: unknown): void {
-  // Do not activate aidos for sessions that do not run the aidos preset.
-  // Mirrors the per-agent gate in aidos-core.ts (bashContext / project
-  // creation): a non-aidos project gets no tools, no prompt section, no
-  // mask, and no write boundary. When agentPresets is absent the check
-  // short-circuits and aidos installs as before (audit-bash1 behavior).
-  const presets = ctx.get("agentPresets");
-  if (presets && presets.composedPreset(ctx) !== "aidos") return;
+  // No apply-time preset gate here. This row is composed only by the aidos
+  // preset's own agent.cordis.yml, so "which sessions is this for" is the
+  // composition's decision, not this module's. The gate daf1f96 tried was
+  // dead in production and fatal: composedPreset(ctx) reads the live scope
+  // chain and answers undefined for a row context inside the standing mount
+  // (the mount scope has no parent; it resolves only for a real agent
+  // context), so the row registered nothing, never activated, and the whole
+  // preset mount failed. Contamination between presets is already handled at
+  // the seams that actually run per agent: the mask/guard/allowlist key off
+  // the calling agent, and bashContext/project creation check
+  // composedPreset(agent.ctx) at call time in aidos-core.ts.
   ctx.systemPrompt.section({
     name: "tool:aidos",
     order: 113,

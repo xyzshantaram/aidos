@@ -2,7 +2,24 @@
  * The aidos board client plugin. Injects the stylesheet once and registers
  * the Tickets tab into the conversation.view list slot. A badge count change
  * re-registers the identical entry so the tab header re-reads badgeLabel.
+ *
+ * The tab is visible only while the current session runs the aidos preset.
+ * The conversation.view tab strip is global (its entries carry no session
+ * state), so visibility is reconciled from the client sessions store: the
+ * summary of the current session carries the session's own agentPreset
+ * (undefined when the deployment composes no presets — the tab stays,
+ * mirroring the host-side fallback).
  */
+
+import type { Context } from "@deepseek-ai/cordis";
+import type {
+  ISessions,
+  SessionListState,
+  SlotRegistry,
+} from "@deepseek-ai/dsh-client-runtime/client";
+// Load the conversation slot-map augmentation so "conversation.view" is a
+// known SlotMap key to the typechecker below.
+import type {} from "@deepseek-ai/dsh-client-ui-conversation/client";
 
 import boardCss from "./board.css";
 import { badgeLabel, setCountCallback } from "./view-state";
@@ -13,6 +30,9 @@ export const name = "aidos";
 
 /** Services this bundle reaches through the plugin context. */
 export const inject = ["slots"];
+
+/** The preset id whose sessions show the Tickets tab. */
+const AIDOS_PRESET = "aidos";
 
 /** Inject the stylesheet once. The data-plugin-css guard prevents duplicates. */
 function injectStyles(): void {
@@ -28,41 +48,87 @@ function injectStyles(): void {
   document.head.appendChild(tag);
 }
 
-/** Plugin body: inject the styles once and register the Tickets tab. */
-export function apply(ctx: {
-  slots: {
-    inject: (key: string, callback: () => unknown) => () => void;
-    register: (options: unknown, component: unknown) => unknown;
-  };
-}): void {
-  // Only register the Tickets tab for sessions that run the aidos preset.
-  // The client context may not expose agentPresets; when it is absent we keep
-  // the current behavior (register anyway) so a missing service never hides
-  // the board in a genuine aidos project.
-  const maybeGet = (ctx as unknown as { get?: (s: string) => unknown }).get;
-  const presets = maybeGet
-    ? (maybeGet("agentPresets") as { composedPreset: (c: unknown) => string } | undefined)
-    : undefined;
-  if (presets && presets.composedPreset(ctx as unknown) !== "aidos") return;
+/** Register the Tickets tab. Returns the registration disposer. */
+function registerTicketsTab(slots: SlotRegistry): () => void {
+  return slots.inject("conversation.view", () =>
+    slots.register(
+      {
+        name: "conversation.view",
+        id: "tickets",
+        order: 20,
+        label: badgeLabel,
+      },
+      LocalTicketView,
+    ),
+  );
+}
+
+/**
+ * Plugin body: inject the styles once, then own one visibility effect.
+ * The effect subscribes to the sessions list snapshot and registers or
+ * disposes the Tickets entry as the current session's preset changes.
+ */
+export function apply(ctx: Context): void {
   injectStyles();
 
-  let disposeRegistration: (() => void) | null = null;
+  ctx.effect(function () {
+    const slots = ctx.get("slots") as SlotRegistry | undefined;
+    if (slots === undefined) return () => {};
 
-  function registerView() {
-    disposeRegistration = ctx.slots.inject("conversation.view", function () {
-      return ctx.slots.register(
-        { name: "conversation.view", id: "tickets", order: 20, label: badgeLabel },
-        LocalTicketView,
-      );
+    const sessions = ctx.get("sessions") as ISessions | undefined;
+    if (
+      sessions === undefined ||
+      typeof sessions.list?.getSnapshot !== "function" ||
+      typeof sessions.list?.subscribe !== "function"
+    ) {
+      // No sessions store on this context (harness, older runtime): keep the
+      // tab always registered, matching the pre-gate behavior.
+      const dispose = registerTicketsTab(slots);
+      return function () {
+        dispose();
+      };
+    }
+
+    let registration: (() => void) | null = null;
+    const list: { current: SessionListState } = { current: sessions.list.getSnapshot() };
+
+    const sync = function (): void {
+      const preset = list.current.current
+        ? list.current.byId[list.current.current]?.agentPreset
+        : undefined;
+      // undefined = the deployment composes no presets; keep the tab.
+      const want = preset === undefined || preset === AIDOS_PRESET;
+      if (want && registration === null) {
+        registration = registerTicketsTab(slots);
+      }
+      if (!want && registration !== null) {
+        registration();
+        registration = null;
+      }
+    };
+
+    const disposeSubscribe = sessions.list.subscribe(function () {
+      list.current = sessions.list.getSnapshot();
+      sync();
     });
-  }
+    sync();
 
-  registerView();
+    return function () {
+      disposeSubscribe();
+      if (registration !== null) {
+        registration();
+        registration = null;
+      }
+    };
+  }, "aidos: tickets tab visibility");
 
   // A badge change re-registers the entry. The tab header re-reads the label,
-  // which is the only way the tab text updates live.
+  // which is the only way the tab text updates live. The callback re-reads
+  // the live slots service, so a visible tab re-registers and a hidden one
+  // stays hidden.
   setCountCallback(function () {
-    if (disposeRegistration !== null) disposeRegistration();
-    registerView();
+    const slots = ctx.get("slots") as SlotRegistry | undefined;
+    if (slots === undefined) return;
+    registerTicketsTab(slots);
   });
 }
