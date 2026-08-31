@@ -5,7 +5,7 @@
 
 import react from "react";
 
-import { STATE_CHECKLIST_ORDER, autocompleteTickets, stateLabel } from "./board-logic";
+import { STATE_CHECKLIST_ORDER, autocompleteTickets, displayDep, fullTicketId, idColor, stateLabel } from "./board-logic";
 import { logDebug } from "./log";
 import type { AppliedState } from "./view-state";
 import {
@@ -251,7 +251,13 @@ export function FilterPanel(props: FilterPanelProps) {
                 }}
               >
                 <span className="aidos-suggestion-title">{ticket.title}</span>
-                <span className="aidos-ticket-id-badge">{"#" + ticket.id}</span>
+                <span
+                  className="aidos-id-badge"
+                  style={{ background: idColor(fullTicketId(ticket)) }}
+                  title={fullTicketId(ticket)}
+                >
+                  {displayDep(fullTicketId(ticket))}
+                </span>
               </button>
             ))}
           </div>
@@ -390,7 +396,13 @@ export function FilterPanel(props: FilterPanelProps) {
                   }}
                 >
                   <span className="aidos-suggestion-title">{ticket.title}</span>
-                  <span className="aidos-ticket-id-badge">{"#" + ticket.id}</span>
+                  <span
+                    className="aidos-id-badge"
+                    style={{ background: idColor(fullTicketId(ticket)) }}
+                    title={fullTicketId(ticket)}
+                  >
+                    {displayDep(fullTicketId(ticket))}
+                  </span>
                 </button>
               ))}
             </div>
