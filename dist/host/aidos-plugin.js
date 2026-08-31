@@ -28167,8 +28167,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /**
    * Resolve a ticket reference (a numeric id or a slug) to a numeric id.
-   * A bare number or a bare slug means the current workspace; a prefixed
-   * `<workspaceKey>:<slug>` reference resolves across workspaces.
+   * A bare number, a bare decimal string, or a bare slug means the current
+   * workspace; a prefixed `<workspaceKey>:<slug>` reference resolves across
+   * workspaces.
    */
   _resolveTicketId(agent, ref) {
     const cache = this._cache(agent.session);
@@ -28176,6 +28177,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (typeof ref === "number") {
       if (cache.state.tickets.has(ref)) {
         return ref;
+      }
+      throw new UnknownTicket(ref);
+    }
+    if (/^\d+$/.test(ref)) {
+      const numeric = Number(ref);
+      if (cache.state.tickets.has(numeric)) {
+        return numeric;
       }
       throw new UnknownTicket(ref);
     }

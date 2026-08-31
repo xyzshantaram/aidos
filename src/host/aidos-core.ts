@@ -1906,8 +1906,9 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * Resolve a ticket reference (a numeric id or a slug) to a numeric id.
-   * A bare number or a bare slug means the current workspace; a prefixed
-   * `<workspaceKey>:<slug>` reference resolves across workspaces.
+   * A bare number, a bare decimal string, or a bare slug means the current
+   * workspace; a prefixed `<workspaceKey>:<slug>` reference resolves across
+   * workspaces.
    */
   private _resolveTicketId(agent: Agent, ref: number | string): TicketId {
     const cache = this._cache(agent.session);
@@ -1918,6 +1919,18 @@ registerAidosSessionEventTypes(ctx);
       }
       throw new UnknownTicket(ref);
     }
+
+    // The board names an own row by `String(id)`, so a bare decimal string
+    // is an id and not a slug. A slug is title-derived and never a bare
+    // number, so no slug hides behind this branch.
+    if (/^\d+$/.test(ref)) {
+      const numeric = Number(ref);
+      if (cache.state.tickets.has(numeric)) {
+        return numeric;
+      }
+      throw new UnknownTicket(ref);
+    }
+
     const current = workspaceKeyFromPath(this._workspacePath(agent));
     const colon = ref.indexOf(":");
     if (colon >= 0) {
