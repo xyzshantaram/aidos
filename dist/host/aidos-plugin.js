@@ -16402,7 +16402,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     return ids;
   }
-  async workspaceTickets(agent) {
+  async workspaceTickets(agent, args) {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const ownViews = ticketsProjection(cache.state, this._resolvedConfig);

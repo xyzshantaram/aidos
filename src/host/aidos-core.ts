@@ -877,7 +877,7 @@ registerAidosSessionEventTypes(ctx);
    * numeric ids and carry no source marker.
    */
   @Remote("workspaceTickets")
-  async workspaceTickets(agent: Agent): Promise<{
+  async workspaceTickets(agent: Agent, args?: Record<string, never>): Promise<{
     tickets: BoardTicketView[];
     evidence: Record<string, EvidenceRow[]>;
     comments: Record<string, CommentRecord[]>;

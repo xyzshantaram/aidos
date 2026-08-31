@@ -117,3 +117,42 @@ describe("workspaceTickets merge", () => {
     ).toThrow(/not open/);
   });
 });
+
+// ---- the gateway envelope: callAidosRemote always sends { agentId, args }.
+
+// The gateway's SRC path derives parameters from the method's parameter
+// NAMES (api-gateway methodParameterNames + srcDescriptor): the first param
+// `agent` is the lookup (wire agentId), later params become JSON wire
+// fields by name. assertExactArguments then rejects unknown keys. These
+// checks pin the wire contract the client's callAidosRemote depends on:
+// the envelope's args object carries the second parameter under the name
+// `args`, and an empty business-args call must pass validation.
+describe("workspaceTickets wire envelope", () => {
+  it("declares agent (lookup) plus an optional args JSON parameter", async () => {
+    const { harness } = twoAgentHarness();
+    const service = harness.service;
+    const typert = await import("@deepseek-ai/dsh-typert-protocol");
+    const marker = typert.remoteMethods(service).find(
+      (candidate) => (candidate.exportName ?? candidate.method) === "workspaceTickets",
+    );
+    expect(marker, "workspaceTickets must carry a Remote marker").toBeDefined();
+    // The signature check the gateway performs: parameter names must be
+    // unique identifiers; our second parameter must be exactly "args" so
+    // the shared envelope's nested args key validates.
+    const source = service.workspaceTickets.toString();
+    const open = source.indexOf("(");
+    const close = source.indexOf(")", open + 1);
+    const params = source.slice(open + 1, close).split(",").map((part) => part.trim()).filter(Boolean);
+    expect(params[0]).toBe("agent");
+    expect(params[1]).toBe("args");
+  });
+
+  it("accepts a direct call with undefined business args", async () => {
+    const { harness, peer } = twoAgentHarness();
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "own" });
+    service.userSetTicket(harness.asAgent(peer), { title: "peer" });
+    const result = await service.workspaceTickets(harness.asAgent());
+    expect(result.tickets.map((row) => row.title).sort()).toEqual(["own", "peer"]);
+  });
+});
