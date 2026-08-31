@@ -39,6 +39,8 @@ function makeTicket(overrides: Partial<TicketView> & { updatedAt?: number }) {
     state: "open",
     confidenceScore: 0,
     gateFraction: null,
+    gatePresent: null,
+    gateTotal: null,
     updatedAt: 0,
     ...overrides,
   };
@@ -300,18 +302,21 @@ describe("openCount", () => {
 
 describe("formatGateFraction", () => {
   it("returns N/A when the ticket has no criteria", () => {
-    expect(formatGateFraction(0.5, false)).toBe("N/A");
-    expect(formatGateFraction(null, false)).toBe("N/A");
+    expect(formatGateFraction(1, 2, false)).toBe("N/A");
+    expect(formatGateFraction(null, null, false)).toBe("N/A");
   });
 
-  it("returns an em dash for a null fraction with criteria", () => {
-    expect(formatGateFraction(null, true)).toBe("\u2014");
+  it("returns an em dash for a null gate with criteria", () => {
+    expect(formatGateFraction(null, null, true)).toBe("\u2014");
+    expect(formatGateFraction(null, 2, true)).toBe("\u2014");
+    expect(formatGateFraction(1, null, true)).toBe("\u2014");
   });
 
-  it("formats a fraction as a rounded percent", () => {
-    expect(formatGateFraction(2 / 3, true)).toBe("67%");
-    expect(formatGateFraction(0, true)).toBe("0%");
-    expect(formatGateFraction(1, true)).toBe("100%");
+  it("formats a real gate as m over n", () => {
+    expect(formatGateFraction(0, 2, true)).toBe("0/2");
+    expect(formatGateFraction(1, 2, true)).toBe("1/2");
+    expect(formatGateFraction(2, 2, true)).toBe("2/2");
+    expect(formatGateFraction(1, 1, true)).toBe("1/1");
   });
 });
 

@@ -24,6 +24,16 @@ export interface TicketView extends TicketRow {
   confidenceScore: number;
   /** Forward gate only. Null for done and for a missing forward gate. */
   gateFraction: number | null;
+  /**
+   * Forward-gate required kinds present. Null exactly when gateFraction
+   * is null.
+   */
+  gatePresent: number | null;
+  /**
+   * Forward-gate required kinds total. Null exactly when gateFraction is
+   * null.
+   */
+  gateTotal: number | null;
   /** At of the last change. Carried so the board can sort by Time updated. */
   updatedAt: number;
   /** The workspace key of the ticket's own workspace. Carried for the board's per-workspace storage key. */
@@ -60,19 +70,30 @@ export function confidenceScoreOf(
 }
 
 /**
- * The forward gate fraction of one ticket: state -> its successor in
+ * The forward gate progress of one ticket: state -> its successor in
  * STATE_ORDER only. The last state has no successor. No gate for the
- * forward pair: null. Empty required kinds: 1.0. Else present over
- * required.
+ * forward pair: all three fields null. Empty required kinds: fraction
+ * 1.0 with present 0 and total 0. Else present over required.
  */
-export function gateFractionOf(
+export interface GateProgress {
+  fraction: number | null;
+  present: number | null;
+  total: number | null;
+}
+
+/**
+ * The forward gate progress of one ticket. The fraction is present over
+ * required. The pair present and total is null exactly when the fraction
+ * is null.
+ */
+export function gateProgressOf(
   config: AidosConfig,
   snapshot: TicketSnapshot,
   evidence: readonly EvidenceRow[],
-): number | null {
+): GateProgress {
   const index = STATE_ORDER.indexOf(snapshot.state);
   if (index < 0 || index + 1 >= STATE_ORDER.length) {
-    return null;
+    return { fraction: null, present: null, total: null };
   }
   const successor = STATE_ORDER[index + 1];
   const gate = config.gates.find(
@@ -80,10 +101,10 @@ export function gateFractionOf(
       candidate.fromState === snapshot.state && candidate.toState === successor,
   );
   if (!gate) {
-    return null;
+    return { fraction: null, present: null, total: null };
   }
   if (gate.requiredKinds.length === 0) {
-    return 1.0;
+    return { fraction: 1.0, present: 0, total: 0 };
   }
   const attached = new Set<string>();
   for (const row of evidence) {
@@ -95,7 +116,20 @@ export function gateFractionOf(
       present += 1;
     }
   }
-  return present / gate.requiredKinds.length;
+  return {
+    fraction: present / gate.requiredKinds.length,
+    present,
+    total: gate.requiredKinds.length,
+  };
+}
+
+/** The forward gate fraction of one ticket. See gateProgressOf. */
+export function gateFractionOf(
+  config: AidosConfig,
+  snapshot: TicketSnapshot,
+  evidence: readonly EvidenceRow[],
+): number | null {
+  return gateProgressOf(config, snapshot, evidence).fraction;
 }
 
 /** One ticket row built from a folded snapshot. One code path. */
@@ -126,10 +160,13 @@ export function ticketsProjection(
   const out = new Map<TicketId, TicketView>();
   for (const [id, snapshot] of state.tickets) {
     const evidence = state.evidence.get(id) ?? [];
+    const progress = gateProgressOf(config, snapshot, evidence);
     out.set(id, {
       ...rowFromSnapshot(snapshot),
       confidenceScore: confidenceScoreOf(config, evidence),
-      gateFraction: gateFractionOf(config, snapshot, evidence),
+      gateFraction: progress.fraction,
+      gatePresent: progress.present,
+      gateTotal: progress.total,
       updatedAt: snapshot.updatedAt,
       workspaceKey: snapshot.workspaceKey,
     });

@@ -23,6 +23,8 @@ export function makeTicket(
     state: "open",
     confidenceScore: 0,
     gateFraction: null,
+    gatePresent: null,
+    gateTotal: null,
     updatedAt: 0,
     workspaceKey: "default",
     dependsOn: [],

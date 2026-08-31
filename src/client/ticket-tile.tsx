@@ -45,7 +45,7 @@ export function TicketTile(props: TicketTileProps) {
       <p className="aidos-tile-preview">{ticket.description}</p>
       <div className="aidos-tile-meta">
         <span className="aidos-tile-gate">
-          {formatGateFraction(ticket.gateFraction, hasCriteria(ticket))}
+          {formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
         </span>
         <span className="aidos-ring-inline">
           <ConfidenceRing ticket={ticket} />

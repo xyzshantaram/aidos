@@ -1,7 +1,9 @@
 /**
- * Ticket U2b + U2c: the ticket detail panel. Fields on top (each editable
- * through FieldEditor), evidence grouped by criterion below in a collapsible
- * section, uncovered criteria tinted.
+ * Tickets U2b + U2c, reworked by U7 to U10: the ticket detail panel. A
+ * quick-facts summary table sits on top (U7), the description follows it
+ * (U8), and Dependencies and Evidence are collapsible panels (U9) whose
+ * evidence rows render as single-line bullets (U10). Fields stay editable
+ * through FieldEditor, and uncovered criteria stay tinted.
  *
  * DetailView wraps the panel: it owns the action modals and renders the
  * action bar, the comments section, and the evidence attach form.
@@ -15,10 +17,10 @@ import {
   formatGateFraction,
   groupEvidenceByCriterion,
   hasCriteria,
+  ringPercent,
   stateLabel,
   uncoveredCriteria,
 } from "./board-logic";
-import { ConfidenceRing } from "./confidence-ring";
 import { EvidenceTags } from "./evidence-tags";
 import { FieldEditor } from "./field-editor";
 import { ActionBar } from "./action-bar";
@@ -125,7 +127,7 @@ function renderEvidenceSection(
   );
 
   return (
-    <div className="aidos-panel-section">
+    <div className="aidos-panel-section aidos-collapsible">
       <div className="aidos-panel-head">
         <h4 className="aidos-panel-title">Evidence</h4>
         <button
@@ -171,6 +173,7 @@ function DependencySection(props: {
   const [hits, setHits] = react.useState<TicketSearchHit[] | null>(null);
   const [searching, setSearching] = react.useState(false);
   const [adding, setAdding] = react.useState<string | null>(null);
+  const [collapsed, setCollapsed] = react.useState(false);
   const current = props.dependsOn ?? [];
 
   async function search() {
@@ -228,11 +231,8 @@ function DependencySection(props: {
     }
   }
 
-  return (
-    <div className="aidos-panel-section">
-      <div className="aidos-panel-head">
-        <h4 className="aidos-panel-title">Dependencies</h4>
-      </div>
+  const body = (
+    <>
       <div className="aidos-dep-row">
         {current.length === 0 ? (
           <p className="aidos-detail-note">No dependencies.</p>
@@ -293,6 +293,49 @@ function DependencySection(props: {
           )}
         </div>
       ) : null}
+    </>
+  );
+
+  return (
+    <div className="aidos-panel-section aidos-collapsible">
+      <div className="aidos-panel-head">
+        <h4 className="aidos-panel-title">Dependencies</h4>
+        <button
+          className="aidos-btn aidos-toggle-btn"
+          onClick={() => {
+            setCollapsed(!collapsed);
+          }}
+        >
+          {collapsed ? "Expand" : "Collapse"}
+        </button>
+      </div>
+      {collapsed ? null : body}
+    </div>
+  );
+}
+
+/**
+ * The description section (U7, U8): the editor sits directly below the
+ * summary table, and an empty description shows a muted note beside the
+ * Edit button.
+ */
+function DescriptionSection(props: {
+  ticket: TicketView;
+  ticketIdKey: string;
+  agentId: string;
+  onSaved: () => void;
+}) {
+  const empty = props.ticket.description.trim() === "";
+  return (
+    <div className="aidos-description">
+      {empty ? <p className="aidos-detail-note">No description.</p> : null}
+      <FieldEditor
+        field="description"
+        ticketId={props.ticketIdKey}
+        value={props.ticket.description}
+        agentId={props.agentId}
+        onSaved={props.onSaved}
+      />
     </div>
   );
 }
@@ -335,27 +378,42 @@ export function DetailPanel(props: DetailPanelProps) {
           agentId={props.agentId}
           onSaved={props.onFieldSaved}
         />
+        <span className={badge}>{stateLabel(ticket.state)}</span>
         <button className="aidos-close-btn" onClick={props.onClose}>
           {"\u00d7"}
         </button>
       </div>
-      <div className="aidos-ring-wrap"><ConfidenceRing ticket={ticket} /></div>
-      <div className="aidos-tile-meta">
-        <span className="aidos-tile-gate">
-          {formatGateFraction(ticket.gateFraction, hasCriteria(ticket))}
-        </span>
-        <span className={badge}>{stateLabel(ticket.state)}</span>
-      </div>
-      <DependencySection
-        ticketId={props.ticketIdKey}
-        dependsOn={ticket.dependsOn}
-        agentId={props.agentId}
-        onSaved={props.onFieldSaved}
-      />
-      <FieldEditor
-        field="description"
-        ticketId={props.ticketIdKey}
-        value={ticket.description}
+      <dl className="aidos-summary-table">
+        <div className="aidos-summary-row">
+          <dt className="aidos-summary-label">Gate</dt>
+          <dd className="aidos-summary-value">
+            {formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
+          </dd>
+        </div>
+        <div className="aidos-summary-row">
+          <dt className="aidos-summary-label">Confidence</dt>
+          <dd className="aidos-summary-value">
+            {String(ringPercent(ticket.confidenceScore)) + "%"}
+            <span
+              className="aidos-summary-asterisk"
+              title="Advisory score. It never unlocks anything."
+            >
+              {"*"}
+            </span>
+          </dd>
+        </div>
+        <div className="aidos-summary-row">
+          <dt className="aidos-summary-label">Phase</dt>
+          <dd className="aidos-summary-value">{String(ticket.phase)}</dd>
+        </div>
+        <div className="aidos-summary-row">
+          <dt className="aidos-summary-label">Order</dt>
+          <dd className="aidos-summary-value">{String(ticket.order)}</dd>
+        </div>
+      </dl>
+      <DescriptionSection
+        ticket={ticket}
+        ticketIdKey={props.ticketIdKey}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
@@ -387,6 +445,12 @@ export function DetailPanel(props: DetailPanelProps) {
           {uncovered.length + " uncovered criteria"}
         </p>
       ) : null}
+      <DependencySection
+        ticketId={props.ticketIdKey}
+        dependsOn={ticket.dependsOn}
+        agentId={props.agentId}
+        onSaved={props.onFieldSaved}
+      />
       {renderEvidenceSection(
         props,
         (row) => {

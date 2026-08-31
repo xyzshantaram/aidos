@@ -2,7 +2,8 @@
  * Ticket U2a: the ticket board-logic helpers.
  *
  * Pure functions over the kernel projection types. No React, no DOM, no dsh
- * imports. This module satisfies the contract in tests/u2a-board-logic.test.ts.
+ * imports. The one kernel data import is BUILTIN_KINDS, which kindLabel
+ * reads. This module satisfies the contract in tests/u2a-board-logic.test.ts.
  * compareTickets is total and deterministic. A ticket without criteria always
  * sorts after a ticket with criteria, for every key and every direction.
  * filterTickets keeps tickets by project, state, and search, then sorts the
@@ -15,11 +16,14 @@
  * element type, so a TicketView input yields TicketView output.
  */
 
+import { BUILTIN_KINDS } from "../kernel/constants";
 import type { TicketState } from "../kernel/types";
 
 /** The ticket fields the board logic reads. TicketView satisfies this. */
 interface TicketLike {
   id: number;
+  /** The workspace key. The id badge color folds over it. */
+  workspaceKey: string;
   projectId: number;
   title: string;
   criteria: string;
@@ -210,17 +214,18 @@ export function openCount<T extends TicketLike>(tickets: readonly T[]): number {
 }
 
 /**
- * Format the gate fraction for the tile. No criteria reads "N/A". A null
- * fraction with criteria reads an em dash. A real fraction reads a rounded
- * percent.
+ * Format the gate for the summary table and the tile. No criteria reads
+ * "N/A". A null present or total with criteria reads an em dash. A real
+ * gate reads present over total.
  */
 export function formatGateFraction(
-  fraction: number | null,
+  present: number | null,
+  total: number | null,
   hasCriteriaValue: boolean,
 ): string {
   if (!hasCriteriaValue) return "N/A";
-  if (fraction === null) return "\u2014";
-  return Math.round(fraction * 100) + "%";
+  if (present === null || total === null) return "\u2014";
+  return present + "/" + total;
 }
 
 /**
@@ -341,6 +346,17 @@ export function kindColor(kind: string): string {
   return KIND_COLORS[index];
 }
 
+/**
+ * The display label of one evidence kind. A builtin kind maps to its
+ * label from BUILTIN_KINDS. An unknown kind falls back to the raw id.
+ */
+export function kindLabel(kind: string): string {
+  for (const def of BUILTIN_KINDS) {
+    if (def.id === kind) return def.label;
+  }
+  return kind;
+}
+
 /** One kind-count tag for the tile: the kind name and the row count. */
 export interface KindCount {
   kind: string;
@@ -380,5 +396,44 @@ export function evidenceKindCounts(
  */
 export function displayDep(ref: string): string {
   return ref.replace(/^--.*--:/, "aidos#");
+}
+
+/**
+ * The full ticket id: the workspace key, a colon, and the numeric id. The
+ * display form is displayDep of this string. The badge color hashes this
+ * string, so two workspaces whose keys share the last path segment get
+ * different colors (C5).
+ */
+export function fullTicketId(ticket: {
+  id: number;
+  workspaceKey: string;
+}): string {
+  return ticket.workspaceKey + ":" + ticket.id;
+}
+
+/** The id badge hues. Each entry is a mid-saturation background for white text. */
+const BADGE_HUES = [
+  "var(--badge-hue-1)",
+  "var(--badge-hue-2)",
+  "var(--badge-hue-3)",
+  "var(--badge-hue-4)",
+  "var(--badge-hue-5)",
+  "var(--badge-hue-6)",
+  "var(--badge-hue-7)",
+  "var(--badge-hue-8)",
+];
+
+/**
+ * Deterministic color for the id badge. The hash folds over the full id
+ * string and the index is stable for the same id across renders. The
+ * palette holds mid-saturation hues that keep white text readable.
+ */
+export function idColor(fullId: string): string {
+  let hash = 0;
+  for (let i = 0; i < fullId.length; i++) {
+    hash = (hash * 31 + fullId.charCodeAt(i)) | 0;
+  }
+  const index = Math.abs(hash) % BADGE_HUES.length;
+  return BADGE_HUES[index];
 }
 
