@@ -3,6 +3,9 @@
  * Pure functions. PLAN.md / SPEC.md section 12 is the contract.
  * If you change this parser, also update skills/aidos-plan/verify-plan.mjs, which mirrors it (and vice versa): keep the two in sync. */
 
+import matter from "gray-matter";
+import YAML from "yaml";
+
 import type { ContextSection, TicketState } from "../kernel/types";
 import { PlanParseError } from "../kernel/types";
 
@@ -69,6 +72,7 @@ export interface PlanTicket {
 
 export interface PlanDocument {
   frontmatter: string;
+  frontmatterData: Record<string, unknown>;
   preamble: string;
   contextSections: ContextSection[];
   tickets: PlanTicket[];
@@ -157,6 +161,7 @@ export function parsePlan(text: string): PlanDocument {
   }
   return {
     frontmatter: frontmatter.text,
+    frontmatterData: _parseFrontmatterData(frontmatter.text),
     preamble: preamble.text,
     contextSections,
     phases,
@@ -222,7 +227,7 @@ function _ticketGroupsOf(
 
 // ---- reading ----
 
-/** The frontmatter text and the index of the line after it. */
+/** Take the frontmatter text and the index of the line after it. */
 function _takeFrontmatter(
   lines: readonly string[],
 ): { text: string; index: number } {
@@ -235,6 +240,31 @@ function _takeFrontmatter(
     }
   }
   throw new PlanParseError(1, "the frontmatter never closes");
+}
+
+/** Parse the raw frontmatter block with gray-matter and the yaml engine. */
+function _parseFrontmatterData(raw: string): Record<string, unknown> {
+  if (raw === "") {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = matter(raw, {
+      engines: {
+        yaml: {
+          parse: (s) => YAML.parse(s),
+          stringify: (o) => YAML.stringify(o),
+        },
+      },
+    }).data;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new PlanParseError(1, "the frontmatter is not valid YAML: " + message);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /** The preamble text and the index of the first heading or ticket. */
