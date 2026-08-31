@@ -17,7 +17,7 @@ export type EditableField =
   | "slug";
 
 export interface FieldEditorProps {
-  ticketId: number;
+  ticketId: number | string;
   field: EditableField;
   value: string | number;
   agentId: string;

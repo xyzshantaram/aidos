@@ -12,7 +12,7 @@ import { showToast } from "./toast-store";
 import type { CommentRecord } from "../kernel/types";
 
 export interface CommentsSectionProps {
-  ticketId: number;
+  ticketId: number | string;
   comments: CommentRecord[];
   agentId: string;
 }

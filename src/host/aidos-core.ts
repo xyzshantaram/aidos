@@ -43,6 +43,7 @@ import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
+import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { scratchRootForAgent } from "../tools/scratch";
@@ -447,6 +448,27 @@ export interface PlanImportArgs {
   projectId?: number;
 }
 
+/**
+ * One board row in the workspace merge. Own rows are plain TicketViews with
+ * `foreign: false`; foreign rows carry the owning session id (the writer)
+ * and keep their in-log ticket id in `id`.
+ */
+export interface BoardTicketView extends TicketView {
+  /** The session whose log owns this row's authoritative state. */
+  sourceSessionId: string;
+  /** Whether the owning log is a different session than the reader's. */
+  foreign: boolean;
+}
+
+/** Routing target for a foreign write is not a live session. */
+export class OwnerUnavailable extends Error {
+  readonly sessionId: string;
+  constructor(sessionId: string) {
+    super(`ticket's owning session ${sessionId} is not open; open it to change this ticket`);
+    this.sessionId = sessionId;
+  }
+}
+
 export interface EvidenceView {
   ticketId: number;
   kind: string;
@@ -702,7 +724,7 @@ registerAidosSessionEventTypes(ctx);
   @Remote("userSetTicket")
   userSetTicket(agent: Agent, args: SetTicketArgs): TicketRow {
     if (args.ticketId !== undefined) {
-      return this._editTicket(agent, args, "user");
+      return this._editTicket(this._routedAgent(agent, args.ticketId), args, "user");
     }
     return this._createTicket(agent, args);
   }
@@ -774,6 +796,201 @@ registerAidosSessionEventTypes(ctx);
     return rows;
   }
 
+  // ---- cross-session board (workspace merge) ----
+
+  /**
+   * One source session's contribution to the workspace board: the ticket
+   * views of one session log plus its evidence and comments maps. The
+   * session that owns a log is the only writer to it (owner routing);
+   * every other session's board shows these rows read-only.
+   */
+  private _foldExternalLog(meta: SessionHeader, events: readonly SessionEvent[]): {
+    state: AidosState;
+  } {
+    const state = createInitialState();
+    for (const event of events) {
+      foldSessionEvent(state, event);
+    }
+    void meta;
+    return { state };
+  }
+
+  /**
+   * Every live session bound to the agent's workspace path, excluding the
+   * caller's own session. Live sessions fold from the in-memory log.
+   */
+  private _liveWorkspaceSessions(agent: Agent): Session[] {
+    const path = this._workspacePath(agent);
+    const out: Session[] = [];
+    for (const candidate of this.ctx.agents.list()) {
+      if (candidate.session.id === agent.session.id) continue;
+      try {
+        if (this._workspacePath(candidate) !== path) continue;
+      } catch {
+        continue;
+      }
+      out.push(candidate.session);
+    }
+    return out;
+  }
+
+  /**
+   * The ids of every persisted session whose header cwd matches the agent's
+   * workspace path, excluding the caller's own session and every live one.
+   */
+  private async _closedWorkspaceSessionIds(
+    agent: Agent,
+    exclude: Set<string>,
+  ): Promise<SessionId[]> {
+    const persistence = this.ctx.get("sessionPersistence") as
+      | {
+          list: () => Promise<SessionHeader[]>;
+        }
+      | undefined;
+    if (persistence === undefined) return [];
+    const path = this._workspacePath(agent);
+    let headers: SessionHeader[];
+    try {
+      headers = await persistence.list();
+    } catch (error) {
+      this.ctx.logger?.warn?.(`aidos: persistence.list failed in workspace merge: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    }
+    const ids: SessionId[] = [];
+    for (const header of headers) {
+      if (header.cwd === undefined) continue;
+      if (header.cwd !== path) continue;
+      if (header.id === agent.session.id) continue;
+      if (exclude.has(header.id)) continue;
+      ids.push(header.id);
+    }
+    return ids;
+  }
+
+  /**
+   * The workspace board: the caller's own tickets plus every ticket held in
+   * another session's log of the SAME workspace path — live sessions fold
+   * from memory, closed sessions from a persistence inspect (never a live
+   * log). Ticket ids collide across sessions, so each foreign row is
+   * re-keyed `<sourceSessionId>:<ticketId>` and carries `sourceSessionId`
+   * for the board badge and for owner-routed writes. Own rows keep plain
+   * numeric ids and carry no source marker.
+   */
+  @Remote("workspaceTickets")
+  async workspaceTickets(agent: Agent): Promise<{
+    tickets: BoardTicketView[];
+    evidence: Record<string, EvidenceRow[]>;
+    comments: Record<string, CommentRecord[]>;
+  }> {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const ownViews = ticketsProjection(cache.state, this._resolvedConfig);
+    const ownSort = (a: TicketView, b: TicketView) =>
+      a.phase - b.phase || a.order - b.order || a.id - b.id;
+
+    const tickets: BoardTicketView[] = [];
+    const evidence: Record<string, EvidenceRow[]> = {};
+    const comments: Record<string, CommentRecord[]> = {};
+
+    for (const view of [...ownViews.values()].sort(ownSort)) {
+      tickets.push({ ...view, sourceSessionId: agent.session.id, foreign: false });
+      const key = String(view.id);
+      evidence[key] = [...(cache.state.evidence.get(view.id) ?? [])];
+      comments[key] = [...(cache.state.comments.get(view.id) ?? [])];
+    }
+
+    const liveSessions = this._liveWorkspaceSessions(agent);
+    const liveIds = new Set<string>();
+    for (const session of liveSessions) {
+      liveIds.add(session.id);
+      const state = this._cache(session).state;
+      this._sync(session, this._caches.get(session)!);
+      const views = ticketsProjection(state, this._resolvedConfig);
+      for (const view of [...views.values()].sort(ownSort)) {
+        const key = session.id + ":" + view.id;
+        tickets.push({
+          ...view,
+          id: view.id,
+          sourceSessionId: session.id,
+          foreign: true,
+        } as BoardTicketView);
+        evidence[key] = [...(state.evidence.get(view.id) ?? [])];
+        comments[key] = [...(state.comments.get(view.id) ?? [])];
+      }
+    }
+
+    const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
+    for (const id of closedIds) {
+      let inspection: { meta: SessionHeader; events: readonly SessionEvent[] };
+      try {
+        const persistence = this.ctx.get("sessionPersistence") as {
+          inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
+        };
+        inspection = await persistence.inspect(id);
+      } catch (error) {
+        this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
+      const { state } = this._foldExternalLog(inspection.meta, inspection.events);
+      const views = ticketsProjection(state, this._resolvedConfig);
+      for (const view of [...views.values()].sort(ownSort)) {
+        const key = id + ":" + view.id;
+        tickets.push({
+          ...view,
+          id: view.id,
+          sourceSessionId: id,
+          foreign: true,
+        } as BoardTicketView);
+        evidence[key] = [...(state.evidence.get(view.id) ?? [])];
+        comments[key] = [...(state.comments.get(view.id) ?? [])];
+      }
+    }
+
+    tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    return { tickets, evidence, comments };
+  }
+
+  /**
+   * The agent the write should run against. A numeric ticketId (or a plain
+   * slug reference in the caller's own workspace) targets the caller's own
+   * session; a `<sourceSessionId>:<ticketId>` string routes to the owner
+   * session. Owner routing keeps one authoritative log per ticket.
+   */
+  private _routedAgent(agent: Agent, ticketRef: number | string | undefined): Agent {
+    if (ticketRef === undefined || typeof ticketRef === "number") return agent;
+    const colon = ticketRef.indexOf(":");
+    if (colon <= 0) return agent;
+    const head = ticketRef.slice(0, colon);
+    const tail = ticketRef.slice(colon + 1);
+    // Only a fully numeric tail routes (see _resolveTicketId): a
+    // workspaceKey:slug reference stays local.
+    if (!/^\d+$/.test(tail)) return agent;
+    return this._ownerAgent(agent, head);
+  }
+
+  /**
+   * Resolve the writer session for a foreign ticket reference
+   * `<sourceSessionId>:<ticketId>`. A live source session returns it;
+   * a closed one resumes nothing here — routing only reaches live owners.
+   */
+  private _ownerSession(agent: Agent, sourceSessionId: string): Session {
+    if (sourceSessionId === agent.session.id) return agent.session;
+    for (const candidate of this.ctx.agents.list()) {
+      if (candidate.session.id === sourceSessionId) return candidate.session;
+    }
+    throw new OwnerUnavailable(sourceSessionId);
+  }
+
+  /**
+   * A synthetic agent handle that pins the OWNER session as the write
+   * target. The writes below need only `agent.session` (and its header for
+   * cwd assertions), which the owner session carries.
+   */
+  private _ownerAgent(agent: Agent, sourceSessionId: string): Agent {
+    const owner = this._ownerSession(agent, sourceSessionId);
+    return { ...agent, session: owner } as unknown as Agent;
+  }
+
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
     return this._attachEvidence(agent, args, "agent");
@@ -786,7 +1003,7 @@ registerAidosSessionEventTypes(ctx);
    */
   @Remote("userAttachEvidence")
   userAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
-    return this._attachEvidence(agent, args, "user");
+    return this._attachEvidence(this._routedAgent(agent, args.ticketId), args, "user");
   }
 
   /**
@@ -797,11 +1014,11 @@ registerAidosSessionEventTypes(ctx);
    * evidence is append-only for the agent, per SPEC-B1 section 5.
    */
   @Remote("userDetachEvidence")
-  userDetachEvidence(agent: Agent, args: { ticketId: number; at: number; rowKind: string }): {
+  userDetachEvidence(agent: Agent, args: { ticketId: number | string; at: number; rowKind: string }): {
     ticketId: number;
     removed: number;
   } {
-    return this._detachEvidence(agent, args);
+    return this._detachEvidence(this._routedAgent(agent, args.ticketId), args as { ticketId: number; at: number; rowKind: string });
   }
 
   /** Move one ticket as the agent. The gate enforces every transition. */
@@ -824,7 +1041,7 @@ registerAidosSessionEventTypes(ctx);
     fromState: TicketState;
     toState: TicketState;
   } {
-    return this._moveTicket(agent, args, "user");
+    return this._moveTicket(this._routedAgent(agent, args.ticketId), args, "user");
   }
 
   /** Append one agent-authored comment to one ticket. */
@@ -835,7 +1052,7 @@ registerAidosSessionEventTypes(ctx);
   /** The user-actor comment path, exported over the typert Remote surface. */
   @Remote("userAddComment")
   userAddComment(agent: Agent, args: AddCommentArgs): CommentRecord {
-    return this._addComment(agent, args, "user");
+    return this._addComment(this._routedAgent(agent, args.ticketId), args, "user");
   }
 
   /** Import one plan file into an empty project. */
@@ -1568,14 +1785,30 @@ registerAidosSessionEventTypes(ctx);
     const current = workspaceKeyFromPath(this._workspacePath(agent));
     const colon = ref.indexOf(":");
     if (colon >= 0) {
-      const workspaceKey = ref.slice(0, colon);
-      const slug = ref.slice(colon + 1);
+      const head = ref.slice(0, colon);
+      const tail = ref.slice(colon + 1);
+      // A session-id-headed reference names a foreign row
+      // (<sourceSessionId>:<ticketId> as the workspaceTickets merge keys
+      // them): resolve it in the OWNER session's log, whose tickets the
+      // caller's own log never holds. Only a fully numeric tail routes —
+      // a workspaceKey:slug reference always carries a slug tail, and
+      // slugs are title-derived (never bare numbers).
+      if (/^\d+$/.test(tail)) {
+        const ownerCache = this._cache(this._ownerSession(agent, head));
+        this._sync(this._ownerSession(agent, head), ownerCache);
+        const numeric = Number(tail);
+        if (Number.isInteger(numeric) && ownerCache.state.tickets.has(numeric)) {
+          return numeric;
+        }
+        throw new UnknownTicket(ref);
+      }
+      const slug = tail;
       for (const snapshot of cache.state.tickets.values()) {
-        if (snapshot.workspaceKey === workspaceKey && snapshot.slug === slug) {
+        if (snapshot.workspaceKey === head && snapshot.slug === slug) {
           return snapshot.id;
         }
       }
-      throw new UnknownTicket(`${workspaceKey}:${slug}`);
+      throw new UnknownTicket(`${head}:${slug}`);
     }
     for (const snapshot of cache.state.tickets.values()) {
       if (snapshot.workspaceKey === current && snapshot.slug === ref) {

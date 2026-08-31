@@ -16107,8 +16107,15 @@ function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var DEFAULT_PHASE_TITLE = "Untitled phase";
-var _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
+var OwnerUnavailable = class extends Error {
+  sessionId;
+  constructor(sessionId) {
+    super(`ticket's owning session ${sessionId} is not open; open it to change this ticket`);
+    this.sessionId = sessionId;
+  }
+};
+var _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -16287,7 +16294,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   userSetTicket(agent, args) {
     if (args.ticketId !== void 0) {
-      return this._editTicket(agent, args, "user");
+      return this._editTicket(this._routedAgent(agent, args.ticketId), args, "user");
     }
     return this._createTicket(agent, args);
   }
@@ -16337,29 +16344,183 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     return rows;
   }
+  // ---- cross-session board (workspace merge) ----
+  /**
+   * One source session's contribution to the workspace board: the ticket
+   * views of one session log plus its evidence and comments maps. The
+   * session that owns a log is the only writer to it (owner routing);
+   * every other session's board shows these rows read-only.
+   */
+  _foldExternalLog(meta3, events) {
+    const state = createInitialState();
+    for (const event of events) {
+      foldSessionEvent(state, event);
+    }
+    void meta3;
+    return { state };
+  }
+  /**
+   * Every live session bound to the agent's workspace path, excluding the
+   * caller's own session. Live sessions fold from the in-memory log.
+   */
+  _liveWorkspaceSessions(agent) {
+    const path = this._workspacePath(agent);
+    const out = [];
+    for (const candidate of this.ctx.agents.list()) {
+      if (candidate.session.id === agent.session.id) continue;
+      try {
+        if (this._workspacePath(candidate) !== path) continue;
+      } catch {
+        continue;
+      }
+      out.push(candidate.session);
+    }
+    return out;
+  }
+  /**
+   * The ids of every persisted session whose header cwd matches the agent's
+   * workspace path, excluding the caller's own session and every live one.
+   */
+  async _closedWorkspaceSessionIds(agent, exclude) {
+    const persistence = this.ctx.get("sessionPersistence");
+    if (persistence === void 0) return [];
+    const path = this._workspacePath(agent);
+    let headers;
+    try {
+      headers = await persistence.list();
+    } catch (error51) {
+      this.ctx.logger?.warn?.(`aidos: persistence.list failed in workspace merge: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      return [];
+    }
+    const ids = [];
+    for (const header of headers) {
+      if (header.cwd === void 0) continue;
+      if (header.cwd !== path) continue;
+      if (header.id === agent.session.id) continue;
+      if (exclude.has(header.id)) continue;
+      ids.push(header.id);
+    }
+    return ids;
+  }
+  async workspaceTickets(agent) {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const ownViews = ticketsProjection(cache.state, this._resolvedConfig);
+    const ownSort = (a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id;
+    const tickets = [];
+    const evidence = {};
+    const comments = {};
+    for (const view of [...ownViews.values()].sort(ownSort)) {
+      tickets.push({ ...view, sourceSessionId: agent.session.id, foreign: false });
+      const key = String(view.id);
+      evidence[key] = [...cache.state.evidence.get(view.id) ?? []];
+      comments[key] = [...cache.state.comments.get(view.id) ?? []];
+    }
+    const liveSessions = this._liveWorkspaceSessions(agent);
+    const liveIds = /* @__PURE__ */ new Set();
+    for (const session of liveSessions) {
+      liveIds.add(session.id);
+      const state = this._cache(session).state;
+      this._sync(session, this._caches.get(session));
+      const views = ticketsProjection(state, this._resolvedConfig);
+      for (const view of [...views.values()].sort(ownSort)) {
+        const key = session.id + ":" + view.id;
+        tickets.push({
+          ...view,
+          id: view.id,
+          sourceSessionId: session.id,
+          foreign: true
+        });
+        evidence[key] = [...state.evidence.get(view.id) ?? []];
+        comments[key] = [...state.comments.get(view.id) ?? []];
+      }
+    }
+    const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
+    for (const id of closedIds) {
+      let inspection;
+      try {
+        const persistence = this.ctx.get("sessionPersistence");
+        inspection = await persistence.inspect(id);
+      } catch (error51) {
+        this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        continue;
+      }
+      const { state } = this._foldExternalLog(inspection.meta, inspection.events);
+      const views = ticketsProjection(state, this._resolvedConfig);
+      for (const view of [...views.values()].sort(ownSort)) {
+        const key = id + ":" + view.id;
+        tickets.push({
+          ...view,
+          id: view.id,
+          sourceSessionId: id,
+          foreign: true
+        });
+        evidence[key] = [...state.evidence.get(view.id) ?? []];
+        comments[key] = [...state.comments.get(view.id) ?? []];
+      }
+    }
+    tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    return { tickets, evidence, comments };
+  }
+  /**
+   * The agent the write should run against. A numeric ticketId (or a plain
+   * slug reference in the caller's own workspace) targets the caller's own
+   * session; a `<sourceSessionId>:<ticketId>` string routes to the owner
+   * session. Owner routing keeps one authoritative log per ticket.
+   */
+  _routedAgent(agent, ticketRef) {
+    if (ticketRef === void 0 || typeof ticketRef === "number") return agent;
+    const colon = ticketRef.indexOf(":");
+    if (colon <= 0) return agent;
+    const head = ticketRef.slice(0, colon);
+    const tail = ticketRef.slice(colon + 1);
+    if (!/^\d+$/.test(tail)) return agent;
+    return this._ownerAgent(agent, head);
+  }
+  /**
+   * Resolve the writer session for a foreign ticket reference
+   * `<sourceSessionId>:<ticketId>`. A live source session returns it;
+   * a closed one resumes nothing here — routing only reaches live owners.
+   */
+  _ownerSession(agent, sourceSessionId) {
+    if (sourceSessionId === agent.session.id) return agent.session;
+    for (const candidate of this.ctx.agents.list()) {
+      if (candidate.session.id === sourceSessionId) return candidate.session;
+    }
+    throw new OwnerUnavailable(sourceSessionId);
+  }
+  /**
+   * A synthetic agent handle that pins the OWNER session as the write
+   * target. The writes below need only `agent.session` (and its header for
+   * cwd assertions), which the owner session carries.
+   */
+  _ownerAgent(agent, sourceSessionId) {
+    const owner = this._ownerSession(agent, sourceSessionId);
+    return { ...agent, session: owner };
+  }
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
     return this._attachEvidence(agent, args, "agent");
   }
   userAttachEvidence(agent, args) {
-    return this._attachEvidence(agent, args, "user");
+    return this._attachEvidence(this._routedAgent(agent, args.ticketId), args, "user");
   }
   userDetachEvidence(agent, args) {
-    return this._detachEvidence(agent, args);
+    return this._detachEvidence(this._routedAgent(agent, args.ticketId), args);
   }
   /** Move one ticket as the agent. The gate enforces every transition. */
   agentMoveTicket(agent, args) {
     return this._moveTicket(agent, args, "agent");
   }
   userMoveTicket(agent, args) {
-    return this._moveTicket(agent, args, "user");
+    return this._moveTicket(this._routedAgent(agent, args.ticketId), args, "user");
   }
   /** Append one agent-authored comment to one ticket. */
   agentAddComment(agent, args) {
     return this._addComment(agent, args, "agent");
   }
   userAddComment(agent, args) {
-    return this._addComment(agent, args, "user");
+    return this._addComment(this._routedAgent(agent, args.ticketId), args, "user");
   }
   /** Import one plan file into an empty project. */
   planImport(agent, args) {
@@ -16969,14 +17130,24 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const current = workspaceKeyFromPath(this._workspacePath(agent));
     const colon = ref.indexOf(":");
     if (colon >= 0) {
-      const workspaceKey = ref.slice(0, colon);
-      const slug = ref.slice(colon + 1);
+      const head = ref.slice(0, colon);
+      const tail = ref.slice(colon + 1);
+      if (/^\d+$/.test(tail)) {
+        const ownerCache = this._cache(this._ownerSession(agent, head));
+        this._sync(this._ownerSession(agent, head), ownerCache);
+        const numeric = Number(tail);
+        if (Number.isInteger(numeric) && ownerCache.state.tickets.has(numeric)) {
+          return numeric;
+        }
+        throw new UnknownTicket(ref);
+      }
+      const slug = tail;
       for (const snapshot of cache.state.tickets.values()) {
-        if (snapshot.workspaceKey === workspaceKey && snapshot.slug === slug) {
+        if (snapshot.workspaceKey === head && snapshot.slug === slug) {
           return snapshot.id;
         }
       }
-      throw new UnknownTicket(`${workspaceKey}:${slug}`);
+      throw new UnknownTicket(`${head}:${slug}`);
     }
     for (const snapshot of cache.state.tickets.values()) {
       if (snapshot.workspaceKey === current && snapshot.slug === ref) {
@@ -17093,6 +17264,7 @@ _init = __decoratorStart(_a3);
 __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
+__decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);

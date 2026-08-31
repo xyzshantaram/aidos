@@ -22,7 +22,7 @@ export interface FilterPanelProps {
   applied: AppliedState;
   tickets: TicketView[];
   onApply: (state: AppliedState) => void;
-  onJump: (ticketId: number) => void;
+  onJump: (key: string) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }
@@ -247,7 +247,7 @@ export function FilterPanel(props: FilterPanelProps) {
                 onMouseDown={(event: react.MouseEvent<HTMLButtonElement>) => {
                   event.preventDefault();
                   clearSearch();
-                  props.onJump(ticket.id);
+                  props.onJump(String(ticket.id));
                 }}
               >
                 <span className="aidos-suggestion-title">{ticket.title}</span>
@@ -386,7 +386,7 @@ export function FilterPanel(props: FilterPanelProps) {
                   onMouseDown={(event: react.MouseEvent<HTMLButtonElement>) => {
                     event.preventDefault();
                     clearSearch();
-                    props.onJump(ticket.id);
+                    props.onJump(String(ticket.id));
                   }}
                 >
                   <span className="aidos-suggestion-title">{ticket.title}</span>

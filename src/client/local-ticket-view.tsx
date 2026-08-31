@@ -31,6 +31,7 @@ import { CreateTicketModal } from "./create-ticket-modal";
 import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
 import { showToast } from "./toast-store";
+import { callAidosRemote } from "./remote";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
 import type { CommentRecord, EvidenceRow } from "../kernel/types";
@@ -145,6 +146,12 @@ export function LocalTicketView(props: LocalTicketViewProps) {
   );
 }
 
+interface WorkspaceMerge {
+  tickets: Array<TicketViewType & { sourceSessionId: string; foreign: boolean }>;
+  evidence: Record<string, EvidenceRow[]>;
+  comments: Record<string, CommentRecord[]>;
+}
+
 function ProjectionReader(props: ProjectionReaderProps) {
   const sessionId = props.sessionId;
 
@@ -155,18 +162,50 @@ function ProjectionReader(props: ProjectionReaderProps) {
     ticketsProjection !== undefined &&
     evidenceProjection !== undefined &&
     commentsProjection !== undefined;
-  const rawTickets: TicketViewType[] =
-    ticketsProjection === undefined
-      ? []
-      : Object.values(ticketsProjection as Record<string, TicketViewType>);
+
+  // The workspace merge. The projection covers the own session only; the
+  // workspaceTickets Remote adds every sibling session of the same
+  // workspace (live and closed) and is re-pulled whenever the own
+  // projection version changes or a foreign write resolves.
+  const [merge, setMerge] = react.useState<WorkspaceMerge | null>(null);
+  const mergeVersionRef = react.useRef(-1);
+  const ownVersion = ticketsProjection === undefined
+    ? -1
+    : JSON.stringify(ticketsProjection).length + ":" + Object.keys(ticketsProjection as Record<string, unknown>).length;
+  react.useEffect(function () {
+    if (!loaded) return;
+    let cancelled = false;
+    const pull = async function () {
+      try {
+        const result = await callAidosRemote("workspaceTickets", {}, sessionId);
+        if (cancelled) return;
+        setMerge(result as unknown as WorkspaceMerge);
+      } catch {
+        // The merge is additive; a failed pull leaves the own board intact.
+        if (!cancelled) setMerge(function (prev) { return prev; });
+      }
+    };
+    void pull();
+    return function () {
+      cancelled = true;
+    };
+    // Re-pull when the own board's shape changes (own version) or on mount.
+  }, [loaded, sessionId, ownVersion]);
+
+  // The effective board: the merged rows when a merge exists, else the own
+  // projection alone. Foreign rows carry key sessionId:ticketId; own rows
+  // plain ticketId.
+  const boardTickets: Array<TicketViewType & { sourceSessionId?: string; foreign?: boolean }> =
+    merge !== null
+      ? merge.tickets
+      : Object.values(ticketsProjection as Record<string, TicketViewType> | undefined ?? {}).map(
+          (row) => ({ ...row, sourceSessionId: sessionId, foreign: false }),
+        );
+  const rawTickets = boardTickets;
   const rawEvidence: Record<string, EvidenceRow[]> =
-    evidenceProjection === undefined
-      ? {}
-      : (evidenceProjection as Record<string, EvidenceRow[]>);
+    merge !== null ? merge.evidence : (evidenceProjection as Record<string, EvidenceRow[]> | undefined) ?? {};
   const rawComments: Record<string, CommentRecord[]> =
-    commentsProjection === undefined
-      ? {}
-      : (commentsProjection as Record<string, CommentRecord[]>);
+    merge !== null ? merge.comments : (commentsProjection as Record<string, CommentRecord[]> | undefined) ?? {};
   const allTicketsCount = rawTickets.length;
   // Persist the filter under one workspace key. When the board shows tickets
   // from projects with different workspace keys, keep the first key but suffix
@@ -184,7 +223,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [applied, setAppliedStateLocal] = react.useState<AppliedState>(function () {
     return cloneAppliedState(DEFAULT_APPLIED);
   });
-  const [selectedId, setSelectedId] = react.useState<number | null>(null);
+  const [selectedKey, setSelectedKey] = react.useState<string | null>(null);
   const [createOpen, setCreateOpen] = react.useState(false);
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
@@ -231,7 +270,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       if (id === null) return;
       const exists = rawTickets.some((ticket) => ticket.id === id);
       if (exists) {
-        setSelectedId(id);
+        setSelectedKey(String(id));
       } else {
         showToast("Ticket " + id + " not found", "info");
       }
@@ -292,28 +331,41 @@ function ProjectionReader(props: ProjectionReaderProps) {
     applyState(cloneAppliedState(DEFAULT_APPLIED));
   }
 
-  function selectTicket(id: number) {
-    if (selectedId === id) {
+  function selectTicket(key: string) {
+    if (selectedKey === key) {
       closeDetail();
       return;
     }
-    setSelectedId(id);
-    setTicketParam(id);
+    setSelectedKey(key);
+    const numeric = Number(key);
+    setTicketParam(Number.isInteger(numeric) ? numeric : null);
   }
 
   function closeDetail() {
-    setSelectedId(null);
+    setSelectedKey(null);
     setTicketParam(null);
   }
 
   const selectedTicket =
-    selectedId === null ? null : rawTickets.find((ticket) => ticket.id === selectedId) ?? null;
+    selectedKey === null
+      ? null
+      : rawTickets.find(
+            (ticket) =>
+              (ticket.foreign ? ticket.sourceSessionId + ":" + ticket.id : String(ticket.id)) ===
+              selectedKey,
+          ) ?? null;
+
+  const selectedBoardKey = selectedTicket
+    ? selectedTicket.foreign
+      ? selectedTicket.sourceSessionId + ":" + selectedTicket.id
+      : String(selectedTicket.id)
+    : null;
 
   const selectedEvidence: EvidenceRow[] =
-    selectedTicket === null ? [] : rawEvidence[String(selectedTicket.id)] ?? [];
+    selectedBoardKey === null ? [] : rawEvidence[selectedBoardKey] ?? [];
 
   const selectedComments: CommentRecord[] =
-    selectedTicket === null ? [] : rawComments[String(selectedTicket.id)] ?? [];
+    selectedBoardKey === null ? [] : rawComments[selectedBoardKey] ?? [];
 
   const [evidenceCollapsed, setEvidenceCollapsed] = react.useState(function () {
     return evidenceIsMany(selectedEvidence);
@@ -327,7 +379,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const detailPanel =
     selectedTicket === null ? null : (
       <DetailView
-        key={selectedTicket.id}
+        key={selectedBoardKey}
         ticket={selectedTicket}
         evidence={selectedEvidence}
         comments={selectedComments}
@@ -337,6 +389,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         }}
         onClose={closeDetail}
         agentId={sessionId}
+        ticketIdKey={selectedBoardKey ?? String(selectedTicket.id)}
         onFieldSaved={function () {
           // The projection frame re-renders the new value automatically.
         }}
@@ -349,7 +402,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         setCreateOpen(false);
       }}
       onCreated={(id) => {
-        selectTicket(id);
+        selectTicket(String(id));
       }}
       agentId={sessionId}
     />
@@ -373,8 +426,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
         tickets={filtered}
         allTicketsCount={allTicketsCount}
         applied={applied}
-        selectedId={selectedId}
-        activeTicketId={activeTicketId(rawTickets)}
+        selectedId={selectedKey}
+        activeTicketId={activeTicketId(rawTickets) === null ? null : String(activeTicketId(rawTickets))}
         evidenceByTicket={rawEvidence}
         onSelect={selectTicket}
         onApply={applyState}

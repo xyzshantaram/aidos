@@ -11,7 +11,7 @@ import { showToast } from "./toast-store";
 
 export interface SignoffDialogProps {
   open: boolean;
-  ticketId: number;
+  ticketId: number | string;
   ticketTitle: string;
   onClose: () => void;
   onSignedOff: () => void;

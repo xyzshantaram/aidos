@@ -36,6 +36,12 @@ import type { EvidenceRow, CommentRecord } from "../kernel/types";
 
 export interface DetailPanelProps {
   ticket: TicketView;
+  /**
+   * The board write identity: the plain id for an own ticket,
+   * `<sourceSessionId>:<id>` for a foreign one. Write components route
+   * through it; the host sends foreign writes to the owner session.
+   */
+  ticketIdKey: string;
   evidence: readonly EvidenceRow[];
   evidenceCollapsed: boolean;
   onToggleEvidence: () => void;
@@ -156,7 +162,7 @@ function refOf(hit: TicketSearchHit): string {
  * current list plus the new reference.
  */
 function DependencySection(props: {
-  ticketId: number;
+  ticketId: number | string;
   dependsOn: string[];
   agentId: string;
   onSaved: () => void;
@@ -304,7 +310,7 @@ export function DetailPanel(props: DetailPanelProps) {
     try {
       await callAidosRemote(
         "userDetachEvidence",
-        { ticketId: ticket.id, at, rowKind: row.kind },
+        { ticketId: props.ticketIdKey, at, rowKind: row.kind },
         props.agentId,
       );
       showToast("Evidence deleted", "success");
@@ -324,7 +330,7 @@ export function DetailPanel(props: DetailPanelProps) {
       <div className="aidos-detail-head">
         <FieldEditor
           field="title"
-          ticketId={ticket.id}
+          ticketId={props.ticketIdKey}
           value={ticket.title}
           agentId={props.agentId}
           onSaved={props.onFieldSaved}
@@ -341,35 +347,35 @@ export function DetailPanel(props: DetailPanelProps) {
         <span className={badge}>{stateLabel(ticket.state)}</span>
       </div>
       <DependencySection
-        ticketId={ticket.id}
+        ticketId={props.ticketIdKey}
         dependsOn={ticket.dependsOn}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
       <FieldEditor
         field="description"
-        ticketId={ticket.id}
+        ticketId={props.ticketIdKey}
         value={ticket.description}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
       <FieldEditor
         field="criteria"
-        ticketId={ticket.id}
+        ticketId={props.ticketIdKey}
         value={ticket.criteria}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
       <FieldEditor
         field="phase"
-        ticketId={ticket.id}
+        ticketId={props.ticketIdKey}
         value={ticket.phase}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
       <FieldEditor
         field="order"
-        ticketId={ticket.id}
+        ticketId={props.ticketIdKey}
         value={ticket.order}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
@@ -437,6 +443,7 @@ export function DetailView(props: DetailViewProps) {
     <div className="aidos-detail">
       <DetailPanel
         ticket={ticket}
+        ticketIdKey={props.ticketIdKey}
         evidence={props.evidence}
         evidenceCollapsed={props.evidenceCollapsed}
         onToggleEvidence={props.onToggleEvidence}
@@ -460,15 +467,15 @@ export function DetailView(props: DetailViewProps) {
         }}
       />
       <CommentsSection
-        ticketId={ticket.id}
+        ticketId={props.ticketIdKey}
         comments={props.comments}
         agentId={agentId}
       />
-      <EvidenceAttachForm ticketId={ticket.id} agentId={agentId} />
+      <EvidenceAttachForm ticketId={props.ticketIdKey} agentId={agentId} />
       {signoffOpen ? (
         <SignoffDialog
           open
-          ticketId={ticket.id}
+          ticketId={props.ticketIdKey}
           ticketTitle={ticket.title}
           onClose={() => {
             setSignoffOpen(false);
@@ -482,7 +489,7 @@ export function DetailView(props: DetailViewProps) {
       {sendBackOpen ? (
         <SendBackModal
           open
-          ticketId={ticket.id}
+          ticketId={props.ticketIdKey}
           onClose={() => {
             setSendBackOpen(false);
           }}
@@ -495,7 +502,7 @@ export function DetailView(props: DetailViewProps) {
       {markDoneOpen ? (
         <MarkDoneModal
           open
-          ticketId={ticket.id}
+          ticketId={props.ticketIdKey}
           ticket={ticket}
           evidence={props.evidence}
           onClose={() => {

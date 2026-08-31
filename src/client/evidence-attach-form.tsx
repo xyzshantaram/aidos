@@ -10,7 +10,7 @@ import { showToast } from "./toast-store";
 import { userEvidenceKinds } from "./user-evidence-kinds";
 
 export interface EvidenceAttachFormProps {
-  ticketId: number;
+  ticketId: number | string;
   agentId: string;
 }
 

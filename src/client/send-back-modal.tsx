@@ -11,7 +11,7 @@ import { showToast } from "./toast-store";
 
 export interface SendBackModalProps {
   open: boolean;
-  ticketId: number;
+  ticketId: number | string;
   onClose: () => void;
   onSentBack: () => void;
   agentId: string;

@@ -17,7 +17,7 @@ import type { EvidenceRow } from "../kernel/types";
 
 export interface MarkDoneModalProps {
   open: boolean;
-  ticketId: number;
+  ticketId: number | string;
   ticket: TicketView;
   evidence: readonly EvidenceRow[];
   onClose: () => void;

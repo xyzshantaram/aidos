@@ -10,20 +10,24 @@ import { FilterPanel } from "./filter-panel";
 import type { AppliedState } from "./view-state";
 import { TicketTile } from "./ticket-tile";
 import type { TicketView } from "../kernel/projections";
+
+/** One merged board row (own rows carry foreign: false or the field is absent). */
+type BoardTicket = TicketView & { sourceSessionId?: string; foreign?: boolean };
 import type { EvidenceRow } from "../kernel/types";
 
 export interface TicketViewProps {
   sessionId: string;
-  tickets: TicketView[];
+  tickets: BoardTicket[];
   allTicketsCount: number;
   applied: AppliedState;
-  selectedId: number | null;
-  activeTicketId: number | null;
-  /** Ticket id (string) to its evidence rows. Undefined falls back to empty. */
+  /** Board keys (own "id", foreign "sessionId:id") of the selection and the active row. */
+  selectedId: string | null;
+  activeTicketId: string | null;
+  /** Board key to its evidence rows. Undefined falls back to empty. */
   evidenceByTicket?: Record<string, EvidenceRow[]>;
-  onSelect: (id: number) => void;
+  onSelect: (key: string) => void;
   onApply: (state: AppliedState) => void;
-  onJump: (id: number) => void;
+  onJump: (key: string) => void;
   onClearFilters: () => void;
   onCreate: () => void;
   projects?: { id: number; name: string }[];
@@ -32,15 +36,19 @@ export interface TicketViewProps {
 export function TicketView(props: TicketViewProps) {
   const [collapsed, setCollapsed] = react.useState(false);
 
+  const boardKeyOf = (ticket: BoardTicket) =>
+    ticket.foreign === true && ticket.sourceSessionId !== undefined
+      ? ticket.sourceSessionId + ":" + ticket.id
+      : String(ticket.id);
   const tiles = props.tickets.map((ticket) => (
     <TicketTile
-      key={ticket.id}
+      key={boardKeyOf(ticket)}
       ticket={ticket}
-      evidence={props.evidenceByTicket?.[String(ticket.id)] ?? []}
-      selected={ticket.id === props.selectedId}
-      active={ticket.id === props.activeTicketId}
+      evidence={props.evidenceByTicket?.[boardKeyOf(ticket)] ?? []}
+      selected={boardKeyOf(ticket) === props.selectedId}
+      active={boardKeyOf(ticket) === props.activeTicketId}
       onSelect={() => {
-        props.onSelect(ticket.id);
+        props.onSelect(boardKeyOf(ticket));
       }}
     />
   ));
