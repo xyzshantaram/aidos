@@ -1693,8 +1693,8 @@ the plan format round trips description and phase.
 - [ ] **Ticket U16: The detail panel follows the spec.** Header, quick facts with `State`,
   `Gate`, `Confidence`, `Phase`, `Order` and `Slug`, the description rendered as markdown
   with a clip past 320px, criteria as bullets with the covered count in the heading,
-  dependencies, evidence as plain bullets, comments, and a right aligned action bar. The
-  stray field editors for criteria, phase and order go away.
+  dependencies, evidence as plain bullets, comments, and a left aligned action row under
+  the quick facts. The stray field editors for criteria, phase and order go away.
   **Evaluate:** an imported ticket shows its criteria as bullets and not as evidence rows
   the evidence panel holds one bullet per row and no `Ungrouped` bucket
   the description renders bold, code and lists instead of raw markdown text

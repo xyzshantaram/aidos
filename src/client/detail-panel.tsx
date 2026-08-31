@@ -1,12 +1,13 @@
 /**
  * Ticket U16: the ticket detail panel, per UI-SPEC section 6. The header
  * carries the title editor and the close button. A chips row follows, then a
- * facts table, the description panel, the criteria panel, the dependencies
- * panel, and the evidence panel. Every panel is a details disclosure.
+ * facts table, the action row, the description panel, the criteria panel, the
+ * dependencies panel, and the evidence panel. Every panel is a details
+ * disclosure.
  *
- * DetailView wraps the panel: it owns the action modals and renders the
- * action bar and the comments section. The evidence attach form lives in
- * the evidence panel body.
+ * DetailView wraps the panel: it owns the action modals, it hands the panel
+ * the action row to place, and it renders the comments section. The evidence
+ * attach form lives in the evidence panel body.
  */
 
 import react from "react";
@@ -64,6 +65,14 @@ export interface DetailPanelProps {
   onClose: () => void;
   agentId: string;
   onFieldSaved: () => void;
+}
+
+/**
+ * The panel plus the action row. DetailView owns the action modals, so it
+ * builds the row and passes it in.
+ */
+interface DetailPanelBodyProps extends DetailPanelProps {
+  actions: react.ReactNode;
 }
 
 export interface DetailViewProps extends DetailPanelProps {
@@ -623,7 +632,7 @@ function EvidencePanel(props: {
   );
 }
 
-export function DetailPanel(props: DetailPanelProps) {
+export function DetailPanel(props: DetailPanelBodyProps) {
   const ticket = props.ticket;
   const badge = badgeClass(ticket.state);
   const [deletingAt, setDeletingAt] = react.useState<number | null>(null);
@@ -706,6 +715,7 @@ export function DetailPanel(props: DetailPanelProps) {
           <dd className="aidos-facts-value">{ticket.slug}</dd>
         </div>
       </dl>
+      {props.actions}
       <DescriptionPanel
         ticket={ticket}
         ticketIdKey={props.ticketIdKey}
@@ -788,26 +798,28 @@ export function DetailView(props: DetailViewProps) {
         onClose={props.onClose}
         agentId={agentId}
         onFieldSaved={props.onFieldSaved}
+        actions={
+          <ActionBar
+            ticket={ticket}
+            onOpenSignoff={() => {
+              setSignoffOpen(true);
+            }}
+            onOpenSendBack={() => {
+              setSendBackOpen(true);
+            }}
+            onOpenMarkDone={() => {
+              setMarkDoneOpen(true);
+            }}
+            onOpenSubmitForReview={() => {
+              void submitForReview();
+            }}
+          />
+        }
       />
       <CommentsSection
         ticketId={props.ticketIdKey}
         comments={props.comments}
         agentId={agentId}
-      />
-      <ActionBar
-        ticket={ticket}
-        onOpenSignoff={() => {
-          setSignoffOpen(true);
-        }}
-        onOpenSendBack={() => {
-          setSendBackOpen(true);
-        }}
-        onOpenMarkDone={() => {
-          setMarkDoneOpen(true);
-        }}
-        onOpenSubmitForReview={() => {
-          void submitForReview();
-        }}
       />
       {signoffOpen ? (
         <SignoffDialog

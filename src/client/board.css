@@ -726,38 +726,10 @@
   white-space: nowrap;
 }
 
-/* ── 12. Primary button (spec §13) ─────────────────────── */
-.primary-button,
-.aidos-btn-primary,
-.aidos-action-btn-primary,
-.aidos-comment-send,
-.aidos-evidence-attach-form .aidos-btn-primary {
-  width: auto;
-}
-
-.aidos-comment-send {
-  height: 2rem;
-  padding-inline: 0.75rem;
-  border: 0;
-  border-radius: 4px;
-  background: #adb2b8;
-  color: #232324;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.primary-button:disabled,
-.aidos-btn-primary:disabled,
-.aidos-action-btn-primary:disabled,
-.aidos-comment-send:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
+/* ── 12. Buttons (spec §13) ───────────────────────────── */
 
 /* secondary button — muted bordered pill, not high-contrast */
 .aidos-btn,
-.aidos-action-btn-secondary,
 .aidos-btn-dot {
   cursor: pointer;
   border: 1px solid var(--border);
@@ -769,14 +741,52 @@
   padding: 5px 12px;
 }
 
-.aidos-btn:hover,
-.aidos-action-btn-secondary:hover {
+.aidos-btn:hover:not(:disabled) {
   background: var(--surface-hover);
   color: var(--text-primary);
   border-color: var(--border);
 }
 
 .aidos-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* primary button — the one filled control of the board: a light fill with
+   dark text. A confirm button carries `.aidos-btn` as well, so this block
+   must follow the secondary block: the two selectors weigh the same and the
+   later one wins. The transparent border keeps the box the size of a
+   secondary button, so a mixed row lines up. */
+.primary-button,
+.aidos-btn-primary,
+.aidos-comment-send {
+  width: auto;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--text-secondary);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+.primary-button:hover:not(:disabled),
+.aidos-btn-primary:hover:not(:disabled),
+.aidos-comment-send:hover:not(:disabled) {
+  background: var(--text-primary);
+  color: var(--surface);
+  border-color: transparent;
+}
+
+/* The send button sets its own height, so it lines up with the comment box. */
+.aidos-comment-send {
+  height: 2rem;
+  padding-inline: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.primary-button:disabled,
+.aidos-btn-primary:disabled,
+.aidos-comment-send:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -1494,21 +1504,15 @@
 }
 
 /* action bar */
-/* The action bar is the footer of the detail pane. It pins to the bottom of
-   the scroll box, so the state moves stay in reach while the panel scrolls. */
+/* The action row sits under the quick facts, near the top of the detail
+   pane. It is an ordinary block of the panel column, so it scrolls with the
+   rest of the pane, and it holds its buttons at the left edge. */
 .aidos-action-bar {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  margin-top: auto;
-  padding-block: 8px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg);
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 /* spoiler (submit-for-review) */
@@ -1523,6 +1527,10 @@
   font-size: 12px;
   line-height: 18px;
   color: var(--text-secondary);
+}
+
+.aidos-spoiler-summary:hover {
+  color: var(--text-primary);
 }
 
 /* comments */

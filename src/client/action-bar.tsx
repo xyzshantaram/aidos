@@ -1,7 +1,8 @@
 /**
  * Ticket U2c: the action bar. Reads the per-state action descriptors and
- * renders the matching buttons. Submit for review lives in a collapsed
- * spoiler; the rest are direct buttons.
+ * renders the matching buttons. The row sits under the quick facts of the
+ * detail pane. Submit for review lives in a collapsed spoiler; the rest are
+ * direct buttons.
  */
 
 import react from "react";
@@ -42,7 +43,7 @@ export function ActionBar(props: ActionBarProps) {
         <details className="aidos-spoiler" key={action.id}>
           <summary className="aidos-spoiler-summary">Advanced</summary>
           <button
-            className="aidos-action-btn-secondary"
+            className="aidos-btn"
             onClick={opener}
           >
             {action.label}
@@ -51,8 +52,8 @@ export function ActionBar(props: ActionBarProps) {
       );
     }
     const className = action.primary
-      ? "aidos-action-btn-primary"
-      : "aidos-action-btn-secondary";
+      ? "aidos-btn aidos-btn-primary"
+      : "aidos-btn";
     return (
       <button className={className} key={action.id} onClick={opener}>
         {action.label}

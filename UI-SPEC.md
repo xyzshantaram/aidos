@@ -105,21 +105,22 @@ shrinks.
    `Order`, `Slug`. Labels left and muted, values right. Confidence keeps the
    advisory asterisk with its hover text. This block replaces every stray field
    editor for phase and order.
-3. **Description.** Rendered markdown, not raw text. An empty description shows
+3. **Action bar.** The state moves for the ticket. It sits right under the
+   quick facts, it is left aligned, and it is an ordinary block of the column,
+   so it scrolls with the pane.
+4. **Description.** Rendered markdown, not raw text. An empty description shows
    the muted note `No description.` The Edit control opens the raw textarea.
-4. **Criteria.** One bullet per criterion. A criterion with matching evidence
+5. **Criteria.** One bullet per criterion. A criterion with matching evidence
    reads normal, one without reads in `--text-muted` with the uncovered tint.
    The panel heading carries the count, for example `CRITERIA 1/3`. The Edit
    control opens the raw textarea for the whole block.
-5. **Dependencies.** Chips plus the search field.
-6. **Evidence.** One bullet per row: kind label in 600 weight, author muted,
+6. **Dependencies.** Chips plus the search field.
+7. **Evidence.** One bullet per row: kind label in 600 weight, author muted,
    the addressed criterion muted when present, delete control at the right.
    No criterion grouping and no `Ungrouped` bucket.
-7. **Comments.**
-8. **Action bar.** The footer of the pane. It is right aligned and it pins to
-   the bottom of the scroll box, so the state moves stay in reach.
+8. **Comments.**
 
-Panels 4 to 7 are collapsible. Each carries a heading row with the label left
+Panels 5 to 8 are collapsible. Each carries a heading row with the label left
 and the Collapse or Expand control right.
 
 ## 7. Long text
