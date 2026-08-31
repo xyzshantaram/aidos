@@ -497,9 +497,34 @@ function ProjectionReader(props: ProjectionReaderProps) {
       }}
     />
   );
+  // The board starts below the app chrome, so a viewport-height cap leaves
+  // both panes taller than the view and the page scrolls. Measure the top
+  // offset of the layout and publish it, so the stylesheet caps the height by
+  // the space the board really has.
+  const layoutRef = react.useRef<HTMLDivElement | null>(null);
+  react.useLayoutEffect(function () {
+    const element = layoutRef.current;
+    if (element === null) return;
+    const sync = function () {
+      const top = element.getBoundingClientRect().top;
+      element.style.setProperty("--aidos-board-top", Math.max(0, Math.round(top)) + "px");
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(sync);
+      observer.observe(document.documentElement);
+    }
+    return function () {
+      window.removeEventListener("resize", sync);
+      if (observer !== null) observer.disconnect();
+    };
+  }, []);
+
   return (
     <>
-      <div className="aidos-layout">
+      <div className="aidos-layout" ref={layoutRef}>
         {body}
         {detailPanel}
       </div>

@@ -85,6 +85,19 @@ export function TicketView(props: TicketViewProps) {
 
   return (
     <div className="aidos-root">
+      <div className="aidos-toolbar">
+        <span className="aidos-empty-note">
+          {props.tickets.length + " of " + props.allTicketsCount + " tickets"}
+        </span>
+        <span className="aidos-toolbar-actions">
+          <button className="aidos-btn" onClick={props.onPlan}>
+            Plan
+          </button>
+          <button className="aidos-btn aidos-btn-primary" onClick={props.onCreate}>
+            Create
+          </button>
+        </span>
+      </div>
       <FilterPanel
         sessionId={props.sessionId}
         projects={props.projects}
@@ -98,17 +111,6 @@ export function TicketView(props: TicketViewProps) {
         }}
       />
       <div className="aidos-grid-wrap">
-        <div className="aidos-grid-chrome">
-          <span className="aidos-empty-note">
-            {props.tickets.length + " of " + props.allTicketsCount + " tickets"}
-          </span>
-          <button className="aidos-btn" onClick={props.onPlan}>
-            Plan
-          </button>
-          <button className="aidos-btn aidos-btn-primary" onClick={props.onCreate}>
-            Create
-          </button>
-        </div>
         {content}
       </div>
     </div>

@@ -86,12 +86,18 @@
   gap: var(--space-2);
   align-items: stretch;
   height: 100%;
-  max-height: 100dvh;
-  overflow: hidden;
-  flex: 1;
   min-width: 0;
   width: 100%;
+  /* The board starts below the app chrome. The host sets
+     --aidos-board-top to the offset at runtime. */
+  max-height: calc(100dvh - var(--aidos-board-top, 0px));
+  overflow: hidden;
+  flex: 1;
 }
+
+/* U18: the board tiles inside the view. The layout caps its own height, and
+   each pane scrolls on its own, so the page behind the board never scrolls.
+   A host that gives no definite height leaves the cap at the viewport. */
 
 /* U18: the board tiles inside the view. The layout caps its own height, and
    each pane scrolls on its own, so the page behind the board never scrolls.
@@ -128,18 +134,22 @@
   overflow-y: auto;
 }
 
-.aidos-grid-chrome {
+/* The toolbar row sits above the filter bar: the ticket count on the left and
+   the board actions on the right. It stays outside the scrolling grid, so it
+   never moves. */
+.aidos-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-1);
-  /* U18: the chrome stays visible while the tile grid scrolls under it. */
-  position: sticky;
-  top: 0;
-  z-index: 1;
   flex: none;
   padding-block: 2px;
-  background: var(--bg);
+}
+
+.aidos-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .aidos-board-grid {
@@ -378,26 +388,53 @@
   color: var(--text-secondary);
 }
 
+/* One criterion row holds the label plus its icon controls. The controls
+   sit on the right and reach full opacity only on hover or focus inside
+   the row. */
+.aidos-criterion-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.aidos-criterion-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+}
+
+.aidos-criterion-row:hover .aidos-criterion-actions,
+.aidos-criterion-row:focus-within .aidos-criterion-actions {
+  opacity: 1;
+}
+
+/* Last row of the criteria block: an input plus a small add button. */
+.aidos-criteria-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aidos-criteria-add input,
+.aidos-criterion-row input {
+  flex: 1;
+  min-width: 0;
+  height: 1.75rem;
+  font-size: 12px;
+  padding-inline: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
 .aidos-criterion-uncovered {
   color: var(--text-muted);
   background: var(--surface-hover);
-}
-
-.aidos-evidence-row-item {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  font-size: 11px;
-  line-height: 16px;
-  min-width: 0;
-  white-space: nowrap;
-}
-
-.aidos-evidence-row-item .aidos-evidence-meta {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .aidos-evidence-delete {
@@ -472,6 +509,29 @@
 .aidos-chip-dep {
   background: var(--badge-hue-1);
 }
+
+/* A kind chip splits when it carries a count: the keyword keeps the kind
+   color, and the count segment inverts it. The chip drops its own inline
+   padding so the count segment reaches the chip edge. */
+.aidos-chip-kind {
+  padding-inline: 0;
+  overflow: hidden;
+  letter-spacing: 0.04em;
+}
+
+.aidos-chip-key {
+  padding-inline: 6px;
+}
+
+.aidos-chip-count {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 5px;
+  background: #f9fafb;
+  font-weight: 700;
+}
+
 
 .aidos-chip-state-open {
   background: var(--state-open);
@@ -848,6 +908,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-top: auto;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -856,7 +917,8 @@
 /* The confidence ring and the tile gate text are gone: the tile shows a gate
    chip and a confidence chip instead (U15). */
 
-/* detail header / body */
+/* detail header / body. The head keeps the title on the left and the
+   close button on the right. */
 .aidos-detail-head {
   display: flex;
   align-items: center;
@@ -869,6 +931,45 @@
   font-weight: 600;
   line-height: 20px;
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* Chip row between the header and the facts table. */
+.aidos-detail-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Small square control for a 12px icon. It carries no border and no
+   background until hover. */
+.aidos-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 4px;
+  box-sizing: content-box;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.aidos-icon-btn:hover,
+.aidos-icon-btn:focus-visible {
+  background: var(--surface-hover);
   color: var(--text-primary);
 }
 
@@ -939,7 +1040,6 @@
   border-radius: var(--radius-sm);
   padding: 8px;
 }
-
 /* detail panels (spec §6) */
 .aidos-panel {
   border: 1px solid var(--border-subtle);
@@ -948,19 +1048,42 @@
   min-width: 0;
 }
 
-.aidos-panel-toggle {
-  flex: none;
-  border: 0;
-  background: none;
-  padding: 0;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--text-secondary);
+/* Panels sit in the detail column flex box, so the 10px gap separates them.
+   The margin keeps stacked panels apart when markup skips the flex gap. */
+.aidos-panel + .aidos-panel {
+  margin-top: 8px;
+}
+
+/* The panel head is the disclosure summary. It keeps the title on the left
+   and draws its own chevron on the right. */
+.aidos-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  list-style: none;
   cursor: pointer;
 }
 
-.aidos-panel-toggle:hover {
-  color: var(--text-primary);
+.aidos-panel-head::-webkit-details-marker {
+  display: none;
+}
+
+.aidos-panel-head::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  /* Closed points right. Open points down. */
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.aidos-panel[open] > .aidos-panel-head::after {
+  transform: rotate(45deg);
 }
 
 .aidos-panel-body {
@@ -969,6 +1092,7 @@
   gap: 6px;
   min-width: 0;
 }
+
 
 /* evidence — one row reads as one bullet on one line (spec §6) */
 .aidos-evidence-list {
