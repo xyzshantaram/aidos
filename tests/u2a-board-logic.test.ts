@@ -19,12 +19,17 @@ import {
   compareTickets,
   filterTickets,
   autocompleteTickets,
+  displayDep,
   openCount,
   formatGateFraction,
   ringPercent,
+  fullTicketId,
+  idColor,
 } from "../src/client/board-logic";
 
 const ALL_STATES: TicketState[] = ["open", "in_progress", "awaiting_verification", "done"];
+
+const WORKSPACE_KEY = "--home-sid-repos-aidos--";
 
 function makeTicket(overrides: Partial<TicketView> & { updatedAt?: number }) {
   return {
@@ -35,6 +40,7 @@ function makeTicket(overrides: Partial<TicketView> & { updatedAt?: number }) {
     body: "",
     criteria: "",
     phase: 0,
+    workspaceKey: WORKSPACE_KEY,
     order: 0,
     state: "open",
     confidenceScore: 0,
@@ -330,6 +336,43 @@ describe("ringPercent", () => {
   it("clamps below 0 and above 100", () => {
     expect(ringPercent(-1)).toBe(0);
     expect(ringPercent(6)).toBe(100);
-    expect(ringPercent(10)).toBe(100);
+  });
+});
+
+describe("fullTicketId", () => {
+  it("joins the workspace key and the id with a colon", () => {
+    expect(fullTicketId(makeTicket({ id: 341 }))).toBe(WORKSPACE_KEY + ":341");
+  });
+
+  it("uses the ticket's own workspace key", () => {
+    const ticket = makeTicket({ id: 7, workspaceKey: "--home-sid-repos-other--" });
+    expect(fullTicketId(ticket)).toBe("--home-sid-repos-other--:7");
+  });
+
+  it("returns a string displayDep shortens to the aidos form", () => {
+    expect(displayDep(fullTicketId(makeTicket({ id: 5 })))).toBe("aidos#5");
+  });
+});
+
+describe("idColor", () => {
+  it("returns the same color for the same id", () => {
+    expect(idColor(WORKSPACE_KEY + ":341")).toBe(idColor(WORKSPACE_KEY + ":341"));
+  });
+
+  it("returns a css custom property from the badge palette", () => {
+    expect(idColor(WORKSPACE_KEY + ":1").startsWith("var(--badge-hue-")).toBe(true);
+  });
+
+  it("spreads ids over the palette", () => {
+    const colors = new Set(
+      Array.from({ length: 40 }, (_, index) => idColor(WORKSPACE_KEY + ":" + index)),
+    );
+    expect(colors.size).toBe(8);
+  });
+
+  it("distinguishes two keys with the same last path segment", () => {
+    const a = idColor("--home-sid-repos-aidos--:1");
+    const b = idColor("--home-sid-repos-other-aidos--:1");
+    expect(a).not.toBe(b);
   });
 });

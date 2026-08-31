@@ -16,9 +16,12 @@ import {
   displayDep,
   formatGateFraction,
   groupEvidenceByCriterion,
+  fullTicketId,
   hasCriteria,
+  idColor,
   ringPercent,
   stateLabel,
+  kindLabel,
   uncoveredCriteria,
 } from "./board-logic";
 import { EvidenceTags } from "./evidence-tags";
@@ -76,7 +79,7 @@ function renderCriterionGroup(
 
   const rows = group.rows.map((row, rowIndex) => (
     <div className="aidos-evidence-row-item" key={rowIndex}>
-      <span className="aidos-evidence-kind">{row.kind}</span>
+      <span className="aidos-evidence-kind">{kindLabel(row.kind)}</span>
       <span className="aidos-evidence-author">{row.author}</span>
       {typeof row.payload.criteria === "string" ? (
         <span className="aidos-evidence-meta">
@@ -371,6 +374,13 @@ export function DetailPanel(props: DetailPanelProps) {
   return (
     <>
       <div className="aidos-detail-head">
+        <span
+          className="aidos-id-badge"
+          style={{ background: idColor(fullTicketId(ticket)) }}
+          title={fullTicketId(ticket)}
+        >
+          {displayDep(fullTicketId(ticket))}
+        </span>
         <FieldEditor
           field="title"
           ticketId={props.ticketIdKey}
@@ -438,8 +448,6 @@ export function DetailPanel(props: DetailPanelProps) {
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
-      <p className="aidos-detail-body">{"#" + ticket.id}</p>
-      <EvidenceTags evidence={props.evidence} />
       {uncovered.length > 0 ? (
         <p className="aidos-detail-note">
           {uncovered.length + " uncovered criteria"}

@@ -10,7 +10,9 @@ import {
   badgeClass,
   displayDep,
   formatGateFraction,
+  fullTicketId,
   hasCriteria,
+  idColor,
   stateLabel,
 } from "./board-logic";
 import { ConfidenceRing } from "./confidence-ring";
@@ -33,12 +35,15 @@ export function TicketTile(props: TicketTileProps) {
   const badge = badgeClass(ticket.state);
 
   return (
-    <button
-      className={className}
-      onClick={props.onSelect}
-      title={ticket.title}
-    >
+    <button className={className} onClick={props.onSelect}>
       <div className="aidos-tile-top">
+        <span
+          className="aidos-id-badge"
+          style={{ background: idColor(fullTicketId(ticket)) }}
+          title={fullTicketId(ticket)}
+        >
+          {displayDep(fullTicketId(ticket))}
+        </span>
         <h3 className="aidos-tile-title">{ticket.title}</h3>
         <span className={badge}>{stateLabel(ticket.state)}</span>
       </div>

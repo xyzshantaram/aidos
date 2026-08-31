@@ -8,7 +8,7 @@
 
 import react from "react";
 
-import { evidenceKindCounts } from "./board-logic";
+import { evidenceKindCounts, kindLabel } from "./board-logic";
 import type { EvidenceRowLike } from "./board-logic";
 
 export interface EvidenceTagsProps {
@@ -26,7 +26,7 @@ export function EvidenceTags({ evidence }: EvidenceTagsProps) {
           className="aidos-evidence-tag"
           style={{ borderColor: count.color, color: count.color }}
         >
-          {count.kind + " " + count.count}
+          {kindLabel(count.kind) + " " + count.count}
         </span>
       ))}
     </div>

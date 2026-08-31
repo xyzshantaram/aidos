@@ -25,6 +25,16 @@
   --space-4: 2rem;
   --space-5: 2.5rem;
   --space-6: 3rem;
+
+  /* Id badge hues (U6): mid-saturation backgrounds that keep white text readable. */
+  --badge-hue-1: #4e6fa8;
+  --badge-hue-2: #7a5ea0;
+  --badge-hue-3: #2f8a7f;
+  --badge-hue-4: #a86a4e;
+  --badge-hue-5: #5f8a3c;
+  --badge-hue-6: #a85578;
+  --badge-hue-7: #3c7fa8;
+  --badge-hue-8: #8a8a3c;
 }
 
 /* ── 2. Typography + base ──────────────────────────────── */
@@ -43,7 +53,11 @@
   line-height: 1.5;
 }
 
-.aidos-root * {
+.aidos-root *,
+.aidos-detail,
+.aidos-detail *,
+.aidos-modal,
+.aidos-modal * {
   box-sizing: border-box;
 }
 
@@ -346,6 +360,8 @@
   align-items: baseline;
   font-size: 11px;
   line-height: 16px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .aidos-evidence-row-item .aidos-evidence-meta {
@@ -441,7 +457,7 @@
   line-height: 14px;
   border-radius: var(--radius-pill);
   padding: 0 8px;
-  color: var(--text-secondary);
+  color: #f9fafb;
   background: var(--surface);
 }
 
@@ -482,7 +498,24 @@
   color: #f9fafb;
 }
 
-.aidos-evidence-row,
+/* id badge — deterministic hue per workspace, white text (U6) */
+.aidos-id-badge {
+  height: 1.125rem;
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 0.375rem;
+  border: 0;
+  border-radius: 3px;
+  background: var(--surface-active);
+  background: var(--badge-hue-1);
+  color: #f9fafb;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: none;
+  line-height: 1.125rem;
+}
+
 .aidos-dep-row {
   display: flex;
   gap: 6px;
@@ -853,14 +886,7 @@
   color: var(--text-secondary);
 }
 
-/* confidence ring wrapper */
-.aidos-ring-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
+/* confidence ring */
 .aidos-ring {
   width: 64px;
   height: 64px;
@@ -909,6 +935,61 @@
   line-height: 16px;
   color: var(--text-secondary);
   margin: 0;
+}
+
+/* quick-facts summary table (U7) */
+.aidos-summary-table {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.aidos-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+.aidos-summary-row + .aidos-summary-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.aidos-summary-label {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.aidos-summary-value {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 16px;
+  color: var(--text-primary);
+}
+
+.aidos-summary-asterisk {
+  margin-left: 2px;
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+/* description section (U7, U8) */
+.aidos-description {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* collapsible sections (U9) */
+.aidos-collapsible {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px;
 }
 
 /* sort row — style select as text-input */
@@ -1180,6 +1261,7 @@
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
 }
 
 /* spoiler (submit-for-review) */
