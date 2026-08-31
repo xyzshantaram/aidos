@@ -32,6 +32,8 @@ import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
+import { getMerge, getPulledVersion, setMerge, setPulledVersion } from "./view-state";
+import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
 import type { CommentRecord, EvidenceRow } from "../kernel/types";
@@ -146,12 +148,6 @@ export function LocalTicketView(props: LocalTicketViewProps) {
   );
 }
 
-interface WorkspaceMerge {
-  tickets: Array<TicketViewType & { sourceSessionId: string; foreign: boolean }>;
-  evidence: Record<string, EvidenceRow[]>;
-  comments: Record<string, CommentRecord[]>;
-}
-
 function ProjectionReader(props: ProjectionReaderProps) {
   const sessionId = props.sessionId;
 
@@ -165,31 +161,35 @@ function ProjectionReader(props: ProjectionReaderProps) {
 
   // The workspace merge. The projection covers the own session only; the
   // workspaceTickets Remote adds every sibling session of the same
-  // workspace (live and closed) and is re-pulled whenever the own
-  // projection version changes or a foreign write resolves.
-  const [merge, setMerge] = react.useState<WorkspaceMerge | null>(null);
-  const mergeVersionRef = react.useRef(-1);
+  // workspace (live and closed). The merge lives in the module-level
+  // view-state store: the badge re-register remounts this component, and
+  // component state would drop the merge on every remount (the badge then
+  // flips 20 -> 0 -> 20 forever and the board renders empty).
+  const [merge, setMergeState] = react.useState(() => getMerge(sessionId));
   const ownVersion = ticketsProjection === undefined
-    ? -1
+    ? null
     : JSON.stringify(ticketsProjection).length + ":" + Object.keys(ticketsProjection as Record<string, unknown>).length;
   react.useEffect(function () {
-    if (!loaded) return;
+    if (!loaded || ownVersion === null) return;
+    // Skip the pull when this exact own-board version already landed: a
+    // badge remount re-runs the effect with unchanged inputs.
+    if (getPulledVersion(sessionId) === ownVersion) return;
+    setPulledVersion(sessionId, ownVersion);
     let cancelled = false;
     const pull = async function () {
       try {
         const result = await callAidosRemote("workspaceTickets", {}, sessionId);
         if (cancelled) return;
-        setMerge(result as unknown as WorkspaceMerge);
+        setMerge(sessionId, result as unknown as WorkspaceMerge);
+        setMergeState(result as unknown as WorkspaceMerge);
       } catch {
-        // The merge is additive; a failed pull leaves the own board intact.
-        if (!cancelled) setMerge(function (prev) { return prev; });
+        // The merge is additive; a failed pull leaves the cached board.
       }
     };
     void pull();
     return function () {
       cancelled = true;
     };
-    // Re-pull when the own board's shape changes (own version) or on mount.
   }, [loaded, sessionId, ownVersion]);
 
   // The effective board: the merged rows when a merge exists, else the own

@@ -5,6 +5,7 @@
 
 import { STATE_CHECKLIST_ORDER } from "./board-logic";
 import type { FilterState } from "./board-logic";
+import type { CommentRecord, EvidenceRow } from "../kernel/types";
 
 /** The applied filter state of one session. */
 export type AppliedState = FilterState;
@@ -98,4 +99,44 @@ export function badgeLabelFor(sessionId: string): string {
 export function badgeLabel(): string {
   const count = currentSessionId === null ? 0 : counts.get(currentSessionId) ?? 0;
   return count > 0 ? "Tickets (" + count + ")" : "Tickets";
+}
+
+// ---- the workspace merge store ----
+
+import type { TicketView } from "../kernel/projections";
+
+/**
+ * One workspaceTickets pull. Foreign rows are keyed
+ * <sourceSessionId>:<ticketId>; own rows plain ticketId.
+ */
+export interface WorkspaceMerge {
+  tickets: Array<TicketView & { sourceSessionId: string; foreign: boolean }>;
+  evidence: Record<string, EvidenceRow[]>;
+  comments: Record<string, CommentRecord[]>;
+}
+
+// Module-scope like the filter and badge stores: the badge re-register
+// remounts the board, and component state would reset to empty on every
+// remount — the merge must survive it.
+const mergeCache = new Map<string, WorkspaceMerge>();
+const mergePulledVersion = new Map<string, string>();
+
+/** The cached merge of one session, or null when none has landed yet. */
+export function getMerge(sessionId: string): WorkspaceMerge | null {
+  return mergeCache.get(sessionId) ?? null;
+}
+
+/** Store one merge for a session. */
+export function setMerge(sessionId: string, merge: WorkspaceMerge): void {
+  mergeCache.set(sessionId, merge);
+}
+
+/** The own-board version the last pull served, or null. */
+export function getPulledVersion(sessionId: string): string | null {
+  return mergePulledVersion.get(sessionId) ?? null;
+}
+
+/** Record the own-board version a pull covered. */
+export function setPulledVersion(sessionId: string, version: string): void {
+  mergePulledVersion.set(sessionId, version);
 }
