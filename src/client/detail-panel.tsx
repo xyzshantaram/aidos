@@ -81,7 +81,7 @@ function showError(error: unknown) {
 
 /**
  * The description panel: rendered markdown through marked, a muted note
- * when empty, and a Show more toggle over the clip threshold.
+ * when empty, and a pencil in the summary row that opens an inline editor.
  */
 function DescriptionPanel(props: {
   ticket: TicketView;
@@ -89,6 +89,9 @@ function DescriptionPanel(props: {
   agentId: string;
   onSaved: () => void;
 }) {
+  const [editing, setEditing] = react.useState(false);
+  const [draft, setDraft] = react.useState("");
+  const [saving, setSaving] = react.useState(false);
   const [expanded, setExpanded] = react.useState(false);
   const text = props.ticket.description;
   const empty = text.trim() === "";
@@ -98,8 +101,62 @@ function DescriptionPanel(props: {
     ? ""
     : String(marked.parse(text, { async: false }));
 
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await callAidosRemote(
+        "userSetTicket",
+        { ticketId: props.ticketIdKey, description: draft },
+        props.agentId,
+      );
+      showToast("Description saved", "success");
+      setEditing(false);
+      props.onSaved();
+    } catch (error) {
+      showError(error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function cancel() {
+    setDraft(text);
+    setEditing(false);
+  }
+
   let body: react.ReactNode;
-  if (empty) {
+  if (editing) {
+    body = (
+      <>
+        <textarea
+          value={draft}
+          disabled={saving}
+          onChange={(event) => {
+            setDraft(event.target.value);
+          }}
+        />
+        <div className="aidos-form-actions">
+          <button
+            className="aidos-btn aidos-btn-primary"
+            disabled={saving}
+            onClick={() => {
+              void save();
+            }}
+          >
+            Save
+          </button>
+          <button
+            className="aidos-btn"
+            disabled={saving}
+            onClick={cancel}
+          >
+            Cancel
+          </button>
+        </div>
+      </>
+    );
+  } else if (empty) {
     body = <p className="aidos-detail-note">No description.</p>;
   } else {
     body = (
@@ -126,18 +183,21 @@ function DescriptionPanel(props: {
     <details className="aidos-panel" open>
       <summary className="aidos-panel-head">
         <span className="aidos-panel-title">Description</span>
-      </summary>
-      <div className="aidos-panel-body">
-        <FieldEditor
-          field="description"
-          ticketId={props.ticketIdKey}
-          value={text}
-          agentId={props.agentId}
-          onSaved={props.onSaved}
+        <button
+          className="aidos-icon-btn"
+          title="Edit"
+          aria-label="Edit description"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(text);
+            setEditing(true);
+          }}
         >
-          {body}
-        </FieldEditor>
-      </div>
+          <PencilIcon />
+        </button>
+      </summary>
+      <div className="aidos-panel-body">{body}</div>
     </details>
   );
 }

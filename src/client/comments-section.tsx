@@ -21,9 +21,6 @@ const EMPTY_COMMENTS: CommentRecord[] = [];
 
 export function CommentsSection(props: CommentsSectionProps) {
   const comments = props.comments ?? EMPTY_COMMENTS;
-  // Collapse only the single-comment case. Zero comments (a new ticket) and
-  // two or more stay expanded so the composer stays visible.
-  const [collapsed, setCollapsed] = react.useState(comments.length === 1);
   const [draft, setDraft] = react.useState("");
   const [sending, setSending] = react.useState(false);
 
@@ -70,39 +67,31 @@ export function CommentsSection(props: CommentsSectionProps) {
   });
 
   return (
-    <div className="aidos-comments-section">
-      <div className="aidos-panel-head">
+    <details className="aidos-panel" open={comments.length !== 1}>
+      <summary className="aidos-panel-head">
         <h4 className="aidos-panel-title">Comments</h4>
-        <button
-          className="aidos-btn aidos-toggle-btn"
-          onClick={() => {
-            setCollapsed(!collapsed);
+      </summary>
+      <div className="aidos-panel-body">
+        {rows.length === 0 ? (
+          <p className="aidos-detail-note">No comments yet.</p>
+        ) : (
+          rows
+        )}
+        <textarea
+          className="aidos-comment-textarea"
+          value={draft}
+          placeholder="Add a comment. Ctrl+Enter sends."
+          onChange={(event) => {
+            setDraft(event.target.value);
           }}
-        >
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
-      </div>
-      {collapsed ? null : (
-        <>
-          {rows.length === 0 ? (
-            <p className="aidos-detail-note">No comments yet.</p>
-          ) : (
-            rows
-          )}
-          <textarea
-            className="aidos-comment-textarea"
-            value={draft}
-            placeholder="Add a comment. Ctrl+Enter sends."
-            onChange={(event) => {
-              setDraft(event.target.value);
-            }}
-            onKeyDown={(event) => {
-              if (event.ctrlKey && event.key === "Enter") {
-                event.preventDefault();
-                void send();
-              }
-            }}
-          />
+          onKeyDown={(event) => {
+            if (event.ctrlKey && event.key === "Enter") {
+              event.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <div className="aidos-form-actions">
           <button
             className="aidos-comment-send"
             disabled={sending || draft.trim() === ""}
@@ -110,8 +99,8 @@ export function CommentsSection(props: CommentsSectionProps) {
           >
             Send
           </button>
-        </>
-      )}
-    </div>
+        </div>
+      </div>
+    </details>
   );
 }

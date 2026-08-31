@@ -80,13 +80,15 @@ export function EvidenceAttachForm(props: EvidenceAttachFormProps) {
           }}
         />
       </div>
-      <button
-        className="aidos-btn aidos-btn-primary"
-        disabled={working || kind === ""}
-        type="submit"
-      >
-        {working ? "Working\u2026" : "Attach"}
-      </button>
+      <div className="aidos-form-actions">
+        <button
+          className="aidos-btn aidos-btn-primary"
+          disabled={working || kind === ""}
+          type="submit"
+        >
+          {working ? "Working\u2026" : "Attach"}
+        </button>
+      </div>
     </form>
   );
 }
