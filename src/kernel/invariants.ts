@@ -43,6 +43,7 @@ const SNAPSHOT_KEYS = [
   "dependsOn",
 ];
 const EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
+const EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
 const EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
 const PLAN_CHANGE_KEYS = ["kind", "version", "projectId", "plan", "at"];
 const PLAN_KEYS = ["frontmatter", "context", "rules"];
@@ -392,6 +393,31 @@ function validateEvidence(
   }
 }
 
+function validateEvidenceDetached(
+  state: AidosState,
+  raw: Record<string, unknown>,
+): void {
+  expectKeys(raw, EVIDENCE_DETACHED_KEYS, "evidence/detached");
+  if (raw.version !== 1) {
+    invariant("evidence/detached version must be 1");
+  }
+  expectInt(raw.ticketId, "ticket id", 1);
+  expectString(raw.rowKind, "evidence row kind");
+  if ((raw.rowKind as string).length === 0) {
+    invariant("evidence row kind must not be empty");
+  }
+  expectNumber(raw.at, "evidence at");
+  // Rule 7: at must not fall for that ticket. Ticket must exist.
+  const ticketId = raw.ticketId as TicketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`evidence references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
+  if (lastAt !== undefined && (raw.at as number) < lastAt) {
+    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
+  }
+}
+
 function validatePlanChange(
   _state: AidosState,
   raw: Record<string, unknown>,
@@ -547,6 +573,9 @@ export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
       return;
     case "evidence/attached":
       validateEvidence(state, raw);
+      return;
+    case "evidence/detached":
+      validateEvidenceDetached(state, raw);
       return;
     case "plan/change":
       validatePlanChange(state, raw);

@@ -14954,6 +14954,7 @@ var SNAPSHOT_KEYS = [
   "dependsOn"
 ];
 var EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
+var EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
 var EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
 var PLAN_CHANGE_KEYS = ["kind", "version", "projectId", "plan", "at"];
 var PLAN_KEYS = ["frontmatter", "context", "rules"];
@@ -15222,6 +15223,26 @@ function validateEvidence(state, raw) {
     invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
+function validateEvidenceDetached(state, raw) {
+  expectKeys(raw, EVIDENCE_DETACHED_KEYS, "evidence/detached");
+  if (raw.version !== 1) {
+    invariant("evidence/detached version must be 1");
+  }
+  expectInt(raw.ticketId, "ticket id", 1);
+  expectString(raw.rowKind, "evidence row kind");
+  if (raw.rowKind.length === 0) {
+    invariant("evidence row kind must not be empty");
+  }
+  expectNumber(raw.at, "evidence at");
+  const ticketId = raw.ticketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`evidence references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
+  if (lastAt !== void 0 && raw.at < lastAt) {
+    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
+  }
+}
 function validatePlanChange(_state, raw) {
   expectKeys(raw, PLAN_CHANGE_KEYS, "plan/change");
   if (raw.version !== 1) {
@@ -15354,6 +15375,9 @@ function validateAidosEvent(state, event) {
     case "evidence/attached":
       validateEvidence(state, raw);
       return;
+    case "evidence/detached":
+      validateEvidenceDetached(state, raw);
+      return;
     case "plan/change":
       validatePlanChange(state, raw);
       return;
@@ -15415,6 +15439,20 @@ function foldAidosEvents(state, event) {
         state.evidence.set(event.ticketId, [event.row]);
       }
       state.lastAt.set(event.ticketId, event.row.at);
+      return state;
+    }
+    case "evidence/detached": {
+      const rows = state.evidence.get(event.ticketId);
+      if (rows) {
+        const index = rows.findIndex(
+          (row) => row.at === event.at && row.kind === event.rowKind
+        );
+        if (index >= 0) {
+          const next = [...rows];
+          next.splice(index, 1);
+          state.evidence.set(event.ticketId, next);
+        }
+      }
       return state;
     }
     case "plan/change": {
@@ -16010,6 +16048,7 @@ var PACKAGE_NAME = "aidos";
 var AIDOS_EVENT_TYPES = /* @__PURE__ */ new Set([
   "ticket/change",
   "evidence/attached",
+  "evidence/detached",
   "plan/change",
   "comment/added",
   "aidos/refusal",
@@ -16190,13 +16229,42 @@ function applyTicketsProjection(state, event) {
       evidence: { ...state.evidence, [id]: [...rows, event.data.row] }
     };
   }
+  if (event.type === "evidence/detached") {
+    const id = String(event.data.ticketId);
+    const rows = state.evidence[id];
+    if (rows === void 0) return state;
+    const index = rows.findIndex(
+      (row) => row.at === event.data.at && row.kind === event.data.rowKind
+    );
+    if (index < 0) return state;
+    const next = [...rows];
+    next.splice(index, 1);
+    return {
+      tickets: state.tickets,
+      evidence: { ...state.evidence, [id]: next }
+    };
+  }
   return state;
 }
 function applyEvidenceProjection(state, event) {
-  if (event.type !== "evidence/attached") return state;
-  const id = String(event.data.ticketId);
-  const rows = state[id] ?? [];
-  return { ...state, [id]: [...rows, event.data.row] };
+  if (event.type === "evidence/attached") {
+    const id = String(event.data.ticketId);
+    const rows = state[id] ?? [];
+    return { ...state, [id]: [...rows, event.data.row] };
+  }
+  if (event.type === "evidence/detached") {
+    const id = String(event.data.ticketId);
+    const rows = state[id];
+    if (rows === void 0) return state;
+    const index = rows.findIndex(
+      (row) => row.at === event.data.at && row.kind === event.data.rowKind
+    );
+    if (index < 0) return state;
+    const next = [...rows];
+    next.splice(index, 1);
+    return { ...state, [id]: next };
+  }
+  return state;
 }
 function applyPlanProjection(state, event) {
   if (event.type !== "plan/change") return state;
@@ -16271,8 +16339,8 @@ function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var DEFAULT_PHASE_TITLE = "Untitled phase";
-var _userAddComment_dec, _userMoveTicket_dec, _userAttachEvidence_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
+var _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -16507,6 +16575,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   userAttachEvidence(agent, args) {
     return this._attachEvidence(agent, args, "user");
+  }
+  userDetachEvidence(agent, args) {
+    return this._detachEvidence(agent, args);
   }
   /** Move one ticket as the agent. The gate enforces every transition. */
   agentMoveTicket(agent, args) {
@@ -16838,6 +16909,36 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     const attached = this._attachEvidenceInternal(agent, ticketId, def.id, payload, actor);
     return { ticketId, kind: args.kind, payload: attached };
+  }
+  /**
+   * One user-actor evidence removal. The row is named by `at` + kind, both
+   * validated against the live row list; the event rides the same
+   * _commit path as attach so the fold and the projections stay in sync.
+   */
+  _detachEvidence(agent, args) {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const rows = cache.state.evidence.get(ticketId) ?? [];
+    const index = rows.findIndex(
+      (row) => row.at === args.at && row.kind === args.rowKind
+    );
+    if (index < 0) {
+      throw new BadPayloadError("no evidence row matches the given at/kind");
+    }
+    this._commit(agent, {
+      kind: "evidence/detached",
+      version: 1,
+      ticketId,
+      at: args.at,
+      rowKind: args.rowKind
+    });
+    return { ticketId, removed: 1 };
   }
   /**
    * One gate-checked move with the actor pinned at the entry point. The
@@ -17225,6 +17326,7 @@ __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
+__decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
 __decoratorMetadata(_init, AidosService);
@@ -17250,6 +17352,20 @@ var BOARD_TOOLS = [
   "plan_import"
 ];
 
+// src/tools/preset-gate.ts
+var AIDOS_PRESET_ID = "aidos";
+function isAidosAgent(ctx, agent) {
+  const presets = ctx.get("agentPresets");
+  if (presets === void 0) return true;
+  let composed;
+  try {
+    composed = presets.composedPreset(agent.ctx);
+  } catch {
+    return true;
+  }
+  return composed === void 0 || composed === AIDOS_PRESET_ID;
+}
+
 // src/tools/guard.ts
 var BOARD_TOOLS2 = BOARD_TOOLS;
 var BOARD_TOOL_SET = new Set(BOARD_TOOLS2);
@@ -17259,6 +17375,7 @@ function installAidosGuard(ctx) {
     if (!BOARD_TOOL_SET.has(execution.name)) return void 0;
     const agent = execution.agent;
     if (!agent) return "the board tools require a calling agent";
+    if (!isAidosAgent(ctx, agent)) return void 0;
     if (delegationDepthOf2(agent) !== 0) {
       return ORCHESTRATOR_ONLY_MESSAGE;
     }
@@ -17324,6 +17441,7 @@ function installAidosMask(ctx) {
   }
   const denyFor = (agent) => {
     if (!aidos) return null;
+    if (!isAidosAgent(ctx, agent)) return [];
     let states;
     try {
       states = aidos.ticketStates(agent);
@@ -17419,6 +17537,7 @@ var FsWriteRefused = class extends Error {
 };
 function writeBoundaryReason(ctx, agent, path) {
   if (agent === void 0) return void 0;
+  if (!isAidosAgent(ctx, agent)) return void 0;
   try {
     const scratchRoot = scratchRootForAgent(agent);
     if (isUnder(scratchRoot, path)) return void 0;
@@ -17453,12 +17572,7 @@ function fsIntentListener(ctx, target, actor, next) {
   return next();
 }
 function installAllowlistGuard(ctx) {
-  const ownSession = ctx.get("agents")?.currentInitiator()?.session;
   const listener = (target, actor, next) => {
-    if (ownSession !== void 0) {
-      const agent = actor?.agent;
-      if (agent !== void 0 && agent.session !== ownSession) return next();
-    }
     return fsIntentListener(ctx, target, actor, next);
   };
   const on = ctx.on;
@@ -17891,6 +18005,20 @@ function apply(ctx, config2) {
     order: 113,
     text: aidosGuidanceText(ctx)
   });
+  {
+    const on = ctx.on;
+    ctx.effect(
+      () => on("system-prompt/assemble", (assembly, context, next) => {
+        const agent = context.agent;
+        if (agent === void 0) return next();
+        if (isAidosAgent(ctx, agent)) return next();
+        assembly.sections = assembly.sections.filter(
+          (section) => section.name !== "tool:aidos"
+        );
+        return next();
+      })
+    );
+  }
   registerGetTickets(ctx);
   registerSetTicket(ctx);
   registerAttachEvidence(ctx);

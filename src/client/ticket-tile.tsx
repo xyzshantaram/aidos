@@ -38,15 +38,18 @@ export function TicketTile(props: TicketTileProps) {
       onClick={props.onSelect}
       title={ticket.title}
     >
-      <h3 className="aidos-tile-title">{ticket.title}</h3>
-      <div className="aidos-ring-wrap">
-        <ConfidenceRing ticket={ticket} />
+      <div className="aidos-tile-top">
+        <h3 className="aidos-tile-title">{ticket.title}</h3>
+        <span className={badge}>{stateLabel(ticket.state)}</span>
       </div>
+      <p className="aidos-tile-preview">{ticket.description}</p>
       <div className="aidos-tile-meta">
         <span className="aidos-tile-gate">
           {formatGateFraction(ticket.gateFraction, hasCriteria(ticket))}
         </span>
-        <span className={badge}>{stateLabel(ticket.state)}</span>
+        <span className="aidos-ring-inline">
+          <ConfidenceRing ticket={ticket} />
+        </span>
       </div>
       {props.active === true ? (
         <span className="aidos-active-marker">Active</span>

@@ -30,6 +30,7 @@ import { MarkDoneModal } from "./mark-done-modal";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
+import type { EvidenceRowLike } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow, CommentRecord } from "../kernel/types";
 
@@ -50,6 +51,8 @@ export interface DetailViewProps extends DetailPanelProps {
 /** One criterion row: the label, an uncovered tint when nothing addresses it. */
 function renderCriterionGroup(
   group: ReturnType<typeof groupEvidenceByCriterion>[number],
+  onDelete: (row: EvidenceRowLike) => void,
+  deletingAt: number | null,
 ) {
   const isUngrouped = group.criterion === "";
   const rowClass = isUngrouped
@@ -72,6 +75,16 @@ function renderCriterionGroup(
           {"criterion: " + row.payload.criteria}
         </span>
       ) : null}
+      <button
+        className="aidos-evidence-delete"
+        title="Delete this evidence row"
+        disabled={deletingAt !== null}
+        onClick={() => {
+          onDelete(row);
+        }}
+      >
+        {"\u2715"}
+      </button>
     </div>
   ));
 
@@ -87,14 +100,20 @@ function renderCriterionGroup(
 }
 
 /** The collapsible evidence section: criteria in order, ungrouped last. */
-function renderEvidenceSection(props: DetailPanelProps) {
+function renderEvidenceSection(
+  props: DetailPanelProps,
+  onDeleteEvidence: (row: EvidenceRowLike) => void,
+  deletingAt: number | null,
+) {
   const groups = groupEvidenceByCriterion(props.ticket.criteria, props.evidence);
   const body = (
     <div className="aidos-evidence-body">
       {groups.length === 0 && props.evidence.length === 0 ? (
         <p className="aidos-detail-note">No evidence rows yet.</p>
       ) : (
-        groups.map((group) => renderCriterionGroup(group))
+        groups.map((group) =>
+          renderCriterionGroup(group, onDeleteEvidence, deletingAt),
+        )
       )}
     </div>
   );
@@ -276,6 +295,29 @@ export function DetailPanel(props: DetailPanelProps) {
   const ticket = props.ticket;
   const badge = badgeClass(ticket.state);
   const uncovered = uncoveredCriteria(ticket.criteria, props.evidence);
+  const [deletingAt, setDeletingAt] = react.useState<number | null>(null);
+
+  async function deleteEvidence(row: EvidenceRowLike) {
+    if (deletingAt !== null) return;
+    const at = row.at ?? 0;
+    setDeletingAt(at);
+    try {
+      await callAidosRemote(
+        "userDetachEvidence",
+        { ticketId: ticket.id, at, rowKind: row.kind },
+        props.agentId,
+      );
+      showToast("Evidence deleted", "success");
+    } catch (error) {
+      if (error instanceof AidosRemoteError) {
+        showToast(error.message, "refusal");
+      } else {
+        showToast(String(error), "refusal");
+      }
+    } finally {
+      setDeletingAt(null);
+    }
+  }
 
   return (
     <>
@@ -339,7 +381,13 @@ export function DetailPanel(props: DetailPanelProps) {
           {uncovered.length + " uncovered criteria"}
         </p>
       ) : null}
-      {renderEvidenceSection(props)}
+      {renderEvidenceSection(
+        props,
+        (row) => {
+          void deleteEvidence(row);
+        },
+        deletingAt,
+      )}
     </>
   );
 }

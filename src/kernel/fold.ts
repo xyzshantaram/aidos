@@ -76,6 +76,22 @@ export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosStat
       state.lastAt.set(event.ticketId, event.row.at);
       return state;
     }
+    case "evidence/detached": {
+      // Drop the row whose stamped `at` and kind both match. A mismatch
+      // leaves the log entry inert (the row list is the read authority).
+      const rows = state.evidence.get(event.ticketId);
+      if (rows) {
+        const index = rows.findIndex(
+          (row) => row.at === event.at && row.kind === event.rowKind,
+        );
+        if (index >= 0) {
+          const next = [...rows];
+          next.splice(index, 1);
+          state.evidence.set(event.ticketId, next);
+        }
+      }
+      return state;
+    }
     case "plan/change": {
       // Whole-value replace.
       state.plans.set(event.projectId, event.plan);

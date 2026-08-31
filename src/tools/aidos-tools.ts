@@ -39,6 +39,7 @@ import { installAidosGuard, ORCHESTRATOR_ONLY_MESSAGE } from "./guard";
 import { installAidosMask } from "./mask";
 import { installAllowlistGuard } from "./allowlist";
 import { registerScratchTools, scratchRootForAgent } from "./scratch";
+import { isAidosAgent } from "./preset-gate";
 export const name = "aidos-tools";
 
 export const inject = [
@@ -528,11 +529,40 @@ export function apply(ctx: Context, config: unknown): void {
   // the seams that actually run per agent: the mask/guard/allowlist key off
   // the calling agent, and bashContext/project creation check
   // composedPreset(agent.ctx) at call time in aidos-core.ts.
+  // The section text is a provider, not a static string: assemblies happen
+  // per agent, and the standing mount makes this registration process-global,
+  // so a non-aidos agent's prompt must not carry aidos guidance. The provider
+  // receives no agent, so the drop happens in the assemble waterfall below
+  // and this provider stays a plain string holder.
   ctx.systemPrompt.section({
     name: "tool:aidos",
     order: 113,
     text: aidosGuidanceText(ctx),
   });
+  {
+    const on = ctx.on as unknown as {
+      (
+        name: "system-prompt/assemble",
+        handler: (
+          assembly: { sections: Array<{ name: string; text: string }> },
+          context: { agent?: unknown },
+          next: () => unknown,
+        ) => void,
+      ): () => void;
+    };
+    ctx.effect(() =>
+      on("system-prompt/assemble", (assembly, context, next) => {
+        const agent = context.agent as import("@deepseek-ai/dsh-agent").Agent | undefined;
+        if (agent === undefined) return next();
+        if (isAidosAgent(ctx, agent)) return next();
+        // Non-aidos agent: strip the aidos section from its prompt.
+        assembly.sections = assembly.sections.filter(
+          (section) => section.name !== "tool:aidos",
+        );
+        return next();
+      }),
+    );
+  }
   registerGetTickets(ctx);
   registerSetTicket(ctx);
   registerAttachEvidence(ctx);

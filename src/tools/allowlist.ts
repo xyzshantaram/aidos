@@ -13,6 +13,7 @@ import type { ToolExecution, ToolGuard } from "@deepseek-ai/dsh-tools";
 import { isAbsolute, join, relative, resolve } from "path";
 import type { TicketView } from "../kernel/projections";
 import { scratchRootForAgent } from "./scratch";
+import { isAidosAgent } from "./preset-gate";
 
 /** The fs path tools the child-scope guard covers. */
 const PATH_TOOLS = new Set<string>(["read", "write", "edit"]);
@@ -59,6 +60,12 @@ export function writeBoundaryReason(
   path: string,
 ): string | undefined {
   if (agent === undefined) return undefined;
+  // Standing-mount listeners are process-global (the mount's scope admits
+  // untagged dispatchers), so this runs for every session. A session whose
+  // composed preset is not aidos is outside the write boundary entirely:
+  // pass the write through. The check uses the real agent context, so
+  // composedPreset resolves correctly (same idiom as the bashContext gate).
+  if (!isAidosAgent(ctx, agent)) return undefined;
   // Scratch root is exempt from the allowlist: the agent writes there freely.
   try {
     const scratchRoot = scratchRootForAgent(agent);
@@ -125,18 +132,11 @@ function fsIntentListener(
  * staleness bookkeeping.
  */
 export function installAllowlistGuard(ctx: Context): () => void {
-  // Capture the owning session at registration time. During apply(ctx) the
-  // current initiator is the agent whose preset is being mounted. The
-  // listener compares every write's agent session against this reference;
-  // writes from other sessions (including standard sessions) pass through
-  // immediately without calling into the aidos service.
-  const ownSession = ctx.get("agents")?.currentInitiator()?.session;
-
+  // The per-agent preset check lives in writeBoundaryReason: this listener
+  // sees every session's writes (the standing mount is process-global), and
+  // an ownSession captured at apply time was always undefined — the mount
+  // applies before any agent exists — so the old pass-through never armed.
   const listener = (target: FsTarget, actor: object | undefined, next: () => unknown) => {
-    if (ownSession !== undefined) {
-      const agent = (actor as { agent?: Agent } | undefined)?.agent;
-      if (agent !== undefined && agent.session !== ownSession) return next();
-    }
     return fsIntentListener(ctx, target, actor, next);
   };
   const on = ctx.on as unknown as (

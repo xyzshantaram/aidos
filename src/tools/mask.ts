@@ -24,6 +24,7 @@ import type { Session } from "@deepseek-ai/dsh-session";
 import { scopeOf } from "@deepseek-ai/dsh-scope";
 import type { TicketState } from "../kernel/types";
 import { BOARD_TOOLS } from "./board-tools";
+import { isAidosAgent } from "./preset-gate";
 
 /** The reserved code-mode transport, which restrictions must never name. */
 const RUN_CODE = "run_code";
@@ -126,6 +127,10 @@ export function installAidosMask(ctx: Context): () => void {
   }
   const denyFor = (agent: Agent): string[] | null => {
     if (!aidos) return null;
+    // Standing-mount wiring sees every session's agents. A session whose
+    // composed preset is not aidos must keep its full tool surface: lift any
+    // restriction the mask previously applied and deny nothing.
+    if (!isAidosAgent(ctx, agent)) return [];
     let states: TicketState[];
     try {
       states = aidos.ticketStates(agent);

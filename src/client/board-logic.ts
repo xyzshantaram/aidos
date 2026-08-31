@@ -35,6 +35,8 @@ export interface EvidenceRowLike {
   kind: string;
   payload: Record<string, unknown>;
   author?: string;
+  /** The row's stamped timestamp; the detach Remote names rows by it. */
+  at?: number;
 }
 
 /** The state checklist order. Done is always last. */

@@ -67,9 +67,30 @@ function registerTicketsTab(slots: SlotRegistry): () => void {
  * Plugin body: inject the styles once, then own one visibility effect.
  * The effect subscribes to the sessions list snapshot and registers or
  * disposes the Tickets entry as the current session's preset changes.
+ *
+ * The registration handle is shared with the badge callback: reportCount
+ * fires during render on every projection update, and refreshing the tab
+ * label means dispose + re-register the identical entry (the tab header only
+ * re-reads the label thunk through re-registration). Registering twice
+ * without disposing throws "already has an entry with id tickets", which
+ * crashes the slot entry and blanks the pane.
  */
 export function apply(ctx: Context): void {
   injectStyles();
+
+  // Owned by the visibility effect below; read by the badge callback.
+  let registration: (() => void) | null = null;
+  let want = false;
+
+  function reconcile(slots: SlotRegistry): void {
+    if (want && registration === null) {
+      registration = registerTicketsTab(slots);
+    }
+    if (!want && registration !== null) {
+      registration();
+      registration = null;
+    }
+  }
 
   ctx.effect(function () {
     const slots = ctx.get("slots") as SlotRegistry | undefined;
@@ -83,52 +104,46 @@ export function apply(ctx: Context): void {
     ) {
       // No sessions store on this context (harness, older runtime): keep the
       // tab always registered, matching the pre-gate behavior.
-      const dispose = registerTicketsTab(slots);
+      want = true;
+      reconcile(slots);
       return function () {
-        dispose();
+        want = false;
+        reconcile(slots);
       };
     }
 
-    let registration: (() => void) | null = null;
-    const list: { current: SessionListState } = { current: sessions.list.getSnapshot() };
+    let list: SessionListState = sessions.list.getSnapshot();
 
     const sync = function (): void {
-      const preset = list.current.current
-        ? list.current.byId[list.current.current]?.agentPreset
+      const preset = list.current
+        ? list.byId[list.current]?.agentPreset
         : undefined;
       // undefined = the deployment composes no presets; keep the tab.
-      const want = preset === undefined || preset === AIDOS_PRESET;
-      if (want && registration === null) {
-        registration = registerTicketsTab(slots);
-      }
-      if (!want && registration !== null) {
-        registration();
-        registration = null;
-      }
+      want = preset === undefined || preset === AIDOS_PRESET;
+      reconcile(slots);
     };
 
     const disposeSubscribe = sessions.list.subscribe(function () {
-      list.current = sessions.list.getSnapshot();
+      list = sessions.list.getSnapshot();
       sync();
     });
     sync();
 
     return function () {
       disposeSubscribe();
-      if (registration !== null) {
-        registration();
-        registration = null;
-      }
+      want = false;
+      reconcile(slots);
     };
   }, "aidos: tickets tab visibility");
 
   // A badge change re-registers the entry. The tab header re-reads the label,
-  // which is the only way the tab text updates live. The callback re-reads
-  // the live slots service, so a visible tab re-registers and a hidden one
-  // stays hidden.
+  // which is the only way the tab text updates live. Dispose first, and only
+  // while the tab is visible: a hidden tab has no registration to refresh.
   setCountCallback(function () {
+    if (registration === null) return;
     const slots = ctx.get("slots") as SlotRegistry | undefined;
     if (slots === undefined) return;
-    registerTicketsTab(slots);
+    registration();
+    registration = registerTicketsTab(slots);
   });
 }

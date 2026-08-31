@@ -13,6 +13,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { BOARD_TOOLS as SHARED_BOARD_TOOLS } from "./board-tools";
+import { isAidosAgent } from "./preset-gate";
 
 /** The six board tools. Shared by the guard and the tool bodies' re-check. */
 export const BOARD_TOOLS = SHARED_BOARD_TOOLS;
@@ -29,6 +30,9 @@ export function installAidosGuard(ctx: Context): () => void {
     if (!BOARD_TOOL_SET.has(execution.name)) return undefined;
     const agent = execution.agent;
     if (!agent) return "the board tools require a calling agent";
+    // The guard is process-global (standing mount): a non-aidos agent has no
+    // board tools to delegate in the first place, so let its calls pass.
+    if (!isAidosAgent(ctx, agent)) return undefined;
     if (delegationDepthOf(agent) !== 0) {
       return ORCHESTRATOR_ONLY_MESSAGE;
     }

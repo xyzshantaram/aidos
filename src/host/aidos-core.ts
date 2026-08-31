@@ -73,7 +73,7 @@ import {
   UnknownProject,
   UnknownTicket,
 } from "../kernel/types";
-import type { AidosEvent } from "../kernel/events";
+import type { AidosEvent, EvidenceDetachedEvent } from "../kernel/events";
 import { AIDOS_EVENT_TYPES, foldSessionEvent, registerAidosInvariant } from "./invariant";
 import { aidosSessionEventTypesRegistered, registerAidosSessionEventTypes } from "./session-events";
 
@@ -108,6 +108,7 @@ declare module "@deepseek-ai/dsh-session/types" {
   interface SessionEventMap {
     "ticket/change": import("../kernel/events").TicketChangeEvent;
     "evidence/attached": import("../kernel/events").EvidenceAttachedEvent;
+    "evidence/detached": import("../kernel/events").EvidenceDetachedEvent;
     "plan/change": import("../kernel/events").PlanChangeEvent;
     "comment/added": import("../kernel/events").CommentAddedEvent;
     "aidos/refusal": import("../kernel/events").RefusalEvent;
@@ -250,6 +251,21 @@ export function applyTicketsProjection(
       evidence: { ...state.evidence, [id]: [...rows, event.data.row] },
     };
   }
+  if (event.type === "evidence/detached") {
+    const id = String(event.data.ticketId);
+    const rows = state.evidence[id];
+    if (rows === undefined) return state;
+    const index = rows.findIndex(
+      (row) => row.at === event.data.at && row.kind === event.data.rowKind,
+    );
+    if (index < 0) return state;
+    const next = [...rows];
+    next.splice(index, 1);
+    return {
+      tickets: state.tickets,
+      evidence: { ...state.evidence, [id]: next },
+    };
+  }
   return state;
 }
 
@@ -258,10 +274,24 @@ export function applyEvidenceProjection(
   state: Record<string, EvidenceRow[]>,
   event: SessionEvent,
 ): Record<string, EvidenceRow[]> {
-  if (event.type !== "evidence/attached") return state;
-  const id = String(event.data.ticketId);
-  const rows = state[id] ?? [];
-  return { ...state, [id]: [...rows, event.data.row] };
+  if (event.type === "evidence/attached") {
+    const id = String(event.data.ticketId);
+    const rows = state[id] ?? [];
+    return { ...state, [id]: [...rows, event.data.row] };
+  }
+  if (event.type === "evidence/detached") {
+    const id = String(event.data.ticketId);
+    const rows = state[id];
+    if (rows === undefined) return state;
+    const index = rows.findIndex(
+      (row) => row.at === event.data.at && row.kind === event.data.rowKind,
+    );
+    if (index < 0) return state;
+    const next = [...rows];
+    next.splice(index, 1);
+    return { ...state, [id]: next };
+  }
+  return state;
 }
 
 /** The projection-grade fold of the aidos.plan unit. */
@@ -759,6 +789,21 @@ registerAidosSessionEventTypes(ctx);
     return this._attachEvidence(agent, args, "user");
   }
 
+  /**
+   * The user-actor detach path, exported over the typert Remote surface.
+   * Removes one evidence row the board shows: the row is identified by its
+   * stamped `at` plus its kind. Any row is detachable here (an agent row the
+   * user discards, or a mistaken user row); the agent has no detach path —
+   * evidence is append-only for the agent, per SPEC-B1 section 5.
+   */
+  @Remote("userDetachEvidence")
+  userDetachEvidence(agent: Agent, args: { ticketId: number; at: number; rowKind: string }): {
+    ticketId: number;
+    removed: number;
+  } {
+    return this._detachEvidence(agent, args);
+  }
+
   /** Move one ticket as the agent. The gate enforces every transition. */
   agentMoveTicket(agent: Agent, args: MoveTicketArgs): {
     ticketId: number;
@@ -1163,6 +1208,40 @@ registerAidosSessionEventTypes(ctx);
     }
     const attached = this._attachEvidenceInternal(agent, ticketId, def.id, payload, actor);
     return { ticketId, kind: args.kind, payload: attached };
+  }
+
+  /**
+   * One user-actor evidence removal. The row is named by `at` + kind, both
+   * validated against the live row list; the event rides the same
+   * _commit path as attach so the fold and the projections stay in sync.
+   */
+  private _detachEvidence(
+    agent: Agent,
+    args: { ticketId: number; at: number; rowKind: string },
+  ): { ticketId: number; removed: number } {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const rows = cache.state.evidence.get(ticketId) ?? [];
+    const index = rows.findIndex(
+      (row) => row.at === args.at && row.kind === args.rowKind,
+    );
+    if (index < 0) {
+      throw new BadPayloadError("no evidence row matches the given at/kind");
+    }
+    this._commit(agent, {
+      kind: "evidence/detached",
+      version: 1,
+      ticketId,
+      at: args.at,
+      rowKind: args.rowKind,
+    });
+    return { ticketId, removed: 1 };
   }
 
   /**

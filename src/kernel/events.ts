@@ -33,6 +33,19 @@ export interface EvidenceAttachedEvent {
   row: EvidenceRow;
 }
 
+/**
+ * One evidence row removed from a ticket. The row is identified by its
+ * stamped `at` within the ticket's row list (monotonic per ticket, so it
+ * names the row to drop); `kind` rides along as a sanity check for the fold.
+ */
+export interface EvidenceDetachedEvent {
+  kind: "evidence/detached";
+  version: 1;
+  ticketId: TicketId;
+  at: number;
+  rowKind: string;
+}
+
 /** One whole-value plan replace. */
 export interface PlanChangeEvent {
   kind: "plan/change";
@@ -99,6 +112,7 @@ export interface PhaseSetEvent {
 export type AidosEvent =
   | TicketChangeEvent
   | EvidenceAttachedEvent
+  | EvidenceDetachedEvent
   | PlanChangeEvent
   | CommentAddedEvent
   | RefusalEvent

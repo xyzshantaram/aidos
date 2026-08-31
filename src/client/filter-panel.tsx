@@ -274,22 +274,138 @@ export function FilterPanel(props: FilterPanelProps) {
     </div>
   );
 
+  // Horizontal filter bar: state chips, sort, and search inline on top of
+  // the grid, so the whole width goes to ticket columns. `collapsed` hides
+  // everything but the toggle.
+  const stateChips = (
+    <div className="aidos-filter-chips">
+      {STATE_CHECKLIST_ORDER.map((state) => {
+        const checked = staged.stateIds.includes(state);
+        const count = props.tickets.filter((t) => t.state === state).length;
+        return (
+          <button
+            key={state}
+            className={
+              "aidos-filter-chip" + (checked ? " aidos-filter-chip-on" : "")
+            }
+            onClick={() => {
+              toggleState(state);
+            }}
+          >
+            {stateLabel(state)}
+            <span className="aidos-check-count">{String(count)}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className="aidos-sidebar">
-      <div className="aidos-panel-head">
-        <h3 className="aidos-panel-title">Filters</h3>
+    <div className="aidos-filterbar">
+      <div className="aidos-filterbar-left">
+        {stateChips}
+        {props.projects === undefined ? null : props.projects.length === 0 ? null : (
+          <select
+            className="aidos-filter-project"
+            value={
+              staged.projectIds === null
+                ? "all"
+                : staged.projectIds.join(",")
+            }
+            onChange={(event: react.ChangeEvent<HTMLSelectElement>) => {
+              const value = event.target.value;
+              if (value === "all") {
+                updateStaged({ ...staged, projectIds: null });
+                return;
+              }
+              updateStaged({
+                ...staged,
+                projectIds: value === "" ? [] : value.split(",").map(Number),
+              });
+            }}
+          >
+            <option value="all">All projects</option>
+            {props.projects.map((project) => (
+              <option key={project.id} value={String(project.id)}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        )}
+        <div className="aidos-sort-row">
+          <select
+            value={staged.sortKey}
+            onChange={(event: react.ChangeEvent<HTMLSelectElement>) => {
+              updateStaged({
+                ...staged,
+                sortKey: event.target.value as AppliedState["sortKey"],
+              });
+            }}
+          >
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.key} value={option.key}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            className="aidos-btn aidos-toggle-btn"
+            title={staged.descending ? "Sort ascending" : "Sort descending"}
+            aria-label={staged.descending ? "Sort ascending" : "Sort descending"}
+            onClick={() => {
+              updateStaged({ ...staged, descending: !staged.descending });
+            }}
+          >
+            {staged.descending ? "\u2193" : "\u2191"}
+          </button>
+        </div>
+        <div className="aidos-search-box aidos-filterbar-search">
+          <input
+            className="aidos-search-input"
+            type="text"
+            placeholder="Title or id"
+            value={searchInput}
+            onChange={(event) => {
+              updateSearch(event.target.value);
+            }}
+            onFocus={() => {
+              setFocused(true);
+            }}
+            onBlur={() => {
+              window.setTimeout(function () {
+                setFocused(false);
+              }, 120);
+            }}
+          />
+          {focused && suggestions.length > 0 ? (
+            <div className="aidos-autocomplete">
+              {suggestions.map((ticket) => (
+                <button
+                  className="aidos-suggestion"
+                  key={ticket.id}
+                  onMouseDown={(event: react.MouseEvent<HTMLButtonElement>) => {
+                    event.preventDefault();
+                    clearSearch();
+                    props.onJump(ticket.id);
+                  }}
+                >
+                  <span className="aidos-suggestion-title">{ticket.title}</span>
+                  <span className="aidos-ticket-id-badge">{"#" + ticket.id}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <button
-          className="aidos-btn aidos-sidebar-toggle"
-          onClick={props.onToggleCollapsed}
+          className={dirty ? "aidos-btn aidos-btn-dot" : "aidos-btn"}
+          onClick={apply}
         >
-          {props.collapsed ? "Show" : "Hide"}
+          Apply
+        </button>
+        <button className="aidos-btn" onClick={reset}>
+          Reset
         </button>
       </div>
-      {props.collapsed ? null : projectRows}
-      {props.collapsed ? null : stateRows}
-      {props.collapsed ? null : sortRows}
-      {props.collapsed ? null : searchSection}
-      {props.collapsed ? null : actionRows}
     </div>
   );
 }
