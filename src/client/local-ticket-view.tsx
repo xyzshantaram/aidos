@@ -32,7 +32,7 @@ import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getMerge, getPulledVersion, setMerge, setPulledVersion } from "./view-state";
+import { getMerge, getPulledVersion, isMergePulling, setMerge, setMergePulling, setPulledVersion } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -166,6 +166,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   // component state would drop the merge on every remount (the badge then
   // flips 20 -> 0 -> 20 forever and the board renders empty).
   const [merge, setMergeState] = react.useState(() => getMerge(sessionId));
+  const [mergePending, setMergePending] = react.useState(() => isMergePulling(sessionId) && getMerge(sessionId) === null);
   const ownVersion = ticketsProjection === undefined
     ? null
     : JSON.stringify(ticketsProjection).length + ":" + Object.keys(ticketsProjection as Record<string, unknown>).length;
@@ -174,7 +175,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
     // Skip the pull when this exact own-board version already landed: a
     // badge remount re-runs the effect with unchanged inputs.
     if (getPulledVersion(sessionId) === ownVersion) return;
-    setPulledVersion(sessionId, ownVersion);
+    const alreadyPulling = isMergePulling(sessionId);
+    setMergePulling(sessionId, true);
+    setMergePending(getMerge(sessionId) === null);
     let cancelled = false;
     const pull = async function () {
       try {
@@ -183,12 +186,20 @@ function ProjectionReader(props: ProjectionReaderProps) {
         // mid-pull: the remount skips re-pulling for the same version, so
         // the cache write is what delivers the merge across the remount.
         setMerge(sessionId, result as unknown as WorkspaceMerge);
+        setMergePulling(sessionId, false);
         if (cancelled) return;
         setMergeState(result as unknown as WorkspaceMerge);
+        setMergePending(false);
       } catch {
-        // The merge is additive; a failed pull leaves the cached board.
+        setMergePulling(sessionId, false);
+        if (cancelled) return;
+        setMergePending(false);
       }
     };
+    // A remount while the first pull runs must not fire a second Remote
+    // call; the in-flight marker dedupes and the mounted flag re-syncs the
+    // indicator from the module store.
+    if (alreadyPulling) return;
     void pull();
     return function () {
       cancelled = true;
@@ -411,6 +422,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
     />
   );
 
+  const mergeLoading = mergePending && rawTickets.length === 0;
   let body;
   if (error !== null) {
     body = error;
@@ -420,6 +432,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
         {[0, 1, 2, 3, 4, 5].map((index) => (
           <div className="aidos-skeleton-tile" key={index} />
         ))}
+      </div>
+    );
+  } else if (mergeLoading) {
+    body = (
+      <div className="aidos-merge-loading" role="status">
+        <span className="aidos-merge-spinner" aria-hidden="true" />
+        <span>Loading workspace tickets…</span>
       </div>
     );
   } else {

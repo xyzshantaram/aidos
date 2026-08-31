@@ -140,3 +140,21 @@ export function getPulledVersion(sessionId: string): string | null {
 export function setPulledVersion(sessionId: string, version: string): void {
   mergePulledVersion.set(sessionId, version);
 }
+
+// Sessions with a workspaceTickets pull in flight. Module scope so a badge
+// remount mid-pull keeps the loading indicator up.
+const pullsInFlight = new Set<string>();
+
+/** Whether a workspaceTickets pull is running for a session. */
+export function isMergePulling(sessionId: string): boolean {
+  return pullsInFlight.has(sessionId);
+}
+
+/** Mark a pull started/finished for a session. */
+export function setMergePulling(sessionId: string, pulling: boolean): void {
+  if (pulling) {
+    pullsInFlight.add(sessionId);
+  } else {
+    pullsInFlight.delete(sessionId);
+  }
+}
