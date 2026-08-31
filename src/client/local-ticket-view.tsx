@@ -179,8 +179,11 @@ function ProjectionReader(props: ProjectionReaderProps) {
     const pull = async function () {
       try {
         const result = await callAidosRemote("workspaceTickets", {}, sessionId);
-        if (cancelled) return;
+        // Write the module cache even when this mount was torn down
+        // mid-pull: the remount skips re-pulling for the same version, so
+        // the cache write is what delivers the merge across the remount.
         setMerge(sessionId, result as unknown as WorkspaceMerge);
+        if (cancelled) return;
         setMergeState(result as unknown as WorkspaceMerge);
       } catch {
         // The merge is additive; a failed pull leaves the cached board.
