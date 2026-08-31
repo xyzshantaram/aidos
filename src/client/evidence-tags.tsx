@@ -23,7 +23,7 @@ export function EvidenceTags({ evidence }: EvidenceTagsProps) {
       {counts.map((count) => (
         <span
           key={count.kind}
-          className="aidos-evidence-tag"
+          className="aidos-chip aidos-chip-kind"
           style={{ borderColor: count.color, color: count.color }}
         >
           {kindLabel(count.kind) + " " + count.count}

@@ -100,8 +100,9 @@ export function stateClass(state: string): string {
 
 /** The full CSS class string for a state badge. */
 export function badgeClass(state: string): string {
-  return "aidos-state-badge aidos-state-" + stateClass(state);
+  return "aidos-chip aidos-chip-state-" + stateClass(state);
 }
+
 /** True when the ticket carries a non-empty criteria string. */
 export function hasCriteria<T extends TicketLike>(ticket: T): boolean {
   return ticket.criteria.trim().length > 0;
@@ -260,6 +261,12 @@ export function parseCriteria(criteria: string): string[] {
  * even when no row addresses it (those stay matched=false / uncovered). Rows
  * whose payload.criteria is absent land in the ungrouped bucket. Returns
  * criteria in their original order, with the ungrouped bucket appended last.
+ *
+ * KEPT ON PURPOSE, with no caller since U16. The detail panel now shows
+ * criteria and evidence as two separate lists, so nothing groups them today.
+ * The logic stays because a later view that shows evidence under the criterion
+ * it addresses wants it back, and `tests/u2b-board-logic.test.ts` still covers
+ * it. Do not remove it as dead code without that decision.
  */
 export interface EvidenceGroup {
   criterion: string;

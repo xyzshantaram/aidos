@@ -1,21 +1,20 @@
 /**
- * Tickets U2b + U2c, reworked by U7 to U10: the ticket detail panel. A
- * quick-facts summary table sits on top (U7), the description follows it
- * (U8), and Dependencies and Evidence are collapsible panels (U9) whose
- * evidence rows render as single-line bullets (U10). Fields stay editable
- * through FieldEditor, and uncovered criteria stay tinted.
+ * Ticket U16: the ticket detail panel, per UI-SPEC section 6. The header
+ * carries the id chip, the title editor, and the state chip. A facts table
+ * follows, then the description markdown panel, the criteria panel, the
+ * dependencies panel, and the evidence panel.
  *
  * DetailView wraps the panel: it owns the action modals and renders the
  * action bar, the comments section, and the evidence attach form.
  */
 
 import react from "react";
+import { marked } from "marked";
 
 import {
   badgeClass,
   displayDep,
   formatGateFraction,
-  groupEvidenceByCriterion,
   fullTicketId,
   hasCriteria,
   idColor,
@@ -25,7 +24,6 @@ import {
   kindLabel,
   uncoveredCriteria,
 } from "./board-logic";
-import { EvidenceTags } from "./evidence-tags";
 import { FieldEditor } from "./field-editor";
 import { ActionBar } from "./action-bar";
 import { CommentsSection } from "./comments-section";
@@ -39,6 +37,13 @@ import { showToast } from "./toast-store";
 import type { EvidenceRowLike } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow, CommentRecord } from "../kernel/types";
+
+/**
+ * Clip the rendered description at this many raw characters. The spec asks
+ * for a fixed threshold, not a height measurement, so the count reads from
+ * the source text and stays deterministic.
+ */
+const DESCRIPTION_CLIP_CHARS = 800;
 
 export interface DetailPanelProps {
   ticket: TicketView;
@@ -60,88 +65,139 @@ export interface DetailViewProps extends DetailPanelProps {
   comments: CommentRecord[];
 }
 
-/** One criterion row: the label, an uncovered tint when nothing addresses it. */
-function renderCriterionGroup(
-  group: ReturnType<typeof groupEvidenceByCriterion>[number],
-  onDelete: (row: EvidenceRowLike) => void,
-  deletingAt: number | null,
-) {
-  const isUngrouped = group.criterion === "";
-  const rowClass = isUngrouped
-    ? "aidos-criterion aidos-criterion-ungrouped"
-    : group.matched
-      ? "aidos-criterion"
-      : "aidos-criterion aidos-criterion-uncovered";
-  const label = isUngrouped ? (
-    "Ungrouped"
-  ) : (
-    <span className="aidos-criterion-label">{group.criterion}</span>
-  );
+/** The non-empty lines of a criteria block. */
+function criteriaLines(criteria: string): string[] {
+  return criteria
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
 
-  const rows = group.rows.map((row, rowIndex) => (
-    <div className="aidos-evidence-row-item" key={rowIndex}>
-      <span className="aidos-evidence-kind">{kindLabel(row.kind)}</span>
-      <span className="aidos-evidence-author">{row.author}</span>
-      {typeof row.payload.criteria === "string" ? (
-        <span className="aidos-evidence-meta">
-          {"criterion: " + row.payload.criteria}
-        </span>
-      ) : null}
-      <button
-        className="aidos-evidence-delete"
-        title="Delete this evidence row"
-        disabled={deletingAt !== null}
-        onClick={() => {
-          onDelete(row);
-        }}
-      >
-        {"\u2715"}
-      </button>
-    </div>
-  ));
+/**
+ * The description panel: rendered markdown through marked, a muted note
+ * when empty, and a Show more toggle over the clip threshold.
+ */
+function DescriptionPanel(props: {
+  ticket: TicketView;
+  ticketIdKey: string;
+  agentId: string;
+  onSaved: () => void;
+}) {
+  const [expanded, setExpanded] = react.useState(false);
+  const text = props.ticket.description;
+  const empty = text.trim() === "";
+  const long = text.length > DESCRIPTION_CLIP_CHARS;
+  const clipped = long && !expanded;
+  const html = empty
+    ? ""
+    : String(marked.parse(text, { async: false }));
+
+  let body: react.ReactNode;
+  if (empty) {
+    body = <p className="aidos-detail-note">No description.</p>;
+  } else {
+    body = (
+      <>
+        <div
+          className={"aidos-md" + (clipped ? " aidos-md-clipped" : "")}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+        {long ? (
+          <button
+            className="aidos-md-more"
+            onClick={() => {
+              setExpanded(!expanded);
+            }}
+          >
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        ) : null}
+      </>
+    );
+  }
 
   return (
-    <div className={rowClass} key={group.criterion}>
-      <div className="aidos-criterion-head">
-        {label}
-        <span className="aidos-criterion-count">{String(group.rows.length)}</span>
+    <div className="aidos-panel">
+      <div className="aidos-panel-head">
+        <h4 className="aidos-panel-title">Description</h4>
       </div>
-      {rows}
+      <div className="aidos-panel-body">
+        <FieldEditor
+          field="description"
+          ticketId={props.ticketIdKey}
+          value={text}
+          agentId={props.agentId}
+          onSaved={props.onSaved}
+        >
+          {body}
+        </FieldEditor>
+      </div>
     </div>
   );
 }
 
-/** The collapsible evidence section: criteria in order, ungrouped last. */
-function renderEvidenceSection(
-  props: DetailPanelProps,
-  onDeleteEvidence: (row: EvidenceRowLike) => void,
-  deletingAt: number | null,
-) {
-  const groups = groupEvidenceByCriterion(props.ticket.criteria, props.evidence);
-  const body = (
-    <div className="aidos-evidence-body">
-      {groups.length === 0 && props.evidence.length === 0 ? (
-        <p className="aidos-detail-note">No evidence rows yet.</p>
-      ) : (
-        groups.map((group) =>
-          renderCriterionGroup(group, onDeleteEvidence, deletingAt),
-        )
-      )}
-    </div>
-  );
+/** The criteria panel: one bullet per line, uncovered lines tinted. */
+function CriteriaPanel(props: {
+  ticket: TicketView;
+  evidence: readonly EvidenceRow[];
+  ticketIdKey: string;
+  agentId: string;
+  onSaved: () => void;
+}) {
+  const [collapsed, setCollapsed] = react.useState(false);
+  const lines = criteriaLines(props.ticket.criteria);
+  const uncovered = uncoveredCriteria(props.ticket.criteria, props.evidence);
+  const uncoveredSet = new Set(uncovered);
+  const covered = lines.length - uncovered.length;
+
+  const list =
+    lines.length === 0 ? (
+      <p className="aidos-detail-note">No criteria.</p>
+    ) : (
+      <ul className="aidos-criteria">
+        {lines.map((line) => (
+          <li
+            key={line}
+            className={
+              uncoveredSet.has(line)
+                ? "aidos-criterion aidos-criterion-uncovered"
+                : "aidos-criterion"
+            }
+          >
+            {line}
+          </li>
+        ))}
+      </ul>
+    );
 
   return (
-    <div className="aidos-panel-section aidos-collapsible">
+    <div className="aidos-panel">
       <div className="aidos-panel-head">
-        <h4 className="aidos-panel-title">Evidence</h4>
+        <h4 className="aidos-panel-title">
+          {"Criteria " + covered + "/" + lines.length}
+        </h4>
         <button
-          className="aidos-btn aidos-toggle-btn"
-          onClick={props.onToggleEvidence}
+          className="aidos-panel-toggle"
+          onClick={() => {
+            setCollapsed(!collapsed);
+          }}
         >
-          {props.evidenceCollapsed ? "Expand" : "Collapse"}
+          {collapsed ? "Expand" : "Collapse"}
         </button>
       </div>
-      {props.evidenceCollapsed ? null : body}
+      {collapsed ? null : (
+        <div className="aidos-panel-body">
+          <FieldEditor
+            field="criteria"
+            ticketId={props.ticketIdKey}
+            value={props.ticket.criteria}
+            agentId={props.agentId}
+            onSaved={props.onSaved}
+          >
+            {list}
+          </FieldEditor>
+        </div>
+      )}
     </div>
   );
 }
@@ -162,7 +218,7 @@ function refOf(hit: TicketSearchHit): string {
 }
 
 /**
- * The Dependencies section: the current dependsOn badges plus a search box
+ * The dependencies panel: the current dependsOn chips plus a search box
  * that finds tickets across live sessions and adds one reference. Search
  * calls the searchTickets Remote; adding calls userSetTicket with the
  * current list plus the new reference.
@@ -242,7 +298,7 @@ function DependencySection(props: {
           <p className="aidos-detail-note">No dependencies.</p>
         ) : (
           current.map((ref) => (
-            <span key={ref} className="aidos-dep-badge" title={ref}>
+            <span key={ref} className="aidos-chip aidos-chip-dep" title={ref}>
               {displayDep(ref)}
             </span>
           ))
@@ -289,7 +345,7 @@ function DependencySection(props: {
                 title={refOf(hit)}
               >
                 <span className="aidos-suggestion-title">{hit.title}</span>
-                <span className="aidos-ticket-id-badge">
+                <span className="aidos-chip aidos-chip-id">
                   {displayDep(refOf(hit))}
                 </span>
               </button>
@@ -301,11 +357,11 @@ function DependencySection(props: {
   );
 
   return (
-    <div className="aidos-panel-section aidos-collapsible">
+    <div className="aidos-panel">
       <div className="aidos-panel-head">
         <h4 className="aidos-panel-title">Dependencies</h4>
         <button
-          className="aidos-btn aidos-toggle-btn"
+          className="aidos-panel-toggle"
           onClick={() => {
             setCollapsed(!collapsed);
           }}
@@ -313,33 +369,60 @@ function DependencySection(props: {
           {collapsed ? "Expand" : "Collapse"}
         </button>
       </div>
-      {collapsed ? null : body}
+      {collapsed ? null : <div className="aidos-panel-body">{body}</div>}
     </div>
   );
 }
 
-/**
- * The description section (U7, U8): the editor sits directly below the
- * summary table, and an empty description shows a muted note beside the
- * Edit button.
- */
-function DescriptionSection(props: {
-  ticket: TicketView;
-  ticketIdKey: string;
-  agentId: string;
-  onSaved: () => void;
+/** The evidence panel: one flat bullet per row, no criterion grouping. */
+function EvidencePanel(props: {
+  evidence: readonly EvidenceRow[];
+  evidenceCollapsed: boolean;
+  onToggleEvidence: () => void;
+  onDelete: (row: EvidenceRowLike) => void;
+  deletingAt: number | null;
 }) {
-  const empty = props.ticket.description.trim() === "";
+  const body = (
+    <div className="aidos-panel-body">
+      {props.evidence.length === 0 ? (
+        <p className="aidos-detail-note">No evidence rows yet.</p>
+      ) : (
+        <ul className="aidos-evidence-list">
+          {props.evidence.map((row, index) => (
+            <li className="aidos-evidence-item" key={row.at ?? index}>
+              <span className="aidos-evidence-kind">{kindLabel(row.kind)}</span>
+              <span className="aidos-evidence-author">{row.author}</span>
+              {typeof row.payload.criteria === "string" ? (
+                <span className="aidos-evidence-meta">
+                  {"criterion: " + row.payload.criteria}
+                </span>
+              ) : null}
+              <button
+                className="aidos-evidence-delete"
+                title="Delete this evidence row"
+                disabled={props.deletingAt !== null}
+                onClick={() => {
+                  props.onDelete(row);
+                }}
+              >
+                {"\u2715"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
   return (
-    <div className="aidos-description">
-      {empty ? <p className="aidos-detail-note">No description.</p> : null}
-      <FieldEditor
-        field="description"
-        ticketId={props.ticketIdKey}
-        value={props.ticket.description}
-        agentId={props.agentId}
-        onSaved={props.onSaved}
-      />
+    <div className="aidos-panel">
+      <div className="aidos-panel-head">
+        <h4 className="aidos-panel-title">Evidence</h4>
+        <button className="aidos-panel-toggle" onClick={props.onToggleEvidence}>
+          {props.evidenceCollapsed ? "Expand" : "Collapse"}
+        </button>
+      </div>
+      {props.evidenceCollapsed ? null : body}
     </div>
   );
 }
@@ -347,7 +430,6 @@ function DescriptionSection(props: {
 export function DetailPanel(props: DetailPanelProps) {
   const ticket = props.ticket;
   const badge = badgeClass(ticket.state);
-  const uncovered = uncoveredCriteria(ticket.criteria, props.evidence);
   const [deletingAt, setDeletingAt] = react.useState<number | null>(null);
 
   async function deleteEvidence(row: EvidenceRowLike) {
@@ -376,7 +458,7 @@ export function DetailPanel(props: DetailPanelProps) {
     <>
       <div className="aidos-detail-head">
         <span
-          className="aidos-id-badge"
+          className="aidos-chip aidos-chip-id"
           style={{ background: idColor(fullTicketId(ticket)) }}
           title={fullTicketId(ticket)}
         >
@@ -394,86 +476,77 @@ export function DetailPanel(props: DetailPanelProps) {
           {"\u00d7"}
         </button>
       </div>
-      <dl className="aidos-summary-table">
-        <div className="aidos-summary-row">
-          <dt className="aidos-summary-label">Gate</dt>
-          <dd className="aidos-summary-value">
+      <dl className="aidos-facts">
+        <div className="aidos-facts-row">
+          <dt className="aidos-facts-label">State</dt>
+          <dd className="aidos-facts-value">{stateLabel(ticket.state)}</dd>
+        </div>
+        <div className="aidos-facts-row">
+          <dt className="aidos-facts-label">Gate</dt>
+          <dd className="aidos-facts-value">
             {formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
           </dd>
         </div>
-        <div className="aidos-summary-row">
-          <dt className="aidos-summary-label">Confidence</dt>
-          <dd className="aidos-summary-value">
+        <div className="aidos-facts-row">
+          <dt className="aidos-facts-label">Confidence</dt>
+          <dd className="aidos-facts-value">
             {String(ringPercent(ticket.confidenceScore)) + "%"}
             <span
-              className="aidos-summary-asterisk"
+              className="aidos-facts-asterisk"
               title="Advisory score. It never unlocks anything."
             >
               {"*"}
             </span>
           </dd>
         </div>
-        <div className="aidos-summary-row">
-          <dt className="aidos-summary-label">Phase</dt>
-          <dd className="aidos-summary-value">{String(ticket.phase)}</dd>
+        <div className="aidos-facts-row">
+          <dt className="aidos-facts-label">Phase</dt>
+          <dd className="aidos-facts-value">{String(ticket.phase)}</dd>
         </div>
-        <div className="aidos-summary-row">
-          <dt className="aidos-summary-label">Order</dt>
-          <dd className="aidos-summary-value">{String(ticket.order)}</dd>
+        <div className="aidos-facts-row">
+          <dt className="aidos-facts-label">Order</dt>
+          <dd className="aidos-facts-value">{String(ticket.order)}</dd>
+        </div>
+        <div className="aidos-facts-row">
+          <dt className="aidos-facts-label">Slug</dt>
+          <dd className="aidos-facts-value">{ticket.slug}</dd>
         </div>
       </dl>
-      <DescriptionSection
+      <DescriptionPanel
         ticket={ticket}
         ticketIdKey={props.ticketIdKey}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
-      <FieldEditor
-        field="criteria"
-        ticketId={props.ticketIdKey}
-        value={ticket.criteria}
+      <CriteriaPanel
+        ticket={ticket}
+        evidence={props.evidence}
+        ticketIdKey={props.ticketIdKey}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
-      <FieldEditor
-        field="phase"
-        ticketId={props.ticketIdKey}
-        value={ticket.phase}
-        agentId={props.agentId}
-        onSaved={props.onFieldSaved}
-      />
-      <FieldEditor
-        field="order"
-        ticketId={props.ticketIdKey}
-        value={ticket.order}
-        agentId={props.agentId}
-        onSaved={props.onFieldSaved}
-      />
-      {uncovered.length > 0 ? (
-        <p className="aidos-detail-note">
-          {uncovered.length + " uncovered criteria"}
-        </p>
-      ) : null}
       <DependencySection
         ticketId={props.ticketIdKey}
         dependsOn={ticket.dependsOn}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
       />
-      {renderEvidenceSection(
-        props,
-        (row) => {
+      <EvidencePanel
+        evidence={props.evidence}
+        evidenceCollapsed={props.evidenceCollapsed}
+        onToggleEvidence={props.onToggleEvidence}
+        onDelete={(row) => {
           void deleteEvidence(row);
-        },
-        deletingAt,
-      )}
+        }}
+        deletingAt={deletingAt}
+      />
     </>
   );
 }
 
 /**
  * The interactive detail view. Owns the action modals and renders the action
- * bar, the field-editor panel, the comments, and the evidence attach form.
+ * bar, the detail panel, the comments, and the evidence attach form.
  * Submit for review moves the ticket directly; the other actions open their
  * modals.
  */

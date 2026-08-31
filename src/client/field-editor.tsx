@@ -4,7 +4,7 @@
  */
 
 import react from "react";
-
+import type { ReactNode } from "react";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 
@@ -22,6 +22,8 @@ export interface FieldEditorProps {
   value: string | number;
   agentId: string;
   onSaved: () => void;
+  /** Shown instead of String(value) when the editor is not editing. */
+  children?: ReactNode;
 }
 
 const TEXTAREA_FIELDS: readonly EditableField[] = ["description", "criteria"];
@@ -111,7 +113,7 @@ export function FieldEditor(props: FieldEditorProps) {
   return (
     <div className="aidos-field-editor">
       <span>
-        {String(props.value)}{" "}
+        {props.children !== undefined ? props.children : String(props.value)}{" "}
         <button className="aidos-btn" onClick={beginEdit}>
           Edit
         </button>

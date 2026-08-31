@@ -1,6 +1,6 @@
 /**
- * One square ticket tile. Shows the title, the confidence ring, the gate
- * fraction, the state badge, and evidence tags (one per kind with a count).
+ * One square ticket tile. Shows the id chip, the title, the state chip, the
+ * gate fraction, the confidence, evidence tags, and dependency chips.
  * The active marker names the in_progress ticket with the latest update.
  */
 
@@ -14,10 +14,11 @@ import {
   hasCriteria,
   idColor,
   stateLabel,
+  ringPercent,
   ticketChipLabel,
 } from "./board-logic";
-import { ConfidenceRing } from "./confidence-ring";
 import { EvidenceTags } from "./evidence-tags";
+
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
 
@@ -34,38 +35,42 @@ export function TicketTile(props: TicketTileProps) {
   const className =
     "aidos-tile" + (props.selected ? " aidos-tile-selected" : "");
   const badge = badgeClass(ticket.state);
-
   return (
+
     <button className={className} onClick={props.onSelect}>
-      <div className="aidos-tile-top">
+      <div className="aidos-tile-meta">
         <span
-          className="aidos-id-badge"
+          className="aidos-chip aidos-chip-id"
           style={{ background: idColor(fullTicketId(ticket)) }}
           title={fullTicketId(ticket)}
         >
           {ticketChipLabel(ticket)}
         </span>
-        <h3 className="aidos-tile-title">{ticket.title}</h3>
         <span className={badge}>{stateLabel(ticket.state)}</span>
       </div>
+      <h3 className="aidos-tile-title">{ticket.title}</h3>
       <p className="aidos-tile-preview">{ticket.description}</p>
-      <div className="aidos-tile-meta">
-        <span className="aidos-tile-gate">
-          {formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
+      <div className="aidos-tile-chips">
+        <span className="aidos-chip aidos-chip-metric">
+          {"Gate " +
+            formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
         </span>
-        <span className="aidos-ring-inline">
-          <ConfidenceRing ticket={ticket} />
+        <span
+          className="aidos-chip aidos-chip-metric"
+          title="Advisory score. It never unlocks anything."
+        >
+          {"Conf " + ringPercent(ticket.confidenceScore) + "%"}
         </span>
+        <EvidenceTags evidence={props.evidence} />
+        {ticket.dependsOn?.map((ref) => (
+          <span key={ref} className="aidos-chip aidos-chip-dep" title={ref}>
+            {displayDep(ref)}
+          </span>
+        ))}
       </div>
       {props.active === true ? (
         <span className="aidos-active-marker">Active</span>
       ) : null}
-      <EvidenceTags evidence={props.evidence} />
-      {ticket.dependsOn?.map((ref) => (
-        <span key={ref} className="aidos-dep-badge" title={ref}>
-          {displayDep(ref)}
-        </span>
-      ))}
     </button>
   );
 }
