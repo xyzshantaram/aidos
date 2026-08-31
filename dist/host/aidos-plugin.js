@@ -15522,20 +15522,20 @@ function confidenceScoreOf(config2, evidence) {
   }
   return total;
 }
-function gateFractionOf(config2, snapshot, evidence) {
+function gateProgressOf(config2, snapshot, evidence) {
   const index = STATE_ORDER.indexOf(snapshot.state);
   if (index < 0 || index + 1 >= STATE_ORDER.length) {
-    return null;
+    return { fraction: null, present: null, total: null };
   }
   const successor = STATE_ORDER[index + 1];
   const gate = config2.gates.find(
     (candidate) => candidate.fromState === snapshot.state && candidate.toState === successor
   );
   if (!gate) {
-    return null;
+    return { fraction: null, present: null, total: null };
   }
   if (gate.requiredKinds.length === 0) {
-    return 1;
+    return { fraction: 1, present: 0, total: 0 };
   }
   const attached = /* @__PURE__ */ new Set();
   for (const row of evidence) {
@@ -15547,7 +15547,11 @@ function gateFractionOf(config2, snapshot, evidence) {
       present += 1;
     }
   }
-  return present / gate.requiredKinds.length;
+  return {
+    fraction: present / gate.requiredKinds.length,
+    present,
+    total: gate.requiredKinds.length
+  };
 }
 function rowFromSnapshot(snapshot) {
   return {
@@ -15567,10 +15571,13 @@ function ticketsProjection(state, config2) {
   const out = /* @__PURE__ */ new Map();
   for (const [id, snapshot] of state.tickets) {
     const evidence = state.evidence.get(id) ?? [];
+    const progress = gateProgressOf(config2, snapshot, evidence);
     out.set(id, {
       ...rowFromSnapshot(snapshot),
       confidenceScore: confidenceScoreOf(config2, evidence),
-      gateFraction: gateFractionOf(config2, snapshot, evidence),
+      gateFraction: progress.fraction,
+      gatePresent: progress.present,
+      gateTotal: progress.total,
       updatedAt: snapshot.updatedAt,
       workspaceKey: snapshot.workspaceKey
     });
@@ -15593,6 +15600,8 @@ var STATE_MARKS = {
 };
 var FENCE = "---";
 var HEADING_PREFIX = "## ";
+var PHASE_HEADING = /^## Phase (\d+): (.+)$/;
+var PHASE_STATE_SUFFIX = / — `[^`]+`$/;
 var CONTINUATION_PREFIX = "  ";
 var CRITERIA_MARKER = "**Evaluate:**";
 var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
@@ -15602,6 +15611,9 @@ function parsePlan(text) {
   const preamble = _takePreamble(lines, frontmatter.index);
   const contextSections = [];
   const rawTickets = [];
+  let currentPhase = 1;
+  const phases = [];
+  const phaseNumbers = /* @__PURE__ */ new Set();
   let index = preamble.index;
   while (index < lines.length) {
     const line = lines[index];
@@ -15610,6 +15622,19 @@ function parsePlan(text) {
       continue;
     }
     if (_isHeading(line)) {
+      const phase = _phaseOfHeading(line);
+      if (phase) {
+        currentPhase = phase.number;
+        if (!phaseNumbers.has(phase.number)) {
+          phaseNumbers.add(phase.number);
+          phases.push(phase);
+        }
+        index += 1;
+        while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
+          index += 1;
+        }
+        continue;
+      }
       const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
@@ -15633,13 +15658,16 @@ function parsePlan(text) {
         `line ${index + 1} is neither a ticket line nor a continuation line`
       );
     }
-    rawTickets.push(_startTicket(ticketMatch, index + 1, rawTickets.length + 1));
+    rawTickets.push(
+      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, currentPhase)
+    );
     index += 1;
   }
   return {
     frontmatter: frontmatter.text,
     preamble: preamble.text,
     contextSections,
+    phases,
     tickets: rawTickets.map((raw) => _finishTicket(raw))
   };
 }
@@ -15656,13 +15684,35 @@ function renderPlan(doc) {
   for (const section of doc.contextSections) {
     blocks.push(_renderContextSection(section));
   }
-  for (const ticket of doc.tickets) {
-    blocks.push(_renderTicket(ticket).join("\n"));
+  for (const group of _ticketGroupsOf(doc)) {
+    if (group.phase) {
+      blocks.push(HEADING_PREFIX + group.phase.raw);
+    }
+    for (const ticket of group.tickets) {
+      blocks.push(_renderTicket(ticket).join("\n"));
+    }
   }
   if (blocks.length === 0) {
     return "";
   }
   return blocks.join("\n\n") + "\n";
+}
+function _ticketGroupsOf(doc) {
+  const recorded = [...doc.phases].sort((a, b) => a.number - b.number);
+  const groups = [];
+  const unrecorded = doc.tickets.filter(
+    (ticket) => !recorded.some((phase) => phase.number === ticket.phase)
+  );
+  if (unrecorded.length > 0) {
+    groups.push({ tickets: unrecorded });
+  }
+  for (const phase of recorded) {
+    groups.push({
+      phase,
+      tickets: doc.tickets.filter((ticket) => ticket.phase === phase.number)
+    });
+  }
+  return groups;
 }
 function _takeFrontmatter(lines) {
   if (lines.length === 0 || lines[0].trim() !== FENCE) {
@@ -15696,7 +15746,7 @@ function _takeContextSection(lines, start, sectionNumber) {
     index
   };
 }
-function _startTicket(match, lineNumber, order) {
+function _startTicket(match, lineNumber, order, phase) {
   const first = match[4].trim();
   return {
     id: match[2],
@@ -15704,7 +15754,8 @@ function _startTicket(match, lineNumber, order) {
     lines: first ? [first] : [],
     claimedState: MARK_STATES[match[1]],
     order,
-    line: lineNumber
+    line: lineNumber,
+    phase
   };
 }
 function _finishTicket(raw) {
@@ -15722,11 +15773,26 @@ function _finishTicket(raw) {
     body: text.slice(0, markerAt).trim(),
     criteria: text.slice(markerAt + CRITERIA_MARKER.length).trim(),
     claimedState: raw.claimedState,
-    order: raw.order
+    order: raw.order,
+    phase: raw.phase
   };
 }
 function _isHeading(line) {
   return line.startsWith(HEADING_PREFIX);
+}
+function _phaseOfHeading(line) {
+  const match = PHASE_HEADING.exec(line);
+  if (!match) {
+    return void 0;
+  }
+  return {
+    number: Number(match[1]),
+    title: _stripStateSuffix(match[2]),
+    raw: line.slice(HEADING_PREFIX.length).replace(/\s+$/, "")
+  };
+}
+function _stripStateSuffix(title) {
+  return title.replace(PHASE_STATE_SUFFIX, "").trim();
 }
 function _trimBlankLines(block) {
   let start = 0;
@@ -15750,13 +15816,16 @@ ${text}`;
 }
 function _renderTicket(ticket) {
   const head = `- [${STATE_MARKS[ticket.claimedState]}] **Ticket ${ticket.id}: ${ticket.title}.**`;
-  const tail = `${CRITERIA_MARKER} ${ticket.criteria}`.trimEnd();
   const body = ticket.body.trim();
   const parts = body ? body.split("\n") : [""];
-  parts[parts.length - 1] = `${parts[parts.length - 1]} ${tail}`.trim();
+  const criteriaLines = ticket.criteria.trim().split("\n");
+  parts[parts.length - 1] = `${parts[parts.length - 1]} ${CRITERIA_MARKER} ${criteriaLines[0]}`.trim();
   const lines = [`${head} ${parts[0]}`.trimEnd()];
   for (const part of parts.slice(1)) {
     lines.push(CONTINUATION_PREFIX + part.trim());
+  }
+  for (const criteriaLine of criteriaLines.slice(1)) {
+    lines.push(CONTINUATION_PREFIX + criteriaLine.trim());
   }
   return lines;
 }
@@ -16079,6 +16148,8 @@ var TICKET_VIEW_ZOD = external_exports.object({
   state: STATE_ENUM,
   confidenceScore: external_exports.number(),
   gateFraction: external_exports.number().nullable(),
+  gatePresent: external_exports.number().nullable(),
+  gateTotal: external_exports.number().nullable(),
   updatedAt: external_exports.number(),
   workspaceKey: external_exports.string(),
   dependsOn: external_exports.array(external_exports.string())
@@ -16114,8 +16185,8 @@ var OwnerUnavailable = class extends Error {
     this.sessionId = sessionId;
   }
 };
-var _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -16272,17 +16343,41 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const tickets = this._ticketsFor(projectId, cache.state).map((row) => ({
       id: String(row.id),
       title: row.title,
-      body: row.body,
+      // Pre-P12 rows hold the prose in the body, later rows in the
+      // description, so the export reads the description first.
+      body: row.description || row.body,
       criteria: row.criteria,
       claimedState: row.state,
-      order: row.order
+      order: row.order,
+      phase: row.phase
+    }));
+    const phases = [...cache.state.phases.get(projectId) ?? /* @__PURE__ */ new Map()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({
+      number: number4,
+      title: phase.title,
+      raw: `Phase ${number4}: ${phase.title}`
     }));
     return renderPlan({
       frontmatter: meta3.frontmatter,
       preamble: meta3.preamble,
       contextSections: meta3.contextSections,
+      phases,
       tickets
     });
+  }
+  /**
+    * The stored plan meta of one project: frontmatter, preamble, and context
+    * sections. A project without a plan/change event yields the empty
+  * default, so the board can open the editor on a fresh session. An absent
+  * project is a refusal, like plan().
+    */
+  planMeta(agent, opts) {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    return this._planMetaOf(projectId, cache.state);
   }
   // ---- writes ----
   /** Create or edit one ticket. Creates the phase when absent. */
@@ -16522,6 +16617,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   userAddComment(agent, args) {
     return this._addComment(this._routedAgent(agent, args.ticketId), args, "user");
   }
+  /**
+   * The agent-actor plan-meta path. Shares the whole-value merge with the
+   * user path: present fields replace, absent fields keep. The board modal
+   * reaches the user path; plan_import stays the whole-plan replace from a
+   * parsed file.
+   */
+  agentSetPlanMeta(agent, args) {
+    return this._setPlanMeta(agent, args, "agent");
+  }
+  userSetPlanMeta(agent, args) {
+    return this._setPlanMeta(agent, args, "user");
+  }
   /** Import one plan file into an empty project. */
   planImport(agent, args) {
     const cache = this._cache(agent.session);
@@ -16555,12 +16662,35 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       at: this._now()
     });
     const ticketIds = [];
+    const headings = new Map(
+      document.phases.map((phase) => [phase.number, phase])
+    );
     for (const ticket of document.tickets) {
-      const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
-        body: ticket.body,
-        criteria: ticket.criteria,
-        order: ticket.order
-      });
+      const heading = headings.get(ticket.phase);
+      const phasesOfProject = cache.state.phases.get(projectId);
+      if (heading && !phasesOfProject?.has(ticket.phase)) {
+        this._commit(agent, {
+          kind: "phase/set",
+          version: 1,
+          projectId,
+          number: heading.number,
+          title: heading.title,
+          state: "open",
+          at: this._now()
+        });
+      }
+      const ticketId = this._createTicketInternal(
+        agent,
+        projectId,
+        ticket.title,
+        ticket.body,
+        {
+          body: "",
+          criteria: ticket.criteria,
+          order: ticket.order,
+          phase: ticket.phase
+        }
+      );
       this._attachEvidenceInternal(
         agent,
         ticketId,
@@ -16571,6 +16701,42 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticketIds.push(ticketId);
     }
     return { tickets: ticketIds };
+  }
+  /**
+   * The shared plan-meta write path. The stored meta is the merge base, so a
+   * block edit reaches the log as one whole-value plan/change event that
+   * keeps every block the caller left out. The cap runs over the resulting
+   * meta, not the diff.
+   */
+  _setPlanMeta(agent, args, actor) {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = args.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const stored = this._planMetaOf(projectId, cache.state);
+    const planValue = {
+      frontmatter: args.frontmatter ?? stored.frontmatter,
+      context: {
+        preamble: args.preamble ?? stored.preamble,
+        contextSections: args.contextSections ? args.contextSections.map((section) => ({ ...section })) : stored.contextSections
+      },
+      rules: ""
+    };
+    const lines = planContextLineCount(planValue);
+    if (lines > PLAN_CONTEXT_LIMIT) {
+      throw new ContextTooLongError(lines - PLAN_CONTEXT_LIMIT);
+    }
+    this._commit(agent, {
+      kind: "plan/change",
+      version: 1,
+      projectId,
+      plan: planValue,
+      at: this._now()
+    });
+    this.ctx.logger?.info?.(`aidos: plan meta set by ${actor} for project ${projectId} in session ${agent.session.id}`);
+    return this._planMetaOf(projectId, cache.state);
   }
   // ---- internals: the session port ----
   /** The per-session fold cache, seeding once from the session log. */
@@ -17240,6 +17406,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const out = {};
     for (const [id, snapshot] of Object.entries(state.tickets)) {
       const evidence = state.evidence[id] ?? [];
+      const progress = gateProgressOf(config2, snapshot, evidence);
       out[id] = {
         id: snapshot.id,
         projectId: snapshot.projectId,
@@ -17252,7 +17419,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         state: snapshot.state,
         dependsOn: [...snapshot.dependsOn ?? []],
         confidenceScore: confidenceScoreOf(config2, evidence),
-        gateFraction: gateFractionOf(config2, snapshot, evidence),
+        gateFraction: progress.fraction,
+        gatePresent: progress.present,
+        gateTotal: progress.total,
         updatedAt: snapshot.updatedAt,
         workspaceKey: snapshot.workspaceKey
       };
@@ -17269,6 +17438,7 @@ __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, Aidos
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
+__decorateElement(_init, 1, "userSetPlanMeta", _userSetPlanMeta_dec, AidosService);
 __decoratorMetadata(_init, AidosService);
 __publicField(AidosService, "inject", [
   "agents",
