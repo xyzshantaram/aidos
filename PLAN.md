@@ -1718,6 +1718,16 @@ the plan format round trips description and phase.
   the page behind the board shows no scrollbar of its own
   the ticket count and the Plan and Create controls stay visible while the grid scrolls
 
+- [x] **Ticket U19: The bundles load under the harness.** `gray-matter` calls `require`
+  at runtime. The node bundles are ESM, so esbuild's shim threw `Dynamic require of
+  "fs" is not supported` and the whole plugin tree failed to load. Every node bundle now
+  carries a banner that builds a real `require` from the module URL. The unit tests run
+  the source, not the bundle, so they could not see this: `build.mjs` now ends with a
+  probe that bundles the plan parser with the same settings, imports it, and parses a
+  document with frontmatter.
+  **Evaluate:** the dsh profile loads the aidos plugin with no dynamic require error
+  a build whose bundle cannot load fails with a named probe error instead of passing
+
 ## User preferences and special rules
 
 - **STE for all user-facing prose.** ASD-STE100 Simplified Technical English, as close as the
