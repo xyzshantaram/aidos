@@ -789,6 +789,11 @@ export function DetailView(props: DetailViewProps) {
         agentId={agentId}
         onFieldSaved={props.onFieldSaved}
       />
+      <CommentsSection
+        ticketId={props.ticketIdKey}
+        comments={props.comments}
+        agentId={agentId}
+      />
       <ActionBar
         ticket={ticket}
         onOpenSignoff={() => {
@@ -803,11 +808,6 @@ export function DetailView(props: DetailViewProps) {
         onOpenSubmitForReview={() => {
           void submitForReview();
         }}
-      />
-      <CommentsSection
-        ticketId={props.ticketIdKey}
-        comments={props.comments}
-        agentId={agentId}
       />
       {signoffOpen ? (
         <SignoffDialog

@@ -1502,12 +1502,21 @@
 }
 
 /* action bar */
+/* The action bar is the footer of the detail pane. It pins to the bottom of
+   the scroll box, so the state moves stay in reach while the panel scrolls. */
 .aidos-action-bar {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: auto;
+  padding-block: 8px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg);
 }
 
 /* spoiler (submit-for-review) */

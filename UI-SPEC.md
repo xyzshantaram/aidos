@@ -116,7 +116,8 @@ shrinks.
    the addressed criterion muted when present, delete control at the right.
    No criterion grouping and no `Ungrouped` bucket.
 7. **Comments.**
-8. **Action bar.** Right aligned.
+8. **Action bar.** The footer of the pane. It is right aligned and it pins to
+   the bottom of the scroll box, so the state moves stay in reach.
 
 Panels 4 to 7 are collapsible. Each carries a heading row with the label left
 and the Collapse or Expand control right.
