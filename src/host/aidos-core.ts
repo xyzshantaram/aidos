@@ -34,7 +34,7 @@ import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
 import { checkGate, isLegalTransition } from "../kernel/gates";
 import {
   confidenceScoreOf,
-  gateFractionOf,
+  gateProgressOf,
   ticketsProjection,
 } from "../kernel/projections";
 import type { TicketView } from "../kernel/projections";
@@ -53,6 +53,7 @@ import type {
   CommentRecord,
   ContextSection,
   EvidenceRow,
+  PlanMetaView,
   PlanValue,
   ProjectId,
   TicketId,
@@ -352,6 +353,8 @@ const TICKET_VIEW_ZOD = zod.object({
   state: STATE_ENUM,
   confidenceScore: zod.number(),
   gateFraction: zod.number().nullable(),
+  gatePresent: zod.number().nullable(),
+  gateTotal: zod.number().nullable(),
   updatedAt: zod.number(),
   workspaceKey: zod.string(),
   dependsOn: zod.array(zod.string()),
@@ -448,6 +451,17 @@ export interface PlanImportArgs {
   projectId?: number;
 }
 
+/**
+ * One plan-meta write. Every present field replaces the stored one, and
+ * absent fields keep the stored value. The board edits one block at a time
+ * where plan_import replaces the whole plan.
+ */
+export interface PlanMetaSetArgs {
+  projectId?: number;
+  frontmatter?: string;
+  preamble?: string;
+  contextSections?: ContextSection[];
+}
 /**
  * One board row in the workspace merge. Own rows are plain TicketViews with
  * `foreign: false`; foreign rows carry the owning session id (the writer)
@@ -692,17 +706,46 @@ registerAidosSessionEventTypes(ctx);
     const tickets: PlanTicket[] = this._ticketsFor(projectId, cache.state).map((row): PlanTicket => ({
       id: String(row.id),
       title: row.title,
-      body: row.body,
+      // Pre-P12 rows hold the prose in the body, later rows in the
+      // description, so the export reads the description first.
+      body: row.description || row.body,
       criteria: row.criteria,
       claimedState: row.state,
       order: row.order,
+      phase: row.phase,
     }));
+    // One heading per stored phase, ascending by number. A flat store emits
+    // no phase headings, because the default phase holds no record.
+    const phases = [...(cache.state.phases.get(projectId) ?? new Map())]
+      .sort((a, b) => a[0] - b[0])
+      .map(([number, phase]) => ({
+        number,
+        title: phase.title,
+        raw: `Phase ${number}: ${phase.title}`,
+      }));
     return renderPlan({
       frontmatter: meta.frontmatter,
       preamble: meta.preamble,
       contextSections: meta.contextSections,
+      phases,
       tickets,
     });
+  }
+
+  /**
+   * The stored plan meta of one project: frontmatter, preamble, and context
+   * sections. A project without a plan/change event yields the empty
+ * default, so the board can open the editor on a fresh session. An absent
+ * project is a refusal, like plan().
+   */
+  planMeta(agent: Agent, opts?: { projectId?: number }): PlanMetaView {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    return this._planMetaOf(projectId, cache.state);
   }
 
   // ---- writes ----
@@ -1055,6 +1098,28 @@ registerAidosSessionEventTypes(ctx);
     return this._addComment(this._routedAgent(agent, args.ticketId), args, "user");
   }
 
+  /**
+   * The agent-actor plan-meta path. Shares the whole-value merge with the
+   * user path: present fields replace, absent fields keep. The board modal
+   * reaches the user path; plan_import stays the whole-plan replace from a
+   * parsed file.
+   */
+  agentSetPlanMeta(agent: Agent, args: PlanMetaSetArgs): PlanMetaView {
+    return this._setPlanMeta(agent, args, "agent");
+  }
+
+  /**
+   * The user-actor plan-meta path, exported over the typert Remote surface.
+   * Every present field replaces the stored one and absent fields keep the
+   * stored value, so the board edits one block at a time. The commit is one
+   * whole-value plan/change event; the agent path is plan_import, which
+   * replaces the whole plan from a parsed file.
+   */
+  @Remote("userSetPlanMeta")
+  userSetPlanMeta(agent: Agent, args: PlanMetaSetArgs): PlanMetaView {
+    return this._setPlanMeta(agent, args, "user");
+  }
+
   /** Import one plan file into an empty project. */
   planImport(agent: Agent, args: PlanImportArgs): {
     tickets: number[];
@@ -1098,14 +1163,40 @@ registerAidosSessionEventTypes(ctx);
     });
 
     const ticketIds: TicketId[] = [];
+    // A heading phase commits before its first ticket, only when the store
+    // does not hold that phase yet. A flat document commits no phase, so it
+    // stays flat.
+    const headings = new Map(
+      document.phases.map((phase) => [phase.number, phase]),
+    );
     for (const ticket of document.tickets) {
-      // Every ticket lands in open, order from the document, phase and ids
-      // from the session's defaults.
-      const ticketId = this._createTicketInternal(agent, projectId, ticket.title, "", {
-        body: ticket.body,
-        criteria: ticket.criteria,
-        order: ticket.order,
-      });
+      const heading = headings.get(ticket.phase);
+      const phasesOfProject = cache.state.phases.get(projectId);
+      if (heading && !phasesOfProject?.has(ticket.phase)) {
+        this._commit(agent, {
+          kind: "phase/set",
+          version: 1,
+          projectId,
+          number: heading.number,
+          title: heading.title,
+          state: "open",
+          at: this._now(),
+        });
+      }
+      // The body prose lands in the description, the body field stays empty.
+      // Every ticket lands in open, order from the document.
+      const ticketId = this._createTicketInternal(
+        agent,
+        projectId,
+        ticket.title,
+        ticket.body,
+        {
+          body: "",
+          criteria: ticket.criteria,
+          order: ticket.order,
+          phase: ticket.phase,
+        },
+      );
       // One imported_state row per ticket, author system.
       this._attachEvidenceInternal(
         agent,
@@ -1117,6 +1208,48 @@ registerAidosSessionEventTypes(ctx);
       ticketIds.push(ticketId);
     }
     return { tickets: ticketIds };
+  }
+
+  /**
+   * The shared plan-meta write path. The stored meta is the merge base, so a
+   * block edit reaches the log as one whole-value plan/change event that
+   * keeps every block the caller left out. The cap runs over the resulting
+   * meta, not the diff.
+   */
+  private _setPlanMeta(agent: Agent, args: PlanMetaSetArgs, actor: Actor): PlanMetaView {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const projectId = args.projectId ?? this._ensureProject(agent).projectId;
+    if (!cache.state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+
+    // Whole-value merge: absent fields keep the stored value. The sections
+    // are copied so the commit never aliases the caller's array.
+    const stored = this._planMetaOf(projectId, cache.state);
+    const planValue: PlanValue = {
+      frontmatter: args.frontmatter ?? stored.frontmatter,
+      context: {
+        preamble: args.preamble ?? stored.preamble,
+        contextSections: args.contextSections
+          ? args.contextSections.map((section) => ({ ...section }))
+          : stored.contextSections,
+      },
+      rules: "",
+    };
+    const lines = planContextLineCount(planValue);
+    if (lines > PLAN_CONTEXT_LIMIT) {
+      throw new ContextTooLongError(lines - PLAN_CONTEXT_LIMIT);
+    }
+    this._commit(agent, {
+      kind: "plan/change",
+      version: 1,
+      projectId,
+      plan: planValue,
+      at: this._now(),
+    });
+    this.ctx.logger?.info?.(`aidos: plan meta set by ${actor} for project ${projectId} in session ${agent.session.id}`);
+    return this._planMetaOf(projectId, cache.state);
   }
 
   // ---- internals: the session port ----
@@ -1911,6 +2044,7 @@ registerAidosSessionEventTypes(ctx);
     const out: Record<string, TicketView> = {};
     for (const [id, snapshot] of Object.entries(state.tickets)) {
       const evidence = state.evidence[id] ?? [];
+      const progress = gateProgressOf(config, snapshot, evidence);
       out[id] = {
         id: snapshot.id,
         projectId: snapshot.projectId,
@@ -1923,7 +2057,9 @@ registerAidosSessionEventTypes(ctx);
         state: snapshot.state,
         dependsOn: [...(snapshot.dependsOn ?? [])],
         confidenceScore: confidenceScoreOf(config, evidence),
-        gateFraction: gateFractionOf(config, snapshot, evidence),
+        gateFraction: progress.fraction,
+        gatePresent: progress.present,
+        gateTotal: progress.total,
         updatedAt: snapshot.updatedAt,
         workspaceKey: snapshot.workspaceKey,
       };

@@ -106,15 +106,16 @@ describe("plan round trip live", () => {
     );
   });
 
-  it("a multi line body keeps every line", async () => {
+  it("the body prose lands in the description and the body holds empty text", async () => {
     successJson(await harness.runTool("plan_import", { file: planFile }));
     const listed = successJson(await harness.runTool("get_tickets", {}));
     const tickets = (listed.tickets as Record<string, unknown>[]) ?? [];
-    const body = tickets[1].body as string;
-    expect(body).toContain("Pick one spelling for each flag.");
-    expect(body).toContain("Keep the spelling the same in every subcommand.");
-    expect(body).toContain("Write the choice into a docstring.");
-    expect(body).not.toContain("**Evaluate:**");
+    const description = tickets[1].description as string;
+    expect(description).toContain("Pick one spelling for each flag.");
+    expect(description).toContain("Keep the spelling the same in every subcommand.");
+    expect(description).toContain("Write the choice into a docstring.");
+    expect(description).not.toContain("**Evaluate:**");
+    expect(tickets[1].body).toBe("");
     expect((tickets[1] as Record<string, unknown>).criteria).toBe(
       "Every flag appears once in the docstring."
     );
@@ -169,7 +170,7 @@ describe("plan round trip live", () => {
       .tickets as Record<string, unknown>[];
     const firstData = firstListed.map((t) => ({
       title: t.title,
-      body: t.body,
+      description: t.description,
       criteria: t.criteria,
       phase: t.phase,
       order: t.order,
@@ -192,7 +193,7 @@ describe("plan round trip live", () => {
       .tickets as Record<string, unknown>[];
     const secondData = secondListed.map((t) => ({
       title: t.title,
-      body: t.body,
+      description: t.description,
       criteria: t.criteria,
       phase: t.phase,
       order: t.order,

@@ -28,6 +28,14 @@ const FENCE = "---";
 // The prefix of every heading that opens a phase or a context section.
 const HEADING_PREFIX = "## ";
 
+// A heading that opens a phase. Every other `## ` heading opens a context
+// section.
+const PHASE_HEADING = /^## Phase (\d+): (.+)$/;
+
+// The state suffix of a phase title: an em dash and one backticked state
+// word. The suffix is display text, not part of the title.
+const PHASE_STATE_SUFFIX = / — `[^`]+`$/;
+
 // The prefix of a continuation line.
 const CONTINUATION_PREFIX = "  ";
 
@@ -38,6 +46,17 @@ const CRITERIA_MARKER = "**Evaluate:**";
 // the final ".\*\*" on the line; verify by requiring the trailing ".\*\*".
 const TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
 
+/**
+ * One phase heading of the document, deduped, in document order. The raw
+ * text holds the heading after the `## ` prefix, so the renderer re-emits
+ * the heading with one prefix.
+ */
+export interface PlanPhase {
+  number: number;
+  title: string;
+  raw: string;
+}
+
 export interface PlanTicket {
   id: string;
   title: string;
@@ -45,6 +64,7 @@ export interface PlanTicket {
   criteria: string;
   claimedState: TicketState;
   order: number;
+  phase: number;
 }
 
 export interface PlanDocument {
@@ -52,6 +72,7 @@ export interface PlanDocument {
   preamble: string;
   contextSections: ContextSection[];
   tickets: PlanTicket[];
+  phases: PlanPhase[];
 }
 
 /** The working data of one ticket before its body is complete. */
@@ -62,6 +83,7 @@ interface RawTicket {
   claimedState: TicketState;
   order: number;
   line: number;
+  phase: number;
 }
 
 /** Read one plan document. Throws PlanParseError on the first bad line. */
@@ -71,6 +93,11 @@ export function parsePlan(text: string): PlanDocument {
   const preamble = _takePreamble(lines, frontmatter.index);
   const contextSections: ContextSection[] = [];
   const rawTickets: RawTicket[] = [];
+  // Tickets before the first phase heading take phase 1. A heading that is
+  // not a phase marker never resets the phase.
+  let currentPhase = 1;
+  const phases: PlanPhase[] = [];
+  const phaseNumbers = new Set<number>();
   let index = preamble.index;
   while (index < lines.length) {
     const line = lines[index];
@@ -79,6 +106,27 @@ export function parsePlan(text: string): PlanDocument {
       continue;
     }
     if (_isHeading(line)) {
+      const phase = _phaseOfHeading(line);
+      if (phase) {
+        // A phase marker sets the phase of every ticket after it. The first
+        // heading of one number is the record the renderer re-emits. The
+        // prose between the marker and the next heading or ticket is
+        // consumed and dropped, like context-section prose.
+        currentPhase = phase.number;
+        if (!phaseNumbers.has(phase.number)) {
+          phaseNumbers.add(phase.number);
+          phases.push(phase);
+        }
+        index += 1;
+        while (
+          index < lines.length &&
+          !_isHeading(lines[index]) &&
+          !TICKET_LINE.test(lines[index])
+        ) {
+          index += 1;
+        }
+        continue;
+      }
       const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
@@ -102,18 +150,25 @@ export function parsePlan(text: string): PlanDocument {
         `line ${index + 1} is neither a ticket line nor a continuation line`,
       );
     }
-    rawTickets.push(_startTicket(ticketMatch, index + 1, rawTickets.length + 1));
+    rawTickets.push(
+      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, currentPhase),
+    );
     index += 1;
   }
   return {
     frontmatter: frontmatter.text,
     preamble: preamble.text,
     contextSections,
+    phases,
     tickets: rawTickets.map((raw) => _finishTicket(raw)),
   };
 }
 
-/** Write one plan document. Sorts nothing. */
+/**
+ * Write one plan document. The tickets keep their given order. The phase
+ * headings emit in phase-number order, and the tickets of a phase with no
+ * record emit before every phase heading.
+ */
 export function renderPlan(doc: PlanDocument): string {
   const blocks: string[] = [];
   const frontmatter = doc.frontmatter.trim();
@@ -127,13 +182,42 @@ export function renderPlan(doc: PlanDocument): string {
   for (const section of doc.contextSections) {
     blocks.push(_renderContextSection(section));
   }
-  for (const ticket of doc.tickets) {
-    blocks.push(_renderTicket(ticket).join("\n"));
+  for (const group of _ticketGroupsOf(doc)) {
+    if (group.phase) {
+      blocks.push(HEADING_PREFIX + group.phase.raw);
+    }
+    for (const ticket of group.tickets) {
+      blocks.push(_renderTicket(ticket).join("\n"));
+    }
   }
   if (blocks.length === 0) {
     return "";
   }
   return blocks.join("\n\n") + "\n";
+}
+
+/**
+ * Group the tickets for rendering: first the tickets of a phase with no
+ * phase record, then one group per recorded phase, ascending by number.
+ */
+function _ticketGroupsOf(
+  doc: PlanDocument,
+): Array<{ phase?: PlanPhase; tickets: PlanTicket[] }> {
+  const recorded = [...doc.phases].sort((a, b) => a.number - b.number);
+  const groups: Array<{ phase?: PlanPhase; tickets: PlanTicket[] }> = [];
+  const unrecorded = doc.tickets.filter(
+    (ticket) => !recorded.some((phase) => phase.number === ticket.phase),
+  );
+  if (unrecorded.length > 0) {
+    groups.push({ tickets: unrecorded });
+  }
+  for (const phase of recorded) {
+    groups.push({
+      phase,
+      tickets: doc.tickets.filter((ticket) => ticket.phase === phase.number),
+    });
+  }
+  return groups;
 }
 
 // ---- reading ----
@@ -199,6 +283,7 @@ function _startTicket(
   match: RegExpExecArray,
   lineNumber: number,
   order: number,
+  phase: number,
 ): RawTicket {
   const first = match[4].trim();
   return {
@@ -208,6 +293,7 @@ function _startTicket(
     claimedState: MARK_STATES[match[1]],
     order,
     line: lineNumber,
+    phase,
   };
 }
 
@@ -228,12 +314,31 @@ function _finishTicket(raw: RawTicket): PlanTicket {
     criteria: text.slice(markerAt + CRITERIA_MARKER.length).trim(),
     claimedState: raw.claimedState,
     order: raw.order,
+    phase: raw.phase,
   };
 }
 
 /** Say whether one line opens a phase or a context section. */
 function _isHeading(line: string): boolean {
   return line.startsWith(HEADING_PREFIX);
+}
+
+/** The phase one heading opens, or undefined when the heading is not one. */
+function _phaseOfHeading(line: string): PlanPhase | undefined {
+  const match = PHASE_HEADING.exec(line);
+  if (!match) {
+    return undefined;
+  }
+  return {
+    number: Number(match[1]),
+    title: _stripStateSuffix(match[2]),
+    raw: line.slice(HEADING_PREFIX.length).replace(/\s+$/, ""),
+  };
+}
+
+/** Drop the em-dash state suffix of a phase title, when present. */
+function _stripStateSuffix(title: string): string {
+  return title.replace(PHASE_STATE_SUFFIX, "").trim();
 }
 
 /** Join lines, and drop the blank lines at the start and at the end. */
@@ -261,16 +366,23 @@ function _renderContextSection(section: ContextSection): string {
 }
 
 
-/** The lines of one ticket. Line two onward carry two spaces. */
+/**
+ * The lines of one ticket. A body line or a criteria line after the first
+ * carries two spaces, so the document re-imports to the same fields.
+ */
 function _renderTicket(ticket: PlanTicket): string[] {
   const head = `- [${STATE_MARKS[ticket.claimedState]}] **Ticket ${ticket.id}: ${ticket.title}.**`;
-  const tail = `${CRITERIA_MARKER} ${ticket.criteria}`.trimEnd();
   const body = ticket.body.trim();
   const parts = body ? body.split("\n") : [""];
-  parts[parts.length - 1] = `${parts[parts.length - 1]} ${tail}`.trim();
+  const criteriaLines = ticket.criteria.trim().split("\n");
+  parts[parts.length - 1] =
+    `${parts[parts.length - 1]} ${CRITERIA_MARKER} ${criteriaLines[0]}`.trim();
   const lines = [`${head} ${parts[0]}`.trimEnd()];
   for (const part of parts.slice(1)) {
     lines.push(CONTINUATION_PREFIX + part.trim());
+  }
+  for (const criteriaLine of criteriaLines.slice(1)) {
+    lines.push(CONTINUATION_PREFIX + criteriaLine.trim());
   }
   return lines;
 }
