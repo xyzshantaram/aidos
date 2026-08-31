@@ -33,7 +33,7 @@ const RUN_CODE = "run_code";
 const TICKET_TOOLS = ["get_tickets", "set_ticket", "attach_evidence", "move_ticket"] as const;
 
 /** The plan tools of the open tier. */
-const PLAN_TOOLS = ["plan", "plan_import"] as const;
+const PLAN_TOOLS = ["plan", "plan_import", "plan_meta", "plan_meta_set"] as const;
 
 /** The read/research/skill/question tools of the open tier. */
 const RESEARCH_TOOLS = ["read", "read_image", "web_search", "web_fetch", "skill", "ask_user_question"] as const;

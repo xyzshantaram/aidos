@@ -20,6 +20,7 @@ import type { JsonValue } from "@deepseek-ai/dsh-session";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { STATE_ORDER } from "../kernel/types";
+import type { ContextSection } from "../kernel/types";
 import {
   BadPayloadError,
   FileNotReadError,
@@ -83,6 +84,38 @@ const TICKET_VIEW_SCHEMA = {
       oneOf: [{ type: "number" }, { type: "null" }],
       required: true,
     },
+    gatePresent: {
+      oneOf: [{ type: "number" }, { type: "null" }],
+      required: true,
+    },
+    gateTotal: {
+      oneOf: [{ type: "number" }, { type: "null" }],
+      required: true,
+    },
+    updatedAt: { type: "number", required: true },
+    workspaceKey: { type: "string", required: true },
+  },
+} as const;
+
+const PLAN_META_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    frontmatter: { type: "string", required: true },
+    preamble: { type: "string", required: true },
+    contextSections: {
+      type: "array",
+      required: true,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          heading: { type: "string", required: true },
+          text: { type: "string", required: true },
+          index: { type: "integer", required: true },
+        },
+      },
+    },
   },
 } as const;
 
@@ -99,6 +132,43 @@ function present(title: string, kind: ToolCallKind, rawInput: unknown): GenericC
 /** Render one JSON result as the model-facing content. */
 function renderJson(_args: unknown, value: JsonValue) {
   return [{ type: "text" as const, text: JSON.stringify(value) }];
+}
+
+/**
+ * Parse the plan_meta_set contextSections argument: one JSON array of
+ * {heading, text, index} objects. The tool layer owns the JSON decode so the
+ * service keeps its typed argument; a malformed payload is a refusal, not a
+ * traceback. Undefined passes through, so absent keeps the stored sections.
+ */
+function parseContextSectionsArg(raw: string | undefined): ContextSection[] | undefined {
+  if (raw === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new BadPayloadError(
+      `contextSections must be a JSON array of {heading, text, index} objects: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new BadPayloadError("contextSections must be a JSON array of {heading, text, index} objects");
+  }
+  return parsed.map((entry, position) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new BadPayloadError(`contextSections[${position}] must be an object with heading, text, and index`);
+    }
+    const section = entry as Record<string, unknown>;
+    const heading = section.heading;
+    const text = section.text;
+    const index = section.index;
+    if (typeof heading !== "string" || typeof text !== "string") {
+      throw new BadPayloadError(`contextSections[${position}] must carry string heading and text fields`);
+    }
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0) {
+      throw new BadPayloadError(`contextSections[${position}] index must be a non-negative integer`);
+    }
+    return { heading, text, index } as ContextSection;
+  });
 }
 
 // ---- the orchestrator check ----
@@ -231,9 +301,10 @@ const AIDOS_GUIDANCE =
   "attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. " +
   "move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. " +
   "plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. " +
+  "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
   "The board tools are the orchestrator's: a subagent cannot use them. " +
-  "Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, and plan_import whenever you spawn a subagent or a fork. " +
+  "Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. " +
   "The depth guard refuses a subagent anyway, so the filter is a second layer.";
 
 // ---- the six tools ----
@@ -513,6 +584,118 @@ function registerPlanImport(ctx: Context): void {
   );
 }
 
+function registerPlanMeta(ctx: Context): void {
+  ctx.tools.register(
+    defineTool({
+      name: "plan_meta",
+      description:
+        "Read one project's stored plan blocks as JSON: frontmatter, preamble, and the context sections with their headings and indexes. The result is the editor's data, not the rendered plan markdown.",
+      parameters: {
+        projectId: {
+          type: "integer",
+          description: "The project to read; the session's workspace project when absent.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            planMeta: PLAN_META_SCHEMA,
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: plan_meta called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: plan_meta args ${JSON.stringify(args)}`);
+        try {
+          const planMeta = ctx.aidos.planMeta(
+            agent,
+            args.projectId === undefined ? undefined : { projectId: args.projectId },
+          );
+          ctx.logger?.info?.(`aidos: plan_meta read for agent ${agent.session?.id}`);
+          return { ok: true, planMeta };
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (args) => present("Read plan meta", "read", args.projectId),
+    }),
+  );
+}
+
+function registerPlanMetaSet(ctx: Context): void {
+  ctx.tools.register(
+    defineTool({
+      name: "plan_meta_set",
+      description:
+        "Edit one plan block in place. Every present field replaces its stored value and absent fields keep it, so pass only the block you changed: frontmatter, preamble, or the full contextSections array with one section's text replaced. The 2000-line context cap runs over the resulting plan. No file read and no markdown parse. You edit the structure, not a document.",
+
+      parameters: {
+        projectId: {
+          type: "integer",
+          description: "The project to edit; the session's workspace project when absent.",
+        },
+        frontmatter: {
+          type: "string",
+          description: "Replaces the stored frontmatter. Absent keeps the stored value.",
+        },
+        preamble: {
+          type: "string",
+          description: "Replaces the stored preamble. Absent keeps the stored value.",
+        },
+        contextSections: {
+          type: "string",
+          description:
+            "JSON array of {heading, text, index} objects; it replaces the stored sections whole. The heading keeps its '##' prefix and index counts the phases before the section. Absent keeps the stored sections.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            planMeta: PLAN_META_SCHEMA,
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: plan_meta_set called by agent ${agent.session?.id}`);
+        ctx.logger?.debug?.(`aidos: plan_meta_set args ${JSON.stringify(args)}`);
+        try {
+          const contextSections = parseContextSectionsArg(args.contextSections);
+          const planMeta = ctx.aidos.agentSetPlanMeta(agent, {
+            ...(args.projectId === undefined ? {} : { projectId: args.projectId }),
+            ...(args.frontmatter === undefined ? {} : { frontmatter: args.frontmatter }),
+            ...(args.preamble === undefined ? {} : { preamble: args.preamble }),
+            ...(contextSections === undefined ? {} : { contextSections }),
+          });
+          ctx.logger?.info?.(`aidos: plan_meta_set wrote the plan meta for agent ${agent.session?.id}`);
+          return { ok: true, planMeta };
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (args) =>
+        present(
+          args.contextSections !== undefined
+            ? "Set plan sections"
+            : args.frontmatter !== undefined
+              ? "Set plan frontmatter"
+              : "Set plan preamble",
+          "edit",
+          args.projectId,
+        ),
+    }),
+  );
+}
+
 /** Register the six tools, the prompt section, and the policy wiring.
  * bash-ask was removed; awaiting_verification now uses bash-guard's
  * profile-awaiting_verification overlay (see src/host/aidos-core.ts#bashContext).
@@ -569,6 +752,9 @@ export function apply(ctx: Context, config: unknown): void {
   registerMoveTicket(ctx);
   registerPlan(ctx);
   registerPlanImport(ctx);
+  registerPlanMeta(ctx);
+  registerPlanMetaSet(ctx);
+
   registerScratchTools(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
