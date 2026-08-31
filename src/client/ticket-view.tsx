@@ -29,6 +29,7 @@ export interface TicketViewProps {
   onApply: (state: AppliedState) => void;
   onJump: (key: string) => void;
   onClearFilters: () => void;
+  onPlan: () => void;
   onCreate: () => void;
   projects?: { id: number; name: string }[];
 }
@@ -101,6 +102,9 @@ export function TicketView(props: TicketViewProps) {
           <span className="aidos-empty-note">
             {props.tickets.length + " of " + props.allTicketsCount + " tickets"}
           </span>
+          <button className="aidos-btn" onClick={props.onPlan}>
+            Plan
+          </button>
           <button className="aidos-btn aidos-btn-primary" onClick={props.onCreate}>
             Create
           </button>

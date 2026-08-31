@@ -28,6 +28,7 @@ import {
 import { TicketView } from "./ticket-view";
 import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
+import { PlanMetaModal } from "./plan-meta-modal";
 import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
 import { showToast } from "./toast-store";
@@ -36,7 +37,7 @@ import { getMerge, getPulledVersion, isMergePulling, setMerge, setMergePulling, 
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
-import type { CommentRecord, EvidenceRow } from "../kernel/types";
+import type { CommentRecord, EvidenceRow, PlanValue } from "../kernel/types";
 
 
 export interface LocalTicketViewProps {
@@ -154,10 +155,21 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const ticketsProjection = props.useProjection("aidos.tickets");
   const evidenceProjection = props.useProjection("aidos.evidence");
   const commentsProjection = props.useProjection("aidos.comments");
+  const planProjection = props.useProjection("aidos.plan");
   const loaded =
     ticketsProjection !== undefined &&
     evidenceProjection !== undefined &&
     commentsProjection !== undefined;
+
+  // The own project id and its stored plan. The projection covers the own
+  // session only, so the first own ticket names the project. A board with
+  // no tickets has no plan to show, and the modal carries the no-plan note.
+  const ownProjectId =
+    Object.values(ticketsProjection as Record<string, TicketViewType> | undefined ?? {})[0]?.projectId ?? null;
+  const ownPlan: PlanValue | null =
+    ownProjectId === null
+      ? null
+      : ((planProjection as Record<string, PlanValue> | undefined) ?? {})[String(ownProjectId)] ?? null;
 
   // The workspace merge. The projection covers the own session only; the
   // workspaceTickets Remote adds every sibling session of the same
@@ -239,9 +251,11 @@ function ProjectionReader(props: ProjectionReaderProps) {
   });
   const [selectedKey, setSelectedKey] = react.useState<string | null>(null);
   const [createOpen, setCreateOpen] = react.useState(false);
+  const [planOpen, setPlanOpen] = react.useState(false);
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
   const restoredRef = react.useRef(false);
+
   // Report the open count to the tab badge store.
   const count = openCount(rawTickets);
   react.useEffect(
@@ -455,6 +469,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
         onApply={applyState}
         onJump={selectTicket}
         onClearFilters={clearFilters}
+        onPlan={() => {
+          setPlanOpen(true);
+        }}
         onCreate={() => {
           setCreateOpen(true);
         }}
@@ -462,6 +479,24 @@ function ProjectionReader(props: ProjectionReaderProps) {
     );
   }
 
+  const planModal = (
+    <PlanMetaModal
+      open={planOpen}
+      planMeta={
+        ownPlan === null
+          ? null
+          : {
+              frontmatter: ownPlan.frontmatter,
+              preamble: ownPlan.context.preamble,
+              contextSections: ownPlan.context.contextSections,
+            }
+      }
+      agentId={sessionId}
+      onClose={() => {
+        setPlanOpen(false);
+      }}
+    />
+  );
   return (
     <>
       <div className="aidos-layout">
@@ -469,6 +504,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         {detailPanel}
       </div>
       {createModal}
+      {planModal}
       {/* The toast container is a sibling of the layout, not a child, so it
           persists across the slot-mutation remount. The single-string toast
           state and its timer are gone; the module-level toast store owns

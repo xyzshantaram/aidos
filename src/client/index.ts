@@ -22,6 +22,7 @@ import type {
 import type {} from "@deepseek-ai/dsh-client-ui-conversation/client";
 
 import boardCss from "./board.css";
+import planMetaCss from "./plan-meta.css";
 import { badgeLabel, setCountCallback } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
 
@@ -37,15 +38,19 @@ const AIDOS_PRESET = "aidos";
 /** Inject the stylesheet once. The data-plugin-css guard prevents duplicates. */
 function injectStyles(): void {
   if (typeof document === "undefined") return;
-  if (
-    document.querySelector("style[data-plugin-css=\"aidos/board.css\"]") !== null
-  )
-    return;
-  const tag = document.createElement("style");
-  tag.dataset.plugin = "aidos";
-  tag.dataset.pluginCss = "aidos/board.css";
-  tag.textContent = boardCss;
-  document.head.appendChild(tag);
+  for (const sheet of [
+    { marker: "aidos/board.css", text: boardCss },
+    { marker: "aidos/plan-meta.css", text: planMetaCss },
+  ] as const) {
+    if (document.querySelector(`style[data-plugin-css="${sheet.marker}"]`) !== null) {
+      continue;
+    }
+    const tag = document.createElement("style");
+    tag.dataset.plugin = "aidos";
+    tag.dataset.pluginCss = sheet.marker;
+    tag.textContent = sheet.text;
+    document.head.appendChild(tag);
+  }
 }
 
 /** Register the Tickets tab. Returns the registration disposer. */
