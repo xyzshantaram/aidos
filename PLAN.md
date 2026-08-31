@@ -1702,6 +1702,10 @@ the plan format round trips description and phase.
 
 ## Human review queue
 
+- [ ] U6/U11 (the board restyle) — click through the board on a live session: id badge colors differ between workspaces with the same last path segment, the badge hover shows the full id, evidence tags read as labels with counts, no pill renders grey-on-grey, and the create-modal textareas, comment textarea, and detail field editor stay inside their containers at narrow widths. Confirm the evidence tag wrapper (its fixed-height row rule was dropped) still reads well when tags wrap.
+- [ ] U7-U10 (the detail view) — open a ticket: the summary table shows Gate m/n, advisory Confidence, Phase, Order; the description section sits below the table with the empty-state note; Dependencies and Evidence collapse through their header rows; evidence renders as one bullet per row; Sign off right-aligns.
+- [ ] U12/P13 (plan meta) — open the Plan modal from the board chrome, edit a block, save, reopen, and confirm the change persisted. On a fresh session, confirm a subagent can see neither plan_meta nor plan_meta_set in its tool list.
+- [ ] P12 (reimport) — after the delete-and-reimport, confirm the board shows phases matching the plan headings, descriptions carry the plan prose, and `plan` export re-imports byte for byte.
 - [ ] C5 — the badge and cross-workspace display need the board (B3): two workspaces whose paths end in the same segment must render distinct badge colors, and a `#number` / bare slug in a session must never reach another workspace. Kernel resolution is unit-tested; the rendering halves ship with the board.
 - [ ] A4 bash-ask — with one ticket in-progress and another awaiting verification, a bash call must NOT ask; with only awaiting-verification, it asks. Exercise both on a live session.
 - [ ] B3 (the board in daily use) — work real tickets through it for one session and say whether the gate refusals help or annoy. That judgment cannot be made from tests. Retargeted from the Python prototype on 2026-08-21, because U5 deletes it.
