@@ -1709,6 +1709,15 @@ the plan format round trips description and phase.
   the tool output schema for `get_tickets` accepts the new field
   two workspaces whose paths end in the same segment still render different chip colors
 
+- [ ] **Ticket U18: The board tiles inside its view.** The grid column and the detail
+  panel each scroll on their own, and neither one grows the page behind the board. The
+  layout caps its height, both panes carry their own scroll, and the grid chrome stays
+  visible while the tiles scroll under it.
+  **Evaluate:** scrolling the tile grid leaves the detail panel where it is
+  scrolling the detail panel leaves the tile grid where it is
+  the page behind the board shows no scrollbar of its own
+  the ticket count and the Plan and Create controls stay visible while the grid scrolls
+
 ## User preferences and special rules
 
 - **STE for all user-facing prose.** ASD-STE100 Simplified Technical English, as close as the

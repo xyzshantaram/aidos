@@ -35,6 +35,13 @@
   --badge-hue-6: #a85578;
   --badge-hue-7: #3c7fa8;
   --badge-hue-8: #8a8a3c;
+
+  /* State chips (U14): mid-saturation backgrounds that keep white text readable. */
+  --state-open: #4e5a66;
+  --state-in-progress: #3c6ea5;
+  --state-awaiting: #a07a2a;
+  --state-done: #3f8a52;
+  --metric-bg: #3a3c41;
 }
 
 /* ── 2. Typography + base ──────────────────────────────── */
@@ -45,7 +52,10 @@
   gap: var(--space-1);
   padding: 0.75rem 1rem 1.5rem;
   width: 100%;
-  min-height: 100%;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text-primary);
   font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -74,28 +84,39 @@
 .aidos-layout {
   display: flex;
   gap: var(--space-2);
-  align-items: flex-start;
+  align-items: stretch;
+  height: 100%;
+  max-height: 100dvh;
+  overflow: hidden;
   flex: 1;
   min-width: 0;
   width: 100%;
 }
 
-/* Detail open: the ticket column and the detail split the row 50/50 and the
-   detail stays pinned while the ticket column scrolls the page. */
+/* U18: the board tiles inside the view. The layout caps its own height, and
+   each pane scrolls on its own, so the page behind the board never scrolls.
+   A host that gives no definite height leaves the cap at the viewport. */
 .aidos-layout:has(> .aidos-detail) {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  align-items: start;
+  align-items: stretch;
 }
 
 .aidos-layout > .aidos-detail {
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
   overflow-y: auto;
   width: auto;
-  align-self: start;
 }
+
+/* The detail panel is a column flex box with a capped height, so its
+   children must never shrink. Without this the summary table (overflow
+   hidden) collapses on a ticket with a long description. */
+.aidos-layout > .aidos-detail > * {
+  flex: none;
+}
+
 
 .aidos-grid-wrap {
   flex: 1;
@@ -103,6 +124,8 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .aidos-grid-chrome {
@@ -110,6 +133,13 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-1);
+  /* U18: the chrome stays visible while the tile grid scrolls under it. */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex: none;
+  padding-block: 2px;
+  background: var(--bg);
 }
 
 .aidos-board-grid {
@@ -131,6 +161,22 @@
   }
 }
 
+/* Detail open: the grid drops one column step (spec §5). */
+.aidos-layout:has(> .aidos-detail) .aidos-board-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 1400px) {
+  .aidos-layout:has(> .aidos-detail) .aidos-board-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .aidos-layout:has(> .aidos-detail) .aidos-board-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 /* ── 4. Section headers (spec §5) ─────────────────────── */
 .aidos-panel-section {
   display: flex;
@@ -157,11 +203,12 @@
 }
 
 .aidos-panel-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-secondary);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
 }
 
 .section-description {
@@ -314,44 +361,26 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-/* used for criteria / evidence rows - map directly */
-.aidos-criterion {
+/* criteria — one bullet per criterion (spec §6) */
+.aidos-criteria {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface);
 }
 
-.aidos-criterion-uncovered {
-  background: var(--surface-hover);
-  opacity: 0.9;
-  border-style: dashed;
-}
-
-.aidos-criterion-ungrouped {
-  border-style: dashed;
-}
-
-.aidos-criterion-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.aidos-criterion-label {
-  font-size: 11px;
-  line-height: 16px;
+.aidos-criterion {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
   color: var(--text-secondary);
 }
 
-.aidos-criterion-count {
-  font-size: 10px;
-  line-height: 14px;
+.aidos-criterion-uncovered {
   color: var(--text-muted);
+  background: var(--surface-hover);
 }
 
 .aidos-evidence-row-item {
@@ -420,100 +449,44 @@
   gap: 6px;
 }
 
-/* ── 8. Pills (spec §9) ───────────────────────────────── */
-.pill,
-.aidos-evidence-tag,
-.aidos-dep-badge,
-.aidos-state-badge,
-.aidos-ticket-id-badge {
-  height: 1.125rem;
+/* ── 8. Chips (spec §3, §10) ───────────────────────────── */
+.aidos-chip {
+  height: 18px;
   display: inline-flex;
   align-items: center;
-  padding-inline: 0.375rem;
+  padding-inline: 6px;
   border: 0;
   border-radius: 3px;
-  background: var(--surface-active);
+  background: var(--metric-bg);
   color: #f9fafb;
-  font-size: 0.6875rem;
+  font-size: 11px;
+  line-height: 16px;
   font-weight: 600;
   white-space: nowrap;
   flex: none;
 }
 
-.pill[data-active="true"] {
-  background: var(--surface-active);
-  color: var(--text-primary);
-}
-
-.aidos-evidence-tag {
-  font-size: 10px;
-  line-height: 14px;
-  border-radius: var(--radius-pill);
-  padding: 0 8px;
-}
-
-.aidos-dep-badge {
-  font-size: 10px;
-  line-height: 14px;
-  border-radius: var(--radius-pill);
-  padding: 0 8px;
-  color: #f9fafb;
-  background: var(--surface);
-}
-
-.aidos-state-badge {
-  font-size: 0.6875rem;
-  line-height: 1.125rem;
-  border-radius: 3px;
-  padding: 0 6px;
-}
-
-.aidos-state-open {
-  color: #f9fafb;
-  background: #48494d;
-}
-
-.aidos-state-in-progress {
-  color: #f9fafb;
-  background: #2f6feb;
-}
-
-.aidos-state-awaiting-verification {
-  color: #f9fafb;
-  background: #9e6a03;
-}
-
-.aidos-state-done {
-  color: #f9fafb;
-  background: #1a7f37;
-}
-
-.aidos-ticket-id-badge {
-  font-size: 0.6875rem;
-  line-height: 1.125rem;
-  border-radius: 3px;
-  padding: 0 6px;
-  height: auto;
-  background: var(--surface-hover);
-  color: #f9fafb;
-}
-
-/* id badge — deterministic hue per workspace, white text (U6) */
-.aidos-id-badge {
-  height: 1.125rem;
-  display: inline-flex;
-  align-items: center;
-  padding-inline: 0.375rem;
-  border: 0;
-  border-radius: 3px;
-  background: var(--surface-active);
+/* The markup sets the hashed background inline. This fallback keeps the chip readable without it. */
+.aidos-chip-id,
+.aidos-chip-kind,
+.aidos-chip-dep {
   background: var(--badge-hue-1);
-  color: #f9fafb;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  white-space: nowrap;
-  flex: none;
-  line-height: 1.125rem;
+}
+
+.aidos-chip-state-open {
+  background: var(--state-open);
+}
+
+.aidos-chip-state-in-progress {
+  background: var(--state-in-progress);
+}
+
+.aidos-chip-state-awaiting-verification {
+  background: var(--state-awaiting);
+}
+
+.aidos-chip-state-done {
+  background: var(--state-done);
 }
 
 .aidos-dep-row {
@@ -636,6 +609,21 @@
 .aidos-modal-row textarea:focus,
 .aidos-modal-row select:focus {
   border-color: var(--border-focus);
+}
+
+/* forms never overflow their container (spec §8) */
+.aidos-root input,
+.aidos-root textarea,
+.aidos-root select,
+.aidos-detail input,
+.aidos-detail textarea,
+.aidos-detail select,
+.aidos-modal input,
+.aidos-modal textarea,
+.aidos-modal select {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* search box wrapper */
@@ -803,52 +791,27 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  height: 156px;
+  flex: none;
   padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   cursor: pointer;
   min-width: 0;
+  overflow: hidden;
   text-align: left;
   color: var(--text-primary);
 }
-
-.aidos-tile-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
 .aidos-tile-preview {
   margin: 0;
-  font-size: 0.75rem;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 16px;
   color: var(--text-secondary);
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  min-height: 2.7em;
-}
-
-.aidos-ring-inline .aidos-ring {
-  width: 28px;
-  height: 28px;
-}
-
-.aidos-ring-inline .aidos-ring-percent {
-  font-size: 9px;
-  font-weight: 700;
-}
-
-.aidos-ring-inline .aidos-ring-na {
-  font-size: 7px;
-}
-
-.aidos-ring-inline .aidos-ring-asterisk {
-  display: none;
 }
 
 .aidos-tile:hover {
@@ -862,9 +825,9 @@
 }
 
 .aidos-tile-title {
-  font-size: 0.8125rem;
+  font-size: 13px;
   font-weight: 600;
-  line-height: 1.3;
+  line-height: 18px;
   margin: 0;
   overflow: hidden;
   display: -webkit-box;
@@ -878,35 +841,20 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  min-width: 0;
 }
 
-.aidos-tile-gate {
-  font-size: 0.8125rem;
-  line-height: 16px;
-  color: var(--text-secondary);
+.aidos-tile-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-/* confidence ring */
-.aidos-ring {
-  width: 64px;
-  height: 64px;
-}
-
-.aidos-ring-percent {
-  font-size: 13px;
-  font-weight: 700;
-  fill: var(--text-primary);
-}
-
-.aidos-ring-asterisk {
-  font-size: 10px;
-  fill: var(--text-secondary);
-}
-
-.aidos-ring-na {
-  font-size: 11px;
-  fill: var(--text-muted);
-}
+/* The confidence ring and the tile gate text are gone: the tile shows a gate
+   chip and a confidence chip instead (U15). */
 
 /* detail header / body */
 .aidos-detail-head {
@@ -937,8 +885,8 @@
   margin: 0;
 }
 
-/* quick-facts summary table (U7) */
-.aidos-summary-table {
+/* quick facts (spec §6) */
+.aidos-facts {
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -947,7 +895,7 @@
   overflow: hidden;
 }
 
-.aidos-summary-row {
+.aidos-facts-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -955,24 +903,24 @@
   padding: 4px 8px;
 }
 
-.aidos-summary-row + .aidos-summary-row {
+.aidos-facts-row + .aidos-facts-row {
   border-top: 1px solid var(--border-subtle);
 }
 
-.aidos-summary-label {
+.aidos-facts-label {
   font-size: 11px;
   line-height: 16px;
   color: var(--text-muted);
 }
 
-.aidos-summary-value {
+.aidos-facts-value {
   margin: 0;
   font-size: 0.8125rem;
   line-height: 16px;
   color: var(--text-primary);
 }
 
-.aidos-summary-asterisk {
+.aidos-facts-asterisk {
   margin-left: 2px;
   color: var(--text-secondary);
   cursor: help;
@@ -990,6 +938,175 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   padding: 8px;
+}
+
+/* detail panels (spec §6) */
+.aidos-panel {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  min-width: 0;
+}
+
+.aidos-panel-toggle {
+  flex: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.aidos-panel-toggle:hover {
+  color: var(--text-primary);
+}
+
+.aidos-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* evidence — one row reads as one bullet on one line (spec §6) */
+.aidos-evidence-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.aidos-evidence-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* rendered markdown (spec §7) */
+.aidos-md {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-secondary);
+}
+
+.aidos-md p {
+  margin: 0 0 6px;
+}
+
+.aidos-md p:last-child {
+  margin-bottom: 0;
+}
+
+.aidos-md ul,
+.aidos-md ol {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+
+.aidos-md li {
+  margin: 0;
+}
+
+.aidos-md code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--surface-active);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.aidos-md pre {
+  margin: 0 0 6px;
+  padding: 6px 8px;
+  border-radius: 3px;
+  background: var(--surface-active);
+  overflow-x: auto;
+}
+
+.aidos-md pre code {
+  padding: 0;
+  background: none;
+}
+
+.aidos-md a {
+  color: var(--text-primary);
+}
+
+.aidos-md strong {
+  color: var(--text-primary);
+}
+
+.aidos-md em {
+  color: var(--text-secondary);
+}
+
+.aidos-md h1,
+.aidos-md h2,
+.aidos-md h3,
+.aidos-md h4 {
+  margin: 8px 0 6px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.aidos-md h1 {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.aidos-md h2 {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.aidos-md h3 {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.aidos-md h4 {
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.aidos-md blockquote {
+  margin: 0 0 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+}
+
+.aidos-md-clipped {
+  max-height: 320px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 78%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 78%, transparent 100%);
+}
+
+.aidos-md-more {
+  align-self: flex-start;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.aidos-md-more:hover {
+  color: var(--text-primary);
 }
 
 /* sort row — style select as text-input */
@@ -1356,6 +1473,9 @@
 .aidos-merge-loading {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 240px;
   gap: 10px;
   padding: 24px 4px;
   color: var(--text-secondary);
