@@ -497,52 +497,17 @@ function ProjectionReader(props: ProjectionReaderProps) {
       }}
     />
   );
-  // The board must fit the box the host gives it. A viewport-height cap is
-  // wrong when the board sits inside a scrolling container that is shorter
-  // than the window. Walk up to the nearest scrolling ancestor, measure the
-  // room left below the top of the board, and publish it. The stylesheet caps
-  // the layout with that number, so each pane scrolls on its own.
-  const layoutRef = react.useRef<HTMLDivElement | null>(null);
-  react.useLayoutEffect(function () {
-    const element = layoutRef.current;
-    if (element === null) return;
-    const scrollParentOf = function (node: HTMLElement): HTMLElement | null {
-      let parent = node.parentElement;
-      while (parent !== null) {
-        const style = window.getComputedStyle(parent);
-        const scrolls = style.overflowY === "auto" || style.overflowY === "scroll";
-        if (scrolls && parent.clientHeight > 0) return parent;
-        parent = parent.parentElement;
-      }
-      return null;
-    };
-    const sync = function () {
-      const top = element.getBoundingClientRect().top;
-      const parent = scrollParentOf(element);
-      const room =
-        parent === null
-          ? window.innerHeight - top
-          : parent.clientHeight - (top - parent.getBoundingClientRect().top);
-      element.style.setProperty("--aidos-board-height", Math.max(160, Math.round(room)) + "px");
-    };
-    sync();
-    window.addEventListener("resize", sync);
-    let observer: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(sync);
-      observer.observe(document.documentElement);
-      const parent = element.parentElement;
-      if (parent !== null) observer.observe(parent);
-    }
-    return function () {
-      window.removeEventListener("resize", sync);
-      if (observer !== null) observer.disconnect();
-    };
-  }, []);
+  // The conversation shell gives a view a definite-height box only when the
+  // view asks for composer-overlay mode. The data attribute below is that
+  // request. The shell then sets the view area to flex 1 1 0 with a zero
+  // min-height and floats the composer over the bottom edge. The page never
+  // scrolls, and each board pane scrolls on its own. The stylesheet keeps the
+  // panes clear of the floating composer through --dsh-composer-height, which
+  // the shell publishes.
 
   return (
     <>
-      <div className="aidos-layout" ref={layoutRef}>
+      <div className="aidos-layout" data-conversation-composer-overlay="">
         {body}
         {detailPanel}
       </div>
