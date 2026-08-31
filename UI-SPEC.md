@@ -78,7 +78,8 @@ because the state must survive a grey screenshot and a colorblind reader.
 └──────────────────────────────────────┘
 ```
 
-- Fixed height, so the grid stays even: `156px`.
+- Fixed height, so the grid stays even: `168px`. The chip row sits on the
+  bottom edge, so the space above it grows on a short card.
 - Title clamps at two lines, preview clamps at two lines, both with ellipsis.
 - Row 4 scrolls nothing and clips extra chips with a `+N` chip.
 

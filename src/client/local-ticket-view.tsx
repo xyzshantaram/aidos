@@ -497,17 +497,33 @@ function ProjectionReader(props: ProjectionReaderProps) {
       }}
     />
   );
-  // The board starts below the app chrome, so a viewport-height cap leaves
-  // both panes taller than the view and the page scrolls. Measure the top
-  // offset of the layout and publish it, so the stylesheet caps the height by
-  // the space the board really has.
+  // The board must fit the box the host gives it. A viewport-height cap is
+  // wrong when the board sits inside a scrolling container that is shorter
+  // than the window. Walk up to the nearest scrolling ancestor, measure the
+  // room left below the top of the board, and publish it. The stylesheet caps
+  // the layout with that number, so each pane scrolls on its own.
   const layoutRef = react.useRef<HTMLDivElement | null>(null);
   react.useLayoutEffect(function () {
     const element = layoutRef.current;
     if (element === null) return;
+    const scrollParentOf = function (node: HTMLElement): HTMLElement | null {
+      let parent = node.parentElement;
+      while (parent !== null) {
+        const style = window.getComputedStyle(parent);
+        const scrolls = style.overflowY === "auto" || style.overflowY === "scroll";
+        if (scrolls && parent.clientHeight > 0) return parent;
+        parent = parent.parentElement;
+      }
+      return null;
+    };
     const sync = function () {
       const top = element.getBoundingClientRect().top;
-      element.style.setProperty("--aidos-board-top", Math.max(0, Math.round(top)) + "px");
+      const parent = scrollParentOf(element);
+      const room =
+        parent === null
+          ? window.innerHeight - top
+          : parent.clientHeight - (top - parent.getBoundingClientRect().top);
+      element.style.setProperty("--aidos-board-height", Math.max(160, Math.round(room)) + "px");
     };
     sync();
     window.addEventListener("resize", sync);
@@ -515,6 +531,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
     if (typeof ResizeObserver !== "undefined") {
       observer = new ResizeObserver(sync);
       observer.observe(document.documentElement);
+      const parent = element.parentElement;
+      if (parent !== null) observer.observe(parent);
     }
     return function () {
       window.removeEventListener("resize", sync);

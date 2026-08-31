@@ -85,12 +85,13 @@
   display: flex;
   gap: var(--space-2);
   align-items: stretch;
-  height: 100%;
+  height: var(--aidos-board-height, 100%);
   min-width: 0;
   width: 100%;
-  /* The board starts below the app chrome. The host sets
-     --aidos-board-top to the offset at runtime. */
-  max-height: calc(100dvh - var(--aidos-board-top, 0px));
+  /* The view sets --aidos-board-height at runtime: the room left inside the
+     nearest scrolling ancestor, below the top of the board. The fallback
+     keeps the board inside the window when no measurement arrives. */
+  max-height: var(--aidos-board-height, 100dvh);
   overflow: hidden;
   flex: 1;
 }
@@ -384,7 +385,8 @@
 .aidos-criterion {
   min-width: 0;
   font-size: 13px;
-  line-height: 20px;
+  line-height: 22px;
+  padding-block: 2px;
   color: var(--text-secondary);
 }
 
@@ -488,10 +490,10 @@
 
 /* ── 8. Chips (spec §3, §10) ───────────────────────────── */
 .aidos-chip {
-  height: 18px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
-  padding-inline: 6px;
+  padding-inline: 7px;
   border: 0;
   border-radius: 3px;
   background: var(--metric-bg);
@@ -520,7 +522,7 @@
 }
 
 .aidos-chip-key {
-  padding-inline: 6px;
+  padding-inline: 7px;
 }
 
 .aidos-chip-count {
@@ -742,7 +744,7 @@
 }
 
 .aidos-comment-send {
-  height: 1.75rem;
+  height: 2rem;
   padding-inline: 0.75rem;
   border: 0;
   border-radius: 4px;
@@ -772,7 +774,7 @@
   border-radius: 4px;
   font-size: 12px;
   line-height: 20px;
-  padding: 2px 10px;
+  padding: 5px 12px;
 }
 
 .aidos-btn:hover,
@@ -850,8 +852,8 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  height: 156px;
+  gap: 8px;
+  height: 168px;
   flex: none;
   padding: 10px 12px;
   background: var(--surface);
@@ -1001,7 +1003,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 7px 10px;
 }
 
 .aidos-facts-row + .aidos-facts-row {
@@ -1044,14 +1046,14 @@
 .aidos-panel {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  padding: 8px;
+  padding: 10px 12px;
   min-width: 0;
 }
 
 /* Panels sit in the detail column flex box, so the 10px gap separates them.
    The margin keeps stacked panels apart when markup skips the flex gap. */
 .aidos-panel + .aidos-panel {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 /* The panel head is the disclosure summary. It keeps the title on the left
@@ -1061,6 +1063,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-1);
+  padding-block: 2px;
   list-style: none;
   cursor: pointer;
 }
@@ -1089,7 +1092,8 @@
 .aidos-panel-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding-top: 8px;
   min-width: 0;
 }
 
@@ -1101,15 +1105,16 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .aidos-evidence-item {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  font-size: 11px;
-  line-height: 16px;
+  gap: 8px;
+  padding-block: 4px;
+  font-size: 12px;
+  line-height: 20px;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -1520,20 +1525,37 @@
 }
 
 /* comments */
-.aidos-comments-section {
+/* A row of controls that sits at the right edge of its block: the comment
+   send button, the evidence attach button, and the save and cancel pair of an
+   inline editor. */
+.aidos-form-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+}
+
+/* The inline editor of a panel: the raw text behind a rendered block. */
+.aidos-panel-body textarea {
+  width: 100%;
+  min-height: 9rem;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  resize: vertical;
 }
 
 .aidos-comment {
   font-size: 12px;
-  line-height: 18px;
+  line-height: 20px;
   color: var(--text-primary);
   background: var(--bg);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 6px 8px;
+  padding: 8px 10px;
 }
 
 /* evidence attach form */
