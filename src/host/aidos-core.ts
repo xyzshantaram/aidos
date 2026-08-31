@@ -357,6 +357,7 @@ const TICKET_VIEW_ZOD = zod.object({
   gateTotal: zod.number().nullable(),
   updatedAt: zod.number(),
   workspaceKey: zod.string(),
+  slug: zod.string(),
   dependsOn: zod.array(zod.string()),
 });
 const PLAN_VALUE_ZOD = zod.object({
@@ -513,6 +514,7 @@ export class AidosService extends TypertRemoteService {
     "invariants",
     "settings",
     "workspaceRegistry",
+    "sessions",
   ];
 
   static Config = z.object({});
@@ -725,6 +727,7 @@ registerAidosSessionEventTypes(ctx);
       }));
     return renderPlan({
       frontmatter: meta.frontmatter,
+      frontmatterData: {},
       preamble: meta.preamble,
       contextSections: meta.contextSections,
       phases,
@@ -2062,6 +2065,7 @@ registerAidosSessionEventTypes(ctx);
         gateTotal: progress.total,
         updatedAt: snapshot.updatedAt,
         workspaceKey: snapshot.workspaceKey,
+        slug: snapshot.slug,
       };
     }
     return out;

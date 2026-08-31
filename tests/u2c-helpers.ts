@@ -27,6 +27,7 @@ export function makeTicket(
     gateTotal: null,
     updatedAt: 0,
     workspaceKey: "default",
+    slug: "t",
     dependsOn: [],
     ...overrides,
   };

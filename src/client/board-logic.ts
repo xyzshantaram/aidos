@@ -24,6 +24,8 @@ interface TicketLike {
   id: number;
   /** The workspace key. The id badge color folds over it. */
   workspaceKey: string;
+  /** The slug. The full global id is `<workspaceKey>:<slug>`. */
+  slug: string;
   projectId: number;
   title: string;
   criteria: string;
@@ -399,16 +401,28 @@ export function displayDep(ref: string): string {
 }
 
 /**
- * The full ticket id: the workspace key, a colon, and the numeric id. The
+ * The full ticket id: the workspace key, a colon, and the slug. The
  * display form is displayDep of this string. The badge color hashes this
  * string, so two workspaces whose keys share the last path segment get
  * different colors (C5).
  */
 export function fullTicketId(ticket: {
+  workspaceKey: string;
+  slug: string;
+}): string {
+  return ticket.workspaceKey + ":" + ticket.slug;
+}
+
+/**
+ * The short chip label of one ticket: `aidos#<id>`. The chip shows the
+ * number because a slug is too long for a chip. The title attribute keeps
+ * the full id from fullTicketId.
+ */
+export function ticketChipLabel(ticket: {
   id: number;
   workspaceKey: string;
 }): string {
-  return ticket.workspaceKey + ":" + ticket.id;
+  return displayDep(ticket.workspaceKey + ":" + ticket.id);
 }
 
 /** The id badge hues. Each entry is a mid-saturation background for white text. */

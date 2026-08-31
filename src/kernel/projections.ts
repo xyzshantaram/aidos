@@ -38,6 +38,8 @@ export interface TicketView extends TicketRow {
   updatedAt: number;
   /** The workspace key of the ticket's own workspace. Carried for the board's per-workspace storage key. */
   workspaceKey: string;
+  /** The slug of the ticket. The full global id is `<workspaceKey>:<slug>`. */
+  slug: string;
 }
 
 /**
@@ -169,6 +171,7 @@ export function ticketsProjection(
       gateTotal: progress.total,
       updatedAt: snapshot.updatedAt,
       workspaceKey: snapshot.workspaceKey,
+      slug: snapshot.slug,
     });
   }
   return out;

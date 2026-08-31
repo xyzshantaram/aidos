@@ -25,6 +25,7 @@ import {
   ringPercent,
   fullTicketId,
   idColor,
+  ticketChipLabel,
 } from "../src/client/board-logic";
 
 const ALL_STATES: TicketState[] = ["open", "in_progress", "awaiting_verification", "done"];
@@ -41,6 +42,7 @@ function makeTicket(overrides: Partial<TicketView> & { updatedAt?: number }) {
     criteria: "",
     phase: 0,
     workspaceKey: WORKSPACE_KEY,
+    slug: "t",
     order: 0,
     state: "open",
     confidenceScore: 0,
@@ -340,17 +342,28 @@ describe("ringPercent", () => {
 });
 
 describe("fullTicketId", () => {
-  it("joins the workspace key and the id with a colon", () => {
-    expect(fullTicketId(makeTicket({ id: 341 }))).toBe(WORKSPACE_KEY + ":341");
+  it("joins the workspace key and the slug with a colon", () => {
+    expect(fullTicketId(makeTicket({ id: 341 }))).toBe(WORKSPACE_KEY + ":t");
+  });
+
+  it("uses the ticket's own workspace key and slug", () => {
+    const ticket = makeTicket({
+      id: 7,
+      workspaceKey: "--home-sid-repos-other--",
+      slug: "seven",
+    });
+    expect(fullTicketId(ticket)).toBe("--home-sid-repos-other--:seven");
+  });
+});
+
+describe("ticketChipLabel", () => {
+  it("returns the aidos form with the numeric id", () => {
+    expect(ticketChipLabel(makeTicket({ id: 12 }))).toBe("aidos#12");
   });
 
   it("uses the ticket's own workspace key", () => {
-    const ticket = makeTicket({ id: 7, workspaceKey: "--home-sid-repos-other--" });
-    expect(fullTicketId(ticket)).toBe("--home-sid-repos-other--:7");
-  });
-
-  it("returns a string displayDep shortens to the aidos form", () => {
-    expect(displayDep(fullTicketId(makeTicket({ id: 5 })))).toBe("aidos#5");
+    const ticket = makeTicket({ id: 5, workspaceKey: "--srv-other--" });
+    expect(ticketChipLabel(ticket)).toBe("aidos#5");
   });
 });
 

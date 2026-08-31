@@ -19,8 +19,9 @@ import {
   fullTicketId,
   hasCriteria,
   idColor,
-  ringPercent,
   stateLabel,
+  ticketChipLabel,
+  ringPercent,
   kindLabel,
   uncoveredCriteria,
 } from "./board-logic";
@@ -379,7 +380,7 @@ export function DetailPanel(props: DetailPanelProps) {
           style={{ background: idColor(fullTicketId(ticket)) }}
           title={fullTicketId(ticket)}
         >
-          {displayDep(fullTicketId(ticket))}
+          {ticketChipLabel(ticket)}
         </span>
         <FieldEditor
           field="title"

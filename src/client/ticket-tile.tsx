@@ -14,6 +14,7 @@ import {
   hasCriteria,
   idColor,
   stateLabel,
+  ticketChipLabel,
 } from "./board-logic";
 import { ConfidenceRing } from "./confidence-ring";
 import { EvidenceTags } from "./evidence-tags";
@@ -42,7 +43,7 @@ export function TicketTile(props: TicketTileProps) {
           style={{ background: idColor(fullTicketId(ticket)) }}
           title={fullTicketId(ticket)}
         >
-          {displayDep(fullTicketId(ticket))}
+          {ticketChipLabel(ticket)}
         </span>
         <h3 className="aidos-tile-title">{ticket.title}</h3>
         <span className={badge}>{stateLabel(ticket.state)}</span>

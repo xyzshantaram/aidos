@@ -94,6 +94,7 @@ const TICKET_VIEW_SCHEMA = {
     },
     updatedAt: { type: "number", required: true },
     workspaceKey: { type: "string", required: true },
+    slug: { type: "string", required: true },
   },
 } as const;
 
