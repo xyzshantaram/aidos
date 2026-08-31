@@ -20,14 +20,15 @@ PLAN.md that `parsePlan` accepts.
   evidence row per ticket, authored by `system`. It records the claimed state.
 - `parsePlan` runs first. A parse error imports nothing.
 - The ticket body becomes the ticket description, shown in the detail view.
-  The text after `**Evaluate:**` becomes the criteria. The title becomes the
-  title.
+  The body before the marker becomes the ticket description, shown in the
+  detail view. The criterion list after the marker becomes the criteria. The
+  title becomes the title.
 - A `## Phase N: <title>` heading sets the phase number and the phase title of
   every ticket after it. A ticket under any other heading imports as phase 1.
   Document order decides the ticket order across the whole project.
-- Each physical line after `**Evaluate:**` is one separate criterion. Never
-  wrap a criterion across lines, because evidence rows match a criterion by
-  exact trimmed line text.
+- The criteria sit after an `**Evaluate:**` marker on its own continuation
+  line. Each criterion starts with `- `. A criterion may wrap across lines.
+  The parser joins a wrapped criterion with one space.
 - Frontmatter, preamble, and `## ` context sections are stored as plan meta.
 
 ## The document format
@@ -61,7 +62,7 @@ text. Use `## ` for any heading you want the parser to recognize.
 
 Each ticket is one line plus optional continuation lines:
 
-    - [ ] **Ticket ID: Title.** Body text here. **Evaluate:** Criteria text here.
+    - [ ] **Ticket ID: Title.** One sentence of scope prose. The prose may wrap
 
 Rules:
 
@@ -72,15 +73,26 @@ Rules:
 - The body can span more lines. Each continuation line starts with two spaces.
 - Every ticket MUST contain the marker `**Evaluate:**`. A ticket without
   `**Evaluate:**` throws a parse error.
-- Each physical line after `**Evaluate:**` is one separate criterion. Keep one
-  criterion per line and never wrap a criterion across lines.
+- The marker sits alone on its own continuation line. Criterion text on the
+  marker line is a parse error. The old format put text after the marker on
+  the ticket line. That format is refused.
+- After the marker, the first non-empty line must start with `- `. Each `- `
+  line starts one criterion. A following non-empty line that does not start
+  with `- ` wraps the criterion before it. The parser joins the wrap with one
+  space.
+- A ticket with no criteria after the marker throws a parse error.
 - Blank lines between tickets are allowed.
 
 Example with a continuation line and the marker:
 
-    - [ ] **Ticket U2d: Global cross-workspace Tickets entry.** The sidebar entry
-      opens a board of every live session's tickets. **Evaluate:** the entry lists
-      tickets from two workspaces and badges each by workspace
+    - [ ] **Ticket U2d: Global cross-workspace tickets entry.** The sidebar entry
+      opens a board of every live session's tickets.
+
+      **Evaluate:**
+
+      - the entry lists tickets from two workspaces
+      - the entry badges each ticket by workspace, and the badge survives a
+        page reload
 ## Verify before you import
 
 Run the bundled checker. It mirrors `src/plan/plan.ts` and reports the same

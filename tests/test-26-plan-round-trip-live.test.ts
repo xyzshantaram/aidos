@@ -40,11 +40,24 @@ The list below must survive:
 - one
 - two
 
-- [x] **Ticket 1: Read the kernel.** Read the store and note the API. **Evaluate:** The notes name every public method.
+- [x] **Ticket 1: Read the kernel.** Read the store and note the API.
+
+  **Evaluate:**
+
+  - The notes name every public method.
 - [ ] **Ticket 2: Choose the flags.** Pick one spelling for each flag.
   Keep the spelling the same in every subcommand.
-  Write the choice into a docstring. **Evaluate:** Every flag appears once in the docstring.
-- [ ] **Ticket 3: Write the suite.** One module for each subject. **Evaluate:** The suite fails on the missing module.
+  Write the choice into a docstring.
+
+  **Evaluate:**
+
+  - Every flag appears once in the docstring.
+- [ ] **Ticket 3: Write the suite.** One module for each subject.
+
+  **Evaluate:**
+
+  - The suite fails on the missing module.
+
 `;
 
 const FRONTMATTER = "---\nplan: Prototype plan\nowner: sid\n---";
@@ -63,7 +76,11 @@ The list below must survive:
 const BAD_PLAN_LINES = [
   "## Notes",
   "",
-  "- [ ] **Ticket 1: Read it.** A body. **Evaluate:** The work is done.",
+  "- [ ] **Ticket 1: Read it.** A body.",
+  "",
+  "  **Evaluate:**",
+  "",
+  "  - The work is done.",
   "",
   "This line is neither a ticket nor a continuation.",
   "",
@@ -336,8 +353,7 @@ describe("plan round trip live", () => {
     emptyKindsHarness.installService();
     apply(asContext(emptyKindsHarness.ctx), {});
 
-    const smallPlan = `- [ ] **Ticket 1: Do the work.** A body. **Evaluate:** The work is done.
-`;
+    const smallPlan = `- [ ] **Ticket 1: Do the work.** A body.\n\n  **Evaluate:**\n\n  - The work is done.\n`;
     const planFile = emptyKindsHarness.tempPlanFile(smallPlan);
 
     const refusal = failureJson(

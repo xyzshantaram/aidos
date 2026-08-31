@@ -26653,12 +26653,38 @@ function _finishTicket(raw) {
       `line ${raw.line} starts a ticket that holds no ${CRITERIA_MARKER} marker`
     );
   }
-  const markerAt = text.indexOf(CRITERIA_MARKER);
+  const markerLineAt = raw.lines.findIndex(
+    (line) => line.includes(CRITERIA_MARKER)
+  );
+  const markerLine = raw.lines[markerLineAt];
+  if (markerLine !== CRITERIA_MARKER) {
+    throw new PlanParseError(
+      raw.line,
+      `line ${raw.line} holds a ${CRITERIA_MARKER} marker with text on the same line. Put the marker alone on its own line, and put "- criterion" lines after it.`
+    );
+  }
+  const criteriaLines = raw.lines.slice(markerLineAt + 1).filter(
+    (line) => line !== ""
+  );
+  if (criteriaLines.length === 0 || !criteriaLines[0].startsWith("- ")) {
+    throw new PlanParseError(
+      raw.line,
+      `line ${raw.line} holds a ${CRITERIA_MARKER} marker with no list. Put one "- criterion" line after the marker for each criterion.`
+    );
+  }
+  const criteria = [];
+  for (const line of criteriaLines) {
+    if (line.startsWith("- ")) {
+      criteria.push(line.slice(2).trim());
+    } else {
+      criteria[criteria.length - 1] += " " + line.trim();
+    }
+  }
   return {
     id: raw.id,
     title: raw.title,
-    body: text.slice(0, markerAt).trim(),
-    criteria: text.slice(markerAt + CRITERIA_MARKER.length).trim(),
+    body: raw.lines.slice(0, markerLineAt).join("\n").trim(),
+    criteria: criteria.join("\n"),
     claimedState: raw.claimedState,
     order: raw.order,
     phase: raw.phase
@@ -26704,15 +26730,16 @@ ${text}`;
 function _renderTicket(ticket) {
   const head = `- [${STATE_MARKS[ticket.claimedState]}] **Ticket ${ticket.id}: ${ticket.title}.**`;
   const body = ticket.body.trim();
-  const parts = body ? body.split("\n") : [""];
-  const criteriaLines = ticket.criteria.trim().split("\n");
-  parts[parts.length - 1] = `${parts[parts.length - 1]} ${CRITERIA_MARKER} ${criteriaLines[0]}`.trim();
-  const lines = [`${head} ${parts[0]}`.trimEnd()];
-  for (const part of parts.slice(1)) {
+  const bodyLines = body ? body.split("\n") : [];
+  const lines = [`${head} ${bodyLines[0] ?? ""}`.trimEnd()];
+  for (const part of bodyLines.slice(1)) {
     lines.push(CONTINUATION_PREFIX + part.trim());
   }
-  for (const criteriaLine of criteriaLines.slice(1)) {
-    lines.push(CONTINUATION_PREFIX + criteriaLine.trim());
+  lines.push("");
+  lines.push(CONTINUATION_PREFIX + CRITERIA_MARKER);
+  lines.push("");
+  for (const criterion of ticket.criteria.trim().split("\n")) {
+    lines.push(`${CONTINUATION_PREFIX}- ${criterion.trim()}`);
   }
   return lines;
 }

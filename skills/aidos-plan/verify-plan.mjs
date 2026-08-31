@@ -88,17 +88,42 @@ function verify(text) {
       index += 1;
       continue;
     }
-    tickets.push({ line: index + 1, body: m[4].trim() ? [m[4].trim()] : [] });
+    tickets.push({
+      line: index + 1,
+      body: m[4].trim() ? [m[4].trim()] : [],
+    });
     index += 1;
   }
 
   for (const t of tickets) {
-    if (!t.body.join("\n").includes(CRITERIA_MARKER)) {
-      errors.push(`line ${t.line}: ticket has no ${CRITERIA_MARKER} marker`);
-    }
+    checkCriteria(t, errors);
   }
 
   return { errors, ticketCount: tickets.length };
+}
+
+/** Check the criteria list of one ticket against the list format. */
+function checkCriteria(t, errors) {
+  const markerIdx = t.body.findIndex((l) => l.includes(CRITERIA_MARKER));
+  if (markerIdx === -1) {
+    errors.push(
+      `line ${t.line} starts a ticket that holds no ${CRITERIA_MARKER} marker`,
+    );
+    return;
+  }
+  const marker = t.body[markerIdx];
+  if (marker !== CRITERIA_MARKER) {
+    errors.push(
+      `line ${t.line} holds a ${CRITERIA_MARKER} marker with text on the same line. Put the marker alone on its own line, and put "- criterion" lines after it.`,
+    );
+    return;
+  }
+  const criteria = t.body.slice(markerIdx + 1).filter((l) => l !== "");
+  if (criteria.length === 0 || !criteria[0].startsWith("- ")) {
+    errors.push(
+      `line ${t.line} holds a ${CRITERIA_MARKER} marker with no list. Put one "- criterion" line after the marker for each criterion.`,
+    );
+  }
 }
 
 /** The aidos checkout above this script, or null when it is not there. */
@@ -200,6 +225,14 @@ if (parsePlan !== null) {
     doc = parsePlan(text);
   } catch (e) {
     console.log(`PARSE ERROR in ${resolve(path)}: ${e.message}`);
+    process.exit(1);
+  }
+  // The real parser may lag the agreed format while src/plan/plan.ts is in
+  // flight, so the mirror checks the criteria rules on top of it as well.
+  const mirror = verify(text);
+  if (mirror.errors.length > 0) {
+    console.log(`PARSE ERRORS in ${path} (${mirror.ticketCount} tickets):`);
+    for (const e of mirror.errors) console.log(`  ${e}`);
     process.exit(1);
   }
   console.log(`OK: ${path} parses (${doc.tickets.length} tickets, real parser)`);

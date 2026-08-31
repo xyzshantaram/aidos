@@ -10,8 +10,8 @@
  *   tickets under headings that do not match get phase 1.
  * - The parsed ticket body lands in the description field, and the body
  *   field holds "".
- * - The export prefixes every criteria line after the first with two spaces,
- *   so the document re-imports to identical criteria.
+ * - The export prefixes the marker and every criteria line with two spaces, so
+ *   the document re-imports to identical criteria.
  * - The export emits one `## Phase N: <title>` heading per phase, so a
  *   phased document round trips, while a flat document stays flat.
  */
@@ -23,6 +23,7 @@ import type { PhaseSetEvent } from "../src/kernel/events";
 import {
   asContext,
   createHarness,
+  failureJson,
   successJson,
   type Harness,
 } from "./b1-harness";
@@ -32,42 +33,80 @@ const PHASED_PLAN = `# Phased plan
 
 ## Phase 2: aidos core — \`in_progress\`
 
-- [ ] **Ticket 1: Read the kernel.** Note the store API. **Evaluate:** The notes name every public method.
-- [ ] **Ticket 2: Choose the flags.** Pick one spelling for each flag. **Evaluate:** Every flag appears once in the docstring.
+- [ ] **Ticket 1: Read the kernel.** Note the store API.
+
+  **Evaluate:**
+
+  - The notes name every public method.
+- [ ] **Ticket 2: Choose the flags.** Pick one spelling for each flag.
+
+  **Evaluate:**
+
+  - Every flag appears once in the docstring.
 
 ## Phase 5: launch
 
-- [ ] **Ticket 3: Write the suite.** One module per subject. **Evaluate:** The suite fails on the missing module.
+- [ ] **Ticket 3: Write the suite.** One module per subject.
+
+  **Evaluate:**
+
+  - The suite fails on the missing module.
 `;
 
 /** A phase heading, then a non-phase heading, then a ticket. The ticket keeps phase 3. */
 const NON_PHASE_HEADING_PLAN = `## Phase 3: groundwork
 
-- [ ] **Ticket 1: First.** Do the work. **Evaluate:** The work is done.
+- [ ] **Ticket 1: First.** Do the work.
+
+  **Evaluate:**
+
+  - The work is done.
 
 ## Critical context
 
 The parser keeps this text.
 
-- [ ] **Ticket 2: Second.** Do more work. **Evaluate:** The work is done.
+- [ ] **Ticket 2: Second.** Do more work.
+
+  **Evaluate:**
+
+  - The work is done.
 `;
 
 /** A ticket before any phase heading, then a phase heading, then a ticket. */
-const EARLY_TICKET_PLAN = `- [ ] **Ticket 1: Early.** Do the work. **Evaluate:** The work is done.
+const EARLY_TICKET_PLAN = `
+- [ ] **Ticket 1: Early.** Do the work.
+
+  **Evaluate:**
+
+  - The work is done.
 
 ## Phase 4: later
 
-- [ ] **Ticket 2: Late.** Do the work. **Evaluate:** The work is done.
+- [ ] **Ticket 2: Late.** Do the work.
+
+  **Evaluate:**
+
+  - The work is done.
 `;
 
 /** A two line body. The prose must land in the description. */
 const BODY_PLAN = `- [ ] **Ticket 1: Choose the flags.** Pick one spelling for each flag.
-  Keep the spelling the same in every subcommand. **Evaluate:** Every flag appears once in the docstring.
+  Keep the spelling the same in every subcommand.
+
+  **Evaluate:**
+
+  - Every flag appears once in the docstring.
 `;
 
 /** A flat document whose criteria spans two lines. */
-const MULTI_CRITERIA_PLAN = `- [ ] **Ticket 1: Write the suite.** One module for each subject. **Evaluate:** The suite fails on the missing module.
-  The suite covers every subcommand.
+const MULTI_CRITERIA_PLAN = `
+- [ ] **Ticket 1: Write the suite.** One module for each subject.
+
+  **Evaluate:**
+
+  - The suite fails on the missing module.
+  - The suite covers every subcommand.
 `;
 
 /** A phased document with a two line body and a two line criteria field. */
@@ -76,19 +115,40 @@ const PHASED_MULTI_CRITERIA_PLAN = `# Phased plan
 ## Phase 2: aidos core — \`in_progress\`
 
 - [ ] **Ticket 1: Read the kernel.** Note the store API.
-  The notes name every public method. **Evaluate:** Every public method appears in the notes.
-- [ ] **Ticket 2: Choose the flags.** Pick one spelling. **Evaluate:** Every flag appears once in the docstring.
-  The spelling holds in every subcommand.
+  The notes name every public method.
+
+  **Evaluate:**
+
+  - Every public method appears in the notes.
+- [ ] **Ticket 2: Choose the flags.** Pick one spelling.
+
+  **Evaluate:**
+
+  - Every flag appears once in the docstring.
+  - The spelling holds in every subcommand.
 
 ## Phase 5: launch
 
-- [ ] **Ticket 3: Write the suite.** One module per subject. **Evaluate:** The suite fails on the missing module.
+- [ ] **Ticket 3: Write the suite.** One module per subject.
+
+  **Evaluate:**
+
+  - The suite fails on the missing module.
 `;
 
 /** A flat document with two tickets and a two line criteria field. */
-const FLAT_PLAN = `- [ ] **Ticket 1: Read the kernel.** Note the store API. **Evaluate:** The notes name every public method.
-- [ ] **Ticket 2: Choose the flags.** Pick one spelling. **Evaluate:** Every flag appears once in the docstring.
-  The spelling holds in every subcommand.
+const FLAT_PLAN = `
+- [ ] **Ticket 1: Read the kernel.** Note the store API.
+
+  **Evaluate:**
+
+  - The notes name every public method.
+- [ ] **Ticket 2: Choose the flags.** Pick one spelling.
+
+  **Evaluate:**
+
+  - Every flag appears once in the docstring.
+  - The spelling holds in every subcommand.
 `;
 
 /** Build one harness with the service installed and the tools applied. */
@@ -191,9 +251,9 @@ describe("plan import fields", () => {
 
     const exportedText = await exportPlanText(harness);
     expect(exportedText).toContain(
-      "**Evaluate:** The suite fails on the missing module.",
+      "  - The suite fails on the missing module.",
     );
-    expect(exportedText).toContain("\n  The suite covers every subcommand.");
+    expect(exportedText).toContain("\n  - The suite covers every subcommand.");
 
     const importer = makeHarness();
     const secondFile = importer.tempPlanFile(exportedText);
@@ -233,5 +293,72 @@ describe("plan import fields", () => {
     successJson(await importer.runTool("plan_import", { file: secondFile }));
     const secondData = planFieldsOf(await ticketRows(importer));
     expect(secondData).toEqual(firstData);
+  });
+/** A document whose one criterion wraps onto a second line. */
+const WRAPPED_CRITERION_PLAN = `- [ ] **Ticket 1: Write the suite.** One module for each subject.
+
+  **Evaluate:**
+
+  - the suite covers every subcommand and
+  every helper module
+`;
+
+/** A document whose ticket holds three criteria. */
+const THREE_CRITERIA_PLAN = `- [ ] **Ticket 1: Write the suite.** One module for each subject.
+
+  **Evaluate:**
+
+  - first.
+  - second.
+  - third.
+`;
+
+  it("a document in the old format is refused, and the error names the line", async () => {
+    const oldFormatPlan = `- [ ] **Ticket 1: Do the work.** A body. **Evaluate:** The work is done.\n`;
+    harness = makeHarness();
+    const planFile = harness.tempPlanFile(oldFormatPlan);
+    const refusal = failureJson(
+      await harness.runTool("plan_import", { file: planFile }),
+    );
+    expect(refusal.error).toBe("plan_parse_error");
+    expect(refusal.line).toBe(1);
+    expect(String(refusal.message)).toContain("text on the same line");
+  });
+
+  it("a wrapped list item parses as one criterion, not two", async () => {
+    await importPlan(WRAPPED_CRITERION_PLAN);
+
+    const rows = await ticketRows(harness);
+    expect(rows[0].criteria).toBe(
+      "the suite covers every subcommand and every helper module",
+    );
+  });
+
+  it("a marker with no list item is refused", async () => {
+    const noListPlan = `- [ ] **Ticket 1: Do the work.** A body.\n\n  **Evaluate:**\n`;
+    harness = makeHarness();
+    const planFile = harness.tempPlanFile(noListPlan);
+    const refusal = failureJson(
+      await harness.runTool("plan_import", { file: planFile }),
+    );
+    expect(refusal.error).toBe("plan_parse_error");
+    expect(String(refusal.message)).toContain("no list");
+  });
+
+  it("a render and parse round trip keeps several criteria in order", async () => {
+    await importPlan(THREE_CRITERIA_PLAN);
+
+    const firstCriteria = "first.\nsecond.\nthird.";
+    const rows = await ticketRows(harness);
+    expect(rows[0].criteria).toBe(firstCriteria);
+
+    const exportedText = await exportPlanText(harness);
+    expect(exportedText).toContain("  - first.\n  - second.\n  - third.");
+
+    const importer = makeHarness();
+    const secondFile = importer.tempPlanFile(exportedText);
+    successJson(await importer.runTool("plan_import", { file: secondFile }));
+    const secondRows = await ticketRows(importer);
+    expect(secondRows[0].criteria).toBe(firstCriteria);
   });
 });

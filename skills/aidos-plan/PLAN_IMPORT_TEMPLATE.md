@@ -23,22 +23,34 @@ phase title on the board. A ticket under any other heading imports as phase 1.
 ## Tickets
 
 Every ticket sits on one physical line, with continuation lines that start with
-two spaces. Every ticket carries an `**Evaluate:**` marker.
+two spaces. The body may wrap. The criteria sit after an `**Evaluate:**` marker
+on its own continuation line, as a list with one `- ` item per criterion.
 
 - [ ] **Ticket A1: First unit.** One sentence of scope prose. The prose may wrap
-  across continuation lines; the whole body becomes the ticket description shown
-  in the detail view. **Evaluate:** the build or test command that must pass
-  a second criterion sits on its own line, when the ticket needs one
-- [~] **Ticket A2: In-progress unit.** One sentence on scope. **Evaluate:** the
-  acceptance check for this ticket, stated so a human can verify it
-- [x] **Ticket A3: Done unit.** One sentence on scope. **Evaluate:** how it was
-  verified before closing
+  across continuation lines. The body before the marker becomes the ticket
+  description shown in the detail view.
+
+  **Evaluate:**
+
+  - the build or test command that must pass
+  - a second criterion, when the ticket needs one
+- [~] **Ticket A2: In-progress unit.** One sentence on scope.
+
+  **Evaluate:**
+
+  - the acceptance check for this ticket, stated so a human can verify it
+- [x] **Ticket A3: Done unit.** One sentence on scope.
+
+  **Evaluate:**
+
+  - how it was verified before closing
 
 ## Import rules
 
-- One criterion per physical line. Never wrap a criterion across lines. The
-  import treats each line after `**Evaluate:**` as one separate criterion, and
-  evidence rows match a criterion by exact trimmed line text.
+- One criterion per list item. Each criterion starts with `- ` after the
+  `**Evaluate:**` marker. A criterion may wrap across continuation lines. The
+  import joins a wrapped criterion with one space, and evidence rows match a
+  criterion by exact trimmed text.
 - Keep each criterion one short checkable sentence. Aim under 100 characters.
 - The mark never sets the live state. Import lands every ticket in `open` and
   records the mark as one `builtin:imported_state` evidence row. `[ ]` is open,

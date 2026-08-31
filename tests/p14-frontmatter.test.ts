@@ -47,8 +47,12 @@ One preamble paragraph.
 ## Phase 2: core
 
 - [x] **Ticket P8: A title here.** body prose
-  more body. **Evaluate:** first criterion.
-  second criterion.
+  more body.
+
+  **Evaluate:**
+
+  - first criterion.
+  - second criterion.
 `;
 
 /** The frontmatter block alone, byte for byte. */

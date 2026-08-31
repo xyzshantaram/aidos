@@ -21,14 +21,22 @@ import {
 } from "./b1-harness";
 
 /** A plan document that imports without an error. */
-const SMALL_PLAN = `- [ ] **Ticket 1: Do the work.** A body. **Evaluate:** The work is done.
+const SMALL_PLAN = `- [ ] **Ticket 1: Do the work.** A body.
+
+  **Evaluate:**
+
+  - The work is done.
 `;
 
 /** A plan document that holds a line the parser must reject. */
 const BAD_PLAN_LINES = [
   "## Notes",
   "",
-  "- [ ] **Ticket 1: Read it.** A body. **Evaluate:** The work is done.",
+  "- [ ] **Ticket 1: Read it.** A body.",
+  "",
+  "  **Evaluate:**",
+  "",
+  "  - The work is done.",
   "",
   "This line is neither a ticket nor a continuation.",
   "",
