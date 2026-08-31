@@ -47,7 +47,9 @@ function verify(text) {
       continue;
     }
     if (line.startsWith(HEADING_PREFIX)) {
-      // Context section: consume until the next heading or ticket.
+      // Context section: consume until the next heading or ticket. A
+      // `## Phase N: <title>` heading counts here too: parsePlan skips a
+      // phase marker and its prose, so the validation walk is the same.
       index += 1;
       while (
         index < lines.length &&

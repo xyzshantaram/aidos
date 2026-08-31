@@ -19,9 +19,15 @@ PLAN.md that `parsePlan` accepts.
   ` `) does not set the live state. The mark becomes one `builtin:imported_state`
   evidence row per ticket, authored by `system`. It records the claimed state.
 - `parsePlan` runs first. A parse error imports nothing.
-- The ticket body becomes the aidos ticket body. The text after `**Evaluate:**`
-  becomes the criteria. The title becomes the title. The document order becomes
-  the ticket order.
+- The ticket body becomes the ticket description, shown in the detail view.
+  The text after `**Evaluate:**` becomes the criteria. The title becomes the
+  title.
+- A `## Phase N: <title>` heading sets the phase number and the phase title of
+  every ticket after it. A ticket under any other heading imports as phase 1.
+  Document order decides the ticket order across the whole project.
+- Each physical line after `**Evaluate:**` is one separate criterion. Never
+  wrap a criterion across lines, because evidence rows match a criterion by
+  exact trimmed line text.
 - Frontmatter, preamble, and `## ` context sections are stored as plan meta.
 
 ## The document format
@@ -64,24 +70,17 @@ Rules:
 - The ID has no colon.
 - The title ends with a period before the closing `**`.
 - The body can span more lines. Each continuation line starts with two spaces.
-- Every ticket MUST contain the marker `**Evaluate:**`. The text after the
-  marker is the criteria. A ticket without `**Evaluate:**` throws a parse error.
+- Every ticket MUST contain the marker `**Evaluate:**`. A ticket without
+  `**Evaluate:**` throws a parse error.
+- Each physical line after `**Evaluate:**` is one separate criterion. Keep one
+  criterion per line and never wrap a criterion across lines.
 - Blank lines between tickets are allowed.
 
 Example with a continuation line and the marker:
 
     - [ ] **Ticket U2d: Global cross-workspace Tickets entry.** The sidebar entry
       opens a board of every live session's tickets. **Evaluate:** the entry lists
-      tickets from two workspaces and badges each by workspace.
-
-### What breaks the parser
-
-- A `### ` heading between tickets. Use `## ` instead.
-- A `---` rule or any non-indented line between tickets that is not a `## `
-  heading, a two-space continuation, or a ticket line.
-- A ticket with no `**Evaluate:**` marker.
-- A line that starts with two spaces before any ticket exists.
-
+      tickets from two workspaces and badges each by workspace
 ## Verify before you import
 
 Run the bundled checker. It mirrors `src/plan/plan.ts` and reports the same

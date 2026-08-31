@@ -15,8 +15,11 @@ Every user-facing document follows ASD-STE100 Simplified Technical English
 as closely as the subject allows. That covers the README, the help text,
 error messages, and anything the agent writes for a person to read.
 
-**Evaluation criteria below are a first draft.** None has your signoff yet.
-Under aidos's own rules a ticket cannot leave `open` without one, so treat
+**Evaluation criteria are rewritten in the new import format** (2026-08-26): one
+criterion per physical line, short and checkable, because evidence rows match a
+criterion by exact trimmed line text. Wrapped prose criteria fragmented on the
+first import. Treat every criterion here as a proposal to argue with, not a
+settled contract.
 every criterion here as a proposal to argue with, not a settled contract.
 
 ---
@@ -970,18 +973,19 @@ The workstation port (the W-series) moved to `~/repos/dotfiles-ai/PLAN.md` on
 
 ---
 
-## Checklist
+## Tickets
 
-The tickets below are the contract. The plan format is a flat checklist
-(P11, settled 2026-08-24): ticket order carries the sequence, and a series
-uses the ticket title. The kernel keeps `phase` and `order` fields for now.
-The Python prototype was dissolved on 2026-08-21: it had pinned the behavior it existed to pin, and the dsh
-package is now larger and better tested than its specification.
+The tickets below are the contract. Phase headings returned on 2026-08-26: a
+`## Phase N: <title> — \`<state>\`` heading sets the phase number and title of
+every ticket after it, which supersedes P11's flat-checklist settlement. Ticket
+order inside one phase carries the sequence. The kernel keeps `phase` and
+`order` fields. The Python prototype was dissolved on 2026-08-21: it had pinned
+the behavior it existed to pin, and the dsh package is now larger and better
+tested than its specification.
 
-### Phase 2: aidos core — `in_progress`
+## Phase 2: aidos core — `in_progress`
 
 **Goal.** The ticket kernel, on dsh. No board yet.
-
 - [ ] **Ticket C1: Workspace and data directory.** On dsh: `ctx.workspaceRegistry` plus the
   session `cwd`. Config lives in the profile and the settings. `move` repoints the workspace
   path and the session `cwd` through a Remote endpoint, not a filesystem move. Config-from-git
@@ -1000,9 +1004,9 @@ package is now larger and better tested than its specification.
   SECOND project, orphaning every ticket on the first. A correct move either writes
   the dsh workspace registry too (a registry aidos only reads today) or stops binding
   by path. Both are larger than B2's lifecycle scope.
-  **Evaluate:** a first run attaches the session to its workspace path. `move` repoints a
-  project and a later session opens in the new path. The sync script copies dotfiles-ai to
-  `$DSH_HOME`. A second run updates rather than duplicating.
+  **Evaluate:** a first run attaches the session to its workspace path
+  `move` repoints a project and a later session opens in the new path
+  the sync script copies dotfiles-ai to `$DSH_HOME` and a second run updates rather than duplicating
 
 - [x] **Ticket C5: Globally distinct ticket ids.** A ticket id becomes unique across every
   workspace, so one id can never mean two tickets. The raw form is the dsh canonical workspace
@@ -1049,11 +1053,11 @@ package is now larger and better tested than its specification.
   - **Display is short and the badge carries the difference.** `aidos:#341` renders as a pill
     whose color is a hash of the FULL workspace key, with the full path on hover. Two workspaces
     ending in the same segment read alike but never look alike.
-  **Evaluate:** creating a ticket with a slug the workspace already holds is refused. A rename
-  leaves every existing reference resolving to the same ticket. A bare `#341` in a session on
-  workspace A never resolves to a ticket in workspace B. A write against a foreign id is refused
-  and names the workspace to open. Two workspaces whose paths end in the same segment render
-  distinct badge colors.
+  **Evaluate:** creating a ticket with a slug the workspace already holds is refused
+  a rename leaves every existing reference resolving to the same ticket
+  a bare `#341` in a session on workspace A never resolves to a ticket in workspace B
+  a write against a foreign id is refused and names the workspace to open
+  two workspaces whose paths end in the same segment render distinct badge colors
 - [x] **Ticket C4: Plan import and serialization.** On dsh: the `plan` and `plan_import` tools
   plus the `plan` skill. Markdown with YAML frontmatter in. Markdown out on demand. The context
   cap applies at the write boundary. This file's design sections are the first real import; the
@@ -1069,8 +1073,8 @@ package is now larger and better tested than its specification.
   **Cap settled 2026-08-24 by grilling: raise it.** `PLAN_CONTEXT_LIMIT` moves to
   2000 so the bootstrap import of this file fits. New plans still respect the cap;
   only the constant changes.
-  **Evaluate:** import, serialize, and re-import produces an identical plan. A context section
-  over 500 lines is refused with a clear message naming the overage.
+  **Evaluate:** import, serialize, and re-import produces an identical plan
+  a context section over the cap is refused with a clear message naming the overage
 
 - [x] **Ticket P8: A review is its own evidence kind.** Register `builtin:review_pass`, labelled
   "Review pass", described as "A reviewer read the change and reported findings", weight 1.0. Add
@@ -1086,9 +1090,9 @@ package is now larger and better tested than its specification.
   that rule permanent.
   **Done.** `builtin:review_pass` is registered (weight 1.0), the gate requires it beside
   `automated_check`, and `test-30-tool-review-pass-is-its-own-kind` pins every criterion.
-  **Evaluate:** a ticket with a passing check and no review is refused, and the refusal names
-  `builtin:review_pass`. The same ticket moves once the review row exists. The number of gates a
-  human must satisfy is unchanged.
+  **Evaluate:** a ticket with a passing check and no review is refused, and the refusal names `builtin:review_pass`
+  the same ticket moves once the review row exists
+  the number of gates a human must satisfy is unchanged
 
 - [x] **Ticket P11: The plan format follows the plan-skill structure.** aidos adopts the section
   shape the `plan` skill defines: Vision, Checklist, Critical context, User preferences and
@@ -1119,8 +1123,9 @@ package is now larger and better tested than its specification.
     `{ tickets: TicketId[] }` (the `phases` key is dropped from the service
     return and from the `plan_import` tool output schema).
   - `PLAN_CONTEXT_LIMIT` moves 500 → 2000 (C4).
-  **Evaluate:** a document in the new shape round trips byte for byte. A document with no phase
-  heading parses without error. The round-trip tests cover the new shape, not only the old one.
+  **Evaluate:** a document in the new shape round trips byte for byte
+  a document with no phase heading parses without error
+  the round-trip tests cover the new shape, not only the old one
 
 ## Phase 3: HTTP and agent loop — `in_progress`
 
@@ -1141,9 +1146,9 @@ work is the tools and the gate enforcement.
   `awaiting_verification` is the ONLY state present, so a concurrent in-progress
   ticket suppresses the ask. `b1-bash-ask` covers it. The bypass suite is
   unwritten, and it carries the real risk of this ticket. It is B5.
-  **Evaluate:** an unmatched command asks and does not run. `git push` is refused while its gate
-  is unmet, and is not reachable through `git -C`, `sh -c`, an alias, or a script. A test suite
-  of bypass attempts is written first and each one fails to bypass.
+  **Evaluate:** an unmatched command asks and does not run
+  `git push` is refused while its gate is unmet, and is not reachable through `git -C`, `sh -c`, an alias, or a script
+  a test suite of bypass attempts is written first and each one fails to bypass
 
 - [ ] **Ticket A5: Subagent definitions.** On dsh: agent presets plus the subagent tool rows with
   `toolFilter`. Board tools refuse `delegationDepthOf > 0`, so only the orchestrator touches the
@@ -1166,13 +1171,11 @@ work is the tools and the gate enforcement.
   so a child scoped to `src/` cannot reach `docs/` through `sed -i`. It stops the
   WORKDIR, not an absolute path inside the command string, so it narrows the hole
   rather than closing it. `b1-allowlist` covers it.
-  **Evaluate:** a new definition file becomes a callable subagent with no code change. A
-  malformed definition fails to load with a message naming the file and the problem, and does
-  not stop the other definitions loading. A subagent that calls any board tool is refused, and
-  the refusal says the orchestrator is the only actor that may do it. After a session that ran
-  several subagents, the log holds no author other than `agent`, `user`, and `system`. A child
-  scoped to `src/` cannot run a bash command whose workdir falls outside `src/`, and the refusal
-  names the scope.
+  **Evaluate:** a new definition file becomes a callable subagent with no code change
+  a malformed definition fails to load with a message naming the file and the problem, and does not stop the other definitions loading
+  a subagent that calls any board tool is refused, and the refusal says the orchestrator is the only actor that may do it
+  after a session that ran several subagents, the log holds no author other than `agent`, `user`, and `system`
+  a child scoped to `src/` cannot run a bash command whose workdir falls outside `src/`, and the refusal names the scope
 
 - [ ] **Ticket A6: Subagents run detached.** On dsh: `ctx.jobs` plus the `job_output`/`job_list`/
   `job_kill` tools. Jobs outlive the parent turn and are listed per session. The orchestrator
@@ -1182,14 +1185,13 @@ work is the tools and the gate enforcement.
   already names the job tools. The aidos half does not exist. Nothing in `src/` reads
   `ctx.jobs`, and `agent_report` appears only as a kind string inside the tool
   descriptions. No code attaches a finished report as evidence. That glue is B5.
-  **Evaluate:** the parent agent spawns a job and takes its next action in the same turn, before
-  that job finishes. A status check names the job, its state, and how long it has run. A report
-  fetch against a running job is refused with text that tells the parent to check the status
-  again, and it does not block. A subagent that crashes or times out reports a terminal state
-  with a reason, so no parent can poll forever. Killing a job stops its process and leaves no
-  orphan. Two jobs run at once and neither report is attributed to the wrong job. A report
-  attached as evidence carries `agent` as its author and the subagent name as metadata, survives
-  a restart, and a query by subagent name and date returns it with its job identifier intact.
+  **Evaluate:** the parent agent spawns a job and takes its next action in the same turn, before that job finishes
+  a status check names the job, its state, and how long it has run
+  a report fetch against a running job is refused with text that tells the parent to check the status again, and it does not block
+  a subagent that crashes or times out reports a terminal state with a reason, so no parent can poll forever
+  killing a job stops its process and leaves no orphan
+  two jobs run at once and neither report is attributed to the wrong job
+  a report attached as evidence carries `agent` as its author and the subagent name as metadata, survives a restart, and a query by subagent name and date returns it with its job identifier intact
 
 - [x] **Ticket A7: The allowlist proposal and its approval.** The agent proposes file paths.
 
@@ -1225,10 +1227,10 @@ work is the tools and the gate enforcement.
   catch every writer. It ships WITH this ticket, not before: an enforced guard
   over an always-empty union would block every write until the approval flow can
   populate one.
-  **Evaluate:** a ticket with no approved row refuses every write, and the refusal names
-  the missing approval rather than an empty union. An `agentSetTicket` call naming a path
-  that no approved row carries is refused. A reworded approval appends a new row and leaves
-  the old one visible. The approval survives replay.
+  **Evaluate:** a ticket with no approved row refuses every write, and the refusal names the missing approval rather than an empty union
+  an `agentSetTicket` call naming a path that no approved row carries is refused
+  a reworded approval appends a new row and leaves the old one visible
+  the approval survives replay
   **Implemented 2026-08-21.** The guard registers prepended on both fs
   waterfalls and throws to refuse. An allowed write calls `next()`, so the
   observation-policy staleness bookkeeping still runs. Approved paths ride in
@@ -1309,28 +1311,17 @@ work is the tools and the gate enforcement.
   `updatedAt` and `workspaceKey` (host-side) so the Time-updated sort and
   per-workspace filter storage work from live data. The pure logic is
   verified; the visual checks below still need eyes on the real GUI.
-  **Evaluate:**
-  - The Tickets tab appears beside Chat and Trajectory. Its badge count changes live when a
-    ticket's state changes, with no page reload.
-  - A ticket created through another path appears in the grid with no reload, proving the live
-    subscription rather than a one-time fetch.
-  - Toggling a filter or sort control shows the orange Apply-dirty dot immediately and clears it
-    after Apply. Reset restores only the staged controls, leaving the last-applied state intact
-    until Apply runs again.
-  - Each of the four sort keys, and each key's documented tiebreak, produces the right order. The
-    ascending/descending toggle reverses it.
-  - A zero-criteria ticket shows "N/A" in the ring and sorts last regardless of the active sort key
-    or direction.
-  - Typing a partial title or id narrows the autocomplete list to loaded tickets only. Picking a
-    suggestion opens that ticket's panel directly and clears the search box.
-  - Selecting a tile sets `?ticket=<id>`. Reloading the page with that param open reopens the same
-    ticket, or shows a not-found toast if the id does not exist.
-  - Closing the panel, either way, pops the query param and does not leave a stray back-button
-    entry.
-  - The two empty-grid messages (no tickets at all, versus filtered-to-nothing) read differently,
-    and the filtered case offers a clear-filters action.
-  - Create opens a modal holding only a stub placeholder, not a working form.
-
+  **Evaluate:** the Tickets tab appears beside Chat and Trajectory, and its badge count changes live when a ticket's state changes, with no page reload
+  a ticket created through another path appears in the grid with no reload, proving the live subscription rather than a one-time fetch
+  toggling a filter or sort control shows the orange Apply-dirty dot immediately and clears it after Apply
+  reset restores only the staged controls, leaving the last-applied state intact until Apply runs again
+  each of the four sort keys, and each key's documented tiebreak, produces the right order, and the ascending/descending toggle reverses it
+  a zero-criteria ticket shows N/A in the ring and sorts last regardless of the active sort key or direction
+  typing a partial title or id narrows the autocomplete list to loaded tickets only, and picking a suggestion opens that ticket's panel directly and clears the search box
+  selecting a tile sets `?ticket=<id>`, and reloading the page with that param reopens the same ticket or shows a not-found toast
+  closing the panel, either way, pops the query param and does not leave a stray back-button entry
+  the two empty-grid messages read differently, and the filtered case offers a clear-filters action
+  create opens a modal holding only a stub placeholder, not a working form
 - [x] **Ticket U2b: Ticket detail panel and evidence.** Replaces U2a's generic placeholder panel
   with the real detail view: fields, criteria, and evidence grouped by the criterion it addresses,
   with uncovered criteria highlighted. Builds the real evidence tags U2a's tiles currently show as
@@ -1361,14 +1352,12 @@ work is the tools and the gate enforcement.
     pinned in B2). U2b itself is read-only and needs no Remote calls; it
     reads the `aidos.evidence` projection alongside `aidos.tickets`.
   **Evaluate:** not started.**
-  **Evaluate:** a ticket with evidence in two kinds shows two count tags on
-  its tile. A criterion with no rows is tinted and dimmed; one with rows is
-  not. Evidence with a `criteria` payload field groups under that criterion;
-  the board shows an ungrouped bucket for rows written before the check
-  existed. Attaching evidence whose `criteria` names no criterion line
-  refuses, naming the criterion. The detail panel opens at the side, shows
-  fields on top, and the evidence section collapses and expands. A dropped
-  connection reconnects and the view is correct afterward with no refresh.
+  **Evaluate:** a ticket with evidence in two kinds shows two count tags on its tile
+  a criterion with no rows is tinted and dimmed; one with rows is not
+  evidence with a `criteria` payload field groups under that criterion, and the board shows an ungrouped bucket for rows written before the check existed
+  attaching evidence whose `criteria` names no criterion line refuses, naming the criterion
+  the detail panel opens at the side, shows fields on top, and the evidence section collapses and expands
+  a dropped connection reconnects and the view is correct afterward with no refresh
 
 - [ ] **Ticket U2c: Ticket actions.** Create (replacing U2a's stub modal), field editing, state
   moves, signoff, and send-back, all through the Remote endpoints. Gate refusals surface as
@@ -1409,20 +1398,15 @@ work is the tools and the gate enforcement.
     decorator so the board can create and edit. The write path is the raw
     client-request POST from U2b's note: `payload.args` carries `{ agentId:
     <sessionId>, args: <business args> }` (the dsh-agent lookup wire).
-  **Evaluate:** host half landed; ui-B done.** The `userSetTicket` Remote (create/edit/state-move/signoff/send-back) is live and pinned by `b2-user-setticket-remote`. The eight action components are built and wired into DetailView. ui-B (board-level polish: evidence tags, gate-fraction column sort, state checklist, debounced search) is done. Remaining: hands-on verify of the full create/edit/signoff/send-back flow on a live session.
-  modal, signoff dialog, send-back modal, mark-done modal, comments section,
-  evidence attach form, field editor, action bar) are built, wired into a
-  DetailView wrapper around the detail panel, and the placeholder toast and
-  create stub are migrated to the real store and modal.
-  **Evaluate:** a ticket created through the modal appears in the grid with
-  no reload. Editing a field saves one field. Signoff with confirm moves
-  `open` to `in_progress` and shows the Active marker. Send-back with no
-  reason is refused; with a reason it comments and moves. Mark done shows
-  criteria then evidence then confirm, and moves on confirm. A gate refusal
-  (for example mark done with no `user_verified`) surfaces as a toast naming
-  the missing kind. The `in_progress` to `awaiting_verification` move hides
-  behind the advanced control. The allowlist half of `userSetTicket` is
-  U2e.
+  **Evaluate:** the `userSetTicket` Remote is live and pinned by `b2-user-setticket-remote`, and the eight action components are built and wired into DetailView
+  a ticket created through the modal appears in the grid with no reload
+  editing a field saves one field
+  signoff with confirm moves `open` to `in_progress` and shows the Active marker
+  send-back with no reason is refused; with a reason it comments and moves
+  mark done shows criteria then evidence then confirm, and moves on confirm
+  a gate refusal (for example mark done with no `user_verified`) surfaces as a toast naming the missing kind
+  the `in_progress` to `awaiting_verification` move hides behind the advanced control
+  the allowlist half of `userSetTicket` is U2e
 
 - [ ] **Ticket U2d: Global cross-workspace Tickets entry.** The sidebar-footer entry near New
   Session. Wraps U2a's `FilterPanel`/`TicketView` with the `projects` filter enabled, the
@@ -1448,7 +1432,9 @@ work is the tools and the gate enforcement.
     cold-reads its `aidos.tickets` projection via
     `ctx.sessionProjectionCache.coldSnapshot`. The client reads projections
     only for open sessions, so this is the cross-workspace read path.
-  **Evaluate:** host half dispatched.** `aidos.coldTickets(sessionId)` Remote (reads one live session's `aidos.tickets` projection) is in flight. The global board UI (U2d-ui: sidebar entry, per-session fetch, workspace badges, sync button, pagination) is the next dispatch, after the host half lands. NOTE: `coldSnapshot` from the plan does not exist in this dsh build — `ctx.sessionProjections.snapshot(session)` (live sessions only; no disk-scan API) is the real read path.
+  **Evaluate:** the global board lists tickets from every session that has an aidos project, and each tile carries a workspace badge whose color is a deterministic hash of the full workspace path
+  a session whose fetch failed shows a banner while the rest of the grid still renders
+  tiles stream in per session as each fetch resolves, and the sync button refetches all sessions
 
 - [ ] **Ticket U2e: Per-ticket allowlist editor.**
   **Scope (grilled 2026-08-24).**
@@ -1460,12 +1446,9 @@ work is the tools and the gate enforcement.
     evidence row (author `user`, payload `{ paths: string[] }`) with the new
     paths, matching the A7 design where the row is the durable approval
     record. The ticket field and the row are written together.
-  **Evaluate:** not started.**
-  **Evaluate:** adding a path through the modal makes a write to that path
-  succeed while the ticket is in-progress. Removing a path makes it refuse
-  again. The saved list appears both in the ticket's allowlist field and as a
-  `builtin:file_allowlist` evidence row. The union preview names the other
-  in-progress tickets' paths.
+  **Evaluate:** adding a path through the modal makes a write to that path succeed while the ticket is in-progress, and removing a path makes it refuse again
+  the saved list appears both in the ticket's allowlist field and as a `builtin:file_allowlist` evidence row
+  the union preview names the other in-progress tickets' paths
 
 - [ ] **Ticket U3: Evidence and screenshots.** `ctx.attachments` stores content-addressed
   images, hash-deduped. Evidence rows reference the attachment refs. Show the confidence score
@@ -1488,10 +1471,9 @@ work is the tools and the gate enforcement.
     apiproxy already admits browser uploads through
     `admitEncodedImages(ctx.attachments, images)`. The aidos Remote for
     admission is net-new (nothing in `src/` reads `ctx.attachments` today).
-  **Evaluate:** a pasted screenshot attaches as a `builtin:media` row and
-  survives a restart. A screenshot renders as a thumbnail in the detail
-  panel and opens full-size on click. The score is visibly marked advisory
-  and no control anywhere is enabled or disabled by it.
+  **Evaluate:** a pasted screenshot attaches as a `builtin:media` row and survives a restart
+  a screenshot renders as a thumbnail in the detail panel and opens full-size on click
+  the score is visibly marked advisory, and no control anywhere is enabled or disabled by it
 
 - [x] **Ticket U5: Delete the prototype.** Remove `prototype/` from the repository. It was a
   behavior specification with a scheduled death.
@@ -1507,8 +1489,8 @@ work is the tools and the gate enforcement.
   `test-25-tool-every-result-is-json.test.ts`. Every other TS test exercises the kernel or a
   tool, including the two carrying `cli` in the name, which import `makeStore` and test kernel
   behavior under a prototype-era filename. Rename those two rather than delete them.
-  **Evaluate:** `prototype/` is gone, the suite still passes, and no TS file imports anything
-  from it. The commit names the port map that replaced it.
+  **Evaluate:** `prototype/` is gone, the suite still passes, and no TS file imports anything from it
+  the commit names the port map that replaced it
   **Done:** `prototype/` directory deleted (all 38 tracked files plus both `__pycache__` dirs gone); `test-25-every-subcommand-prints-json.test.ts` culled as a 21-line no-assertion duplicate of the real `test-25-tool-every-result-is-json.test.ts`; `test-20-cli-author-is-agent.test.ts` renamed to `test-20-author-is-agent.test.ts` and `test-21-cli-refuses-human-only-kinds.test.ts` renamed to `test-21-refuses-human-only-kinds.test.ts` (the `cli` prefix was a prototype-era leftover; content unchanged). Port map: the Python prototype was replaced by the TS suite under `packages/aidos/tests/`; no TS file imports from `prototype/` — the only remaining references are historical doc comments in `src/plan/plan.ts:2` and `src/kernel/store.ts:2`.
 
 
@@ -1522,8 +1504,8 @@ work is the tools and the gate enforcement.
   provider, and the `skill` tool all ship with dsh. The aidos package contains no
   `SKILL.md`, so the preset ships no skill directory. This is the same gap C4 records
   for the plan skill. The token measurement has never been taken.
-  **Evaluate:** the always-on core is measurably small in tokens, and the number is recorded. A
-  task needing an inactive group triggers activation and then completes.
+  **Evaluate:** the always-on core is measurably small in tokens, and the number is recorded
+  a task needing an inactive group triggers activation and then completes
 
 - [x] **Ticket T5: Scratch workspaces and the scratch tool suite.** The scratch design in this
   plan's "Scratch, not the repo": `$DSH_HOME/aidos/scratch/<workspace-key>/`, durable on disk,
@@ -1584,19 +1566,101 @@ work is the tools and the gate enforcement.
   `dsh-fs-local` are a bare `node:fs/promises` import used for atomic-write staging, declared in
   no `.d.ts`. So `scratch_mkdir` either adds a seam method upstream or calls `node:fs` directly.
   The direct call skips the seam's containment, so the tool must clamp the path itself.
-  **Evaluate:** `scratch_write("notes.md", ...)` writes `<scratch-root>/notes.md` from a session
-  whose cwd is any directory. A path that escapes the root, by `../` or by an absolute path, is
-  refused. A scratch write succeeds while a ticket is in-progress and the allowlist union is
-  empty. `scratch_read` returns anchors that `scratch_edit` accepts, and a stale anchor is
-  refused rather than fuzzy-matched. The directory survives a restart, and clearing removes it
-  from disk.
+  **Evaluate:** `scratch_write("notes.md", ...)` writes `<scratch-root>/notes.md` from a session whose cwd is any directory
+  a path that escapes the root, by `../` or by an absolute path, is refused
+  a scratch write succeeds while a ticket is in-progress and the allowlist union is empty
+  `scratch_read` returns anchors that `scratch_edit` accepts, and a stale anchor is refused rather than fuzzy-matched
+  the directory survives a restart, and clearing removes it from disk
 
 - [x] **Ticket T6: Archived-session manager.** Done in a separate repo. Dropped from this plan. **Evaluate:** delivered in a separate repo; nothing to implement in this plan.
 
 - [ ] **Ticket D1: Dependency tracking.** A ticket carries an informational `dependsOn`
   list of `<workspaceKey>:<ticketId>` references (cross-workspace allowed). No gate
   enforces it; the board shows it.
-  **Evaluate:** kernel done; D1-ui dispatched.** The kernel stores and validates the field, the invariant refuses self-dependencies and cycles, and the `set_ticket` tool passes it through. D1-ui (search Remote `aidos.searchTickets` + dependency badges in the tile and detail panel) is in flight; board UI not landed yet.
+  **Evaluate:** the kernel stores and validates the field, the invariant refuses self-dependencies and cycles, and the `set_ticket` tool passes it through
+  the search Remote finds tickets by title or id, and dependency badges render in the tile and the detail panel
+
+## Phase 6: Board and import fixes — `pending`
+
+**Goal.** The detail view reads like a dossier, not a wall of raw fields, and
+the plan format round trips description and phase.
+
+- [ ] **Ticket U6: Badge, pill, and tile cleanup.** Every badge and pill gets white
+  text on its existing background, so no variant reads grey-on-grey. The ticket
+  id renders as a colored badge (deterministic color from a hash of the full id
+  or workspace key, per C5's display rule) with the full id on hover, in the
+  detail header left of the title and on each tile; the tile drops its global
+  `title` attribute so the hover reaches the badge. The `builtin:imported_state`
+  tag renders in a friendlier shape on the tile and in the detail view.
+  **Evaluate:** no badge or pill anywhere renders grey text on a grey background
+  the ticket id badge color is stable per id and its hover tooltip shows the full id
+  hovering the tile shows no browser title tooltip, and hovering the id badge does
+  the evidence tag row reads as a label with a count, not a raw kind id with a number
+- [ ] **Ticket U7: Detail header and quick-facts table.** The confidence ring leaves
+  the detail view. A wikipedia-style summary table sits at the top: Gate, Confidence,
+  Phase, Order, always visible. Gate renders as m/n with a label, not a bare
+  percentage. Description moves directly below the table. An empty description shows
+  an empty-state note.
+  **Evaluate:** the summary table shows all four rows with labels, and gate reads as m over n
+  the confidence row carries the advisory marker
+  description sits below the table and an empty description shows an indicator
+- [ ] **Ticket U8: Description from the plan body.** The detail view renders
+  `description` (not `body`) as its editable description, which U7's section shows.
+  No host change: import and export own the field mapping (P12).
+  **Evaluate:** the detail view shows and edits the description field, and no client code reads `body`
+- [ ] **Ticket U9: Collapsible sections.** Dependencies and Evidence become bordered
+  panels with a header row that collapses the body. Evidence keeps its
+  auto-collapse-when-more-than-six-rows rule. Description and Comments stay open.
+  **Evaluate:** Dependencies and Evidence each collapse and expand through their header row
+  the Evidence section opens collapsed when the ticket holds more than six rows
+- [ ] **Ticket U10: Evidence as bullets.** Each evidence row renders as one bullet:
+  kind label, author, criterion it addresses. The uncovered tint stays.
+  **Evaluate:** each evidence row is one bullet carrying kind, author, and criterion
+  uncovered criteria keep the tint
+- [ ] **Ticket U11: Textarea overflow.** The detail panel, the create-ticket modal,
+  and the comments form render outside `.aidos-root`, so the global border-box
+  reset misses them and `width: 100%` plus padding overflows to the right. Extend
+  the box-sizing rule to the aidos subtree everywhere it mounts.
+  **Evaluate:** the create-ticket textareas, the comment textarea, and the evidence
+  note stay inside their containers at narrow widths
+  the field-editor textarea in the detail panel does not overflow
+- [ ] **Ticket P12: Import and export carry description and phase.** Import maps the
+  plan body to the ticket description and keeps the criteria. A `## Phase N: <title>`
+  heading sets the phase number and title of every ticket after it; any other heading
+  leaves phase 1. Export emits description as the body prose, emits phase headings,
+  and writes criteria with the two-space continuation prefix it forgot. Phase creation
+  rides the existing `phase/set` event.
+  **Evaluate:** importing a phased plan puts each ticket in its heading's phase with the heading as phase title
+  a ticket's plan body appears as its description in the detail view
+  import then export reproduces the input document including phase headings and multi-line criteria
+  the existing round-trip tests still pass on single-phase documents
+- [ ] **Ticket U12: Plan meta modal.** A button on the board chrome opens a modal
+  showing the stored plan meta from the `aidos.plan` projection: frontmatter,
+  preamble, and each context section, each section collapsible. An edit mode saves
+  changes through the new host Remote.
+  **Evaluate:** the modal shows frontmatter, preamble, and every context section with per-section collapse
+  editing a section and saving updates the stored plan meta
+- [ ] **Ticket P13: Agent plan meta tools.** `plan_meta` returns
+  `{frontmatter, preamble, contextSections}` as JSON. `plan_meta_set` replaces the
+  whole meta with the same whole-value rule as plan_import. Both masked from
+  subagents like the other plan tools.
+  **Evaluate:** `plan_meta` returns the parsed meta of the session's project
+  `plan_meta_set` replaces the meta and the change survives replay
+  a subagent calling either tool is refused
+
+- [ ] **Ticket P14: Real frontmatter parsing with standard libraries.** The
+  frontmatter stays a verbatim string today, and the hand-rolled fence handling in
+  `plan.ts` is the kind of code a maintained library replaces. Add `gray-matter`
+  and `yaml` as dependencies (the audit rules allow well-scoped libraries; the
+  kernel stays dependency-free — the imports live in `src/plan/` only). The
+  frontmatter becomes parsed data on `PlanDocument` (the raw text keeps riding
+  for round-trip fidelity). The ticket-line grammar (`- [MARK] **Ticket ID:
+  Title.**`, the `**Evaluate:**` marker, two-space continuations) is
+  aidos-specific and stays hand-rolled.
+  **Evaluate:** a plan with YAML frontmatter exposes its fields on the parsed document
+  a document with malformed frontmatter is refused with a message naming the problem
+  the round-trip tests still pass byte for byte on documents whose frontmatter never changed
+  `package.json` carries the two dependencies and `src/kernel/` imports neither
 
 ## User preferences and special rules
 
@@ -1649,3 +1713,7 @@ work is the tools and the gate enforcement.
 - [ ] Fresh session (aidos preset) — the six board tools (get_tickets/set_ticket/attach_evidence/move_ticket/plan/plan_import) and `tool:aidos` appear; exercise the state-gated tiers (open tier hides write/edit/bash; awaiting-verification asks on each bash call).
 - [ ] U2b/U2c (the board in daily use) — work real tickets through the detail panel and actions for one session: signoff, mark done, send-back with a reason, comments, evidence attach. Say whether the gate refusals help or annoy. That judgment cannot be made from tests. The U2c host half lands here too: POST `/api/aidos/userSetTicket` for a create and an edit on a live session (the envelope and the `agentId` wire are pinned by `b2-user-setticket-remote`; the live check exercises the real gateway and the real agent lookup).
 - [ ] P11 flat format — the round trip on a flat plan (no `## Phase` headings) is byte for byte; a document with no phase heading imports without error, and ticket order survives.
+- [ ] A-W3 — open the board panel, confirm toasts and remote calls still work after the id-generation change.
+- [ ] A-LOG2 — open the board panel with the console at `debug`, confirm the log is readable and not flooded.
+- [ ] A-LOG1 — run a board flow (create a ticket, attach evidence, move it) and confirm the log at `info` shows the tool calls, the gate result, and the append.
+- [ ] A-UI1 — open the Tickets tab and confirm the board spans the full width and clears the chat input, Apply and Reset sit at the right edge of the filter panel, and the sort-direction icon sits beside the dropdown, points the right way for each state, and its hover text names the other state.

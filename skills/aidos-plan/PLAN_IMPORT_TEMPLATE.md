@@ -10,19 +10,46 @@ goal itself changes.
 ## Critical context
 
 Decisions, constraints, and gotchas that are not obvious from the code and would
-cost real time to rediscover. One or two sentences each.
+cost real time to rediscover. One or two sentences each. Everything before the
+first ticket line counts as context, so bullet lists, tables, and code fences
+are fine here.
+
+## Phase 1: <phase title> — `pending`
+
+A `## Phase N: <title> — \`<state>\`` heading opens a phase. N becomes the
+phase number of every ticket that follows it, and the heading text becomes the
+phase title on the board. A ticket under any other heading imports as phase 1.
 
 ## Tickets
 
-Every ticket carries an `**Evaluate:**` marker. The text after it is the
-acceptance criteria. Continuation lines start with two spaces.
+Every ticket sits on one physical line, with continuation lines that start with
+two spaces. Every ticket carries an `**Evaluate:**` marker.
 
-- [ ] **Ticket A1: First unit.** One sentence on scope. **Evaluate:** the test or
-  build command that must pass, or the manual behavior to exercise.
+- [ ] **Ticket A1: First unit.** One sentence of scope prose. The prose may wrap
+  across continuation lines; the whole body becomes the ticket description shown
+  in the detail view. **Evaluate:** the build or test command that must pass
+  a second criterion sits on its own line, when the ticket needs one
 - [~] **Ticket A2: In-progress unit.** One sentence on scope. **Evaluate:** the
-  acceptance check for this ticket, stated so a human can verify it.
+  acceptance check for this ticket, stated so a human can verify it
 - [x] **Ticket A3: Done unit.** One sentence on scope. **Evaluate:** how it was
-  verified before closing.
+  verified before closing
+
+## Import rules
+
+- One criterion per physical line. Never wrap a criterion across lines. The
+  import treats each line after `**Evaluate:**` as one separate criterion, and
+  evidence rows match a criterion by exact trimmed line text.
+- Keep each criterion one short checkable sentence. Aim under 100 characters.
+- The mark never sets the live state. Import lands every ticket in `open` and
+  records the mark as one `builtin:imported_state` evidence row. `[ ]` is open,
+  `[~]` in_progress, `[?]` awaiting_verification, `[x]` done.
+- Import needs an empty project. A parse error imports nothing and names the
+  line.
+- A `### ` heading between tickets breaks the parse. Use `## ` for any heading
+  you want parsed, and keep prose either before the first ticket or under a
+  `## ` heading after the last one.
+- Verify before you import: `node skills/aidos-plan/verify-plan.mjs PLAN.md`.
+  Exit code 0 means the document parses. Exit code 1 lists the bad lines.
 
 ## User preferences and special rules
 
