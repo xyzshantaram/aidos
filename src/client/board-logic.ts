@@ -250,6 +250,11 @@ export function parseCriteria(criteria: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+/** The criteria-panel name for parseCriteria. */
+export function criteriaLines(criteria: string): string[] {
+  return parseCriteria(criteria);
+}
+
 /**
  * Match one criterion label against one evidence row. The row's payload.criteria
  * is trimmed and compared with strict equality to the criterion label. Rows
@@ -366,6 +371,44 @@ export function kindLabel(kind: string): string {
   return kind;
 }
 
+/**
+ * The description of one evidence kind from BUILTIN_KINDS. An unknown kind
+ * returns an empty string.
+ */
+export function kindDescription(kind: string): string {
+  for (const def of BUILTIN_KINDS) {
+    if (def.id === kind) return def.description;
+  }
+  return "";
+}
+
+/**
+ * The chip keyword of one evidence kind. A chip has room for one word, so
+ * each builtin kind gets a short token. An unregistered kind falls back to
+ * its label in upper case, and an unknown id falls back to the part after
+ * the namespace colon.
+ */
+const KIND_KEYWORDS: Record<string, string> = {
+  "builtin:imported_state": "IMPORTED",
+  "builtin:user_signoff": "SIGNED OFF",
+  "builtin:user_verified": "VERIFIED",
+  "builtin:eval_criteria": "CRITERIA",
+  "builtin:file_allowlist": "ALLOWLIST",
+  "builtin:agent_report": "REPORT",
+  "builtin:automated_check": "CHECK",
+  "builtin:test_run": "TESTS",
+  "builtin:review_pass": "REVIEWED",
+  "builtin:review_note": "NOTE",
+};
+
+export function kindKeyword(kind: string): string {
+  const known = KIND_KEYWORDS[kind];
+  if (known !== undefined) return known;
+  const label = kindLabel(kind);
+  if (label !== kind) return label.toUpperCase();
+  const tail = kind.includes(":") ? kind.slice(kind.indexOf(":") + 1) : kind;
+  return tail.replace(/[_-]+/g, " ").toUpperCase();
+}
 /** One kind-count tag for the tile: the kind name and the row count. */
 export interface KindCount {
   kind: string;

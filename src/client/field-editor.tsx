@@ -7,6 +7,7 @@ import react from "react";
 import type { ReactNode } from "react";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
+import { PencilIcon } from "./icons";
 
 export type EditableField =
   | "title"
@@ -114,8 +115,13 @@ export function FieldEditor(props: FieldEditorProps) {
     <div className="aidos-field-editor">
       <span>
         {props.children !== undefined ? props.children : String(props.value)}{" "}
-        <button className="aidos-btn" onClick={beginEdit}>
-          Edit
+        <button
+          className="aidos-icon-btn"
+          title="Edit"
+          aria-label={"Edit " + props.field}
+          onClick={beginEdit}
+        >
+          <PencilIcon />
         </button>
       </span>
     </div>

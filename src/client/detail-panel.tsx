@@ -1,11 +1,12 @@
 /**
  * Ticket U16: the ticket detail panel, per UI-SPEC section 6. The header
- * carries the id chip, the title editor, and the state chip. A facts table
- * follows, then the description markdown panel, the criteria panel, the
- * dependencies panel, and the evidence panel.
+ * carries the title editor and the close button. A chips row follows, then a
+ * facts table, the description panel, the criteria panel, the dependencies
+ * panel, and the evidence panel. Every panel is a details disclosure.
  *
  * DetailView wraps the panel: it owns the action modals and renders the
- * action bar, the comments section, and the evidence attach form.
+ * action bar and the comments section. The evidence attach form lives in
+ * the evidence panel body.
  */
 
 import react from "react";
@@ -13,6 +14,7 @@ import { marked } from "marked";
 
 import {
   badgeClass,
+  criteriaLines,
   displayDep,
   formatGateFraction,
   fullTicketId,
@@ -21,7 +23,9 @@ import {
   stateLabel,
   ticketChipLabel,
   ringPercent,
-  kindLabel,
+  kindColor,
+  kindKeyword,
+  kindDescription,
   uncoveredCriteria,
 } from "./board-logic";
 import { FieldEditor } from "./field-editor";
@@ -31,6 +35,7 @@ import { EvidenceAttachForm } from "./evidence-attach-form";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
+import { PencilIcon, TrashIcon } from "./icons";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
@@ -65,12 +70,13 @@ export interface DetailViewProps extends DetailPanelProps {
   comments: CommentRecord[];
 }
 
-/** The non-empty lines of a criteria block. */
-function criteriaLines(criteria: string): string[] {
-  return criteria
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
+/** Show one refusal or error as a toast. */
+function showError(error: unknown) {
+  if (error instanceof AidosRemoteError) {
+    showToast(error.message, "refusal");
+  } else {
+    showToast(String(error), "refusal");
+  }
 }
 
 /**
@@ -117,10 +123,10 @@ function DescriptionPanel(props: {
   }
 
   return (
-    <div className="aidos-panel">
-      <div className="aidos-panel-head">
-        <h4 className="aidos-panel-title">Description</h4>
-      </div>
+    <details className="aidos-panel" open>
+      <summary className="aidos-panel-head">
+        <span className="aidos-panel-title">Description</span>
+      </summary>
       <div className="aidos-panel-body">
         <FieldEditor
           field="description"
@@ -132,11 +138,57 @@ function DescriptionPanel(props: {
           {body}
         </FieldEditor>
       </div>
-    </div>
+    </details>
   );
 }
 
-/** The criteria panel: one bullet per line, uncovered lines tinted. */
+/** One criteria line in edit mode: an input with Save and Cancel. */
+function CriterionEditor(props: {
+  line: string;
+  saving: boolean;
+  onSave: (draft: string) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = react.useState(props.line);
+  return (
+    <span className="aidos-criterion-row">
+      <input
+        type="text"
+        value={draft}
+        disabled={props.saving}
+        onChange={(event) => {
+          setDraft(event.target.value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            props.onSave(draft);
+          }
+        }}
+      />
+      <span className="aidos-criterion-actions">
+        <button
+          className="aidos-btn"
+          disabled={props.saving}
+          onClick={() => {
+            props.onSave(draft);
+          }}
+        >
+          Save
+        </button>
+        <button
+          className="aidos-btn"
+          disabled={props.saving}
+          onClick={props.onCancel}
+        >
+          Cancel
+        </button>
+      </span>
+    </span>
+  );
+}
+
+/** The criteria panel: one line per row, each with edit and delete. */
 function CriteriaPanel(props: {
   ticket: TicketView;
   evidence: readonly EvidenceRow[];
@@ -144,61 +196,149 @@ function CriteriaPanel(props: {
   agentId: string;
   onSaved: () => void;
 }) {
-  const [collapsed, setCollapsed] = react.useState(false);
+  const [editingIndex, setEditingIndex] = react.useState<number | null>(null);
+  const [saving, setSaving] = react.useState(false);
+  const [addDraft, setAddDraft] = react.useState("");
   const lines = criteriaLines(props.ticket.criteria);
   const uncovered = uncoveredCriteria(props.ticket.criteria, props.evidence);
   const uncoveredSet = new Set(uncovered);
   const covered = lines.length - uncovered.length;
 
-  const list =
-    lines.length === 0 ? (
-      <p className="aidos-detail-note">No criteria.</p>
-    ) : (
-      <ul className="aidos-criteria">
-        {lines.map((line) => (
-          <li
-            key={line}
-            className={
-              uncoveredSet.has(line)
-                ? "aidos-criterion aidos-criterion-uncovered"
-                : "aidos-criterion"
-            }
-          >
-            {line}
-          </li>
-        ))}
-      </ul>
-    );
+  // One save path for every criteria change: edit, delete, and add all
+  // rebuild the whole list and write it once. It reports success, so the add
+  // row knows when to clear its draft.
+  async function saveLines(survivors: string[]): Promise<boolean> {
+    if (saving) return false;
+    setSaving(true);
+    try {
+      await callAidosRemote(
+        "userSetTicket",
+        { ticketId: props.ticketIdKey, criteria: survivors.join("\n") },
+        props.agentId,
+      );
+      showToast("Criteria saved", "success");
+      setEditingIndex(null);
+      props.onSaved();
+      return true;
+    } catch (error) {
+      showError(error);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function replaceLine(index: number, replacement: string) {
+    const survivors = lines.slice();
+    survivors[index] = replacement;
+    void saveLines(survivors);
+  }
+
+  function removeLine(index: number) {
+    const survivors = lines.slice();
+    survivors.splice(index, 1);
+    void saveLines(survivors);
+  }
+
+  async function addLine() {
+    const text = addDraft.trim();
+    if (text === "") return;
+    const saved = await saveLines(lines.concat([text]));
+    if (saved) setAddDraft("");
+  }
 
   return (
-    <div className="aidos-panel">
-      <div className="aidos-panel-head">
-        <h4 className="aidos-panel-title">
+    <details className="aidos-panel">
+      <summary className="aidos-panel-head">
+        <span className="aidos-panel-title">
           {"Criteria " + covered + "/" + lines.length}
-        </h4>
-        <button
-          className="aidos-panel-toggle"
-          onClick={() => {
-            setCollapsed(!collapsed);
-          }}
-        >
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
+        </span>
+      </summary>
+      <div className="aidos-panel-body">
+        {lines.length === 0 ? (
+          <p className="aidos-detail-note">No criteria.</p>
+        ) : (
+          <ul className="aidos-criteria">
+            {lines.map((line, index) => (
+              <li
+                key={index + ":" + line}
+                className={
+                  uncoveredSet.has(line)
+                    ? "aidos-criterion aidos-criterion-uncovered"
+                    : "aidos-criterion"
+                }
+              >
+                {editingIndex === index ? (
+                  <CriterionEditor
+                    line={line}
+                    saving={saving}
+                    onSave={(draft) => {
+                      replaceLine(index, draft.trim());
+                    }}
+                    onCancel={() => {
+                      setEditingIndex(null);
+                    }}
+                  />
+                ) : (
+                  <span className="aidos-criterion-row">
+                    {line}
+                    <span className="aidos-criterion-actions">
+                      <button
+                        className="aidos-icon-btn"
+                        title="Edit"
+                        aria-label={"Edit criterion " + (index + 1)}
+                        onClick={() => {
+                          setEditingIndex(index);
+                        }}
+                      >
+                        <PencilIcon />
+                      </button>
+                      <button
+                        className="aidos-icon-btn"
+                        title="Delete"
+                        aria-label={"Delete criterion " + (index + 1)}
+                        disabled={saving}
+                        onClick={() => {
+                          removeLine(index);
+                        }}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </span>
+                  </span>
+                )}
+              </li>
+            ))}
+            <li className="aidos-criteria-add">
+              <input
+                type="text"
+                value={addDraft}
+                disabled={saving}
+                placeholder="Add a criterion"
+                onChange={(event) => {
+                  setAddDraft(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void addLine();
+                  }
+                }}
+              />
+              <button
+                className="aidos-btn"
+                disabled={saving || addDraft.trim() === ""}
+                onClick={() => {
+                  void addLine();
+                }}
+              >
+                Add
+              </button>
+            </li>
+          </ul>
+        )}
       </div>
-      {collapsed ? null : (
-        <div className="aidos-panel-body">
-          <FieldEditor
-            field="criteria"
-            ticketId={props.ticketIdKey}
-            value={props.ticket.criteria}
-            agentId={props.agentId}
-            onSaved={props.onSaved}
-          >
-            {list}
-          </FieldEditor>
-        </div>
-      )}
-    </div>
+    </details>
   );
 }
 
@@ -233,7 +373,6 @@ function DependencySection(props: {
   const [hits, setHits] = react.useState<TicketSearchHit[] | null>(null);
   const [searching, setSearching] = react.useState(false);
   const [adding, setAdding] = react.useState<string | null>(null);
-  const [collapsed, setCollapsed] = react.useState(false);
   const current = props.dependsOn ?? [];
 
   async function search() {
@@ -254,11 +393,7 @@ function DependencySection(props: {
         : [];
       setHits(rows);
     } catch (error) {
-      if (error instanceof AidosRemoteError) {
-        showToast(error.message, "refusal");
-      } else {
-        showToast(String(error), "refusal");
-      }
+      showError(error);
       setHits(null);
     } finally {
       setSearching(false);
@@ -281,149 +416,150 @@ function DependencySection(props: {
       showToast("Dependency added", "success");
       props.onSaved();
     } catch (error) {
-      if (error instanceof AidosRemoteError) {
-        showToast(error.message, "refusal");
-      } else {
-        showToast(String(error), "refusal");
-      }
+      showError(error);
     } finally {
       setAdding(null);
     }
   }
 
-  const body = (
-    <>
-      <div className="aidos-dep-row">
-        {current.length === 0 ? (
-          <p className="aidos-detail-note">No dependencies.</p>
-        ) : (
-          current.map((ref) => (
-            <span key={ref} className="aidos-chip aidos-chip-dep" title={ref}>
-              {displayDep(ref)}
-            </span>
-          ))
-        )}
-      </div>
-      <div className="aidos-dep-search">
-        <input
-          className="aidos-dep-search-input"
-          value={query}
-          placeholder="Search tickets"
-          onChange={(event) => {
-            setQuery(event.target.value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void search();
-            }
-          }}
-        />
-        <button
-          className="aidos-btn"
-          disabled={searching}
-          onClick={() => {
-            void search();
-          }}
-        >
-          Search
-        </button>
-      </div>
-      {hits !== null ? (
-        <div className="aidos-dep-results">
-          {hits.length === 0 ? (
-            <p className="aidos-detail-note">No matches.</p>
+  return (
+    <details className="aidos-panel">
+      <summary className="aidos-panel-head">
+        <span className="aidos-panel-title">Dependencies</span>
+      </summary>
+      <div className="aidos-panel-body">
+        <div className="aidos-dep-row">
+          {current.length === 0 ? (
+            <p className="aidos-detail-note">No dependencies.</p>
           ) : (
-            hits.map((hit) => (
-              <button
-                key={refOf(hit)}
-                className="aidos-dep-result"
-                disabled={adding !== null}
-                onClick={() => {
-                  void add(refOf(hit));
-                }}
-                title={refOf(hit)}
-              >
-                <span className="aidos-suggestion-title">{hit.title}</span>
-                <span className="aidos-chip aidos-chip-id">
-                  {displayDep(refOf(hit))}
-                </span>
-              </button>
+            current.map((ref) => (
+              <span key={ref} className="aidos-chip aidos-chip-dep" title={ref}>
+                {displayDep(ref)}
+              </span>
             ))
           )}
         </div>
-      ) : null}
-    </>
-  );
-
-  return (
-    <div className="aidos-panel">
-      <div className="aidos-panel-head">
-        <h4 className="aidos-panel-title">Dependencies</h4>
-        <button
-          className="aidos-panel-toggle"
-          onClick={() => {
-            setCollapsed(!collapsed);
-          }}
-        >
-          {collapsed ? "Expand" : "Collapse"}
-        </button>
+        <div className="aidos-dep-search">
+          <input
+            className="aidos-dep-search-input"
+            value={query}
+            placeholder="Search tickets"
+            onChange={(event) => {
+              setQuery(event.target.value);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void search();
+              }
+            }}
+          />
+          <button
+            className="aidos-btn"
+            disabled={searching}
+            onClick={() => {
+              void search();
+            }}
+          >
+            Search
+          </button>
+        </div>
+        {hits !== null ? (
+          <div className="aidos-dep-results">
+            {hits.length === 0 ? (
+              <p className="aidos-detail-note">No matches.</p>
+            ) : (
+              hits.map((hit) => (
+                <button
+                  key={refOf(hit)}
+                  className="aidos-dep-result"
+                  disabled={adding !== null}
+                  onClick={() => {
+                    void add(refOf(hit));
+                  }}
+                  title={refOf(hit)}
+                >
+                  <span className="aidos-suggestion-title">{hit.title}</span>
+                  <span className="aidos-chip aidos-chip-id">
+                    {displayDep(refOf(hit))}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        ) : null}
       </div>
-      {collapsed ? null : <div className="aidos-panel-body">{body}</div>}
-    </div>
+    </details>
   );
 }
 
-/** The evidence panel: one flat bullet per row, no criterion grouping. */
+/** The evidence panel: one flat row per evidence row, plus the attach form. */
 function EvidencePanel(props: {
   evidence: readonly EvidenceRow[];
   evidenceCollapsed: boolean;
   onToggleEvidence: () => void;
   onDelete: (row: EvidenceRowLike) => void;
   deletingAt: number | null;
+  ticketIdKey: string;
+  agentId: string;
 }) {
-  const body = (
-    <div className="aidos-panel-body">
-      {props.evidence.length === 0 ? (
-        <p className="aidos-detail-note">No evidence rows yet.</p>
-      ) : (
-        <ul className="aidos-evidence-list">
-          {props.evidence.map((row, index) => (
-            <li className="aidos-evidence-item" key={row.at ?? index}>
-              <span className="aidos-evidence-kind">{kindLabel(row.kind)}</span>
-              <span className="aidos-evidence-author">{row.author}</span>
-              {typeof row.payload.criteria === "string" ? (
-                <span className="aidos-evidence-meta">
-                  {"criterion: " + row.payload.criteria}
-                </span>
-              ) : null}
-              <button
-                className="aidos-evidence-delete"
-                title="Delete this evidence row"
-                disabled={props.deletingAt !== null}
-                onClick={() => {
-                  props.onDelete(row);
-                }}
-              >
-                {"\u2715"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-
   return (
-    <div className="aidos-panel">
-      <div className="aidos-panel-head">
-        <h4 className="aidos-panel-title">Evidence</h4>
-        <button className="aidos-panel-toggle" onClick={props.onToggleEvidence}>
-          {props.evidenceCollapsed ? "Expand" : "Collapse"}
-        </button>
+    <details
+      className="aidos-panel"
+      open={!props.evidenceCollapsed}
+      onToggle={(event) => {
+        const open = (event.target as HTMLDetailsElement).open;
+        if (open === props.evidenceCollapsed) {
+          props.onToggleEvidence();
+        }
+      }}
+    >
+      <summary className="aidos-panel-head">
+        <span className="aidos-panel-title">Evidence</span>
+      </summary>
+      <div className="aidos-panel-body">
+        {props.evidence.length === 0 ? (
+          <p className="aidos-detail-note">No evidence rows yet.</p>
+        ) : (
+          <ul className="aidos-evidence-list">
+            {props.evidence.map((row, index) => (
+              <li className="aidos-evidence-item" key={row.at ?? index}>
+                <span
+                  className="aidos-chip aidos-chip-kind aidos-evidence-kind"
+                  style={{ background: kindColor(row.kind) }}
+                  title={kindDescription(row.kind)}
+                >
+                  <span className="aidos-chip-key">{kindKeyword(row.kind)}</span>
+                </span>
+                <span className="aidos-evidence-author">{row.author}</span>
+                {typeof row.payload.criteria === "string" ? (
+                  <span className="aidos-evidence-meta">
+                    {"criterion: " + row.payload.criteria}
+                  </span>
+                ) : null}
+                {row.kind === "builtin:imported_state" &&
+                typeof row.payload.claimed_state === "string" ? (
+                  <span className="aidos-evidence-meta">
+                    {"plan claimed: " + row.payload.claimed_state}
+                  </span>
+                ) : null}
+                <button
+                  className="aidos-evidence-delete"
+                  title="Delete this evidence row"
+                  disabled={props.deletingAt !== null}
+                  onClick={() => {
+                    props.onDelete(row);
+                  }}
+                >
+                  {"\u2715"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <EvidenceAttachForm ticketId={props.ticketIdKey} agentId={props.agentId} />
       </div>
-      {props.evidenceCollapsed ? null : body}
-    </div>
+    </details>
   );
 }
 
@@ -444,11 +580,7 @@ export function DetailPanel(props: DetailPanelProps) {
       );
       showToast("Evidence deleted", "success");
     } catch (error) {
-      if (error instanceof AidosRemoteError) {
-        showToast(error.message, "refusal");
-      } else {
-        showToast(String(error), "refusal");
-      }
+      showError(error);
     } finally {
       setDeletingAt(null);
     }
@@ -457,13 +589,6 @@ export function DetailPanel(props: DetailPanelProps) {
   return (
     <>
       <div className="aidos-detail-head">
-        <span
-          className="aidos-chip aidos-chip-id"
-          style={{ background: idColor(fullTicketId(ticket)) }}
-          title={fullTicketId(ticket)}
-        >
-          {ticketChipLabel(ticket)}
-        </span>
         <FieldEditor
           field="title"
           ticketId={props.ticketIdKey}
@@ -471,10 +596,19 @@ export function DetailPanel(props: DetailPanelProps) {
           agentId={props.agentId}
           onSaved={props.onFieldSaved}
         />
-        <span className={badge}>{stateLabel(ticket.state)}</span>
         <button className="aidos-close-btn" onClick={props.onClose}>
           {"\u00d7"}
         </button>
+      </div>
+      <div className="aidos-detail-chips">
+        <span
+          className="aidos-chip aidos-chip-id"
+          style={{ background: idColor(fullTicketId(ticket)) }}
+          title={fullTicketId(ticket)}
+        >
+          {ticketChipLabel(ticket)}
+        </span>
+        <span className={badge}>{stateLabel(ticket.state)}</span>
       </div>
       <dl className="aidos-facts">
         <div className="aidos-facts-row">
@@ -539,16 +673,18 @@ export function DetailPanel(props: DetailPanelProps) {
           void deleteEvidence(row);
         }}
         deletingAt={deletingAt}
+        ticketIdKey={props.ticketIdKey}
+        agentId={props.agentId}
       />
     </>
   );
 }
 
 /**
- * The interactive detail view. Owns the action modals and renders the action
- * bar, the detail panel, the comments, and the evidence attach form.
- * Submit for review moves the ticket directly; the other actions open their
- * modals.
+ * The interactive detail view. Owns the action modals and renders the detail
+ * panel, the action bar, and the comments. The evidence attach form lives in
+ * the evidence panel. Submit for review moves the ticket directly; the other
+ * actions open their modals.
  */
 export function DetailView(props: DetailViewProps) {
   const [signoffOpen, setSignoffOpen] = react.useState(false);
@@ -575,11 +711,7 @@ export function DetailView(props: DetailViewProps) {
       showToast("Submitted for review", "success");
       props.onClose();
     } catch (error) {
-      if (error instanceof AidosRemoteError) {
-        showToast(error.message, "refusal");
-      } else {
-        showToast(String(error), "refusal");
-      }
+      showError(error);
     } finally {
       setSubmitting(false);
     }
@@ -617,7 +749,6 @@ export function DetailView(props: DetailViewProps) {
         comments={props.comments}
         agentId={agentId}
       />
-      <EvidenceAttachForm ticketId={props.ticketIdKey} agentId={agentId} />
       {signoffOpen ? (
         <SignoffDialog
           open

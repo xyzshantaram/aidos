@@ -1,14 +1,13 @@
 /**
- * Evidence kind tags: one per kind with a count, colored from the kind name.
- *
- * Extracted from ticket-tile.tsx and detail-panel.tsx (which had identical
- * logic but different wrapper class names — now unified to
- * .aidos-evidence-row).
+ * Evidence kind tags: one chip per kind, colored from the kind name. The chip
+ * shows a short keyword, for example IMPORTED or CHECK. A kind with more than
+ * one row splits: the keyword keeps the kind color, and the count segment
+ * inverts it. The title holds the kind description.
  */
 
 import react from "react";
 
-import { evidenceKindCounts, kindLabel } from "./board-logic";
+import { evidenceKindCounts, kindDescription, kindKeyword } from "./board-logic";
 import type { EvidenceRowLike } from "./board-logic";
 
 export interface EvidenceTagsProps {
@@ -19,16 +18,22 @@ export function EvidenceTags({ evidence }: EvidenceTagsProps) {
   const counts = evidenceKindCounts(evidence);
   if (counts.length === 0) return null;
   return (
-    <div className="aidos-evidence-row">
+    <>
       {counts.map((count) => (
         <span
           key={count.kind}
           className="aidos-chip aidos-chip-kind"
-          style={{ borderColor: count.color, color: count.color }}
+          style={{ background: count.color }}
+          title={kindDescription(count.kind)}
         >
-          {kindLabel(count.kind) + " " + count.count}
+          <span className="aidos-chip-key">{kindKeyword(count.kind)}</span>
+          {count.count > 1 ? (
+            <span className="aidos-chip-count" style={{ color: count.color }}>
+              {String(count.count)}
+            </span>
+          ) : null}
         </span>
       ))}
-    </div>
+    </>
   );
 }

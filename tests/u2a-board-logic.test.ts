@@ -26,6 +26,7 @@ import {
   fullTicketId,
   idColor,
   ticketChipLabel,
+  kindKeyword,
 } from "../src/client/board-logic";
 
 const ALL_STATES: TicketState[] = ["open", "in_progress", "awaiting_verification", "done"];
@@ -387,5 +388,27 @@ describe("idColor", () => {
     const a = idColor("--home-sid-repos-aidos--:1");
     const b = idColor("--home-sid-repos-other-aidos--:1");
     expect(a).not.toBe(b);
+  });
+});
+
+describe("kindKeyword", () => {
+  it("gives every builtin kind a short token", () => {
+    expect(kindKeyword("builtin:imported_state")).toBe("IMPORTED");
+    expect(kindKeyword("builtin:automated_check")).toBe("CHECK");
+    expect(kindKeyword("builtin:user_verified")).toBe("VERIFIED");
+    expect(kindKeyword("builtin:review_pass")).toBe("REVIEWED");
+  });
+
+  it("never returns the raw kind id of a builtin kind", () => {
+    expect(kindKeyword("builtin:file_allowlist")).not.toContain(":");
+  });
+
+  it("falls back to the id tail in upper case for an unknown kind", () => {
+    expect(kindKeyword("team:load_test")).toBe("LOAD TEST");
+    expect(kindKeyword("team:smoke-run")).toBe("SMOKE RUN");
+  });
+
+  it("keeps a bare id readable when it carries no namespace", () => {
+    expect(kindKeyword("handmade")).toBe("HANDMADE");
   });
 });
