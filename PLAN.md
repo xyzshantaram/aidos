@@ -1156,7 +1156,7 @@ work is the tools and the gate enforcement.
   orchestrator turns that report into a board change. Identity stays flat:
   every subagent writes as the single author `agent`, and its name is metadata
   on a record rather than an actor of its own.
-  **Evaluate:** structural half done; bash hang closed.** `installAidosGuard` refuses every board
+  **Status: structural half done; bash hang closed.** `installAidosGuard` refuses every board
   tool when `delegationDepthOf(agent) !== 0`, and the refusal names the orchestrator as
   the only actor that may do it. `childPathScope` is the per-child path predicate.
   Presets load as definitions with no code change, which is dsh behavior rather than
@@ -1181,7 +1181,7 @@ work is the tools and the gate enforcement.
   `job_kill` tools. Jobs outlive the parent turn and are listed per session. The orchestrator
   attaches a finished report as `builtin:agent_report` evidence with the job identifier, the
   subagent name, and the start and end times.
-  **Evaluate:** not started.** dsh's half works today, and the mask's delegation tier
+  **Status: not started.** dsh's half works today, and the mask's delegation tier
   already names the job tools. The aidos half does not exist. Nothing in `src/` reads
   `ctx.jobs`, and `agent_report` appears only as a kind string inside the tool
   descriptions. No code attaches a finished report as evidence. That glue is B5.
@@ -1198,7 +1198,7 @@ work is the tools and the gate enforcement.
   You approve, change, or reject them. Only an approved proposal grants write access.
   Decided 2026-08-21 during the B2 grilling, after a read found the write boundary
   unreachable.
-  **Evaluate:** implemented 2026-08-21, closed 2026-08-22.**
+  **Status: implemented 2026-08-21, closed 2026-08-22.**
 
   **Why it exists.** `TicketSnapshot.allowlist` is a validated durable field
   (`types.ts:40`, and the invariant key list) with NO writer. `SetTicketArgs` carries no
@@ -1227,10 +1227,6 @@ work is the tools and the gate enforcement.
   catch every writer. It ships WITH this ticket, not before: an enforced guard
   over an always-empty union would block every write until the approval flow can
   populate one.
-  **Evaluate:** a ticket with no approved row refuses every write, and the refusal names the missing approval rather than an empty union
-  an `agentSetTicket` call naming a path that no approved row carries is refused
-  a reworded approval appends a new row and leaves the old one visible
-  the approval survives replay
   **Implemented 2026-08-21.** The guard registers prepended on both fs
   waterfalls and throws to refuse. An allowed write calls `next()`, so the
   observation-policy staleness bookkeeping still runs. Approved paths ride in
@@ -1246,6 +1242,10 @@ work is the tools and the gate enforcement.
   the coverage gate is satisfiable only through tests until
   `userAttachEvidence` lands, and `userSetTicket` has no production caller
   for the same reason.
+  **Evaluate:** a ticket with no approved row refuses every write, and the refusal names the missing approval rather than an empty union
+  an `agentSetTicket` call naming a path that no approved row carries is refused
+  a reworded approval appends a new row and leaves the old one visible
+  the approval survives replay
 
 
 ## Phase 4: Web UI — `in_progress`
@@ -1351,7 +1351,7 @@ work is the tools and the gate enforcement.
     client-request envelope directly to `/api/aidos/<method>` (the recipe
     pinned in B2). U2b itself is read-only and needs no Remote calls; it
     reads the `aidos.evidence` projection alongside `aidos.tickets`.
-  **Evaluate:** not started.**
+  **Status: not started.**
   **Evaluate:** a ticket with evidence in two kinds shows two count tags on its tile
   a criterion with no rows is tinted and dimmed; one with rows is not
   evidence with a `criteria` payload field groups under that criterion, and the board shows an ungrouped bucket for rows written before the check existed
@@ -1489,9 +1489,9 @@ work is the tools and the gate enforcement.
   `test-25-tool-every-result-is-json.test.ts`. Every other TS test exercises the kernel or a
   tool, including the two carrying `cli` in the name, which import `makeStore` and test kernel
   behavior under a prototype-era filename. Rename those two rather than delete them.
+  **Done:** `prototype/` directory deleted (all 38 tracked files plus both `__pycache__` dirs gone); `test-25-every-subcommand-prints-json.test.ts` culled as a 21-line no-assertion duplicate of the real `test-25-tool-every-result-is-json.test.ts`; `test-20-cli-author-is-agent.test.ts` renamed to `test-20-author-is-agent.test.ts` and `test-21-cli-refuses-human-only-kinds.test.ts` renamed to `test-21-refuses-human-only-kinds.test.ts` (the `cli` prefix was a prototype-era leftover; content unchanged). Port map: the Python prototype was replaced by the TS suite under `packages/aidos/tests/`; no TS file imports from `prototype/` — the only remaining references are historical doc comments in `src/plan/plan.ts:2` and `src/kernel/store.ts:2`.
   **Evaluate:** `prototype/` is gone, the suite still passes, and no TS file imports anything from it
   the commit names the port map that replaced it
-  **Done:** `prototype/` directory deleted (all 38 tracked files plus both `__pycache__` dirs gone); `test-25-every-subcommand-prints-json.test.ts` culled as a 21-line no-assertion duplicate of the real `test-25-tool-every-result-is-json.test.ts`; `test-20-cli-author-is-agent.test.ts` renamed to `test-20-author-is-agent.test.ts` and `test-21-cli-refuses-human-only-kinds.test.ts` renamed to `test-21-refuses-human-only-kinds.test.ts` (the `cli` prefix was a prototype-era leftover; content unchanged). Port map: the Python prototype was replaced by the TS suite under `packages/aidos/tests/`; no TS file imports from `prototype/` — the only remaining references are historical doc comments in `src/plan/plan.ts:2` and `src/kernel/store.ts:2`.
 
 
 ## Phase 5: Tools, scripting, and skills — `pending`
@@ -1500,7 +1500,7 @@ work is the tools and the gate enforcement.
 
 - [ ] **Ticket T4: Skills.** On dsh: `ctx.skills` plus the filesystem provider plus the `skill`
   tool. The preset tool groups are the always-on core; a skill activates a further group.
-  **Evaluate:** the dsh half is built, the aidos half is not.** `ctx.skills`, the filesystem
+  **Status: the dsh half is built, the aidos half is not.** `ctx.skills`, the filesystem
   provider, and the `skill` tool all ship with dsh. The aidos package contains no
   `SKILL.md`, so the preset ships no skill directory. This is the same gap C4 records
   for the plan skill. The token measurement has never been taken.
@@ -1513,7 +1513,7 @@ work is the tools and the gate enforcement.
   `scratch_edit`, `scratch_mkdir`. A relative path resolves against the scratch root, so
   `scratch_write("foo.md", ...)` lands at `<scratch-root>/foo.md` whatever the session cwd is.
   The names carry a `scratch_` prefix, so they never collide with the builtin fs tools.
-  **Evaluate:** not started in code.** Nothing in `src/` computes or reads a scratch path. The
+  **Status: not started in code.** Nothing in `src/` computes or reads a scratch path. The
   directory is in daily use by hand (the B1 container harness lives under
   `$DSH_HOME/aidos/scratch/--home-sid-repos-aidos--/`), which is what makes the design look done.
   **The agent writes here freely** (decided 2026-08-21). No allowlist, no approval, and no
@@ -1655,12 +1655,59 @@ the plan format round trips description and phase.
   kernel stays dependency-free — the imports live in `src/plan/` only). The
   frontmatter becomes parsed data on `PlanDocument` (the raw text keeps riding
   for round-trip fidelity). The ticket-line grammar (`- [MARK] **Ticket ID:
-  Title.**`, the `**Evaluate:**` marker, two-space continuations) is
+  Title.**`, the Evaluate marker, two-space continuations) is
   aidos-specific and stays hand-rolled.
   **Evaluate:** a plan with YAML frontmatter exposes its fields on the parsed document
   a document with malformed frontmatter is refused with a message naming the problem
   the round-trip tests still pass byte for byte on documents whose frontmatter never changed
   `package.json` carries the two dependencies and `src/kernel/` imports neither
+
+- [x] **Ticket U13: The detail panel keeps its shape under long text.** The panel is a
+  column flex box with a capped height, so a child with `overflow: hidden` shrinks. The
+  quick facts table lost its last row on a short ticket and vanished on a long one. The
+  panel children now set `flex: none`. The workspace merge spinner centers in the grid
+  area. The `searchTickets` Remote read `ctx.sessions` without declaring it, so the
+  dependency search refused with a service error.
+  **Evaluate:** a ticket with a several thousand character description still shows every quick facts row
+  the dependency search returns matches instead of a service refusal
+  the merge spinner sits in the middle of the grid area
+
+- [ ] **Ticket U14: One chip language and one token set.** `UI-SPEC.md` sections 1, 2, 3,
+  8 and 10 define the tokens, the type scale, the chip family, the form rules, and the
+  exact class names. This ticket owns `board.css` alone: it adds the state colors and the
+  metric background, adds the `.aidos-chip` family, and deletes `.pill`,
+  `.aidos-state-badge`, `.aidos-evidence-tag`, `.aidos-dep-badge`, `.aidos-id-badge`, and
+  `.aidos-ticket-id-badge`.
+  **Evaluate:** every chip on the board is 18px tall with white text and a 3px radius
+  no textarea or input overflows its container in the detail panel or in any modal
+  the removed class names appear in no stylesheet and in no component
+
+- [ ] **Ticket U15: The card follows variant A.** The tile carries an id chip and a state
+  chip on the first row, the title over at most two lines, a description preview over at
+  most two lines, and one chip row holding gate, confidence, and evidence counts. The
+  grid holds four columns, two while the detail panel is open.
+  **Evaluate:** a tile with a long title clamps at two lines instead of clipping mid word
+  the gate chip reads `Gate 0/1` and the confidence chip reads `Conf 0%`
+  opening the detail panel drops the grid to two columns
+
+- [ ] **Ticket U16: The detail panel follows the spec.** Header, quick facts with `State`,
+  `Gate`, `Confidence`, `Phase`, `Order` and `Slug`, the description rendered as markdown
+  with a clip past 320px, criteria as bullets with the covered count in the heading,
+  dependencies, evidence as plain bullets, comments, and a right aligned action bar. The
+  stray field editors for criteria, phase and order go away.
+  **Evaluate:** an imported ticket shows its criteria as bullets and not as evidence rows
+  the evidence panel holds one bullet per row and no `Ungrouped` bucket
+  the description renders bold, code and lists instead of raw markdown text
+  no bare value with an Edit button sits below the description
+
+- [ ] **Ticket U17: The ticket view carries the slug.** The kernel has held `slug` and
+  `workspaceKey` since C5, and the documented global id is `<workspaceKey>:<slug>`. The
+  client built its own id from the numeric ticket id instead. The projection now carries
+  the slug, and every id chip derives its label, its color and its hover text from the
+  real global id.
+  **Evaluate:** the hover text of an id chip reads `<workspaceKey>:<slug>`
+  the tool output schema for `get_tickets` accepts the new field
+  two workspaces whose paths end in the same segment still render different chip colors
 
 ## User preferences and special rules
 
