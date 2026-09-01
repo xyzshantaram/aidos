@@ -1972,3 +1972,33 @@
 .aidos-dep-card-open {
   flex: none;
 }
+
+/* #51: the pending-approval card. Kind-generic: one card style for every
+   agent-to-user ask (allowlist first). */
+.aidos-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--accent-blue);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  background: var(--surface);
+}
+
+.aidos-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.aidos-approval-prompt {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.aidos-chip-approval-kind {
+  background: var(--accent-blue);
+}

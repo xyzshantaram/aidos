@@ -26,7 +26,7 @@ import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
@@ -556,6 +556,63 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
     }
   }
   return "";
+}
+
+/**
+ * One pending agent-to-user approval (#51, the #56 seam's first consumer).
+ * Kind-generic on purpose: the allowlist flow is the first consumer, but a
+ * signoff request, a criteria confirmation, or any future agent-to-user ask
+ * rides the same queue -> card -> resolve path. In-memory by design: a
+ * restart drops pending requests, and the requesting agent re-requests.
+ */
+export interface PendingApproval {
+  id: string;
+  ticketId: number;
+  /** The approval kind; the card renders and resolves by it. */
+  kind: string;
+  /** Human-readable prompt shown on the card. */
+  prompt: string;
+  /** The proposed payload — for allowlists, { paths: string[] }. */
+  payload: Record<string, unknown>;
+  at: number;
+}
+
+/**
+ * Validate one proposed allowlist path set (#51). Every path must resolve
+ * inside the session workspace and exist on disk; the list must be non-empty;
+ * duplicates are collapsed. Returns the bad paths so the refusal can name
+ * each one — the agent can fix its proposal without a round trip.
+ */
+function validateAllowlistPaths(
+  cwd: string,
+  paths: readonly string[],
+): { ok: true; paths: string[] } | { ok: false; bad: Array<{ path: string; reason: string }> } {
+  const seen = new Set<string>();
+  const clean: string[] = [];
+  const bad: Array<{ path: string; reason: string }> = [];
+  for (const raw of paths) {
+    if (typeof raw !== "string" || raw.trim() === "") {
+      bad.push({ path: String(raw), reason: "empty" });
+      continue;
+    }
+    const p = raw.trim().replace(/\/+$/, "");
+    if (p === "") continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const abs = resolve(cwd, p);
+    if (!abs.startsWith(resolve(cwd))) {
+      bad.push({ path: p, reason: "escapes the workspace" });
+      continue;
+    }
+    if (!existsSync(abs)) {
+      bad.push({ path: p, reason: "does not exist" });
+      continue;
+    }
+    clean.push(p);
+  }
+  if (bad.length > 0) return { ok: false, bad };
+  if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
+  return { ok: true, paths: clean };
 }
 
 export class AidosService extends TypertRemoteService {
@@ -1123,6 +1180,98 @@ registerAidosSessionEventTypes(ctx);
    * The human-only kinds (`builtin:user_signoff` and `builtin:user_verified`)
    * accept rows here and nowhere else. No tool reaches this path.
    */
+  // ---- the pending-approval store (#51, the #56 seam's first consumer) ----
+
+  /** In-memory pending approvals keyed by request id. Restarts drop them. */
+  private readonly _pendingApprovals = new Map<string, PendingApproval>();
+  private _approvalSeq = 0;
+
+  /**
+   * The AGENT surface (#51): propose an allowlist for one ticket. Validates
+   * immediately (every path inside the session workspace and existing; the
+   * list deduped and non-empty — the refusal names each bad path), queues
+   * the request for the board, and returns AT ONCE. No blocking: tool
+   * timeouts make sync-wait unworkable, and the outcome reaches the agent
+   * through the digest when the user resolves the card.
+   */
+  requestAllowlist(agent: Agent, args: { ticketId: number; paths: string[] }): {
+    ok: true;
+    status: "pending";
+    ticketId: number;
+    requestId: string;
+    proposed: string[];
+  } {
+    const cwd = agent.session?.header?.cwd ?? "";
+    if (cwd === "") {
+      throw new Error("the session has no workspace cwd; cannot validate paths");
+    }
+    const result = validateAllowlistPaths(cwd, args.paths ?? []);
+    if (!result.ok) {
+      const detail = result.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
+      throw new Error(`allowlist proposal refused: ${detail}`);
+    }
+    this._approvalSeq += 1;
+    const id = `req-${Date.now()}-${this._approvalSeq}`;
+    const pending: PendingApproval = {
+      id,
+      ticketId: args.ticketId,
+      kind: "allowlist",
+      prompt: `Approve write access for ticket #${args.ticketId}`,
+      payload: { paths: result.paths },
+      at: this._now(),
+    };
+    this._pendingApprovals.set(id, pending);
+    return { ok: true, status: "pending", ticketId: args.ticketId, requestId: id, proposed: result.paths };
+  }
+
+  /**
+   * The BOARD surface: the oldest pending approval for one ticket, or null.
+   * Peek, not pop — resolution is explicit through resolveApproval, so a
+   * card survives a re-render.
+   */
+  @Remote("pendingApproval")
+  pendingApproval(agent: Agent, args: { ticketId: number }): PendingApproval | null {
+    const rows = [...this._pendingApprovals.values()]
+      .filter((row) => row.ticketId === args.ticketId)
+      .sort((a, b) => a.at - b.at);
+    return rows[0] ?? null;
+  }
+
+  /**
+   * The BOARD surface: resolve one pending approval. `approved` carries the
+   * (possibly edited) paths; `rejected` resolves with no attach. Either way
+   * the queue drops the request and the digest tells the agent the outcome.
+   * Returns what the agent will be told.
+   */
+  @Remote("resolveApproval")
+  resolveApproval(
+    agent: Agent,
+    args: { requestId: string; approved: boolean; paths?: string[] },
+  ): { resolved: string } {
+    const pending = this._pendingApprovals.get(args.requestId);
+    if (pending === undefined) {
+      throw new Error(`unknown approval request ${args.requestId}`);
+    }
+    this._pendingApprovals.delete(args.requestId);
+    if (!args.approved) {
+      this._queueInjection(
+        agent.session,
+        `Allowlist request for #${pending.ticketId} was rejected on the board — do not write; re-propose if still needed`,
+      );
+      return { resolved: "rejected" };
+    }
+    // The click is the user authorship: attach + field write here, so the
+    // coverage gate sees a user-authored row and the union updates at once.
+    const paths = (args.paths ?? (pending.payload.paths as string[])).map((p) => p.trim()).filter((p) => p !== "");
+    this.userAttachEvidence(agent, {
+      ticketId: pending.ticketId,
+      kind: "builtin:file_allowlist",
+      payload: { paths },
+    });
+    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: paths });
+    return { resolved: `approved: ${paths.join(", ")}` };
+  }
+
   /**
    * The session's workspace root, for client surfaces that need to address
    * the workspace's .dsh directory directly (the #53 Verify modal addresses

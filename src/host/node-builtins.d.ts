@@ -4,9 +4,10 @@
  * exports), so the declarations are global ambient modules.
  *
  * The tests run under vitest, which supplies the runtime; these types are
- * the compile-time contract for the synchronous plan-file read and the
- * path resolution under the session workspace. Both "fs"/"path" and
- * "node:fs"/"node:path" resolve via these ambient modules.
+ * the compile-time contract for the synchronous plan-file read, the path
+ * resolution under the session workspace, and the allowlist existence
+ * checks (#51). Both "fs"/"path" and "node:fs"/"node:path" resolve via
+ * these ambient modules.
  *
  * A merge pass that adds @types/node can delete this file.
  */
@@ -14,10 +15,12 @@
 declare module "fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function existsSync(path: string): boolean;
 }
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function existsSync(path: string): boolean;
 }
 declare module "path" {
   export function isAbsolute(path: string): boolean;

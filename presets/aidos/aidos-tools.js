@@ -25583,7 +25583,7 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "node:path";
 
 // src/kernel/constants.ts
@@ -27416,14 +27416,51 @@ function _evidenceDigestSuffix(kind, payload) {
   }
   return "";
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+function validateAllowlistPaths(cwd, paths) {
+  const seen = /* @__PURE__ */ new Set();
+  const clean = [];
+  const bad = [];
+  for (const raw of paths) {
+    if (typeof raw !== "string" || raw.trim() === "") {
+      bad.push({ path: String(raw), reason: "empty" });
+      continue;
+    }
+    const p = raw.trim().replace(/\/+$/, "");
+    if (p === "") continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const abs = resolve2(cwd, p);
+    if (!abs.startsWith(resolve2(cwd))) {
+      bad.push({ path: p, reason: "escapes the workspace" });
+      continue;
+    }
+    if (!existsSync(abs)) {
+      bad.push({ path: p, reason: "does not exist" });
+      continue;
+    }
+    clean.push(p);
+  }
+  if (bad.length > 0) return { ok: false, bad };
+  if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
+  return { ok: true, paths: clean };
+}
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _resolveApproval_dec, _pendingApproval_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
     __publicField(this, "_config");
     __publicField(this, "_caches", /* @__PURE__ */ new WeakMap());
     __publicField(this, "_resolvedConfig");
+    /**
+     * The user-actor attach path, exported over the typert Remote surface.
+     * The human-only kinds (`builtin:user_signoff` and `builtin:user_verified`)
+     * accept rows here and nowhere else. No tool reaches this path.
+     */
+    // ---- the pending-approval store (#51, the #56 seam's first consumer) ----
+    /** In-memory pending approvals keyed by request id. Restarts drop them. */
+    __publicField(this, "_pendingApprovals", /* @__PURE__ */ new Map());
+    __publicField(this, "_approvalSeq", 0);
     /**
      * The append path: validate the candidate against the folded state (the
      * invariant companion's check), append to the session log, then fold.
@@ -27853,6 +27890,63 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
     return this._attachEvidence(agent, args, "agent");
+  }
+  /**
+   * The AGENT surface (#51): propose an allowlist for one ticket. Validates
+   * immediately (every path inside the session workspace and existing; the
+   * list deduped and non-empty — the refusal names each bad path), queues
+   * the request for the board, and returns AT ONCE. No blocking: tool
+   * timeouts make sync-wait unworkable, and the outcome reaches the agent
+   * through the digest when the user resolves the card.
+   */
+  requestAllowlist(agent, args) {
+    const cwd = agent.session?.header?.cwd ?? "";
+    if (cwd === "") {
+      throw new Error("the session has no workspace cwd; cannot validate paths");
+    }
+    const result = validateAllowlistPaths(cwd, args.paths ?? []);
+    if (!result.ok) {
+      const detail = result.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
+      throw new Error(`allowlist proposal refused: ${detail}`);
+    }
+    this._approvalSeq += 1;
+    const id = `req-${Date.now()}-${this._approvalSeq}`;
+    const pending = {
+      id,
+      ticketId: args.ticketId,
+      kind: "allowlist",
+      prompt: `Approve write access for ticket #${args.ticketId}`,
+      payload: { paths: result.paths },
+      at: this._now()
+    };
+    this._pendingApprovals.set(id, pending);
+    return { ok: true, status: "pending", ticketId: args.ticketId, requestId: id, proposed: result.paths };
+  }
+  pendingApproval(agent, args) {
+    const rows = [...this._pendingApprovals.values()].filter((row) => row.ticketId === args.ticketId).sort((a, b) => a.at - b.at);
+    return rows[0] ?? null;
+  }
+  resolveApproval(agent, args) {
+    const pending = this._pendingApprovals.get(args.requestId);
+    if (pending === void 0) {
+      throw new Error(`unknown approval request ${args.requestId}`);
+    }
+    this._pendingApprovals.delete(args.requestId);
+    if (!args.approved) {
+      this._queueInjection(
+        agent.session,
+        `Allowlist request for #${pending.ticketId} was rejected on the board \u2014 do not write; re-propose if still needed`
+      );
+      return { resolved: "rejected" };
+    }
+    const paths = (args.paths ?? pending.payload.paths).map((p) => p.trim()).filter((p) => p !== "");
+    this.userAttachEvidence(agent, {
+      ticketId: pending.ticketId,
+      kind: "builtin:file_allowlist",
+      payload: { paths }
+    });
+    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: paths });
+    return { resolved: `approved: ${paths.join(", ")}` };
   }
   workspaceRoot(agent) {
     const cwd = agent.session?.header?.cwd ?? "";
@@ -28745,6 +28839,8 @@ __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
+__decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);
+__decorateElement(_init, 1, "resolveApproval", _resolveApproval_dec, AidosService);
 __decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
@@ -29479,6 +29575,53 @@ function registerPlan(ctx) {
     })
   );
 }
+function registerRequestAllowlist(ctx) {
+  ctx.tools.register(
+    defineTool2({
+      name: "request_allowlist",
+      description: "Propose file paths for a ticket's write allowlist (#51). Each path is validated immediately (inside the session workspace, exists on disk); a bad list is refused naming every bad path. A valid proposal queues an APPROVAL CARD on the board and returns at once - do not wait, do not poll: you will be steered with the outcome (approved paths or a rejection) when the user resolves the card.",
+      parameters: {
+        ticketId: {
+          type: "integer",
+          description: "The in-progress ticket the proposal is for.",
+          required: true
+        },
+        paths: {
+          type: "array",
+          description: "The proposed paths, workspace-relative or absolute.",
+          items: { type: "string" },
+          required: true
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            status: { type: "string", const: "pending", required: true },
+            ticketId: { type: "integer", required: true },
+            requestId: { type: "string", required: true },
+            proposed: { type: "array", items: { type: "string" }, required: true }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: request_allowlist called by agent ${agent.session?.id}`);
+        try {
+          const result = ctx.aidos.requestAllowlist(agent, args);
+          ctx.logger?.info?.(`aidos: allowlist request ${result.requestId} queued for ticket ${result.ticketId}`);
+          return result;
+        } catch (error51) {
+          refusal(error51);
+        }
+      },
+      presentCall: (a) => present("Request allowlist", "edit", a?.paths?.length ?? 0)
+    })
+  );
+}
 function registerPlanImport(ctx) {
   ctx.tools.register(
     defineTool2({
@@ -29652,6 +29795,7 @@ function apply(ctx, config2) {
   registerPlanMeta(ctx);
   registerPlanMetaSet(ctx);
   registerScratchTools(ctx);
+  registerRequestAllowlist(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);

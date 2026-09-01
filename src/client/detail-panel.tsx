@@ -35,6 +35,7 @@ import { FieldEditor } from "./field-editor";
 import { ActionBar } from "./action-bar";
 import { CommentsSection } from "./comments-section";
 import { EvidenceAttach, VerifyModal } from "./evidence-attach";
+import { AllowlistRequestCard } from "./allowlist-request-card";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
@@ -808,6 +809,11 @@ export function DetailPanel(props: DetailPanelBodyProps) {
           <dd className="aidos-facts-value">{ticket.slug}</dd>
         </div>
       </dl>
+      <AllowlistRequestCard
+        ticketId={props.ticketIdKey}
+        agentId={props.agentId}
+        onResolved={props.onFieldSaved}
+      />
       {props.actions}
       <DescriptionPanel
         ticket={ticket}

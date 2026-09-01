@@ -568,6 +568,59 @@ function registerPlan(ctx: Context): void {
   );
 }
 
+function registerRequestAllowlist(ctx: Context): void {
+  ctx.tools.register(
+    defineTool({
+      name: "request_allowlist",
+      description:
+        "Propose file paths for a ticket's write allowlist (#51). Each path is validated " +
+        "immediately (inside the session workspace, exists on disk); a bad list is refused " +
+        "naming every bad path. A valid proposal queues an APPROVAL CARD on the board and " +
+        "returns at once - do not wait, do not poll: you will be steered with the outcome " +
+        "(approved paths or a rejection) when the user resolves the card.",
+      parameters: {
+        ticketId: {
+          type: "integer",
+          description: "The in-progress ticket the proposal is for.",
+          required: true as const,
+        },
+        paths: {
+          type: "array",
+          description: "The proposed paths, workspace-relative or absolute.",
+          items: { type: "string" },
+          required: true as const,
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            status: { type: "string", const: "pending", required: true },
+            ticketId: { type: "integer", required: true },
+            requestId: { type: "string", required: true },
+            proposed: { type: "array", items: { type: "string" }, required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: request_allowlist called by agent ${agent.session?.id}`);
+        try {
+          const result = ctx.aidos.requestAllowlist(agent, args as { ticketId: number; paths: string[] });
+          ctx.logger?.info?.(`aidos: allowlist request ${result.requestId} queued for ticket ${result.ticketId}`);
+          return result;
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (a) => present("Request allowlist", "edit", (a as { paths?: string[] })?.paths?.length ?? 0),
+    }),
+  );
+}
+
 function registerPlanImport(ctx: Context): void {
   ctx.tools.register(
     defineTool({
@@ -785,6 +838,7 @@ export function apply(ctx: Context, config: unknown): void {
   registerPlanMetaSet(ctx);
 
   registerScratchTools(ctx);
+  registerRequestAllowlist(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);
