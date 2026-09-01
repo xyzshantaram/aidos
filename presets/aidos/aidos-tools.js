@@ -27046,7 +27046,12 @@ function registerScratchTools(ctx) {
         ctx.logger?.debug?.(`aidos: scratch_mkdir path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
-        const fs = ctx.fs;
+        let fs;
+        try {
+          fs = ctx.fs;
+        } catch {
+          fs = void 0;
+        }
         if (fs?.mkdir) {
           await fs.mkdir(absPath, { recursive: true });
         } else {
@@ -28034,7 +28039,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" }
       });
-      live.inject(message);
+      live.steer(message);
     } catch (error51) {
       this.ctx.logger?.warn?.(
         `aidos: injection flush failed for ${key}: ${error51 instanceof Error ? error51.message : String(error51)}`

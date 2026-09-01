@@ -1406,7 +1406,12 @@ registerAidosSessionEventTypes(ctx);
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" },
       });
-      live.inject(message);
+      // steer, not inject (#63 follow-up, user-reported): inject is QUIET
+      // delivery — an idle agent leaves it pending until something else wakes
+      // it, so board updates sat unread until the user happened to prompt.
+      // steer starts a turn for an idle agent and rides the next step
+      // boundary for a running one, which is what "tell the agent" means.
+      live.steer(message);
     } catch (error) {
       this.ctx.logger?.warn?.(
         `aidos: injection flush failed for ${key}: ${error instanceof Error ? error.message : String(error)}`,

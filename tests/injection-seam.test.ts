@@ -1,7 +1,10 @@
 /**
  * Ticket #63: the injection seam. User/system-actor board events queue a
  * one-line note; a debounce timer flushes them as ONE digest into the live
- * agent's inbox via agent.inject (next-step, never wakes an idle agent).
+ * agent's inbox via agent.steer: a running agent consumes it at the next
+ * step boundary; an IDLE agent STARTS A TURN (the user-reported behavior —
+ * quiet inject left board updates unread until the user happened to
+ * prompt, which defeats the seam's purpose).
  * Agent-actor events never queue. Failures are swallowed.
  */
 import { describe, expect, it } from "vitest";
@@ -26,8 +29,8 @@ function makeFixture() {
   internal._resolvedConfig.injectEnabled = true;
   // Record what the live agent receives.
   const injected: string[] = [];
-  const live = harness.asAgent() as unknown as { inject: (m: unknown) => void };
-  live.inject = (message: unknown) => {
+  const live = harness.asAgent() as unknown as { steer: (m: unknown) => void };
+  live.steer = (message: unknown) => {
     const blocks = (message as { content: Array<{ type: string; text?: string }> }).content;
     const text = blocks
       .filter((block) => block.type === "text")

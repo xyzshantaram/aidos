@@ -27776,7 +27776,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" }
       });
-      live.inject(message);
+      live.steer(message);
     } catch (error51) {
       this.ctx.logger?.warn?.(
         `aidos: injection flush failed for ${key}: ${error51 instanceof Error ? error51.message : String(error51)}`
