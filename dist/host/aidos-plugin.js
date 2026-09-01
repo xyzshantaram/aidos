@@ -27181,8 +27181,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _resolveApproval_dec, _pendingApproval_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _resolveApproval_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -27628,14 +27628,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   agentAttachEvidence(agent, args) {
     return this._attachEvidence(agent, args, "agent");
   }
-  /**
-   * The AGENT surface (#51): propose an allowlist for one ticket. Validates
-   * immediately (every path inside the session workspace and existing; the
-   * list deduped and non-empty — the refusal names each bad path), queues
-   * the request for the board, and returns AT ONCE. No blocking: tool
-   * timeouts make sync-wait unworkable, and the outcome reaches the agent
-   * through the digest when the user resolves the card.
-   */
   requestAllowlist(agent, args) {
     const cwd = agent.session?.header?.cwd ?? "";
     if (cwd === "") {
@@ -28576,6 +28568,7 @@ __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
+__decorateElement(_init, 1, "requestAllowlist", _requestAllowlist_dec, AidosService);
 __decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);
 __decorateElement(_init, 1, "resolveApproval", _resolveApproval_dec, AidosService);
 __decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);

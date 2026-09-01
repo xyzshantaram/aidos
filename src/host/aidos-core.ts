@@ -1194,6 +1194,7 @@ registerAidosSessionEventTypes(ctx);
    * timeouts make sync-wait unworkable, and the outcome reaches the agent
    * through the digest when the user resolves the card.
    */
+  @Remote("requestAllowlist")
   requestAllowlist(agent: Agent, args: { ticketId: number; paths: string[] }): {
     ok: true;
     status: "pending";
