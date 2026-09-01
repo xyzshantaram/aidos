@@ -1231,9 +1231,13 @@ registerAidosSessionEventTypes(ctx);
    * card survives a re-render.
    */
   @Remote("pendingApproval")
-  pendingApproval(agent: Agent, args: { ticketId: number }): PendingApproval | null {
+  pendingApproval(agent: Agent, args: { ticketId: number | string }): PendingApproval | null {
+    // The client's ticketIdKey is a STRING ("53"); the store holds NUMBERS.
+    // Strict === between them silently nulled every poll, so the card never
+    // rendered (#51). Coerce like _resolveTicketId does.
+    const wanted = Number(args.ticketId);
     const rows = [...this._pendingApprovals.values()]
-      .filter((row) => row.ticketId === args.ticketId)
+      .filter((row) => row.ticketId === wanted)
       .sort((a, b) => a.at - b.at);
     return rows[0] ?? null;
   }
