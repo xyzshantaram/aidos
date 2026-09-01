@@ -812,6 +812,17 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
       if (name === "approval") {
         return harness.approval;
       }
+      // Explicit per-test provides win over the rig default.
+      if (name === "agentPresets" && provided.agentPresets !== undefined) {
+        return provided.agentPresets;
+      }
+      if (name === "agentPresets") {
+        // The aidos rig composes the aidos preset for its agents: the
+        // deny-by-default preset gate (A5) requires provable membership.
+        return {
+          composedPreset: () => "aidos",
+        };
+      }
       return provided[name];
     },
     agents: {

@@ -23,17 +23,21 @@ export const AIDOS_PRESET_ID = "aidos";
  * into.
  */
 export function isAidosAgent(ctx: Context, agent: Agent): boolean {
+  // Deny by default (#A5 follow-up): the board tools belong to the aidos
+  // orchestrator. An agent that cannot PROVE it composes the aidos preset
+  // is outside the boundary — the earlier fail-open behavior let subagents
+  // from foreign chains (no composed preset, unset delegation depth) reach
+  // set_ticket, which the user observed live.
   const presets = ctx.get("agentPresets") as
     | { composedPreset: (agentCtx: unknown) => string | undefined }
     | undefined;
-  if (presets === undefined) return true;
-  let composed: string | undefined;
+  if (presets === undefined) return false;
+  let composed: string |undefined;
   try {
     composed = presets.composedPreset(agent.ctx);
   } catch {
-    // An unreadable scope chain must not veto tool calls; treat as aidos
-    // (fail open) and let the per-agent seams the service owns still apply.
-    return true;
+    // An unreadable scope chain cannot prove aidos membership.
+    return false;
   }
-  return composed === undefined || composed === AIDOS_PRESET_ID;
+  return composed === AIDOS_PRESET_ID;
 }

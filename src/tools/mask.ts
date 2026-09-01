@@ -25,6 +25,7 @@ import { scopeOf } from "@deepseek-ai/dsh-scope";
 import type { TicketState } from "../kernel/types";
 import { BOARD_TOOLS } from "./board-tools";
 import { isAidosAgent } from "./preset-gate";
+import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 
 /** The reserved code-mode transport, which restrictions must never name. */
 const RUN_CODE = "run_code";
@@ -131,6 +132,13 @@ export function installAidosMask(ctx: Context): () => void {
     // composed preset is not aidos must keep its full tool surface: lift any
     // restriction the mask previously applied and deny nothing.
     if (!isAidosAgent(ctx, agent)) return [];
+    // A subagent NEVER sees the orchestrator-only tools — not in the mask
+    // and not in the prompt (skill-gate pattern, A5). Depth decides, not
+    // the session's ticket tiers: a child of an in-progress session must
+    // not inherit set_ticket/attach_evidence/move_ticket/plan_*.
+    if (delegationDepthOf(agent) !== 0) {
+      return [...BOARD_TOOLS, ...PLAN_TOOLS].sort();
+    }
     let states: TicketState[];
     try {
       states = aidos.ticketStates(agent);
