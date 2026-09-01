@@ -10,6 +10,7 @@
   --border: #3e3e3f;
   --border-subtle: #303031;
   --border-focus: #66676b;
+  --accent-blue: #3b82f6;
   --text-primary: #f9fafb;
   --text-secondary: #adb2b8;
   --text-muted: #88898a;
@@ -51,6 +52,11 @@
   flex-direction: column;
   gap: var(--space-1);
   padding: 0.75rem 1rem 1.5rem;
+  /* #64: the mobile plugin's fixed top bar covers our top edge, and its real
+     height depends on the device safe area. The view measures the actual
+     overlap and publishes it as --aidos-top-clearance (0 when nothing covers
+     the board), so no breakpoint or magic number is involved. */
+  padding-top: calc(0.75rem + var(--aidos-top-clearance, 0px));
   width: 100%;
   min-height: 0;
   height: 100%;
@@ -88,21 +94,78 @@
      shell publishes --dsh-composer-height, so the panes pad clear of the
      floating composer. */
   --aidos-bottom-clearance: calc(var(--dsh-composer-height, 152px) + 16px);
+  container: aidos-shell / inline-size;
   display: flex;
   gap: var(--space-2);
   align-items: stretch;
   min-width: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
   min-height: 0;
   overflow: hidden;
-  flex: 1;
+  flex: 1 1 0%;
 }
 
+/* The grid pane fills the layout box so its inner scroller is bounded. The
+   real tree is .aidos-layout > .aidos-root > .aidos-grid-wrap: any rule
+   written as `.aidos-layout > .aidos-grid-wrap` matches NOTHING. */
+.aidos-layout > .aidos-root {
+  flex: 1 1 0%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Two-pane above the narrow break (#64). */
 .aidos-layout:has(> .aidos-detail) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   align-items: stretch;
+}
+
+/* Mobile single pane (#64): the detail panel becomes the only thing on
+   screen — a full overlay over the grid — and the grid behind it collapses
+   to one column. The break follows the board container width, not the
+   device, per the ticket. */
+/* Mobile (#64). Two hard-won constraints live here:
+   1. The single-pane switch MUST be a media query, never a container query:
+      .aidos-layout declares `container: aidos-shell`, and an element can
+      never match a query against its OWN container, so the container-query
+      version of this rule was dead CSS.
+   2. The breakpoint matches dsh-plugin-better-mobile-ui's own 768px mobile
+      mode, because its fixed 48px top bar — and the composer it pins over
+      the board bottom — exist exactly when that mode is on. */
+@media (max-width: 768px) {
+  .aidos-grid-wrap {
+    padding-bottom: calc(var(--aidos-bottom-clearance) + 8px);
+  }
+
+  .aidos-board-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aidos-layout:has(> .aidos-detail) {
+    display: block;
+    position: relative;
+  }
+
+  .aidos-layout > .aidos-detail {
+    /* Fixed takeover, not absolute-in-layout: the layout sits inside the
+       root's padding, so anchoring there left the header (and its close
+       button) under the plugin's top bar. */
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: var(--bg);
+    /* Viewport-pinned, so it clears the chrome's viewport-space bottom. */
+    padding-top: calc(var(--aidos-top-chrome, 0px) + 0.5rem);
+    padding-bottom: calc(var(--aidos-bottom-clearance) + 8px);
+  }
+}
+
+@container aidos-shell (max-width: 560px) {
+  .aidos-board-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .aidos-layout > .aidos-detail {
@@ -130,6 +193,11 @@
   gap: var(--space-2);
   min-height: 0;
   overflow-y: auto;
+  overflow-x: clip;
+  /* The composer floats over the board at every width, so the scroll pane
+     must end above it or the last tile row hides underneath. Only the detail
+     pane carried this clearance before, which is why the grid clipped its
+     bottom row on desktop and mobile alike. */
   padding-bottom: var(--aidos-bottom-clearance);
   /* The tile grid steps its column count from the width of this pane, not the
      width of the window. The pane is always narrower than the window, and it
@@ -855,8 +923,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  height: 168px;
-  flex: none;
+  /* #59: no fixed height — badges own their vertical space, the card grows
+     with wrapped rows, and grid rows stretch to the tallest card so the
+     field stays aligned. The preview still clamps at two lines. */
+  min-height: 168px;
   padding: 10px 12px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -868,6 +938,7 @@
   color: var(--text-primary);
 }
 .aidos-tile-preview {
+  flex: none;
   margin: 0;
   font-size: 12px;
   line-height: 16px;
@@ -883,9 +954,18 @@
   border-color: var(--border);
 }
 
+/* Focused tile: the one open in the detail panel (ticket #61). */
 .aidos-tile-selected {
-  border-color: var(--border-focus);
-  background: var(--surface-hover);
+  outline: 2px solid #f9fafb;
+  outline-offset: -3px;
+}
+
+/* Active-work tile: the in_progress ticket with the latest update. The
+   ring renders INSIDE the tile (inset shadow) so edge tiles never clip
+   against the scroll pane and the grid extent never changes (#61). */
+.aidos-tile-active {
+  border-color: var(--accent-blue);
+  box-shadow: inset 0 0 0 3px var(--accent-blue);
 }
 
 .aidos-tile-title {
@@ -910,12 +990,11 @@
 
 .aidos-tile-chips {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   margin-top: auto;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
 }
 
 /* The confidence ring and the tile gate text are gone: the tile shows a gate
@@ -1574,18 +1653,6 @@
   gap: 8px;
 }
 
-/* active marker */
-.aidos-active-marker {
-  flex: none;
-  font-size: 10px;
-  line-height: 14px;
-  color: #232324;
-  background: #adb2b8;
-  border-radius: var(--radius-pill);
-  padding: 0 8px;
-  white-space: nowrap;
-}
-
 /* helper text (spec §13) */
 .helper-text {
   font-size: 0.8125rem;
@@ -1597,7 +1664,12 @@
 /* ── 15. Responsive (spec §20) ─────────────────────────── */
 @media (max-width: 700px) {
   .aidos-root {
-    padding: 1.5rem 1rem 2.5rem;
+    /* NEVER use the `padding` shorthand here: this block sits after the
+       measured top clearance (§2) at equal specificity, so a shorthand
+       silently resets padding-top and the toolbar slides back under the
+       mobile plugin's fixed top bar. Longhands only. (#64) */
+    padding-inline: 1rem;
+    padding-bottom: 2.5rem;
   }
 
   .aidos-sidebar,
@@ -1653,4 +1725,93 @@
   .aidos-merge-spinner {
     animation-duration: 2s;
   }
+}
+
+/* U2e: allowlist editor */
+.aidos-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.aidos-allowlist-input {
+  width: 100%;
+  min-height: 120px;
+  font-family: monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.aidos-allowlist-preview ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aidos-clickable {
+  cursor: pointer;
+}
+
+/* #50: evidence viewer modal */
+.aidos-evidence-payload-json {
+  max-height: 320px;
+  overflow: auto;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+}
+
+.aidos-evidence-payload-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.aidos-evidence-viewer-meta {
+  display: flex;
+  gap: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+/* #62: disabled action buttons stay legible on the dark theme */
+.aidos-btn-disabled,
+.aidos-btn-disabled:hover,
+.aidos-btn-disabled:active {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--text-primary);
+  background: var(--surface-active);
+  border-color: var(--border);
+}
+
+/* #55: split badges for the metric chips. The keyword half carries the
+   neutral chrome; the value half inverts so the number reads first. */
+.aidos-chip-metric {
+  padding-inline: 0;
+  overflow: hidden;
+}
+
+.aidos-chip-metric .aidos-chip-key {
+  padding-inline: 7px;
+}
+
+.aidos-chip-metric .aidos-chip-value {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  padding-inline: 5px;
+  background: #f9fafb;
+  color: #232324;
+  font-weight: 700;
 }

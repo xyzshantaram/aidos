@@ -1,41 +1,99 @@
 /**
- * Ticket U2c: the per-state action descriptors.
- *
- * One pure function maps a ticket state to the actions the human may take.
- * The component layer reads the descriptors and renders the matching
- * buttons. No React, no DOM, no dsh imports.
+ * Ticket U2c + #62: the per-action descriptors. Every action is always
+ * present; availability and the unlock reason ride the descriptor so the
+ * action bar can grey buttons out with a tooltip naming what is missing.
+ * No React, no DOM, no dsh imports.
  */
 
 import type { TicketView } from "../kernel/projections";
 
-export type ActionId = "signoff" | "submit-for-review" | "send-back" | "mark-done";
+export type ActionId =
+  | "signoff"
+  | "submit-for-review"
+  | "send-back"
+  | "mark-done"
+  | "allowlist";
 
 export interface ActionDescriptor {
   id: ActionId;
   label: string;
   primary?: boolean;
+  /** Undefined when the action is available now; the unlock hint otherwise. */
+  unavailableReason?: string;
+}
+
+/** The evidence kinds present on the ticket, from the caller's rows. */
+export type EvidenceKinds = readonly string[];
+
+/** Signoff is open → in_progress; the user authors the row. */
+function signoffReason(ticket: TicketView): string | undefined {
+  if (ticket.state !== "open") {
+    return "the ticket is already signed off";
+  }
+  return undefined;
+}
+
+/** Submit for review needs automated_check + review_pass rows attached. */
+function submitReason(
+  ticket: TicketView,
+  kinds: EvidenceKinds,
+): string | undefined {
+  if (ticket.state !== "in_progress") {
+    return "the ticket must be in progress";
+  }
+  const present = new Set(kinds);
+  const missing: string[] = [];
+  if (!present.has("builtin:automated_check")) missing.push("automated_check");
+  if (!present.has("builtin:review_pass")) {
+    missing.push("review_pass (a reviewer subagent or the human reviews first)");
+  }
+  return missing.length === 0 ? undefined : "requires " + missing.join(", ");
+}
+
+/** Send back is the user-only send-back edge from awaiting_verification. */
+function sendBackReason(ticket: TicketView): string | undefined {
+  if (ticket.state !== "awaiting_verification") {
+    return "the ticket must be awaiting verification";
+  }
+  return undefined;
+}
+
+/** Mark done needs the user_verified row on an awaiting ticket. */
+function markDoneReason(
+  ticket: TicketView,
+  kinds: EvidenceKinds,
+): string | undefined {
+  if (ticket.state !== "awaiting_verification") {
+    return "the ticket must be awaiting verification";
+  }
+  if (!kinds.includes("builtin:user_verified")) {
+    return "requires user_verified (attach your verification row first)";
+  }
+  return undefined;
+}
+
+/** The allowlist editor edits the write boundary of an in-progress ticket. */
+function allowlistReason(ticket: TicketView): string | undefined {
+  if (ticket.state !== "in_progress") {
+    return "the ticket must be in progress";
+  }
+  return undefined;
 }
 
 /**
- * The actions for one ticket state, in render order.
- * - open: signoff (the primary button).
- * - in_progress: submit for review. No primary flag; this action lives in
- *   the spoiler.
- * - awaiting_verification: send-back and mark done (primary).
- * - done: no actions.
+ * Every action, always, in render order, each with its availability. The
+ * caller renders disabled buttons with `unavailableReason` as the tooltip.
+ * `evidenceKinds` feeds the evidence-gated reasons.
  */
-export function actionsFor(ticket: TicketView): ActionDescriptor[] {
-  switch (ticket.state) {
-    case "open":
-      return [{ id: "signoff", label: "Sign off", primary: true }];
-    case "in_progress":
-      return [{ id: "submit-for-review", label: "Submit for review" }];
-    case "awaiting_verification":
-      return [
-        { id: "send-back", label: "Send back" },
-        { id: "mark-done", label: "Mark done", primary: true },
-      ];
-    case "done":
-      return [];
-  }
+export function actionsFor(
+  ticket: TicketView,
+  evidenceKinds: EvidenceKinds = [],
+): ActionDescriptor[] {
+  return [
+    { id: "signoff", label: "Sign off", primary: true, unavailableReason: signoffReason(ticket) },
+    { id: "submit-for-review", label: "Submit for review", unavailableReason: submitReason(ticket, evidenceKinds) },
+    { id: "send-back", label: "Send back", unavailableReason: sendBackReason(ticket) },
+    { id: "mark-done", label: "Mark done", primary: true, unavailableReason: markDoneReason(ticket, evidenceKinds) },
+    { id: "allowlist", label: "Allowlist", unavailableReason: allowlistReason(ticket) },
+  ];
 }

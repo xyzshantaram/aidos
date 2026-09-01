@@ -17,23 +17,40 @@ export interface EvidenceTagsProps {
 export function EvidenceTags({ evidence }: EvidenceTagsProps) {
   const counts = evidenceKindCounts(evidence);
   if (counts.length === 0) return null;
+  // #55: the IMPORTED badge's value half is the claimed ticket state from
+  // the row payload, not a bare count.
+  const claimedStates = new Map<string, string>();
+  for (const row of evidence) {
+    if (row.kind === "builtin:imported_state" && typeof row.payload.claimed_state === "string") {
+      claimedStates.set(row.kind, row.payload.claimed_state);
+    }
+  }
   return (
     <>
-      {counts.map((count) => (
-        <span
-          key={count.kind}
-          className="aidos-chip aidos-chip-kind"
-          style={{ background: count.color }}
-          title={kindDescription(count.kind)}
-        >
-          <span className="aidos-chip-key">{kindKeyword(count.kind)}</span>
-          {count.count > 1 ? (
-            <span className="aidos-chip-count" style={{ color: count.color }}>
-              {String(count.count)}
-            </span>
-          ) : null}
-        </span>
-      ))}
+      {counts.map((count) => {
+        const claimed = claimedStates.get(count.kind);
+        const value =
+          claimed !== undefined
+            ? claimed
+            : count.count > 1
+              ? String(count.count)
+              : null;
+        return (
+          <span
+            key={count.kind}
+            className="aidos-chip aidos-chip-kind"
+            style={{ background: count.color }}
+            title={kindDescription(count.kind)}
+          >
+            <span className="aidos-chip-key">{kindKeyword(count.kind)}</span>
+            {value !== null ? (
+              <span className="aidos-chip-count" style={{ color: count.color }}>
+                {value}
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
     </>
   );
 }

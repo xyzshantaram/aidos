@@ -130,6 +130,93 @@ function setTicketParam(id: number | null): void {
   }
 }
 
+/**
+ * Mobile top-chrome clearance (#64).
+ *
+ * dsh-plugin-better-mobile-ui floats a fixed top bar over the whole frame,
+ * and its real height depends on the device safe area, so every hardcoded
+ * clearance we tried was either too small (toolbar clipped) or wasteful.
+ * Measure the actual overlap instead and publish two custom properties on
+ * the layout element:
+ *
+ *   --aidos-top-clearance : how far fixed chrome reaches PAST the board's own
+ *                           top edge (0 on desktop, where nothing covers it).
+ *   --aidos-top-chrome    : that chrome's bottom in VIEWPORT coordinates, for
+ *                           the fixed mobile detail overlay, which is pinned
+ *                           to the viewport rather than to the board box.
+ */
+function useTopChromeClearance(ref: { current: HTMLDivElement | null }): void {
+  react.useEffect(function () {
+    const node = ref.current;
+    if (node === null || typeof window === "undefined") return;
+    let frame = 0;
+    const timers: number[] = [];
+
+    const measure = (): void => {
+      frame = 0;
+      const box = node.getBoundingClientRect();
+      let chromeBottom = 0;
+      const consider = (element: Element): void => {
+        const rect = element.getBoundingClientRect();
+        if (rect.height === 0 || rect.bottom <= 0) return;
+        // Only chrome that sits at the top and actually covers our top edge.
+        if (rect.top > box.top + 4) return;
+        if (rect.bottom > chromeBottom) chromeBottom = rect.bottom;
+      };
+      // 1. The known mobile-plugin bar, INCLUDING children: its buttons can
+      //    paint below the 48px bar box, which is what a hardcoded 48px
+      //    clearance kept missing.
+      document.querySelectorAll<HTMLElement>(".bmu-topbar, [data-bmu-topbar]").forEach(function (bar) {
+        consider(bar);
+        for (const child of Array.from(bar.children)) consider(child);
+      });
+      // 2. Anything else painting over our top edge: probe the stack at the
+      //    edge and count every fixed/sticky element above us. This keeps the
+      //    clearance honest if the shell's chrome changes or the plugin is
+      //    absent. The probe reads the border-box top, which our own padding
+      //    never moves, so there is no feedback loop.
+      if (box.width > 0 && typeof document.elementsFromPoint === "function") {
+        const stack = document.elementsFromPoint(box.left + box.width / 2, box.top + 2);
+        for (const element of stack) {
+          if (element === node || node.contains(element)) break;
+          const position = window.getComputedStyle(element).position;
+          if (position === "fixed" || position === "sticky") consider(element);
+        }
+      }
+      const overlap = Math.max(0, Math.round(chromeBottom - box.top));
+      node.style.setProperty("--aidos-top-clearance", `${overlap}px`);
+      node.style.setProperty("--aidos-top-chrome", `${Math.max(0, Math.round(chromeBottom))}px`);
+    };
+
+    const schedule = (): void => {
+      if (frame !== 0) return;
+      frame = window.requestAnimationFrame(measure);
+    };
+
+    measure();
+    // The bar can mount (or re-lay-out for the safe area) after we do; a few
+    // bounded re-measures beat a forever interval.
+    for (const delay of [120, 600, 1600]) {
+      timers.push(window.setTimeout(schedule, delay));
+    }
+    window.addEventListener("resize", schedule);
+    window.addEventListener("orientationchange", schedule);
+    const viewport = window.visualViewport;
+    if (viewport) viewport.addEventListener("resize", schedule);
+    const observer = new ResizeObserver(schedule);
+    observer.observe(node);
+
+    return function () {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      for (const timer of timers) window.clearTimeout(timer);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      if (viewport) viewport.removeEventListener("resize", schedule);
+      observer.disconnect();
+    };
+  }, [ref]);
+}
+
 export function LocalTicketView(props: LocalTicketViewProps) {
   const [retryNonce, setRetryNonce] = react.useState(0);
 
@@ -187,8 +274,6 @@ function ProjectionReader(props: ProjectionReaderProps) {
     // Skip the pull when this exact own-board version already landed: a
     // badge remount re-runs the effect with unchanged inputs.
     if (getPulledVersion(sessionId) === ownVersion) return;
-    const alreadyPulling = isMergePulling(sessionId);
-    setMergePulling(sessionId, true);
     setMergePending(getMerge(sessionId) === null);
     let cancelled = false;
     const pull = async function () {
@@ -199,19 +284,19 @@ function ProjectionReader(props: ProjectionReaderProps) {
         // the cache write is what delivers the merge across the remount.
         setMerge(sessionId, result as unknown as WorkspaceMerge);
         setMergePulling(sessionId, false);
+        setPulledVersion(sessionId, ownVersion);
         if (cancelled) return;
         setMergeState(result as unknown as WorkspaceMerge);
         setMergePending(false);
+        // A signal that arrived mid-pull was folded into ownVersion; the
+        // effect reruns and pulls the fresher merge. The stale marker no
+        // longer drops anything (#46/#48).
       } catch {
         setMergePulling(sessionId, false);
         if (cancelled) return;
         setMergePending(false);
       }
     };
-    // A remount while the first pull runs must not fire a second Remote
-    // call; the in-flight marker dedupes and the mounted flag re-syncs the
-    // indicator from the module store.
-    if (alreadyPulling) return;
     void pull();
     return function () {
       cancelled = true;
@@ -221,17 +306,36 @@ function ProjectionReader(props: ProjectionReaderProps) {
   // The effective board: the merged rows when a merge exists, else the own
   // projection alone. Foreign rows carry key sessionId:ticketId; own rows
   // plain ticketId.
-  const boardTickets: Array<TicketViewType & { sourceSessionId?: string; foreign?: boolean }> =
+  // Own rows always render from the live projection (goal-domain pattern):
+  // the merge cache contributes foreign rows only, so own-session writes
+  // show instantly and a stale merge can never shadow them (#46/#48).
+  const ownRows: Array<TicketViewType & { sourceSessionId?: string; foreign?: boolean }> =
+    Object.values(ticketsProjection as Record<string, TicketViewType> | undefined ?? {}).map(
+      (row) => ({ ...row, sourceSessionId: sessionId, foreign: false }),
+    );
+  const foreignRows =
     merge !== null
-      ? merge.tickets
-      : Object.values(ticketsProjection as Record<string, TicketViewType> | undefined ?? {}).map(
-          (row) => ({ ...row, sourceSessionId: sessionId, foreign: false }),
-        );
+      ? merge.tickets.filter((row) => row.sourceSessionId !== sessionId)
+      : [];
+  const boardTickets: Array<TicketViewType & { sourceSessionId?: string; foreign?: boolean }> = [
+    ...ownRows,
+    ...foreignRows,
+  ];
   const rawTickets = boardTickets;
-  const rawEvidence: Record<string, EvidenceRow[]> =
-    merge !== null ? merge.evidence : (evidenceProjection as Record<string, EvidenceRow[]> | undefined) ?? {};
-  const rawComments: Record<string, CommentRecord[]> =
-    merge !== null ? merge.comments : (commentsProjection as Record<string, CommentRecord[]> | undefined) ?? {};
+  const ownEvidence = (evidenceProjection as Record<string, EvidenceRow[]> | undefined) ?? {};
+  const ownComments = (commentsProjection as Record<string, CommentRecord[]> | undefined) ?? {};
+  const foreignEvidence: Record<string, EvidenceRow[]> = {};
+  const foreignComments: Record<string, CommentRecord[]> = {};
+  if (merge !== null) {
+    for (const [key, value] of Object.entries(merge.evidence)) {
+      if (!key.startsWith(sessionId + ":")) foreignEvidence[key] = value;
+    }
+    for (const [key, value] of Object.entries(merge.comments)) {
+      if (!key.startsWith(sessionId + ":")) foreignComments[key] = value;
+    }
+  }
+  const rawEvidence: Record<string, EvidenceRow[]> = { ...foreignEvidence, ...ownEvidence };
+  const rawComments: Record<string, CommentRecord[]> = { ...foreignComments, ...ownComments };
   const allTicketsCount = rawTickets.length;
   // Persist the filter under one workspace key. When the board shows tickets
   // from projects with different workspace keys, keep the first key but suffix
@@ -255,6 +359,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
   const restoredRef = react.useRef(false);
+  const layoutRef = react.useRef<HTMLDivElement | null>(null);
+  useTopChromeClearance(layoutRef);
 
   // Report the open count to the tab badge store.
   const count = openCount(rawTickets);
@@ -507,7 +613,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
 
   return (
     <>
-      <div className="aidos-layout" data-conversation-composer-overlay="">
+      <div className="aidos-layout" ref={layoutRef} data-conversation-composer-overlay="">
         {body}
         {detailPanel}
       </div>

@@ -1,6 +1,8 @@
 /**
- * Ticket U2c: the evidence attach form. Pick a user-allowed kind and an
- * optional note, then attach through userAttachEvidence.
+ * Ticket U2c + #53: the evidence attach form. Pick a user-allowed kind,
+ * an optional JSON payload, and an optional note, then attach through
+ * userAttachEvidence. Non-empty JSON input parses and rides as the payload
+ * object; input that fails to parse refuses with the parse error (#53).
  */
 
 import react from "react";
@@ -18,14 +20,36 @@ export function EvidenceAttachForm(props: EvidenceAttachFormProps) {
   const kinds = userEvidenceKinds();
   const [kind, setKind] = react.useState(kinds.length > 0 ? kinds[0].id : "");
   const [note, setNote] = react.useState("");
+  const [payloadText, setPayloadText] = react.useState("");
   const [working, setWorking] = react.useState(false);
 
   async function attach() {
     if (working) return;
     if (kind === "") return;
+    // #53: the payload is a real object, never a stringified note. Empty
+    // input sends an empty payload; non-empty input must parse as a JSON
+    // OBJECT, and a parse failure refuses with the error text.
+    let structured: Record<string, unknown> = {};
+    if (payloadText.trim() !== "") {
+      try {
+        const parsed: unknown = JSON.parse(payloadText);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+          showToast("Payload must be a JSON object", "refusal");
+          return;
+        }
+        structured = parsed as Record<string, unknown>;
+      } catch (error) {
+        showToast(
+          "Payload is not valid JSON: " + (error instanceof Error ? error.message : String(error)),
+          "refusal",
+        );
+        return;
+      }
+    }
+    const payload =
+      note.trim() === "" ? structured : { ...structured, note: note.trim() };
     setWorking(true);
     try {
-      const payload = note.trim() === "" ? {} : { note };
       await callAidosRemote(
         "userAttachEvidence",
         { ticketId: props.ticketId, kind, payload },
@@ -33,6 +57,7 @@ export function EvidenceAttachForm(props: EvidenceAttachFormProps) {
       );
       showToast("Evidence attached", "success");
       setNote("");
+      setPayloadText("");
     } catch (error) {
       if (error instanceof AidosRemoteError) {
         showToast(error.message, "refusal");
@@ -68,6 +93,18 @@ export function EvidenceAttachForm(props: EvidenceAttachFormProps) {
             </option>
           ))}
         </select>
+      </div>
+      <div className="aidos-modal-row">
+        <label>Payload JSON (optional object)</label>
+        <textarea
+          className="aidos-evidence-attach-note"
+          value={payloadText}
+          disabled={working}
+          placeholder={'{"paths": ["src/"]}'} 
+          onChange={(event) => {
+            setPayloadText(event.target.value);
+          }}
+        />
       </div>
       <div className="aidos-modal-row">
         <label>Note (optional)</label>

@@ -11,6 +11,8 @@
  */
 
 import react from "react";
+import { AllowlistEditor } from "./allowlist-editor";
+import { EvidenceViewer } from "./evidence-viewer";
 import { marked } from "marked";
 
 import {
@@ -65,6 +67,12 @@ export interface DetailPanelProps {
   onClose: () => void;
   agentId: string;
   onFieldSaved: () => void;
+  /** Opens the allowlist editor; the editor state lives in DetailView. */
+  onOpenAllowlist?: () => void;
+  /** Opens the evidence viewer for one row (#50). */
+  onViewEvidence?: (row: EvidenceRowLike) => void;
+  /** Always-present action descriptors with unlock reasons (#62). */
+  actionHints?: Record<string, string>;
 }
 
 /**
@@ -571,6 +579,8 @@ function EvidencePanel(props: {
   deletingAt: number | null;
   ticketIdKey: string;
   agentId: string;
+  /** Opens the evidence viewer for one row (#50). */
+  onViewEvidence?: (row: EvidenceRowLike) => void;
 }) {
   return (
     <details
@@ -592,7 +602,19 @@ function EvidencePanel(props: {
         ) : (
           <ul className="aidos-evidence-list">
             {props.evidence.map((row, index) => (
-              <li className="aidos-evidence-item" key={row.at ?? index}>
+              <li
+                className={
+                  props.onViewEvidence !== undefined
+                    ? "aidos-evidence-item aidos-clickable"
+                    : "aidos-evidence-item"
+                }
+                key={row.at ?? index}
+                onClick={() => {
+                  if (props.onViewEvidence !== undefined) {
+                    props.onViewEvidence(row);
+                  }
+                }}
+              >
                 <span
                   className="aidos-chip aidos-chip-kind aidos-evidence-kind"
                   style={{ background: kindColor(row.kind) }}
@@ -616,7 +638,8 @@ function EvidencePanel(props: {
                   className="aidos-evidence-delete"
                   title="Delete this evidence row"
                   disabled={props.deletingAt !== null}
-                  onClick={() => {
+                  onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
+                    event.stopPropagation();
                     props.onDelete(row);
                   }}
                 >
@@ -745,6 +768,7 @@ export function DetailPanel(props: DetailPanelBodyProps) {
         deletingAt={deletingAt}
         ticketIdKey={props.ticketIdKey}
         agentId={props.agentId}
+        onViewEvidence={props.onViewEvidence}
       />
     </>
   );
@@ -760,6 +784,8 @@ export function DetailView(props: DetailViewProps) {
   const [signoffOpen, setSignoffOpen] = react.useState(false);
   const [sendBackOpen, setSendBackOpen] = react.useState(false);
   const [markDoneOpen, setMarkDoneOpen] = react.useState(false);
+  const [allowlistOpen, setAllowlistOpen] = react.useState(false);
+  const [viewingEvidence, setViewingEvidence] = react.useState<EvidenceRowLike | null>(null);
   const [submitting, setSubmitting] = react.useState(false);
 
   const ticket = props.ticket;
@@ -798,9 +824,16 @@ export function DetailView(props: DetailViewProps) {
         onClose={props.onClose}
         agentId={agentId}
         onFieldSaved={props.onFieldSaved}
+        onOpenAllowlist={() => {
+          setAllowlistOpen(true);
+        }}
+        onViewEvidence={(row) => {
+          setViewingEvidence(row);
+        }}
         actions={
           <ActionBar
             ticket={ticket}
+            evidence={props.evidence}
             onOpenSignoff={() => {
               setSignoffOpen(true);
             }}
@@ -813,9 +846,31 @@ export function DetailView(props: DetailViewProps) {
             onOpenSubmitForReview={() => {
               void submitForReview();
             }}
+            onOpenAllowlist={() => {
+              setAllowlistOpen(true);
+            }}
           />
         }
       />
+      <EvidenceViewer
+        row={viewingEvidence}
+        onClose={() => {
+          setViewingEvidence(null);
+        }}
+      />
+      {allowlistOpen ? (
+        <AllowlistEditor
+          open
+          ticketId={ticket.id}
+          ticketIdKey={props.ticketIdKey}
+          currentAllowlist={ticket.allowlist ?? []}
+          agentId={agentId}
+          onClose={() => {
+            setAllowlistOpen(false);
+          }}
+          onSaved={props.onFieldSaved}
+        />
+      ) : null}
       <CommentsSection
         ticketId={props.ticketIdKey}
         comments={props.comments}

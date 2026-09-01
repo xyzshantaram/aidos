@@ -1,8 +1,7 @@
 /**
- * Ticket U2c: the action bar. Reads the per-state action descriptors and
- * renders the matching buttons. The row sits under the quick facts of the
- * detail pane. Submit for review lives in a collapsed spoiler; the rest are
- * direct buttons.
+ * Ticket U2c + #62: the action bar. Every action renders in every state;
+ * unavailable ones are greyed out with a tooltip naming what is missing.
+ * The allowlist editor opens here for in-progress tickets.
  */
 
 import react from "react";
@@ -10,13 +9,16 @@ import react from "react";
 import { actionsFor, type ActionId } from "./action-visibility";
 import { logDebug } from "./log";
 import type { TicketView } from "../kernel/projections";
+import type { EvidenceRowLike } from "./board-logic";
 
 export interface ActionBarProps {
   ticket: TicketView;
+  evidence: readonly EvidenceRowLike[];
   onOpenSignoff: () => void;
   onOpenSendBack: () => void;
   onOpenMarkDone: () => void;
   onOpenSubmitForReview: () => void;
+  onOpenAllowlist: () => void;
 }
 
 /** One descriptor id to its opener prop name. */
@@ -25,37 +27,33 @@ const OPENERS: Record<ActionId, keyof ActionBarProps> = {
   "submit-for-review": "onOpenSubmitForReview",
   "send-back": "onOpenSendBack",
   "mark-done": "onOpenMarkDone",
+  allowlist: "onOpenAllowlist",
 };
 
 export function ActionBar(props: ActionBarProps) {
-  const actions = actionsFor(props.ticket);
+  const kinds = props.evidence.map((row) => row.kind);
+  const actions = actionsFor(props.ticket, kinds);
 
   react.useEffect(function () {
     logDebug("action bar mounted");
   }, []);
 
-  if (actions.length === 0) return null;
-
   const buttons = actions.map((action) => {
     const opener = props[OPENERS[action.id]] as () => void;
-    if (action.id === "submit-for-review") {
-      return (
-        <details className="aidos-spoiler" key={action.id}>
-          <summary className="aidos-spoiler-summary">Advanced</summary>
-          <button
-            className="aidos-btn"
-            onClick={opener}
-          >
-            {action.label}
-          </button>
-        </details>
-      );
-    }
-    const className = action.primary
-      ? "aidos-btn aidos-btn-primary"
-      : "aidos-btn";
+    const disabled = action.unavailableReason !== undefined;
+    const className =
+      (action.primary ? "aidos-btn aidos-btn-primary" : "aidos-btn") +
+      (disabled ? " aidos-btn-disabled" : "");
     return (
-      <button className={className} key={action.id} onClick={opener}>
+      <button
+        className={className}
+        key={action.id}
+        disabled={disabled}
+        title={action.unavailableReason ?? action.label}
+        onClick={() => {
+          if (!disabled) opener();
+        }}
+      >
         {action.label}
       </button>
     );

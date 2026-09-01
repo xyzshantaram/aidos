@@ -33,7 +33,9 @@ export interface TicketTileProps {
 export function TicketTile(props: TicketTileProps) {
   const ticket = props.ticket;
   const className =
-    "aidos-tile" + (props.selected ? " aidos-tile-selected" : "");
+    "aidos-tile" +
+    (props.selected ? " aidos-tile-selected" : "") +
+    (props.active === true ? " aidos-tile-active" : "");
   const badge = badgeClass(ticket.state);
   return (
 
@@ -51,15 +53,18 @@ export function TicketTile(props: TicketTileProps) {
       <h3 className="aidos-tile-title">{ticket.title}</h3>
       <p className="aidos-tile-preview">{ticket.description}</p>
       <div className="aidos-tile-chips">
-        <span className="aidos-chip aidos-chip-metric">
-          {"Gate " +
-            formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
+        <span className="aidos-chip aidos-chip-metric" title="Gate progress">
+          <span className="aidos-chip-key">Gate</span>
+          <span className="aidos-chip-value">
+            {formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}
+          </span>
         </span>
         <span
           className="aidos-chip aidos-chip-metric"
           title="Advisory score. It never unlocks anything."
         >
-          {"Conf " + ringPercent(ticket.confidenceScore) + "%"}
+          <span className="aidos-chip-key">Conf</span>
+          <span className="aidos-chip-value">{ringPercent(ticket.confidenceScore) + "%"}</span>
         </span>
         <EvidenceTags evidence={props.evidence} />
         {ticket.dependsOn?.map((ref) => (
@@ -68,9 +73,6 @@ export function TicketTile(props: TicketTileProps) {
           </span>
         ))}
       </div>
-      {props.active === true ? (
-        <span className="aidos-active-marker">Active</span>
-      ) : null}
     </button>
   );
 }
