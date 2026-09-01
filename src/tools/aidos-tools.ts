@@ -602,7 +602,7 @@ function registerPlan(ctx: Context): void {
           refusal(error);
         }
       },
-      presentCall: () => present("Export plan", "read", undefined),
+      presentCall: (args) => present("Export plan", "read", args.projectId, args.projectId !== undefined ? ["project " + args.projectId] : []),
     }),
   );
 }
@@ -818,6 +818,7 @@ function registerPlanMetaSet(ctx: Context): void {
               : "Set plan preamble",
           "edit",
           args.projectId,
+          args.projectId !== undefined ? ["project " + args.projectId] : [],
         ),
     }),
   );

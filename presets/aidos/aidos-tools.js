@@ -29622,7 +29622,7 @@ function registerPlan(ctx) {
           refusal(error51);
         }
       },
-      presentCall: () => present("Export plan", "read", void 0)
+      presentCall: (args) => present("Export plan", "read", args.projectId, args.projectId !== void 0 ? ["project " + args.projectId] : [])
     })
   );
 }
@@ -29818,7 +29818,8 @@ function registerPlanMetaSet(ctx) {
       presentCall: (args) => present(
         args.contextSections !== void 0 ? "Set plan sections" : args.frontmatter !== void 0 ? "Set plan frontmatter" : "Set plan preamble",
         "edit",
-        args.projectId
+        args.projectId,
+        args.projectId !== void 0 ? ["project " + args.projectId] : []
       )
     })
   );
