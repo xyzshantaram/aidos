@@ -18,6 +18,7 @@ import react from "react";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { userEvidenceKinds } from "./user-evidence-kinds";
+import { parsePayloadText } from "./parse-payload-text";
 import { ModalShell, NoteField as NoteFieldShared } from "./ui";
 import { EvidencePayloadView } from "./evidence-payload-view";
 import type { EvidenceRowLike } from "./board-logic";
@@ -256,20 +257,9 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
   }
 
   // Foreign/unknown kinds: the extenuating-circumstances JSON escape hatch.
-  let structured: Record<string, unknown> = {};
-  let parseError: string | null = null;
-  if (payloadText.trim() !== "") {
-    try {
-      const parsed: unknown = JSON.parse(payloadText);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        parseError = "Payload must be a JSON object";
-      } else {
-        structured = parsed as Record<string, unknown>;
-      }
-    } catch (error) {
-      parseError = "Payload is not valid JSON: " + (error instanceof Error ? error.message : String(error));
-    }
-  }
+  const parsedPayload = parsePayloadText(payloadText);
+  const structured = parsedPayload.ok ? parsedPayload.payload : {};
+  const parseError = parsedPayload.ok ? null : parsedPayload.error;
   return (
     <div className="aidos-evidence-tailored">
       <div className="aidos-modal-row">

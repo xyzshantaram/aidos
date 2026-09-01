@@ -134,7 +134,12 @@ function present(
   rawInput: unknown,
   chips: string[] = [],
 ): GenericCallView {
-  const capped = chips.slice(0, 4).filter((chip) => chip.trim() !== "");
+  // A shared 60-char cap: every chip is a one-line-card citizen, including
+  // set_ticket's raw title and get_tickets' search string (the #71 review
+  // caught only attach_evidence capping its note).
+  const cap = (chip: string): string =>
+    chip.length > 60 ? chip.slice(0, 60) + "\u2026" : chip;
+  const capped = chips.slice(0, 4).map(cap).filter((chip) => chip.trim() !== "");
   return {
     card: "generic",
     title,
