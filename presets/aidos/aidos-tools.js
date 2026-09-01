@@ -28975,8 +28975,8 @@ function writeBoundaryReason(ctx, agent, path) {
   const cwd = agent.session?.header?.cwd;
   const aidosSvc = ctx.aidos ?? ctx.get?.("aidos");
   const union2 = aidosSvc ? aidosSvc.allowlistUnion(agent) : [];
-  ctx.logger?.warn?.(
-    `aidos: write-boundary debug path=${path} cwd=${cwd ?? "none"} union=${JSON.stringify(union2)} hadSvc=${aidosSvc ? "yes" : "no"}`
+  ctx.logger?.debug?.(
+    `aidos: write-boundary path=${path} cwd=${cwd ?? "none"} union=${JSON.stringify(union2)}`
   );
   if (pathAllowed(path, union2, cwd)) return void 0;
   let rows = [];

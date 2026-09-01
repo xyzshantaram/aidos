@@ -86,8 +86,10 @@ export function writeBoundaryReason(
   const aidosSvc = (ctx as unknown as { aidos?: { allowlistUnion(a: Agent): string[] }; get?: (k: string) => unknown }).aidos
     ?? ((ctx as unknown as { get?: (k: string) => unknown }).get?.("aidos") as { allowlistUnion(a: Agent): string[] } | undefined);
   const union = aidosSvc ? aidosSvc.allowlistUnion(agent) : [];
-  ctx.logger?.warn?.(
-    `aidos: write-boundary debug path=${path} cwd=${cwd ?? "none"} union=${JSON.stringify(union)} hadSvc=${aidosSvc ? "yes" : "no"}`,
+  // Debug line demoted from warn to debug: it fired on EVERY guarded write
+  // during the #57 investigation and stayed at warn after the fix landed.
+  ctx.logger?.debug?.(
+    `aidos: write-boundary path=${path} cwd=${cwd ?? "none"} union=${JSON.stringify(union)}`,
   );
   if (pathAllowed(path, union, cwd)) return undefined;
   // Name the in-progress ticket whose allowlist would need to cover it.
