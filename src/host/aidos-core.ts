@@ -567,6 +567,8 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
  */
 export interface PendingApproval {
   id: string;
+  /** The requesting session: ticket ids collide across sessions (#51 review). */
+  sessionId: string;
   ticketId: number;
   /** The approval kind; the card renders and resolves by it. */
   kind: string;
@@ -587,6 +589,16 @@ function validateAllowlistPaths(
   cwd: string,
   paths: readonly string[],
 ): { ok: true; paths: string[] } | { ok: false; bad: Array<{ path: string; reason: string }> } {
+  // Containment uses relative() + the "../" check, NOT startsWith: the
+  // prefix test has the sibling hole ("/ws-evil/x".startsWith("/ws") is
+  // true), which the #51 review demonstrated. Same contract as isUnder in
+  // the write boundary.
+  const base = resolve(cwd);
+  const contains = (candidate: string): boolean => {
+    const rel = relative(base, resolve(candidate));
+    const norm = rel.replace(/\\/g, "/");
+    return rel === "" || (!norm.startsWith("../") && norm !== ".." && !isAbsolute(rel));
+  };
   const seen = new Set<string>();
   const clean: string[] = [];
   const bad: Array<{ path: string; reason: string }> = [];
@@ -600,7 +612,7 @@ function validateAllowlistPaths(
     if (seen.has(p)) continue;
     seen.add(p);
     const abs = resolve(cwd, p);
-    if (!abs.startsWith(resolve(cwd))) {
+    if (!contains(abs)) {
       bad.push({ path: p, reason: "escapes the workspace" });
       continue;
     }
@@ -1211,10 +1223,23 @@ registerAidosSessionEventTypes(ctx);
       const detail = result.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
       throw new Error(`allowlist proposal refused: ${detail}`);
     }
+    // The ticket must exist — a request for an unknown id queues a card no
+    // poll can ever show (finding 6).
+    const snapshot = this._cache(agent.session).state.tickets.get(args.ticketId as TicketId);
+    if (snapshot === undefined) {
+      throw new Error(`unknown ticket ${args.ticketId}`);
+    }
+    // A per-session cap bounds a looping agent (finding 6).
+    const sessionId = String(agent.session.id);
+    const mine = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId);
+    if (mine.length >= 5) {
+      throw new Error("too many pending allowlist requests (5); resolve some on the board first");
+    }
     this._approvalSeq += 1;
     const id = `req-${Date.now()}-${this._approvalSeq}`;
     const pending: PendingApproval = {
       id,
+      sessionId,
       ticketId: args.ticketId,
       kind: "allowlist",
       prompt: `Approve write access for ticket #${args.ticketId}`,
@@ -1232,12 +1257,14 @@ registerAidosSessionEventTypes(ctx);
    */
   @Remote("pendingApproval")
   pendingApproval(agent: Agent, args: { ticketId: number | string }): PendingApproval | null {
-    // The client's ticketIdKey is a STRING ("53"); the store holds NUMBERS.
-    // Strict === between them silently nulled every poll, so the card never
-    // rendered (#51). Coerce like _resolveTicketId does.
+    // Two scoping rules (#51 review): the SESSION (ids collide across
+    // sessions once workspaceTickets merges boards), and the ticketId
+    // COERCED to a number (the client's ticketIdKey is a string; strict ===
+    // against the store's numbers silently nulled every poll).
+    const sessionId = String(agent.session.id);
     const wanted = Number(args.ticketId);
     const rows = [...this._pendingApprovals.values()]
-      .filter((row) => row.ticketId === wanted)
+      .filter((row) => row.sessionId === sessionId && row.ticketId === wanted)
       .sort((a, b) => a.at - b.at);
     return rows[0] ?? null;
   }
@@ -1257,6 +1284,12 @@ registerAidosSessionEventTypes(ctx);
     if (pending === undefined) {
       throw new Error(`unknown approval request ${args.requestId}`);
     }
+    // The resolver must be the requesting session (finding 2): ids collide
+    // across sessions, and cross-session approval would attach evidence to
+    // the wrong session's ticket.
+    if (pending.sessionId !== String(agent.session.id)) {
+      throw new Error(`approval request ${args.requestId} belongs to another session`);
+    }
     this._pendingApprovals.delete(args.requestId);
     if (!args.approved) {
       this._queueInjection(
@@ -1267,7 +1300,21 @@ registerAidosSessionEventTypes(ctx);
     }
     // The click is the user authorship: attach + field write here, so the
     // coverage gate sees a user-authored row and the union updates at once.
-    const paths = (args.paths ?? (pending.payload.paths as string[])).map((p) => p.trim()).filter((p) => p !== "");
+    // Re-validate the edited paths (finding 3): the card sends whatever is
+    // in the textarea, so approve-time is when containment + existence are
+    // re-checked — propose-time validation alone is not the gate.
+    const rawPaths = args.paths ?? (pending.payload.paths as string[]);
+    const cwd = agent.session?.header?.cwd ?? "";
+    const revalidated = validateAllowlistPaths(cwd, rawPaths);
+    if (!revalidated.ok) {
+      const detail = revalidated.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
+      this._queueInjection(
+        agent.session,
+        `Allowlist approval for #${pending.ticketId} was refused: ${detail} — the agent should re-propose`,
+      );
+      return { resolved: `refused: ${detail}` };
+    }
+    const paths = revalidated.paths;
     this.userAttachEvidence(agent, {
       ticketId: pending.ticketId,
       kind: "builtin:file_allowlist",

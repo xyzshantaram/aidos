@@ -83,12 +83,13 @@ describe("#51 the allowlist suggestion flow", () => {
       approved: true,
       paths: ["src/client/"],
     });
-    expect(resolved.resolved).toContain("src/client/");
+    expect(resolved.resolved).toContain("src/client");
 
     const row = svc
       .getTickets(agent)
       .find((t: { id: number }) => t.id === ticket.id);
-    expect(row.allowlist).toEqual(["src/client/"]);
+    // The stored entry carries the validator's clean form (no trailing /).
+    expect(row.allowlist).toEqual(["src/client"]);
     const evidence = harness.service.getTickets
       ? undefined
       : undefined;

@@ -121,12 +121,32 @@ const PLAN_META_SCHEMA = {
   },
 } as const;
 
-/** One pending-call card for the board tools. */
-function present(title: string, kind: ToolCallKind, rawInput: unknown): GenericCallView {
+/**
+ * One pending-call card for the board tools (#71): a verb+object line plus
+ * up to FOUR field chips the tool declares. The chips ride `content` (the
+ * collapsed card shows them alongside the title); the raw input appears only
+ * in the expanded view via rawInput, which stays the audit path. No raw JSON
+ * ever renders as the collapsed body.
+ */
+function present(
+  title: string,
+  kind: ToolCallKind,
+  rawInput: unknown,
+  chips: string[] = [],
+): GenericCallView {
+  const capped = chips.slice(0, 4).filter((chip) => chip.trim() !== "");
   return {
     card: "generic",
     title,
     kind,
+    ...(capped.length > 0
+      ? {
+          content: capped.map((chip) => ({
+            type: "text" as const,
+            text: chip,
+          })),
+        }
+      : {}),
     ...(rawInput === undefined ? {} : { rawInput }),
   };
 }
@@ -376,7 +396,13 @@ function registerGetTickets(ctx: Context): void {
           refusal(error);
         }
       },
-      presentCall: (args) => present("Read the board", "read", args.projectId),
+      presentCall: (args) => {
+        const filters: string[] = [];
+        if (args.stateIds !== undefined) filters.push("states: " + args.stateIds.join("|"));
+        if (args.search !== undefined && args.search !== "") filters.push("search: " + args.search);
+        if (args.projectId !== undefined) filters.push("project " + args.projectId);
+        return present("Read the board", "read", args.projectId, filters);
+      },
     }),
   );
 }
@@ -432,7 +458,12 @@ function registerSetTicket(ctx: Context): void {
         }
       },
       presentCall: (args) =>
-        present(args.ticketId === undefined ? "Create ticket" : "Edit ticket", "edit", args.ticketId ?? args.title),
+        present(
+          args.ticketId === undefined ? "Create ticket" : "Edit ticket #" + args.ticketId,
+          "edit",
+          args.ticketId ?? args.title,
+          [args.title !== undefined ? args.title : ""],
+        ),
     }),
   );
 }
@@ -490,7 +521,15 @@ function registerAttachEvidence(ctx: Context): void {
           refusal(error, { kind: args.kind });
         }
       },
-      presentCall: (args) => present(`Attach ${args.kind}`, "edit", args.ticketId),
+      presentCall: (args) => {
+        const chips = ["#" + args.ticketId, args.kind];
+        const payload = args.payload as { note?: unknown } | undefined;
+        if (payload !== undefined && typeof payload.note === "string" && payload.note.trim() !== "") {
+          const note = payload.note.trim();
+          chips.push(note.length > 40 ? note.slice(0, 40) + "\u2026" : note);
+        }
+        return present(`Attach evidence`, "edit", args.ticketId, chips);
+      },
     }),
   );
 }
@@ -530,7 +569,7 @@ function registerMoveTicket(ctx: Context): void {
           refusal(error);
         }
       },
-      presentCall: (args) => present(`Move ticket to ${args.to}`, "move", args.ticketId),
+      presentCall: (args) => present("Move ticket", "move", args.ticketId, ["#" + args.ticketId, "to " + args.to]),
     }),
   );
 }
@@ -616,7 +655,13 @@ function registerRequestAllowlist(ctx: Context): void {
           refusal(error);
         }
       },
-      presentCall: (a) => present("Request allowlist", "edit", (a as { paths?: string[] })?.paths?.length ?? 0),
+      presentCall: (a) => {
+        const req = a as { ticketId?: number; paths?: string[] };
+        return present("Request allowlist", "edit", req.paths, [
+          "#" + req.ticketId,
+          (req.paths?.length ?? 0) + " path(s)",
+        ]);
+      },
     }),
   );
 }
@@ -661,7 +706,7 @@ function registerPlanImport(ctx: Context): void {
           refusal(error);
         }
       },
-      presentCall: (args) => present("Import plan", "other", args.file),
+      presentCall: (args) => present("Import plan", "other", args.file, [args.file]),
     }),
   );
 }
@@ -704,7 +749,7 @@ function registerPlanMeta(ctx: Context): void {
           refusal(error);
         }
       },
-      presentCall: (args) => present("Read plan meta", "read", args.projectId),
+      presentCall: (args) => present("Read plan meta", "read", args.projectId, args.projectId !== undefined ? ["project " + args.projectId] : []),
     }),
   );
 }

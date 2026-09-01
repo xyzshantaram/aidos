@@ -29,7 +29,11 @@ export function AllowlistRequestCard(props: {
   const [request, setRequest] = react.useState<PendingApproval | null>(null);
   const [paths, setPaths] = react.useState<string[]>([]);
   const [working, setWorking] = react.useState(false);
-  const [tick, setTick] = react.useState(0);
+  // Finding 4 (#51 review): the 2s poll must not clobber edits typed between
+  // intervals — the dirty flag latches on the first keystroke and resets
+  // only when the request is replaced.
+  const dirtyRef = react.useRef(false);
+  // Finding 8: the dead `tick` state is gone.
 
   // Poll while mounted. The request is a peek, not a pop: re-renders and
   // polling never lose it; only an explicit resolve does.
@@ -44,7 +48,7 @@ export function AllowlistRequestCard(props: {
             ? (result as unknown as PendingApproval)
             : null;
         setRequest(row);
-        if (row !== null && Array.isArray(row.payload?.paths)) {
+        if (row !== null && !dirtyRef.current && Array.isArray(row.payload?.paths)) {
           setPaths((row.payload as { paths: string[] }).paths);
         }
       } catch {
@@ -57,7 +61,7 @@ export function AllowlistRequestCard(props: {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [props.ticketId, props.agentId, tick]);
+  }, [props.ticketId, props.agentId]);
 
   async function resolve(approved: boolean) {
     if (request === null || working) return;
@@ -70,6 +74,7 @@ export function AllowlistRequestCard(props: {
         props.agentId,
       );
       showToast(approved ? "Allowlist approved" : "Allowlist rejected", approved ? "success" : "info");
+      dirtyRef.current = false;
       setRequest(null);
       props.onResolved?.();
     } catch (error) {
@@ -94,6 +99,7 @@ export function AllowlistRequestCard(props: {
         value={paths.join("\n")}
         disabled={working}
         onChange={(event) => {
+          dirtyRef.current = true;
           setPaths(event.target.value.split("\n"));
         }}
       />

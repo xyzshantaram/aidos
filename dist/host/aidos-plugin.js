@@ -27154,6 +27154,12 @@ function _evidenceDigestSuffix(kind, payload) {
   return "";
 }
 function validateAllowlistPaths(cwd, paths) {
+  const base = resolve2(cwd);
+  const contains = (candidate) => {
+    const rel = relative2(base, resolve2(candidate));
+    const norm = rel.replace(/\\/g, "/");
+    return rel === "" || !norm.startsWith("../") && norm !== ".." && !isAbsolute2(rel);
+  };
   const seen = /* @__PURE__ */ new Set();
   const clean = [];
   const bad = [];
@@ -27167,7 +27173,7 @@ function validateAllowlistPaths(cwd, paths) {
     if (seen.has(p)) continue;
     seen.add(p);
     const abs = resolve2(cwd, p);
-    if (!abs.startsWith(resolve2(cwd))) {
+    if (!contains(abs)) {
       bad.push({ path: p, reason: "escapes the workspace" });
       continue;
     }
@@ -27638,10 +27644,20 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const detail = result.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
       throw new Error(`allowlist proposal refused: ${detail}`);
     }
+    const snapshot = this._cache(agent.session).state.tickets.get(args.ticketId);
+    if (snapshot === void 0) {
+      throw new Error(`unknown ticket ${args.ticketId}`);
+    }
+    const sessionId = String(agent.session.id);
+    const mine = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId);
+    if (mine.length >= 5) {
+      throw new Error("too many pending allowlist requests (5); resolve some on the board first");
+    }
     this._approvalSeq += 1;
     const id = `req-${Date.now()}-${this._approvalSeq}`;
     const pending = {
       id,
+      sessionId,
       ticketId: args.ticketId,
       kind: "allowlist",
       prompt: `Approve write access for ticket #${args.ticketId}`,
@@ -27652,14 +27668,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return { ok: true, status: "pending", ticketId: args.ticketId, requestId: id, proposed: result.paths };
   }
   pendingApproval(agent, args) {
+    const sessionId = String(agent.session.id);
     const wanted = Number(args.ticketId);
-    const rows = [...this._pendingApprovals.values()].filter((row) => row.ticketId === wanted).sort((a, b) => a.at - b.at);
+    const rows = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId && row.ticketId === wanted).sort((a, b) => a.at - b.at);
     return rows[0] ?? null;
   }
   resolveApproval(agent, args) {
     const pending = this._pendingApprovals.get(args.requestId);
     if (pending === void 0) {
       throw new Error(`unknown approval request ${args.requestId}`);
+    }
+    if (pending.sessionId !== String(agent.session.id)) {
+      throw new Error(`approval request ${args.requestId} belongs to another session`);
     }
     this._pendingApprovals.delete(args.requestId);
     if (!args.approved) {
@@ -27669,7 +27689,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
       return { resolved: "rejected" };
     }
-    const paths = (args.paths ?? pending.payload.paths).map((p) => p.trim()).filter((p) => p !== "");
+    const rawPaths = args.paths ?? pending.payload.paths;
+    const cwd = agent.session?.header?.cwd ?? "";
+    const revalidated = validateAllowlistPaths(cwd, rawPaths);
+    if (!revalidated.ok) {
+      const detail = revalidated.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
+      this._queueInjection(
+        agent.session,
+        `Allowlist approval for #${pending.ticketId} was refused: ${detail} \u2014 the agent should re-propose`
+      );
+      return { resolved: `refused: ${detail}` };
+    }
+    const paths = revalidated.paths;
     this.userAttachEvidence(agent, {
       ticketId: pending.ticketId,
       kind: "builtin:file_allowlist",

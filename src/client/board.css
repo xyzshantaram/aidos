@@ -1646,13 +1646,6 @@
   padding: 8px 10px;
 }
 
-/* evidence attach form */
-.aidos-evidence-attach-form {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 /* helper text (spec §13) */
 .helper-text {
   font-size: 0.8125rem;
@@ -1776,14 +1769,6 @@
   font-size: 12px;
 }
 
-.aidos-evidence-viewer-meta {
-  display: flex;
-  gap: 16px;
-  color: var(--text-secondary);
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-
 /* #62: disabled action buttons stay legible on the dark theme */
 .aidos-btn-disabled,
 .aidos-btn-disabled:hover,
@@ -1821,27 +1806,6 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.aidos-evidence-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.aidos-evidence-field-label {
-  font-size: 11px;
-  line-height: 16px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
-
-.aidos-evidence-field-value {
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-primary);
-  overflow-wrap: anywhere;
 }
 
 .aidos-evidence-note-text {

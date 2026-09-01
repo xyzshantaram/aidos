@@ -6,7 +6,7 @@
  * The rule this module exists for: a field has a LABEL and a VALUE, rendered
  * the same way everywhere (FieldRow); a status is a CHIP (Chip); a detail is
  * a KEY/VALUE pair (KeyVal); anything long or optional hides behind a
- * disclosure (Collapse).aidos stays standalone: these are ours, styled from
+ * disclosure (Collapse). aidos stays standalone: these are ours, styled from
  * board.css tokens, no external dependency.
  */
 import react from "react";
@@ -73,7 +73,12 @@ export function Collapse(props: {
   );
 }
 
-/** The shared modal chrome: mask, panel, title row, close, action row. */
+/**
+ * The shared modal chrome: mask, panel, title row, close, action row.
+ * M1 (#72 review): every close path — Escape, backdrop, close button —
+ * honors `working`, so a submit in flight never loses its modal. The old
+ * hand-rolled chrome guarded all three; the first ModalShell cut did not.
+ */
 export function ModalShell(props: {
   title: string;
   working?: boolean;
@@ -82,9 +87,10 @@ export function ModalShell(props: {
   confirmLabel?: string;
   children: react.ReactNode;
 }) {
+  const working = props.working === true;
   react.useEffect(function () {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !working) {
         props.onClose();
       }
     };
@@ -92,9 +98,14 @@ export function ModalShell(props: {
     return function () {
       window.removeEventListener("keydown", onKey);
     };
-  }, [props]);
+  }, [props, working]);
   return (
-    <div className="aidos-modal-mask" onClick={props.onClose}>
+    <div
+      className="aidos-modal-mask"
+      onClick={() => {
+        if (!working) props.onClose();
+      }}
+    >
       <div
         className="aidos-modal"
         onClick={(event: react.MouseEvent<HTMLDivElement>) => {
@@ -103,7 +114,12 @@ export function ModalShell(props: {
       >
         <div className="aidos-modal-head">
           <h3 className="aidos-modal-title">{props.title}</h3>
-          <button className="aidos-close-btn" onClick={props.onClose} aria-label="Close">
+          <button
+            className="aidos-close-btn"
+            onClick={props.onClose}
+            disabled={working}
+            aria-label="Close"
+          >
             {"\u00d7"}
           </button>
         </div>
@@ -111,15 +127,15 @@ export function ModalShell(props: {
           {props.children}
           {props.onConfirm !== undefined ? (
             <div className="aidos-form-actions">
-              <button className="aidos-btn" onClick={props.onClose} disabled={props.working}>
+              <button className="aidos-btn" onClick={props.onClose} disabled={working}>
                 Cancel
               </button>
               <button
                 className="aidos-btn aidos-btn-primary"
                 onClick={props.onConfirm}
-                disabled={props.working}
+                disabled={working}
               >
-                {props.working ? "Working\u2026" : (props.confirmLabel ?? "Confirm")}
+                {working ? "Working\u2026" : (props.confirmLabel ?? "Confirm")}
               </button>
             </div>
           ) : null}
