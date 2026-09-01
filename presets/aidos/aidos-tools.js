@@ -26534,8 +26534,6 @@ var STATE_MARKS = {
 };
 var FENCE = "---";
 var HEADING_PREFIX = "## ";
-var PHASE_HEADING = /^## Phase (\d+): (.+)$/;
-var PHASE_STATE_SUFFIX = / — `[^`]+`$/;
 var CONTINUATION_PREFIX = "  ";
 var CRITERIA_MARKER = "**Evaluate:**";
 var TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
@@ -26545,9 +26543,6 @@ function parsePlan(text) {
   const preamble = _takePreamble(lines, frontmatter.index);
   const contextSections = [];
   const rawTickets = [];
-  let currentPhase = 1;
-  const phases = [];
-  const phaseNumbers = /* @__PURE__ */ new Set();
   let index = preamble.index;
   while (index < lines.length) {
     const line = lines[index];
@@ -26556,19 +26551,6 @@ function parsePlan(text) {
       continue;
     }
     if (_isHeading(line)) {
-      const phase = _phaseOfHeading(line);
-      if (phase) {
-        currentPhase = phase.number;
-        if (!phaseNumbers.has(phase.number)) {
-          phaseNumbers.add(phase.number);
-          phases.push(phase);
-        }
-        index += 1;
-        while (index < lines.length && !_isHeading(lines[index]) && !TICKET_LINE.test(lines[index])) {
-          index += 1;
-        }
-        continue;
-      }
       const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
@@ -26593,7 +26575,7 @@ function parsePlan(text) {
       );
     }
     rawTickets.push(
-      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, currentPhase)
+      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, 1)
     );
     index += 1;
   }
@@ -26602,7 +26584,6 @@ function parsePlan(text) {
     frontmatterData: _parseFrontmatterData(frontmatter.text),
     preamble: preamble.text,
     contextSections,
-    phases,
     tickets: rawTickets.map((raw) => _finishTicket(raw))
   };
 }
@@ -26619,35 +26600,13 @@ function renderPlan(doc) {
   for (const section of doc.contextSections) {
     blocks.push(_renderContextSection(section));
   }
-  for (const group of _ticketGroupsOf(doc)) {
-    if (group.phase) {
-      blocks.push(HEADING_PREFIX + group.phase.raw);
-    }
-    for (const ticket of group.tickets) {
-      blocks.push(_renderTicket(ticket).join("\n"));
-    }
+  for (const ticket of doc.tickets) {
+    blocks.push(_renderTicket(ticket).join("\n"));
   }
   if (blocks.length === 0) {
     return "";
   }
   return blocks.join("\n\n") + "\n";
-}
-function _ticketGroupsOf(doc) {
-  const recorded = [...doc.phases].sort((a, b) => a.number - b.number);
-  const groups = [];
-  const unrecorded = doc.tickets.filter(
-    (ticket) => !recorded.some((phase) => phase.number === ticket.phase)
-  );
-  if (unrecorded.length > 0) {
-    groups.push({ tickets: unrecorded });
-  }
-  for (const phase of recorded) {
-    groups.push({
-      phase,
-      tickets: doc.tickets.filter((ticket) => ticket.phase === phase.number)
-    });
-  }
-  return groups;
 }
 function _takeFrontmatter(lines) {
   if (lines.length === 0 || lines[0].trim() !== FENCE) {
@@ -26697,7 +26656,12 @@ function _takeContextSection(lines, start, sectionNumber) {
   }
   return {
     section: {
-      heading: lines[start].replace(/\s+$/, ""),
+      // #5/P11: the heading re-emits WITH its `## ` prefix. The old flat
+      // renderer assumed the prefix was already part of the stored heading
+      // (a phase-heading habit); without it a legacy `## Phase N: ...`
+      // heading exported WITHOUT the prefix, re-imported as prose, and the
+      // heading vanished on the round trip.
+      heading: HEADING_PREFIX + lines[start].slice(HEADING_PREFIX.length).replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
       index: sectionNumber
     },
@@ -26763,20 +26727,6 @@ function _finishTicket(raw) {
 }
 function _isHeading(line) {
   return line.startsWith(HEADING_PREFIX);
-}
-function _phaseOfHeading(line) {
-  const match = PHASE_HEADING.exec(line);
-  if (!match) {
-    return void 0;
-  }
-  return {
-    number: Number(match[1]),
-    title: _stripStateSuffix(match[2]),
-    raw: line.slice(HEADING_PREFIX.length).replace(/\s+$/, "")
-  };
-}
-function _stripStateSuffix(title) {
-  return title.replace(PHASE_STATE_SUFFIX, "").trim();
 }
 function _trimBlankLines(block) {
   let start = 0;
@@ -27432,6 +27382,30 @@ var OwnerUnavailable = class extends Error {
     this.sessionId = sessionId;
   }
 };
+function _evidenceDigestSuffix(kind, payload) {
+  const cap = 160;
+  const ellipsize = (text) => text.length > cap ? `${text.slice(0, cap)}\u2026` : text;
+  if (typeof payload.note === "string" && payload.note.trim() !== "") {
+    return ` \u2014 "${ellipsize(payload.note.trim())}"`;
+  }
+  if (Array.isArray(payload.paths)) {
+    const paths = payload.paths.filter((p) => typeof p === "string");
+    if (paths.length > 0) {
+      return ` \u2014 ${paths.length} path(s): ${ellipsize(paths.join(", "))}`;
+    }
+  }
+  if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
+    return ` \u2014 claimed ${payload.claimed_state}`;
+  }
+  if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
+    for (const value of Object.values(payload)) {
+      if (typeof value === "string" && value.trim() !== "") {
+        return ` \u2014 "${ellipsize(value.trim())}"`;
+      }
+    }
+  }
+  return "";
+}
 var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
 var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
@@ -27629,17 +27603,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       order: row.order,
       phase: row.phase
     }));
-    const phases = [...cache.state.phases.get(projectId) ?? /* @__PURE__ */ new Map()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({
-      number: number4,
-      title: phase.title,
-      raw: `Phase ${number4}: ${phase.title}`
-    }));
     return renderPlan({
       frontmatter: meta3.frontmatter,
       frontmatterData: {},
       preamble: meta3.preamble,
       contextSections: meta3.contextSections,
-      phases,
       tickets
     });
   }
@@ -27941,23 +27909,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       at: this._now()
     });
     const ticketIds = [];
-    const headings = new Map(
-      document.phases.map((phase) => [phase.number, phase])
-    );
     for (const ticket of document.tickets) {
-      const heading = headings.get(ticket.phase);
-      const phasesOfProject = cache.state.phases.get(projectId);
-      if (heading && !phasesOfProject?.has(ticket.phase)) {
-        this._commit(agent, {
-          kind: "phase/set",
-          version: 1,
-          projectId,
-          number: heading.number,
-          title: heading.title,
-          state: "open",
-          at: this._now()
-        });
-      }
       const ticketId = this._createTicketInternal(
         agent,
         projectId,
@@ -27967,7 +27919,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
           body: "",
           criteria: ticket.criteria,
           order: ticket.order,
-          phase: ticket.phase
+          phase: 1
         }
       );
       this._attachEvidenceInternal(
@@ -28539,7 +28491,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}`
+        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload)
       );
     }
     return row.payload;
