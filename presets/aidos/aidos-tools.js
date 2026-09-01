@@ -27406,8 +27406,8 @@ function _evidenceDigestSuffix(kind, payload) {
   }
   return "";
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -27843,6 +27843,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
     return this._attachEvidence(agent, args, "agent");
+  }
+  workspaceRoot(agent) {
+    const cwd = agent.session?.header?.cwd ?? "";
+    return { workspace: cwd };
   }
   userAttachEvidence(agent, args) {
     return this._attachEvidence(this._routedAgent(agent, args.ticketId), args, "user");
@@ -28731,6 +28735,7 @@ __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
+__decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);

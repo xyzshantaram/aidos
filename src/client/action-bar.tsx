@@ -15,6 +15,7 @@ export interface ActionBarProps {
   ticket: TicketView;
   evidence: readonly EvidenceRowLike[];
   onOpenSignoff: () => void;
+  onOpenVerify: () => void;
   onOpenSendBack: () => void;
   onOpenMarkDone: () => void;
   onOpenSubmitForReview: () => void;
@@ -24,6 +25,7 @@ export interface ActionBarProps {
 /** One descriptor id to its opener prop name. */
 const OPENERS: Record<ActionId, keyof ActionBarProps> = {
   signoff: "onOpenSignoff",
+  verify: "onOpenVerify",
   "submit-for-review": "onOpenSubmitForReview",
   "send-back": "onOpenSendBack",
   "mark-done": "onOpenMarkDone",

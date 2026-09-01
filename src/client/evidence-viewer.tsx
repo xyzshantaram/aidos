@@ -9,29 +9,11 @@ import react from "react";
 
 import { kindColor, kindKeyword } from "./board-logic";
 import type { EvidenceRowLike } from "./board-logic";
+import { EvidencePayloadView } from "./evidence-payload-view";
 
 export interface EvidenceViewerProps {
   row: EvidenceRowLike | null;
   onClose: () => void;
-}
-
-/** One payload value rendered kind-aware. JSON at minimum. */
-function PayloadView({ row }: { row: EvidenceRowLike }) {
-  const payload = row.payload ?? {};
-  if (row.kind === "builtin:file_allowlist" && Array.isArray(payload.paths)) {
-    return (
-      <ul className="aidos-evidence-payload-list">
-        {(payload.paths as string[]).map((path) => (
-          <li key={path}>{path}</li>
-        ))}
-      </ul>
-    );
-  }
-  return (
-    <pre className="aidos-evidence-payload-json">
-      {JSON.stringify(payload, null, 2)}
-    </pre>
-  );
 }
 
 export function EvidenceViewer(props: EvidenceViewerProps) {
@@ -93,7 +75,7 @@ export function EvidenceViewer(props: EvidenceViewerProps) {
                 : "unknown"}
             </span>
           </div>
-          <PayloadView row={row} />
+          <EvidencePayloadView row={row} />
         </div>
       </div>
     </div>

@@ -11,6 +11,7 @@ export type ActionId =
   | "signoff"
   | "submit-for-review"
   | "send-back"
+  | "verify"
   | "mark-done"
   | "allowlist";
 
@@ -58,6 +59,18 @@ function sendBackReason(ticket: TicketView): string | undefined {
   return undefined;
 }
 
+/**
+ * #53: Verify is the one-button authoring of the user_verified row on an
+ * awaiting ticket. The row IS the action's product; the mark-done button
+ * (next to it) carries the final move, so verify does not move anything.
+ */
+function verifyReason(ticket: TicketView): string | undefined {
+  if (ticket.state !== "awaiting_verification") {
+    return "the ticket must be awaiting verification";
+  }
+  return undefined;
+}
+
 /** Mark done needs the user_verified row on an awaiting ticket. */
 function markDoneReason(
   ticket: TicketView,
@@ -91,6 +104,7 @@ export function actionsFor(
 ): ActionDescriptor[] {
   return [
     { id: "signoff", label: "Sign off", primary: true, unavailableReason: signoffReason(ticket) },
+    { id: "verify", label: "Verify", unavailableReason: verifyReason(ticket) },
     { id: "submit-for-review", label: "Submit for review", unavailableReason: submitReason(ticket, evidenceKinds) },
     { id: "send-back", label: "Send back", unavailableReason: sendBackReason(ticket) },
     { id: "mark-done", label: "Mark done", primary: true, unavailableReason: markDoneReason(ticket, evidenceKinds) },

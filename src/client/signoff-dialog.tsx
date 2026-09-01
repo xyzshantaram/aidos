@@ -27,10 +27,24 @@ export function SignoffDialog(props: SignoffDialogProps) {
 
   if (!props.open) return null;
 
+  // #53: one button, TWO steps in order — the gate needs the
+  // builtin:user_signoff row BEFORE the open -> in_progress move, so the
+  // attach goes first and the move rides right behind it. A note is optional.
+  const [note, setNote] = react.useState("");
+
   async function confirm() {
     if (working) return;
     setWorking(true);
     try {
+      await callAidosRemote(
+        "userAttachEvidence",
+        {
+          ticketId: props.ticketId,
+          kind: "builtin:user_signoff",
+          payload: note.trim() === "" ? {} : { note: note.trim() },
+        },
+        props.agentId,
+      );
       await callAidosRemote(
         "userMoveTicket",
         { ticketId: props.ticketId, to: "in_progress" },
@@ -79,6 +93,17 @@ export function SignoffDialog(props: SignoffDialogProps) {
           Signoff grants the agent write access on this ticket. Confirm to proceed.
         </p>
         <div className="aidos-modal-form">
+          <div className="aidos-modal-row">
+            <label>Note (optional — rides the signoff row)</label>
+            <textarea
+              className="aidos-evidence-attach-note"
+              value={note}
+              disabled={working}
+              onChange={(event) => {
+                setNote(event.target.value);
+              }}
+            />
+          </div>
           <button
             className="aidos-btn aidos-btn-primary"
             disabled={working}

@@ -34,7 +34,7 @@ import {
 import { FieldEditor } from "./field-editor";
 import { ActionBar } from "./action-bar";
 import { CommentsSection } from "./comments-section";
-import { EvidenceAttachForm } from "./evidence-attach-form";
+import { EvidenceAttach, VerifyModal } from "./evidence-attach";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
@@ -73,6 +73,10 @@ export interface DetailPanelProps {
   onViewEvidence?: (row: EvidenceRowLike) => void;
   /** Always-present action descriptors with unlock reasons (#62). */
   actionHints?: Record<string, string>;
+  /** Every board-known ticket view keyed for dependency cards. */
+  ticketsByKey?: Map<string, TicketView>;
+  /** Jump the board's selection to another ticket (dependency cards). */
+  onJump?: (key: string) => void;
 }
 
 /**
@@ -435,6 +439,61 @@ function refOf(hit: TicketSearchHit): string {
 }
 
 /**
+ * One dependency as a mini-card (#board-feedback): the referenced ticket's
+ * title and state chip when the board knows it, the raw reference when it
+ * does not (a foreign or closed session), and an Open button that jumps the
+ * board's selection to that ticket. Basic status only — the card is a
+ * pointer, not a second detail panel.
+ */
+function DependencyCard(props: {
+  depRef: string;
+  agentId: string;
+  ticketsByKey?: Map<string, TicketView>;
+  onJump?: (key: string) => void;
+  workspaceKey?: string;
+}) {
+  const ref = props.depRef;
+  // A ref is either `workspaceKey:id` or a legacy plain id. A plain id
+  // resolves against the REFERENCING ticket's workspace (the only board a
+  // plain ref could have meant), which is why the board said "not on this
+  // board" for every plain-id dependency before.
+  const key = ref.includes(":") ? ref : (props.workspaceKey ?? "") + ":" + ref;
+  const known = props.ticketsByKey?.get(key) ?? props.ticketsByKey?.get(ref);
+  const jumpKey = key;
+  const open = () => {
+    if (props.onJump !== undefined) {
+      props.onJump(jumpKey);
+    }
+  };
+  return (
+    <div className="aidos-dep-card">
+      <div className="aidos-dep-card-main">
+        <span className="aidos-chip aidos-chip-dep" title={ref}>
+          {displayDep(ref)}
+        </span>
+        {known !== undefined ? (
+          <>
+            <span className="aidos-dep-card-title" title={known.title}>
+              {known.title}
+            </span>
+            <span className={`aidos-chip aidos-chip-state-${known.state.replace(/\s+/g, "-")}`}>
+              {stateLabel(known.state)}
+            </span>
+          </>
+        ) : (
+          <span className="aidos-dep-card-title aidos-dep-card-unknown">not on this board</span>
+        )}
+      </div>
+      {props.onJump !== undefined ? (
+        <button className="aidos-btn aidos-dep-card-open" onClick={open} title={"Open " + ref}>
+          Open
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * The dependencies panel: the current dependsOn chips plus a search box
  * that finds tickets across live sessions and adds one reference. Search
  * calls the searchTickets Remote; adding calls userSetTicket with the
@@ -445,6 +504,12 @@ function DependencySection(props: {
   dependsOn: string[];
   agentId: string;
   onSaved: () => void;
+  /** Jump the board's selection to one dependency ticket. */
+  onJump?: (key: string) => void;
+  /** Every board-known ticket view, keyed by `workspaceKey:id` and plain id. */
+  ticketsByKey?: Map<string, TicketView>;
+  /** The referencing ticket's workspaceKey: resolves plain-id refs. */
+  workspaceKey?: string;
 }) {
   const [query, setQuery] = react.useState("");
   const [hits, setHits] = react.useState<TicketSearchHit[] | null>(null);
@@ -505,17 +570,22 @@ function DependencySection(props: {
         <span className="aidos-panel-title">Dependencies</span>
       </summary>
       <div className="aidos-panel-body">
-        <div className="aidos-dep-row">
-          {current.length === 0 ? (
-            <p className="aidos-detail-note">No dependencies.</p>
-          ) : (
-            current.map((ref) => (
-              <span key={ref} className="aidos-chip aidos-chip-dep" title={ref}>
-                {displayDep(ref)}
-              </span>
-            ))
-          )}
-        </div>
+        {current.length === 0 ? (
+          <p className="aidos-detail-note">No dependencies.</p>
+        ) : (
+          <div className="aidos-dep-cards">
+            {current.map((ref) => (
+              <DependencyCard
+                key={ref}
+                depRef={ref}
+                agentId={props.agentId}
+                ticketsByKey={props.ticketsByKey}
+                onJump={props.onJump}
+                workspaceKey={props.workspaceKey}
+              />
+            ))}
+          </div>
+        )}
         <div className="aidos-dep-search">
           <input
             className="aidos-dep-search-input"
@@ -649,7 +719,7 @@ function EvidencePanel(props: {
             ))}
           </ul>
         )}
-        <EvidenceAttachForm ticketId={props.ticketIdKey} agentId={props.agentId} />
+        <EvidenceAttach ticketId={props.ticketIdKey} agentId={props.agentId} />
       </div>
     </details>
   );
@@ -757,6 +827,9 @@ export function DetailPanel(props: DetailPanelBodyProps) {
         dependsOn={ticket.dependsOn}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
+        ticketsByKey={props.ticketsByKey}
+        onJump={props.onJump}
+        workspaceKey={ticket.workspaceKey}
       />
       <EvidencePanel
         evidence={props.evidence}
@@ -782,6 +855,7 @@ export function DetailPanel(props: DetailPanelBodyProps) {
  */
 export function DetailView(props: DetailViewProps) {
   const [signoffOpen, setSignoffOpen] = react.useState(false);
+  const [verifyOpen, setVerifyOpen] = react.useState(false);
   const [sendBackOpen, setSendBackOpen] = react.useState(false);
   const [markDoneOpen, setMarkDoneOpen] = react.useState(false);
   const [allowlistOpen, setAllowlistOpen] = react.useState(false);
@@ -837,6 +911,9 @@ export function DetailView(props: DetailViewProps) {
             onOpenSignoff={() => {
               setSignoffOpen(true);
             }}
+            onOpenVerify={() => {
+              setVerifyOpen(true);
+            }}
             onOpenSendBack={() => {
               setSendBackOpen(true);
             }}
@@ -888,6 +965,15 @@ export function DetailView(props: DetailViewProps) {
             setSignoffOpen(false);
           }}
           agentId={agentId}
+        />
+      ) : null}
+      {verifyOpen ? (
+        <VerifyModal
+          ticketId={props.ticketIdKey}
+          agentId={agentId}
+          onClose={() => {
+            setVerifyOpen(false);
+          }}
         />
       ) : null}
       {sendBackOpen ? (

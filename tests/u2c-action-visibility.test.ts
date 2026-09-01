@@ -17,39 +17,42 @@ describe("u2c action-visibility: actionsFor", () => {
     const actions = actionsFor(ticket);
     expect(actions.map((a) => a.id)).toEqual([
       "signoff",
+      "verify",
       "submit-for-review",
       "send-back",
       "mark-done",
       "allowlist",
     ]);
     expect(actions[0].unavailableReason).toBeUndefined();
-    expect(actions[1].unavailableReason).toContain("in progress");
-    expect(actions[2].unavailableReason).toContain("awaiting verification");
+    expect(actions[1].unavailableReason).toContain("awaiting verification");
+    expect(actions[2].unavailableReason).toContain("in progress");
     expect(actions[3].unavailableReason).toContain("awaiting verification");
-    expect(actions[4].unavailableReason).toContain("in progress");
+    expect(actions[4].unavailableReason).toContain("awaiting verification");
+    expect(actions[5].unavailableReason).toContain("in progress");
   });
 
   it("in_progress: submit and allowlist available; submit still needs evidence rows", () => {
     const ticket = makeTicket({ state: "in_progress" });
     const actions = actionsFor(ticket);
-    expect(actions[1].unavailableReason).toContain("automated_check");
-    expect(actions[1].unavailableReason).toContain("review_pass");
+    expect(actions[2].unavailableReason).toContain("automated_check");
+    expect(actions[2].unavailableReason).toContain("review_pass");
     const withEvidence = actionsFor(ticket, [
       "builtin:automated_check",
       "builtin:review_pass",
     ]);
-    expect(withEvidence[1].unavailableReason).toBeUndefined();
-    expect(withEvidence[4].unavailableReason).toBeUndefined();
+    expect(withEvidence[2].unavailableReason).toBeUndefined();
+    expect(withEvidence[5].unavailableReason).toBeUndefined();
     expect(actions[0].unavailableReason).toContain("already signed off");
   });
 
   it("awaiting_verification: send-back available; mark done needs user_verified", () => {
     const ticket = makeTicket({ state: "awaiting_verification" });
     const actions = actionsFor(ticket);
-    expect(actions[2].unavailableReason).toBeUndefined();
-    expect(actions[3].unavailableReason).toContain("user_verified");
+    expect(actions[1].unavailableReason).toBeUndefined();
+    expect(actions[3].unavailableReason).toBeUndefined();
+    expect(actions[4].unavailableReason).toContain("user_verified");
     const verified = actionsFor(ticket, ["builtin:user_verified"]);
-    expect(verified[3].unavailableReason).toBeUndefined();
+    expect(verified[4].unavailableReason).toBeUndefined();
   });
 
   it("done: nothing is available", () => {

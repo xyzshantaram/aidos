@@ -1116,6 +1116,18 @@ registerAidosSessionEventTypes(ctx);
    * The human-only kinds (`builtin:user_signoff` and `builtin:user_verified`)
    * accept rows here and nowhere else. No tool reaches this path.
    */
+  /**
+   * The session's workspace root, for client surfaces that need to address
+   * the workspace's .dsh directory directly (the #53 Verify modal addresses
+   * the paste-to-path route, which resolves the workspace itself). Read-only
+   * and harmless: the cwd is not a secret to the session's own client.
+   */
+  @Remote("workspaceRoot")
+  workspaceRoot(agent: Agent): { workspace: string } {
+    const cwd = agent.session?.header?.cwd ?? "";
+    return { workspace: cwd };
+  }
+
   @Remote("userAttachEvidence")
   userAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
     return this._attachEvidence(this._routedAgent(agent, args.ticketId), args, "user");

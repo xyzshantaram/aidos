@@ -510,6 +510,14 @@ function ProjectionReader(props: ProjectionReaderProps) {
   }, [selectedTicket?.id]);
 
 
+  // Dependency cards (#board-feedback): every known ticket keyed by plain id
+  // and by workspaceKey:id so a ref resolves to a card with title + state.
+  const ticketsByKey = new Map<string, TicketViewType>();
+  for (const view of rawTickets) {
+    ticketsByKey.set(String(view.id), view);
+    ticketsByKey.set(view.workspaceKey + ":" + String(view.id), view);
+  }
+
   const detailPanel =
     selectedTicket === null ? null : (
       <DetailView
@@ -527,6 +535,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
         onFieldSaved={function () {
           // The projection frame re-renders the new value automatically.
         }}
+        ticketsByKey={ticketsByKey}
+        onJump={selectTicket}
       />
     );
   const createModal = (
