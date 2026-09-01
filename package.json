@@ -10,6 +10,7 @@
     "test": "vitest run",
     "build": "node build.mjs",
     "prepare": "node build.mjs",
+    "patch:dsh": "bash patches/apply-dsh-patches.sh",
     "typecheck:client": "tsc --noEmit -p tsconfig.client.json"
   },
   "devDependencies": {

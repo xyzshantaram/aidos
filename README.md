@@ -84,6 +84,23 @@ The session log is the append-only source of truth. Derived reads are projection
 
 See PLAN.md for the full design and the ticket list.
 
+### Required dsh patches
+
+aidos needs one behavioral patch in the installed dsh tree to function: the fs sandbox must exempt
+the aidos durable scratch root (`~/.dsh/aidos/scratch/<workspace-key>/`), which the harness's own
+policy already allows in every phase but the sandbox layer still denied (ticket #60). Without it,
+any scratch write that reaches the sandboxed fs tools — including `scratch_edit`'s delegation to
+`edit` — refuses with `FS_SANDBOX_DENIED`.
+
+Apply it after every dsh or aidos (re)install; both wipe it:
+
+```
+npm run patch:dsh        # or: bash patches/apply-dsh-patches.sh [dsh-package-root]
+```
+
+The script is idempotent and fails loudly if upstream dsh changes the code it patches, so drift
+surfaces as an error, never as a silent no-op. A dsh-web restart picks the patch up.
+
 ## Repository layout
 
 - `PLAN.md` — the design and the tickets. It is a bootstrap artifact with a scheduled death. The
