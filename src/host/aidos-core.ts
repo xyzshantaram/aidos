@@ -536,6 +536,13 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
       return ` — ${paths.length} path(s): ${ellipsize(paths.join(", "))}`;
     }
   }
+  // #68: a commit-carrying row names the commit and subject so the digest
+  // reader knows WHAT was attached without opening the viewer.
+  if (typeof payload.commit === "string" && payload.commit.trim() !== "") {
+    const hash = payload.commit.trim().slice(0, 12);
+    const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
+    return ` — commit ${hash}${ellipsize(subject)}`;
+  }
   if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
     return ` — claimed ${payload.claimed_state}`;
   }

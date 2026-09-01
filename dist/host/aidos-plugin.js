@@ -27136,6 +27136,11 @@ function _evidenceDigestSuffix(kind, payload) {
       return ` \u2014 ${paths.length} path(s): ${ellipsize(paths.join(", "))}`;
     }
   }
+  if (typeof payload.commit === "string" && payload.commit.trim() !== "") {
+    const hash2 = payload.commit.trim().slice(0, 12);
+    const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
+    return ` \u2014 commit ${hash2}${ellipsize(subject)}`;
+  }
   if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
     return ` \u2014 claimed ${payload.claimed_state}`;
   }

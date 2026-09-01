@@ -76,6 +76,28 @@ describe("the board-update digest carries evidence content", () => {
     expect(lines.some((line) => line.includes("claimed in_progress"))).toBe(true);
   });
 
+  it("a commit-carrying row names the commit and subject in the line", async () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as any).service;
+    const agent = (harness as any).asAgent();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:agent_report",
+      payload: {
+        commit: "abc123def4567890",
+        subject: "feat(board): kind-tailored evidence attach",
+        author: "sid",
+        branch: "main",
+      },
+    });
+    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
+    const lines = [...pending.values()].flat();
+    expect(lines.some((line) => line.includes("commit abc123def456") && line.includes("kind-tailored evidence attach"))).toBe(true);
+  });
+
   it("a verdict row with no note still surfaces its first string field", async () => {
     const harness = createHarness();
     harness.installService();
