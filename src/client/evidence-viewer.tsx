@@ -9,6 +9,7 @@ import react from "react";
 
 import { kindColor, kindKeyword } from "./board-logic";
 import type { EvidenceRowLike } from "./board-logic";
+import { FieldRow } from "./ui";
 import { EvidencePayloadView } from "./evidence-payload-view";
 
 export interface EvidenceViewerProps {
@@ -64,16 +65,13 @@ export function EvidenceViewer(props: EvidenceViewerProps) {
           </button>
         </div>
         <div className="aidos-modal-form">
-          <div className="aidos-evidence-viewer-meta">
-            <span>
-              <strong>Author:</strong> {row.author}
-            </span>
-            <span>
-              <strong>At:</strong>{" "}
+          <div className="aidos-evidence-fields">
+            <FieldRow label="Author">{row.author}</FieldRow>
+            <FieldRow label="At">
               {typeof row.at === "number"
                 ? new Date(row.at * 1000).toISOString()
                 : "unknown"}
-            </span>
+            </FieldRow>
           </div>
           <EvidencePayloadView row={row} />
         </div>

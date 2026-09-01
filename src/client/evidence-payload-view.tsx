@@ -11,23 +11,13 @@
  */
 import react from "react";
 
+import { FieldRow } from "./ui";
 import type { EvidenceRowLike } from "./board-logic";
-
-/** One label/value row of the structured payload view. */
-function FieldRow(props: { label: string; children: react.ReactNode }) {
-  return (
-    <div className="aidos-evidence-field">
-      <span className="aidos-evidence-field-label">{props.label}</span>
-      <span className="aidos-evidence-field-value">{props.children}</span>
-    </div>
-  );
-}
 
 /** A note-like string: quoted, preserved across lines. */
 function NoteText(props: { text: string }) {
   return <span className="aidos-evidence-note-text">{props.text}</span>;
 }
-
 /** A collapsible raw-JSON disclosure: the last resort, never the default. */
 function RawJsonDisclosure(props: { payload: Record<string, unknown> }) {
   const [open, setOpen] = react.useState(false);

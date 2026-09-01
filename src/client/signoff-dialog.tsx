@@ -1,13 +1,16 @@
 /**
- * Ticket U2c: the signoff confirmation dialog. Signoff moves the ticket
- * from open to in_progress; the agent gains write access on the ticket.
+ * Ticket U2c + #53 + #72: the signoff confirmation dialog, on the shared
+ * ModalShell/NoteField primitives. Signoff is TWO steps in order — the gate
+ * needs the builtin:user_signoff row BEFORE the open -> in_progress move, so
+ * the attach goes first and the move rides right behind it. A note is
+ * optional and rides the signoff row.
  */
-
 import react from "react";
 
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
+import { ModalShell, NoteField } from "./ui";
 
 export interface SignoffDialogProps {
   open: boolean;
@@ -19,18 +22,17 @@ export interface SignoffDialogProps {
 }
 
 export function SignoffDialog(props: SignoffDialogProps) {
+  // All hooks live ABOVE any conditional return (the reviewer's finding:
+  // useState after `if (!props.open) return null` was a latent
+  // Rules-of-Hooks mismatch waiting for a mounted-closed caller).
   const [working, setWorking] = react.useState(false);
+  const [note, setNote] = react.useState("");
 
   react.useEffect(function () {
     if (props.open) logDebug("signoff dialog opened");
   }, [props.open]);
 
   if (!props.open) return null;
-
-  // #53: one button, TWO steps in order — the gate needs the
-  // builtin:user_signoff row BEFORE the open -> in_progress move, so the
-  // attach goes first and the move rides right behind it. A note is optional.
-  const [note, setNote] = react.useState("");
 
   async function confirm() {
     if (working) return;
@@ -65,54 +67,22 @@ export function SignoffDialog(props: SignoffDialogProps) {
   }
 
   return (
-    <div
-      className="aidos-modal-mask"
-      onClick={() => {
-        if (!working) props.onClose();
-      }}
+    <ModalShell
+      title="Sign off ticket"
+      working={working}
+      onClose={props.onClose}
+      onConfirm={confirm}
+      confirmLabel="Confirm"
     >
-      <div
-        className="aidos-modal"
-        onClick={(event: react.MouseEvent<HTMLDivElement>) => {
-          event.stopPropagation();
-        }}
-      >
-        <div className="aidos-modal-head">
-          <h3 className="aidos-modal-title">Sign off ticket</h3>
-          <button
-            className="aidos-close-btn"
-            onClick={() => {
-              if (!working) props.onClose();
-            }}
-            aria-label="Close"
-          >
-            {"\u00d7"}
-          </button>
-        </div>
-        <p className="aidos-modal-body">
-          Signoff grants the agent write access on this ticket. Confirm to proceed.
-        </p>
-        <div className="aidos-modal-form">
-          <div className="aidos-modal-row">
-            <label>Note (optional — rides the signoff row)</label>
-            <textarea
-              className="aidos-evidence-attach-note"
-              value={note}
-              disabled={working}
-              onChange={(event) => {
-                setNote(event.target.value);
-              }}
-            />
-          </div>
-          <button
-            className="aidos-btn aidos-btn-primary"
-            disabled={working}
-            onClick={confirm}
-          >
-            {working ? "Working\u2026" : "Confirm"}
-          </button>
-        </div>
-      </div>
-    </div>
+      <p className="aidos-modal-body">
+        Signoff grants the agent write access on this ticket. Confirm to proceed.
+      </p>
+      <NoteField
+        label="Note (optional — rides the signoff row)"
+        value={note}
+        working={working}
+        onChange={setNote}
+      />
+    </ModalShell>
   );
 }

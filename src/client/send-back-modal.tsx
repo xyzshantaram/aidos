@@ -1,6 +1,7 @@
 /**
- * Ticket U2c: the send-back modal. A required reason attaches as a user
- * comment, then the ticket moves back to in_progress. Two events, one click.
+ * Ticket U2c + #72: the send-back modal on the shared ModalShell/NoteField
+ * primitives. A required reason attaches as a user comment, then the ticket
+ * moves back to in_progress. Two events, one click.
  */
 
 import react from "react";
@@ -8,6 +9,7 @@ import react from "react";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
+import { ModalShell, NoteField } from "./ui";
 
 export interface SendBackModalProps {
   open: boolean;
@@ -18,6 +20,7 @@ export interface SendBackModalProps {
 }
 
 export function SendBackModal(props: SendBackModalProps) {
+  // Hooks before the early return (Rules-of-Hooks; see #72 review note).
   const [reason, setReason] = react.useState("");
   const [working, setWorking] = react.useState(false);
 
@@ -29,12 +32,11 @@ export function SendBackModal(props: SendBackModalProps) {
 
   async function sendBack() {
     if (working) return;
-    if (reason.trim() === "") return;
     setWorking(true);
     try {
       await callAidosRemote(
         "userAddComment",
-        { ticketId: props.ticketId, text: reason },
+        { ticketId: props.ticketId, text: reason.trim() },
         props.agentId,
       );
       await callAidosRemote(
@@ -57,54 +59,17 @@ export function SendBackModal(props: SendBackModalProps) {
   }
 
   return (
-    <div
-      className="aidos-modal-mask"
-      onClick={() => {
-        if (!working) props.onClose();
-      }}
+    <ModalShell
+      title="Send back"
+      working={working}
+      onClose={props.onClose}
+      onConfirm={sendBack}
+      confirmLabel="Send back"
     >
-      <div
-        className="aidos-modal"
-        onClick={(event: react.MouseEvent<HTMLDivElement>) => {
-          event.stopPropagation();
-        }}
-      >
-        <div className="aidos-modal-head">
-          <h3 className="aidos-modal-title">Send back</h3>
-          <button
-            className="aidos-close-btn"
-            onClick={() => {
-              if (!working) props.onClose();
-            }}
-            aria-label="Close"
-          >
-            {"\u00d7"}
-          </button>
-        </div>
-        <p className="aidos-modal-body">
-          Send the ticket back to in progress. The reason attaches as a
-          comment.
-        </p>
-        <div className="aidos-modal-form">
-          <div className="aidos-modal-row">
-            <label>Reason</label>
-            <textarea
-              value={reason}
-              disabled={working}
-              onChange={(event) => {
-                setReason(event.target.value);
-              }}
-            />
-          </div>
-          <button
-            className="aidos-btn aidos-btn-primary"
-            disabled={working || reason.trim() === ""}
-            onClick={sendBack}
-          >
-            {working ? "Working\u2026" : "Send back"}
-          </button>
-        </div>
-      </div>
-    </div>
+      <p className="aidos-modal-body">
+        Send the ticket back to in progress. The reason attaches as a comment.
+      </p>
+      <NoteField label="Reason" value={reason} working={working} onChange={setReason} />
+    </ModalShell>
   );
 }

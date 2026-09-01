@@ -2002,3 +2002,43 @@
 .aidos-chip-approval-kind {
   background: var(--accent-blue);
 }
+
+/* #70: the shared UI vocabulary's tokens. */
+.aidos-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aidos-field-row-label,
+.aidos-collapse > summary {
+  font-size: 11px;
+  line-height: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.aidos-field-row-value {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.aidos-chip-emphasis {
+  background: var(--accent-blue);
+}
+
+.aidos-collapse > summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.aidos-collapse > summary:hover {
+  color: var(--text-secondary);
+}
+
+.aidos-collapse-body {
+  margin-top: 4px;
+}

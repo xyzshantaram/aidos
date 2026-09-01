@@ -1,6 +1,7 @@
 /**
- * Ticket U2c: the mark-done modal. Two steps. Step one shows the criteria
- * reminder. Step two shows the evidence summary and a final comment field.
+ * Ticket U2c + #72: the mark-done modal on the shared primitives. Two steps.
+ * Step one shows the criteria reminder. Step two shows the evidence summary
+ * and a final comment field.
  *
  * Confirm attaches a final comment when one is given, attaches the
  * user_verified kind, then moves the ticket to done. A refusal aborts the
@@ -12,6 +13,7 @@ import react from "react";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
+import { ModalShell, NoteField } from "./ui";
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
 
@@ -26,6 +28,7 @@ export interface MarkDoneModalProps {
 }
 
 export function MarkDoneModal(props: MarkDoneModalProps) {
+  // Hooks before the early return (Rules-of-Hooks; see #72 review note).
   const [step, setStep] = react.useState<1 | 2>(1);
   const [finalComment, setFinalComment] = react.useState("");
   const [working, setWorking] = react.useState(false);
@@ -92,44 +95,22 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
   }
 
   return (
-    <div
-      className="aidos-modal-mask"
-      onClick={() => {
-        if (!working) props.onClose();
-      }}
-    >
-      <div
-        className="aidos-modal"
-        onClick={(event: react.MouseEvent<HTMLDivElement>) => {
-          event.stopPropagation();
-        }}
-      >
-        <div className="aidos-modal-head">
-          <h3 className="aidos-modal-title">Mark done</h3>
-          <button
-            className="aidos-close-btn"
-            onClick={() => {
-              if (!working) props.onClose();
-            }}
-            aria-label="Close"
-          >
-            {"\u00d7"}
-          </button>
-        </div>
-        {step === 1 ? (
-          <div className="aidos-modal-form">
-            <p className="aidos-modal-body">The ticket criteria:</p>
-            {criteriaLines.length === 0 ? (
-              <p className="aidos-detail-note">No criteria on this ticket.</p>
-            ) : (
-              <ul className="aidos-check-list">
-                {criteriaLines.map((line) => (
-                  <li className="aidos-check-row" key={line}>
-                    {line}
-                  </li>
-                ))}
-              </ul>
-            )}
+    <ModalShell title="Mark done" working={working} onClose={props.onClose}>
+      {step === 1 ? (
+        <div className="aidos-modal-form">
+          <p className="aidos-modal-body">The ticket criteria:</p>
+          {criteriaLines.length === 0 ? (
+            <p className="aidos-detail-note">No criteria on this ticket.</p>
+          ) : (
+            <ul className="aidos-check-list">
+              {criteriaLines.map((line) => (
+                <li className="aidos-check-row" key={line}>
+                  {line}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="aidos-form-actions">
             <button
               className="aidos-btn aidos-btn-primary"
               onClick={() => {
@@ -139,30 +120,28 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
               Continue
             </button>
           </div>
-        ) : (
-          <div className="aidos-modal-form">
-            <p className="aidos-modal-body">The evidence summary:</p>
-            {summary.length === 0 ? (
-              <p className="aidos-detail-note">No evidence rows yet.</p>
-            ) : (
-              <ul className="aidos-check-list">
-                {summary.map((entry) => (
-                  <li className="aidos-check-row" key={entry.kind}>
-                    {entry.kind + ": " + entry.count}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="aidos-modal-row">
-              <label>Final comment (optional)</label>
-              <textarea
-                value={finalComment}
-                disabled={working}
-                onChange={(event) => {
-                  setFinalComment(event.target.value);
-                }}
-              />
-            </div>
+        </div>
+      ) : (
+        <div className="aidos-modal-form">
+          <p className="aidos-modal-body">The evidence summary:</p>
+          {summary.length === 0 ? (
+            <p className="aidos-detail-note">No evidence rows yet.</p>
+          ) : (
+            <ul className="aidos-check-list">
+              {summary.map((entry) => (
+                <li className="aidos-check-row" key={entry.kind}>
+                  {entry.kind + ": " + entry.count}
+                </li>
+              ))}
+            </ul>
+          )}
+          <NoteField
+            label="Final comment (optional)"
+            value={finalComment}
+            working={working}
+            onChange={setFinalComment}
+          />
+          <div className="aidos-form-actions">
             <button
               className="aidos-btn aidos-btn-primary"
               disabled={working}
@@ -171,8 +150,8 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
               {working ? "Working\u2026" : "Confirm"}
             </button>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+    </ModalShell>
   );
 }

@@ -18,10 +18,11 @@ import react from "react";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { userEvidenceKinds } from "./user-evidence-kinds";
+import { ModalShell, NoteField as NoteFieldShared } from "./ui";
 import { EvidencePayloadView } from "./evidence-payload-view";
 import type { EvidenceRowLike } from "./board-logic";
 
-// ---- shared modal chrome ---------------------------------------------------
+// ---- shared modal chrome (thin wrappers over ui.tsx) ------------------------
 
 function AttachModal(props: {
   title: string;
@@ -30,48 +31,16 @@ function AttachModal(props: {
   onClose: () => void;
   children: react.ReactNode;
 }) {
-  react.useEffect(function () {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        props.onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return function () {
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [props]);
   return (
-    <div className="aidos-modal-mask" onClick={props.onClose}>
-      <div
-        className="aidos-modal"
-        onClick={(event: react.MouseEvent<HTMLDivElement>) => {
-          event.stopPropagation();
-        }}
-      >
-        <div className="aidos-modal-head">
-          <h3 className="aidos-modal-title">{props.title}</h3>
-          <button className="aidos-close-btn" onClick={props.onClose} aria-label="Close">
-            {"\u00d7"}
-          </button>
-        </div>
-        <div className="aidos-modal-form">
-          {props.children}
-          <div className="aidos-form-actions">
-            <button className="aidos-btn" onClick={props.onClose} disabled={props.working}>
-              Cancel
-            </button>
-            <button
-              className="aidos-btn aidos-btn-primary"
-              onClick={props.onAttach}
-              disabled={props.working}
-            >
-              {props.working ? "Working\u2026" : "Attach"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <ModalShell
+      title={props.title}
+      working={props.working}
+      onClose={props.onClose}
+      onConfirm={props.onAttach}
+      confirmLabel="Attach"
+    >
+      {props.children}
+    </ModalShell>
   );
 }
 
@@ -82,17 +51,12 @@ function NoteField(props: {
   label?: string;
 }) {
   return (
-    <div className="aidos-modal-row">
-      <label>{props.label ?? "Note (optional)"}</label>
-      <textarea
-        className="aidos-evidence-attach-note"
-        value={props.note}
-        disabled={props.working}
-        onChange={(event) => {
-          props.onChange(event.target.value);
-        }}
-      />
-    </div>
+    <NoteFieldShared
+      label={props.label ?? "Note (optional)"}
+      value={props.note}
+      working={props.working}
+      onChange={props.onChange}
+    />
   );
 }
 
