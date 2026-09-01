@@ -25637,7 +25637,7 @@ var BUILTIN_KINDS = [
   {
     id: "builtin:review_pass",
     label: "Review pass",
-    description: "A reviewer read the change and reported findings.",
+    description: "An independent review of the change: a reviewer subagent or the human read it and reported findings. The orchestrator's own read does not qualify.",
     weight: 1,
     allowedAuthors: ["agent", "user"]
   },
@@ -25698,7 +25698,9 @@ var DEFAULT_GATES = [
 ];
 var DEFAULT_CONFIG = {
   kinds: [...BUILTIN_KINDS],
-  gates: [...DEFAULT_GATES]
+  gates: [...DEFAULT_GATES],
+  injectEnabled: true,
+  injectDebounceMs: 3e4
 };
 var PLAN_CONTEXT_LIMIT = 2e3;
 
@@ -25784,7 +25786,8 @@ function normalizeTicketSnapshot(snapshot) {
   const slug = snapshot.slug;
   const workspaceKey = snapshot.workspaceKey;
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
-  return { ...snapshot, slug, workspaceKey, dependsOn };
+  const allowlist = Array.isArray(snapshot.allowlist) ? snapshot.allowlist : [];
+  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist };
 }
 
 // src/kernel/invariants.ts
@@ -26421,7 +26424,8 @@ function rowFromSnapshot(snapshot) {
     phase: snapshot.phase,
     order: snapshot.order,
     state: snapshot.state,
-    dependsOn: [...snapshot.dependsOn]
+    dependsOn: [...snapshot.dependsOn],
+    allowlist: [...snapshot.allowlist]
   };
 }
 function ticketsProjection(state, config2) {
@@ -26442,6 +26446,73 @@ function ticketsProjection(state, config2) {
   }
   return out;
 }
+function ticketHasCriteria(ticket) {
+  return ticket.criteria.trim().length > 0;
+}
+function compareTicketTitles(a, b) {
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  if (al < bl) return -1;
+  if (al > bl) return 1;
+  return 0;
+}
+function compareTicketViews(a, b, key = "confidence", descending = true) {
+  const aHas = ticketHasCriteria(a);
+  const bHas = ticketHasCriteria(b);
+  if (aHas !== bHas) return aHas ? -1 : 1;
+  let primary = 0;
+  let tiebreak = 0;
+  switch (key) {
+    case "confidence":
+      primary = a.confidenceScore - b.confidenceScore;
+      tiebreak = (a.gateFraction ?? 0) - (b.gateFraction ?? 0);
+      break;
+    case "gates":
+      primary = (a.gateFraction ?? 0) - (b.gateFraction ?? 0);
+      tiebreak = a.confidenceScore - b.confidenceScore;
+      break;
+    case "time":
+      primary = a.updatedAt - b.updatedAt;
+      tiebreak = compareTicketTitles(a.title, b.title);
+      break;
+    case "alpha":
+      primary = compareTicketTitles(a.title, b.title);
+      tiebreak = a.updatedAt - b.updatedAt;
+      break;
+  }
+  let cmp = primary;
+  if (descending) cmp = -cmp;
+  if (cmp === 0) {
+    cmp = tiebreak;
+    if (descending) cmp = -cmp;
+  }
+  if (cmp === 0) cmp = a.id - b.id;
+  return cmp;
+}
+function ticketMatchesSearch(ticket, query) {
+  if (query === "") return true;
+  if (ticket.title.toLowerCase().includes(query.toLowerCase())) return true;
+  return String(ticket.id).includes(query);
+}
+function filterTicketViews(views, filter = {}) {
+  const stateSet = filter.stateIds ? new Set(filter.stateIds) : null;
+  const projectSet = filter.projectIds ? new Set(filter.projectIds) : null;
+  const search = filter.search ?? "";
+  const out = [];
+  for (const ticket of views) {
+    if (stateSet !== null && !stateSet.has(ticket.state)) continue;
+    if (projectSet !== null && !projectSet.has(ticket.projectId)) continue;
+    if (!ticketMatchesSearch(ticket, search)) continue;
+    out.push(ticket);
+  }
+  out.sort(
+    (a, b) => compareTicketViews(a, b, filter.sortKey ?? "confidence", filter.descending ?? true)
+  );
+  return out;
+}
+
+// src/host/aidos-core.ts
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 // src/plan/plan.ts
 var import_gray_matter = __toESM(require_gray_matter(), 1);
@@ -26756,7 +26827,8 @@ function rowOf(snapshot) {
     phase: snapshot.phase,
     order: snapshot.order,
     state: snapshot.state,
-    dependsOn: [...snapshot.dependsOn]
+    dependsOn: [...snapshot.dependsOn],
+    allowlist: [...snapshot.allowlist]
   };
 }
 function refusalReason(missing, allowedActors) {
@@ -26917,6 +26989,8 @@ var FileNotReadError = class extends Error {
 };
 var ACTOR_UNION = z2.union(["agent", "user", "system"]);
 var AIDOS_SETTINGS_SCHEMA = z2.object({
+  injectEnabled: z2.boolean().default(true),
+  injectDebounceMs: z2.number().default(3e4),
   kinds: z2.array(
     z2.object({
       id: z2.string().required(),
@@ -26943,6 +27017,8 @@ function resolveConfig(settings, ctx) {
     weight: kind.weight,
     allowedAuthors: [...kind.allowedAuthors]
   }));
+  const injectEnabled = settings.injectEnabled;
+  const injectDebounceMs = settings.injectDebounceMs;
   const gates = settings.gates.map((gate) => ({
     fromState: gate.fromState,
     toState: gate.toState,
@@ -26959,7 +27035,7 @@ function resolveConfig(settings, ctx) {
       }
     }
   }
-  return { kinds, gates };
+  return { kinds, gates, injectEnabled, injectDebounceMs };
 }
 function applyTicketsProjection(state, event) {
   if (event.type === "ticket/change") {
@@ -27064,7 +27140,8 @@ var TICKET_VIEW_ZOD = external_exports.object({
   updatedAt: external_exports.number(),
   workspaceKey: external_exports.string(),
   slug: external_exports.string(),
-  dependsOn: external_exports.array(external_exports.string())
+  dependsOn: external_exports.array(external_exports.string()),
+  allowlist: external_exports.array(external_exports.string())
 });
 var PLAN_VALUE_ZOD = external_exports.object({
   frontmatter: external_exports.string(),
@@ -27105,9 +27182,26 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     __publicField(this, "_config");
     __publicField(this, "_caches", /* @__PURE__ */ new WeakMap());
     __publicField(this, "_resolvedConfig");
+    /**
+     * The append path: validate the candidate against the folded state (the
+     * invariant companion's check), append to the session log, then fold.
+     * A violation throws InvariantError and the log does not change.
+     */
+    /**
+     * The injection seam (#63): user/system board events queue one-line notes
+     * per session; a debounce timer flushes them as ONE digest message into
+     * the live agent's inbox via agent.inject (next-step, never wakes an
+     * idle agent). Agent-actor events never queue: the agent knows its own
+     * moves from its tool results. Any failure is logged and swallowed —
+     * the commit that produced the event never fails.
+     */
+    __publicField(this, "_pendingInjections", /* @__PURE__ */ new Map());
+    __publicField(this, "_injectTimers", /* @__PURE__ */ new Map());
     registerAidosSessionEventTypes(ctx);
     this._config = config2 ?? {};
     this._resolvedConfig = {
+      injectEnabled: DEFAULT_CONFIG.injectEnabled,
+      injectDebounceMs: DEFAULT_CONFIG.injectDebounceMs,
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
       gates: DEFAULT_CONFIG.gates.map((gate) => ({
         ...gate,
@@ -27148,9 +27242,14 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       projectId = this._ensureProject(agent).projectId;
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
-    const rows = [...views.values()].filter((view) => view.projectId === projectId);
-    rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-    return rows;
+    const scoped = [...views.values()].filter((view) => view.projectId === projectId);
+    return filterTicketViews(scoped, {
+      stateIds: opts?.stateIds,
+      projectIds: opts?.projectIds,
+      search: opts?.search,
+      sortKey: opts?.sortKey,
+      descending: opts?.descending
+    });
   }
   /** The distinct ticket states of one agent's session (the mask input). */
   ticketStates(agent) {
@@ -27181,7 +27280,16 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    */
   bashContext(agent) {
     const presets = this.ctx.get("agentPresets");
-    if (presets && presets.composedPreset(agent.ctx) !== "aidos") {
+    if (presets === void 0) {
+      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+    }
+    let composed;
+    try {
+      composed = presets.composedPreset(agent.ctx);
+    } catch {
+      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+    }
+    if (composed !== "aidos") {
       return { profile: "none", scratchDir: "", workspaceRoot: "" };
     }
     let profile;
@@ -27672,11 +27780,48 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     cache.observedSeq = events.length;
   }
-  /**
-   * The append path: validate the candidate against the folded state (the
-   * invariant companion's check), append to the session log, then fold.
-   * A violation throws InvariantError and the log does not change.
-   */
+  _queueInjection(session, line) {
+    if ((this._resolvedConfig.injectEnabled ?? true) !== true) return;
+    const key = String(session.id);
+    const entry = this._pendingInjections.get(key) ?? [];
+    entry.push(line);
+    this._pendingInjections.set(key, entry);
+    const prior = this._injectTimers.get(key);
+    if (prior !== void 0) clearTimeout(prior);
+    const debounce = this._resolvedConfig.injectDebounceMs ?? 3e4;
+    if (debounce <= 0) {
+      this._flushInjection(session);
+      return;
+    }
+    this._injectTimers.set(
+      key,
+      setTimeout(() => {
+        this._injectTimers.delete(key);
+        this._flushInjection(session);
+      }, debounce)
+    );
+  }
+  _flushInjection(session) {
+    const key = String(session.id);
+    const lines = this._pendingInjections.get(key) ?? [];
+    this._pendingInjections.delete(key);
+    if (lines.length === 0) return;
+    try {
+      const live = this.ctx.agents?.get?.(session.id);
+      if (live === void 0) return;
+      const text = lines.length === 1 ? `aidos board update: ${lines[0]}` : `aidos board update (${lines.length} changes):
+- ${lines.join("\n- ")}`;
+      const message = createUserMessage({
+        content: [{ type: "text", text }],
+        source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" }
+      });
+      live.inject(message);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: injection flush failed for ${key}: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
+  }
   _commit(agent, event) {
     const session = agent.session;
     const cache = this._cache(session);
@@ -27888,6 +28033,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticket: snapshot,
       at
     });
+    if (actor !== "agent" && allowlist !== void 0) {
+      this._queueInjection(
+        agent.session,
+        `Allowlist updated for #${ticketId} (${snapshot.title}): ${allowlist.length} path(s)`
+      );
+    }
     return rowOf(snapshot);
   }
   /**
@@ -27993,6 +28144,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticket: snapshot,
       at
     });
+    if (actor !== "agent") {
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${ticket.title}) moved ${fromState} -> ${toState} by ${actor}`
+      );
+    }
     return { ticketId, fromState, toState };
   }
   /**
@@ -28120,6 +28277,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticketId,
       row
     });
+    if (actor !== "agent") {
+      const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}`
+      );
+    }
     return row.payload;
   }
   /** One log-only refusal record, appended before the GateRefused throw. */
@@ -28339,6 +28503,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         order: snapshot.order,
         state: snapshot.state,
         dependsOn: [...snapshot.dependsOn ?? []],
+        allowlist: [...snapshot.allowlist],
         confidenceScore: confidenceScoreOf(config2, evidence),
         gateFraction: progress.fraction,
         gatePresent: progress.present,
