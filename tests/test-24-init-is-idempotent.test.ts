@@ -21,6 +21,8 @@ describe("init is idempotent", () => {
     const first: typeof DEFAULT_CONFIG = {
       kinds: [...BUILTIN_KINDS],
       gates: [...DEFAULT_GATES],
+      injectEnabled: true,
+      injectDebounceMs: 30000,
     };
     expect(first).toEqual(DEFAULT_CONFIG);
     expect(JSON.parse(JSON.stringify(DEFAULT_CONFIG))).toEqual(DEFAULT_CONFIG);

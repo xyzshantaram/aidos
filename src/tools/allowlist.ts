@@ -30,12 +30,20 @@ function isUnder(root: string, candidate: string): boolean {
   return rel === "" || (!norm.startsWith("../") && norm !== ".." && !isAbsolute(rel));
 }
 
-/** Whether one target path sits under one of the allowed roots. */
-function pathAllowed(target: string, roots: readonly string[]): boolean {
+/**
+ * Whether one target path sits under one of the allowed roots. Relative
+ * roots resolve against `base` (the agent's workspace root), never against
+ * the process cwd: an allowlist entry like `src/client/` is workspace
+ * relative by contract, and the dsh daemon rarely runs from the repo
+ * (ticket #57). Absolute entries are taken verbatim.
+ */
+function pathAllowed(target: string, roots: readonly string[], base?: string): boolean {
   for (const root of roots) {
-    const base = root.replace(/\/+$/, "");
-    if (base === "") continue;
-    if (isUnder(base, target)) return true;
+    const stripped = root.replace(/\/+$/, "");
+    if (stripped === "") continue;
+    const resolved =
+      base !== undefined && !isAbsolute(stripped) ? resolve(base, stripped) : stripped;
+    if (isUnder(resolved, target)) return true;
   }
   return false;
 }
@@ -74,8 +82,14 @@ export function writeBoundaryReason(
     ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error instanceof Error ? error.message : String(error)}`);
     // No scratch root (no cwd) → skip the exemption, fall through to union.
   }
-  const union = ctx.aidos ? ctx.aidos.allowlistUnion(agent) : [];
-  if (pathAllowed(path, union)) return undefined;
+  const cwd = agent.session?.header?.cwd;
+  const aidosSvc = (ctx as unknown as { aidos?: { allowlistUnion(a: Agent): string[] }; get?: (k: string) => unknown }).aidos
+    ?? ((ctx as unknown as { get?: (k: string) => unknown }).get?.("aidos") as { allowlistUnion(a: Agent): string[] } | undefined);
+  const union = aidosSvc ? aidosSvc.allowlistUnion(agent) : [];
+  ctx.logger?.warn?.(
+    `aidos: write-boundary debug path=${path} cwd=${cwd ?? "none"} union=${JSON.stringify(union)} hadSvc=${aidosSvc ? "yes" : "no"}`,
+  );
+  if (pathAllowed(path, union, cwd)) return undefined;
   // Name the in-progress ticket whose allowlist would need to cover it.
   let rows: TicketView[] = [];
   try {
@@ -174,7 +188,8 @@ export function childPathScope(allowed: string[]): ToolGuard {
       execution.agent?.ctx?.logger?.warn?.(`aidos: scratch root unavailable in childPathScope: ${error instanceof Error ? error.message : String(error)}`);
       // No cwd → no scratch root → skip the exemption.
     }
-    if (pathAllowed(path, [...allowed, ...extra])) return undefined;
+    const cwd = execution.agent?.session?.header?.cwd;
+    if (pathAllowed(path, [...allowed, ...extra], cwd)) return undefined;
     const roots = allowed.length > 0 ? allowed.join(", ") : "(none)";
     return `path ${path} is outside the allowed root (allowed: ${roots})`;
   };

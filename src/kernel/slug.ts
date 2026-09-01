@@ -71,5 +71,6 @@ export function normalizeTicketSnapshot(
   const slug = snapshot.slug;
   const workspaceKey = snapshot.workspaceKey;
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
-  return { ...snapshot, slug, workspaceKey, dependsOn };
+  const allowlist = Array.isArray(snapshot.allowlist) ? snapshot.allowlist : [];
+  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist };
 }

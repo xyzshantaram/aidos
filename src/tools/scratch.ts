@@ -81,7 +81,14 @@ function callingAgent(exec: ToolRunContext): Agent {
 
 /** Resolve the fs service or throw a structured HarnessError. Harnesses provide it as ctx.fs; production via ctx.get. */
 function requireFs(ctx: Context): { resolve: (p: string, opts?: unknown) => Promise<unknown>; readText: (t: unknown, signal?: AbortSignal) => Promise<string>; writeText: (t: unknown, content: string, u: unknown, signal?: AbortSignal) => Promise<{ operation: string }> } {
-  const direct = (ctx as unknown as { fs?: unknown }).fs;
+  let direct: unknown;
+  try {
+    // Cordis throws on an undeclared service property instead of returning
+    // undefined, so this probe must not run before the get() fallback (#54).
+    direct = (ctx as unknown as { fs?: unknown }).fs;
+  } catch {
+    direct = undefined;
+  }
   if (direct) return direct as never;
   const viaGet = (ctx as unknown as { get?: (k: string) => unknown }).get?.call(ctx, "fs");
   if (viaGet) return viaGet as never;
@@ -124,6 +131,26 @@ export function registerScratchTools(ctx: Context): void {
         ctx.logger?.debug?.(`aidos: scratch_read path ${args.path}`);
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
+        // Delegate to the resolved read tool when present, so the content
+        // rides the session's read grammar — hashline anchors included —
+        // and scratch_edit accepts them (T5). Falls back to raw fs text.
+        const readDef = ctx.tools.get("read", agent);
+        if (readDef) {
+          const delegated = await ctx.tools.execute({
+            callId: exec.callId,
+            rootCallId: exec.rootCallId,
+            name: "read",
+            arguments: { file_path: absPath },
+            agent: exec.agent,
+            parent: exec.token,
+            signal: exec.signal,
+          });
+          if (!delegated.isError) {
+            const first = delegated.content[0];
+            const text = first && first.type === "text" ? first.text : "";
+            return { ok: true, path: absPath, scratch_root: root, content: text };
+          }
+        }
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         const content = await fs.readText(target, exec.signal);
@@ -177,9 +204,10 @@ export function registerScratchTools(ctx: Context): void {
         "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Accepts the same edit arguments (old_string, new_string, replace_all) plus a scratch-relative path. The path is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
       parameters: {
         path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
-        old_string: { type: "string", required: true, description: "The literal text to replace." },
-        new_string: { type: "string", required: true, description: "The literal replacement text." },
-        replace_all: { type: "boolean", description: "When true, replace every match instead of requiring exactly one." },
+        old_string: { type: "string", description: "Literal-edit grammar: the text to replace. Omit when using edits." },
+        new_string: { type: "string", description: "Literal-edit grammar: the replacement text." },
+        replace_all: { type: "boolean", description: "Literal-edit grammar: replace every match." },
+        edits: { type: "array", items: { type: "array" }, description: "Anchor-edit grammar: [[remove_from, remove_to, replacement_text], ...] with 3-char hashline anchors. Omit old_string/new_string when using edits." },
       },
       output: {
         schema: {
@@ -210,16 +238,22 @@ export function registerScratchTools(ctx: Context): void {
           );
         }
 
+        const delegatedArgs: Record<string, unknown> =
+          Array.isArray(args.edits)
+            ? { path: absPath, edits: args.edits }
+            : {
+                file_path: absPath,
+                old_string: args.old_string,
+                new_string: args.new_string,
+              };
+        if (!Array.isArray(args.edits) && args.replace_all !== undefined) {
+          delegatedArgs.replace_all = args.replace_all;
+        }
         const delegated = await ctx.tools.execute({
           callId: exec.callId,
           rootCallId: exec.rootCallId,
           name: "edit",
-          arguments: {
-            file_path: absPath,
-            old_string: args.old_string,
-            new_string: args.new_string,
-            replace_all: args.replace_all,
-          },
+          arguments: delegatedArgs,
           agent: exec.agent,
           parent: exec.token,
           signal: exec.signal,

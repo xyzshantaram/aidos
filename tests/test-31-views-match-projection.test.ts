@@ -106,7 +106,8 @@ const EXPECTED_KINDS: KindDef[] = [
   {
     id: "builtin:review_pass",
     label: "Review pass",
-    description: "A reviewer read the change and reported findings.",
+    description:
+      "An independent review of the change: a reviewer subagent or the human read it and reported findings. The orchestrator's own read does not qualify.",
     weight: 1.0,
     allowedAuthors: ["agent", "user"],
   },
@@ -174,6 +175,7 @@ const EXPECTED_TICKETS: TicketRow[] = [
     order: 1,
     state: "awaiting_verification",
     dependsOn: [],
+    allowlist: [],
   },
   {
     id: 2,
@@ -186,6 +188,7 @@ const EXPECTED_TICKETS: TicketRow[] = [
     order: 2,
     state: "open",
     dependsOn: [],
+    allowlist: [],
   },
   {
     id: 3,
@@ -198,6 +201,7 @@ const EXPECTED_TICKETS: TicketRow[] = [
     order: 1,
     state: "open",
     dependsOn: [],
+    allowlist: [],
   },
 ];
 
@@ -346,6 +350,7 @@ describe("legacy ticket defaults", () => {
       order: 1,
       state: "open",
       dependsOn: [],
+      allowlist: [],
     });
   });
 
@@ -367,6 +372,7 @@ describe("legacy ticket defaults", () => {
       order: 1,
       state: "open",
       dependsOn: [],
+      allowlist: [],
     });
     expect(store.getTicket(legacy)).toEqual({
       id: 2,
@@ -379,6 +385,7 @@ describe("legacy ticket defaults", () => {
       order: 2,
       state: "open",
       dependsOn: [],
+      allowlist: [],
     });
   });
 });

@@ -23,6 +23,7 @@ export function rowOf(snapshot: TicketSnapshot): TicketRow {
     order: snapshot.order,
     state: snapshot.state,
     dependsOn: [...snapshot.dependsOn],
+    allowlist: [...snapshot.allowlist],
   };
 }
 

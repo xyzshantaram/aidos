@@ -41,20 +41,20 @@ function harnessWithInProgress(allowlist: string[], title = "Scope the allowlist
 describe("the write union", () => {
   it("a write inside the in-progress allowlist passes", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "src/a.ts");
+    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/src/a.ts");
     expect(reason).toBeUndefined();
   });
 
   it("a write outside the union refuses and names the ticket", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md");
+    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/docs/b.md");
     expect(typeof reason).toBe("string");
     expect(reason).toMatch(/in-progress ticket 1/);
   });
 
   it("an edit outside the union refuses the same way", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md");
+    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/docs/b.md");
     expect(typeof reason).toBe("string");
     expect(reason).toMatch(/in-progress ticket 1/);
   });
@@ -72,7 +72,7 @@ describe("the write union", () => {
 
   it("both tool families refuse through the same waterfall decision", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const target = { displayPath: "docs/b.md", targetKey: "docs/b.md" };
+    const target = { displayPath: "/srv/proj/cli/docs/b.md", targetKey: "/srv/proj/cli/docs/b.md" };
     const actor = { agent: harness.agent };
     // The builtin fs tools (write/edit) and the hashline editors
     // (path/batch_edit/undo_last_edit) both funnel through these intents.
@@ -90,7 +90,7 @@ describe("the write union", () => {
 
   it("an allowed write calls through to the observation-policy next", () => {
     const { harness } = harnessWithInProgress(["src/"]);
-    const target = { displayPath: "src/a.ts", targetKey: "src/a.ts" };
+    const target = { displayPath: "/srv/proj/cli/src/a.ts", targetKey: "/srv/proj/cli/src/a.ts" };
     const actor = { agent: harness.agent };
     let nextCalled = 0;
     const next = () => {
@@ -125,8 +125,8 @@ describe("the write union", () => {
     const union = harness.service.allowlistUnion(harness.asAgent());
     expect(harness.service.allowlistUnion(harness.asAgent())).toEqual(union);
     expect(union).toEqual(["src/", "docs/"]);
-    expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "src/a.ts")).toBeUndefined();
-    expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md")).toBeUndefined();
+    expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/src/a.ts")).toBeUndefined();
+    expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/docs/b.md")).toBeUndefined();
     const outside = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "lib/c.ts");
     expect(typeof outside).toBe("string");
   });
@@ -161,9 +161,12 @@ describe("the write union", () => {
 describe("childPathScope", () => {
   it("allows read, write, and edit inside the allowed root", () => {
     const scope = childPathScope(["src/"]);
-    const exec = createHarness().makeExec;
+    const harness = createHarness();
+    const agent = harness.asAgent();
+    const exec = (name: string, args: unknown) =>
+      harness.makeExec(name, args, agent as unknown as Parameters<typeof harness.makeExec>[2]);
     for (const name of ["read", "write", "edit"]) {
-      expect(scope(exec(name, { file_path: "src/a.ts" })), `tool ${name}`).toBeUndefined();
+      expect(scope(exec(name, { file_path: "/srv/proj/cli/src/a.ts" })), `tool ${name}`).toBeUndefined();
     }
   });
 
@@ -171,7 +174,7 @@ describe("childPathScope", () => {
     const scope = childPathScope(["src/"]);
     const exec = createHarness().makeExec;
     for (const name of ["read", "write", "edit"]) {
-      const reason = scope(exec(name, { file_path: "docs/b.md" }));
+      const reason = scope(exec(name, { file_path: "/srv/proj/cli/docs/b.md" }));
       expect(typeof reason, `tool ${name}`).toBe("string");
       expect(reason).toMatch(/src\//);
     }
@@ -181,7 +184,7 @@ describe("childPathScope", () => {
     const scope = childPathScope(["README.md"]);
     const exec = createHarness().makeExec;
     expect(scope(exec("read", { file_path: "README.md" }))).toBeUndefined();
-    const reason = scope(exec("read", { file_path: "src/a.ts" }));
+    const reason = scope(exec("read", { file_path: "/srv/proj/cli/src/a.ts" }));
     expect(typeof reason).toBe("string");
     expect(reason).toMatch(/README\.md/);
   });

@@ -29,6 +29,7 @@ export function makeTicket(
     workspaceKey: "default",
     slug: "t",
     dependsOn: [],
+    allowlist: [],
     ...overrides,
   };
 }

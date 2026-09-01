@@ -34,10 +34,12 @@ import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
 import { checkGate, isLegalTransition } from "../kernel/gates";
 import {
   confidenceScoreOf,
+  filterTicketViews,
   gateProgressOf,
   ticketsProjection,
 } from "../kernel/projections";
-import type { TicketView } from "../kernel/projections";
+import type { TicketSortKey, TicketView } from "../kernel/projections";
+import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { parsePlan, renderPlan } from "../plan/plan";
 import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
@@ -164,12 +166,16 @@ export interface AidosSettingsGate {
 export interface AidosSettings {
   kinds: AidosSettingsKind[];
   gates: AidosSettingsGate[];
+  injectEnabled: boolean;
+  injectDebounceMs: number;
 }
 
 const ACTOR_UNION = z.union(["agent", "user", "system"]);
 
 /** The schemastery schema of the aidos settings namespace. */
 export const AIDOS_SETTINGS_SCHEMA = z.object({
+  injectEnabled: z.boolean().default(true),
+  injectDebounceMs: z.number().default(30000),
   kinds: z
     .array(
       z.object({
@@ -206,6 +212,8 @@ function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
     weight: kind.weight,
     allowedAuthors: [...kind.allowedAuthors],
   }));
+  const injectEnabled = settings.injectEnabled;
+  const injectDebounceMs = settings.injectDebounceMs;
   const gates = settings.gates.map((gate) => ({
     fromState: gate.fromState,
     toState: gate.toState,
@@ -222,7 +230,7 @@ function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
       }
     }
   }
-  return { kinds, gates };
+  return { kinds, gates, injectEnabled, injectDebounceMs };
 }
 
 // ---- projection state and apply bodies (plain JSON per the unit contract) ----
@@ -359,6 +367,7 @@ const TICKET_VIEW_ZOD = zod.object({
   workspaceKey: zod.string(),
   slug: zod.string(),
   dependsOn: zod.array(zod.string()),
+  allowlist: zod.array(zod.string()),
 });
 const PLAN_VALUE_ZOD = zod.object({
   frontmatter: zod.string(),
@@ -540,6 +549,8 @@ registerAidosSessionEventTypes(ctx);
     // For now, no prototype mutation here — see _commit for the per-session handling.
     this._config = config ?? {};
     this._resolvedConfig = {
+      injectEnabled: DEFAULT_CONFIG.injectEnabled,
+      injectDebounceMs: DEFAULT_CONFIG.injectDebounceMs,
       kinds: DEFAULT_CONFIG.kinds.map((kind) => ({ ...kind, allowedAuthors: [...kind.allowedAuthors] })),
       gates: DEFAULT_CONFIG.gates.map((gate) => ({
         ...gate,
@@ -579,7 +590,17 @@ registerAidosSessionEventTypes(ctx);
   // ---- reads ----
 
   /** The board rows of one agent's session. Sorted by phase and order. */
-  getTickets(agent: Agent, opts?: { projectId?: number }): TicketView[] {
+  getTickets(
+    agent: Agent,
+    opts?: {
+      projectId?: number;
+      stateIds?: readonly string[];
+      projectIds?: readonly number[];
+      search?: string;
+      sortKey?: TicketSortKey;
+      descending?: boolean;
+    },
+  ): TicketView[] {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     let projectId: ProjectId;
@@ -592,9 +613,15 @@ registerAidosSessionEventTypes(ctx);
       projectId = this._ensureProject(agent).projectId;
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
-    const rows = [...views.values()].filter((view) => view.projectId === projectId);
-    rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-    return rows;
+    const scoped = [...views.values()].filter((view) => view.projectId === projectId);
+    // FilterPanel-parity filtering (#49): server-side, no default narrowing.
+    return filterTicketViews(scoped, {
+      stateIds: opts?.stateIds,
+      projectIds: opts?.projectIds,
+      search: opts?.search,
+      sortKey: opts?.sortKey,
+      descending: opts?.descending,
+    });
   }
 
   /** The distinct ticket states of one agent's session (the mask input). */
@@ -626,8 +653,21 @@ registerAidosSessionEventTypes(ctx);
    *    (an unknown provider falls back to "subagent-coder")
    */
   bashContext(agent: Agent): { profile: string; scratchDir: string; workspaceRoot: string } {
-    const presets = this.ctx.get("agentPresets");
-    if (presets && presets.composedPreset(agent.ctx) !== "aidos") {
+    const presets = this.ctx.get("agentPresets") as
+      | { composedPreset: (agentCtx: unknown) => string | undefined }
+      | undefined;
+    // Deny by default (A5): an agent that cannot prove it composes the aidos
+    // preset gets no bash profile at all — same contract as isAidosAgent.
+    if (presets === undefined) {
+      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+    }
+    let composed: string | undefined;
+    try {
+      composed = presets.composedPreset(agent.ctx);
+    } catch {
+      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+    }
+    if (composed !== "aidos") {
       return { profile: "none", scratchDir: "", workspaceRoot: "" };
     }
     let profile: string;
@@ -1284,6 +1324,64 @@ registerAidosSessionEventTypes(ctx);
    * invariant companion's check), append to the session log, then fold.
    * A violation throws InvariantError and the log does not change.
    */
+  /**
+   * The injection seam (#63): user/system board events queue one-line notes
+   * per session; a debounce timer flushes them as ONE digest message into
+   * the live agent's inbox via agent.inject (next-step, never wakes an
+   * idle agent). Agent-actor events never queue: the agent knows its own
+   * moves from its tool results. Any failure is logged and swallowed —
+   * the commit that produced the event never fails.
+   */
+  private readonly _pendingInjections = new Map<string, string[]>();
+  private readonly _injectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  private _queueInjection(session: Session, line: string): void {
+    if ((this._resolvedConfig.injectEnabled ?? true) !== true) return;
+    const key = String(session.id);
+    const entry = this._pendingInjections.get(key) ?? [];
+    entry.push(line);
+    this._pendingInjections.set(key, entry);
+    const prior = this._injectTimers.get(key);
+    if (prior !== undefined) clearTimeout(prior);
+    const debounce = this._resolvedConfig.injectDebounceMs ?? 30000;
+    if (debounce <= 0) {
+      this._flushInjection(session);
+      return;
+    }
+    this._injectTimers.set(
+      key,
+      setTimeout(() => {
+        this._injectTimers.delete(key);
+        this._flushInjection(session);
+      }, debounce),
+    );
+  }
+
+  private _flushInjection(session: Session): void {
+    const key = String(session.id);
+    const lines = this._pendingInjections.get(key) ?? [];
+    this._pendingInjections.delete(key);
+    if (lines.length === 0) return;
+    try {
+      const live = this.ctx.agents?.get?.(session.id);
+      if (live === undefined) return;
+      const text =
+        lines.length === 1
+          ? `aidos board update: ${lines[0]}`
+          : `aidos board update (${lines.length} changes):
+- ${lines.join("\n- ")}`;
+      const message = createUserMessage({
+        content: [{ type: "text", text }],
+        source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" },
+      });
+      live.inject(message);
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: injection flush failed for ${key}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   private _commit(agent: Agent, event: AidosEvent): void {
     const session = agent.session;
     const cache = this._cache(session);
@@ -1529,6 +1627,12 @@ registerAidosSessionEventTypes(ctx);
       ticket: snapshot,
       at,
     });
+    if (actor !== "agent" && allowlist !== undefined) {
+      this._queueInjection(
+        agent.session,
+        `Allowlist updated for #${ticketId} (${snapshot.title}): ${allowlist.length} path(s)`,
+      );
+    }
     return rowOf(snapshot);
   }
 
@@ -1653,6 +1757,12 @@ registerAidosSessionEventTypes(ctx);
       ticket: snapshot,
       at,
     });
+    if (actor !== "agent") {
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${ticket.title}) moved ${fromState} -> ${toState} by ${actor}`,
+      );
+    }
     return { ticketId, fromState, toState };
   }
 
@@ -1803,6 +1913,13 @@ registerAidosSessionEventTypes(ctx);
       ticketId,
       row,
     });
+    if (actor !== "agent") {
+      const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}`,
+      );
+    }
     return row.payload;
   }
 
@@ -2072,6 +2189,7 @@ registerAidosSessionEventTypes(ctx);
         order: snapshot.order,
         state: snapshot.state,
         dependsOn: [...(snapshot.dependsOn ?? [])],
+        allowlist: [...snapshot.allowlist],
         confidenceScore: confidenceScoreOf(config, evidence),
         gateFraction: progress.fraction,
         gatePresent: progress.present,

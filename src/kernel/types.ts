@@ -123,6 +123,10 @@ export interface GateDef {
 export interface AidosConfig {
   kinds: KindDef[];
   gates: GateDef[];
+  /** Ticket events inject a digest into the live agent's inbox (#63). */
+  injectEnabled?: boolean;
+  /** Debounce window for the injection digest, milliseconds. */
+  injectDebounceMs?: number;
 }
 
 /** One ticket as the Store returns it. The prototype's dict, camelCased. */
@@ -141,6 +145,8 @@ export interface TicketRow {
    * means no dependencies. Informational only: no gate enforces them.
    */
   dependsOn: string[];
+  /** Per-ticket file allowlist. User-set; the write boundary enforces it. */
+  allowlist: string[];
 }
 
 /** One paged ticket row: the ticket fields plus the derived pair. */

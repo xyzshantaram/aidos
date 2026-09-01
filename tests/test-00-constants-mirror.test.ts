@@ -74,7 +74,8 @@ const MIRROR_BUILTIN_KINDS: KindDef[] = [
   {
     id: "builtin:review_pass",
     label: "Review pass",
-    description: "A reviewer read the change and reported findings.",
+    description:
+      "An independent review of the change: a reviewer subagent or the human read it and reported findings. The orchestrator's own read does not qualify.",
     weight: 1.0,
     allowedAuthors: ["agent", "user"],
   },

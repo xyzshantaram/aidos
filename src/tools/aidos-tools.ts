@@ -72,6 +72,7 @@ const TICKET_ROW_SCHEMA = {
     order: { type: "integer", required: true },
     state: { ...STATE_SCHEMA, required: true },
     dependsOn: { type: "array", items: { type: "string" }, required: true },
+    allowlist: { type: "array", items: { type: "string" }, required: true },
   },
 } as const;
 
@@ -315,11 +316,34 @@ function registerGetTickets(ctx: Context): void {
     defineTool({
       name: "get_tickets",
       description:
-        "Read the board rows of the session's project: every ticket with its state, confidence score, and gate fraction, sorted by phase and order.",
+        "Read the board rows of the session's project: every ticket with its state, confidence score, and gate fraction. Optional FilterPanel-parity filters (#49); with no filters, returns everything as before.",
       parameters: {
         projectId: {
           type: "integer",
           description: "The project to read; the session's workspace project when absent.",
+        },
+        stateIds: {
+          type: "array",
+          items: { type: "string", enum: [...STATE_ORDER] },
+          description: "Only tickets in these states. Absent = all states.",
+        },
+        projectIds: {
+          type: "array",
+          items: { type: "integer" },
+          description: "Only tickets in these projects. Absent = all.",
+        },
+        search: {
+          type: "string",
+          description: "Substring match over title or id, like the board search box.",
+        },
+        sortKey: {
+          type: "string",
+          enum: ["confidence", "gates", "time", "alpha"],
+          description: "Sort key. Default: confidence.",
+        },
+        descending: {
+          type: "boolean",
+          description: "Sort direction. Default: true.",
         },
       },
       output: {
@@ -338,10 +362,14 @@ function registerGetTickets(ctx: Context): void {
         ctx.logger?.info?.(`aidos: get_tickets called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: get_tickets args ${JSON.stringify(args)}`);
         try {
-          const tickets = ctx.aidos.getTickets(
-            agent,
-            args.projectId === undefined ? undefined : { projectId: args.projectId },
-          );
+          const tickets = ctx.aidos.getTickets(agent, {
+            projectId: args.projectId,
+            stateIds: args.stateIds,
+            projectIds: args.projectIds,
+            search: args.search,
+            sortKey: args.sortKey,
+            descending: args.descending,
+          });
           ctx.logger?.info?.(`aidos: get_tickets returned ${tickets.length} ticket(s) for agent ${agent.session?.id}`);
           return { ok: true, tickets };
         } catch (error) {

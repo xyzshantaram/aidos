@@ -147,6 +147,7 @@ function rowFromSnapshot(snapshot: TicketSnapshot): TicketRow {
     order: snapshot.order,
     state: snapshot.state,
     dependsOn: [...snapshot.dependsOn],
+    allowlist: [...snapshot.allowlist],
   };
 }
 
@@ -197,5 +198,107 @@ export function commentsProjection(state: AidosState): Map<TicketId, CommentReco
   for (const [id, comments] of state.comments) {
     out.set(id, [...comments]);
   }
+  return out;
+}
+
+/** The sort keys shared by the board filter panel and the get_tickets tool. */
+export type TicketSortKey = "confidence" | "gates" | "time" | "alpha";
+
+/** One full filter and sort request, mirror of the board FilterPanel. */
+export interface TicketFilter {
+  /** Absent or empty means all states. */
+  stateIds?: readonly string[];
+  /** Absent or null means all projects. */
+  projectIds?: readonly number[] | null;
+  /** Substring match over title or id; empty matches everything. */
+  search?: string;
+  sortKey?: TicketSortKey;
+  descending?: boolean;
+}
+
+function ticketHasCriteria(ticket: TicketRow): boolean {
+  return ticket.criteria.trim().length > 0;
+}
+
+function compareTicketTitles(a: string, b: string): number {
+  const al = a.toLowerCase();
+  const bl = b.toLowerCase();
+  if (al < bl) return -1;
+  if (al > bl) return 1;
+  return 0;
+}
+
+/**
+ * Total order over two ticket rows (board FilterPanel semantics, ticket #49):
+ * a ticket without criteria sorts after one with criteria regardless of
+ * direction; primary key, tiebreak key, then id. Descending flips the primary
+ * and the tiebreak but never the id break.
+ */
+export function compareTicketViews(
+  a: TicketView,
+  b: TicketView,
+  key: TicketSortKey = "confidence",
+  descending = true,
+): number {
+  const aHas = ticketHasCriteria(a);
+  const bHas = ticketHasCriteria(b);
+  if (aHas !== bHas) return aHas ? -1 : 1;
+
+  let primary = 0;
+  let tiebreak = 0;
+  switch (key) {
+    case "confidence":
+      primary = a.confidenceScore - b.confidenceScore;
+      tiebreak = (a.gateFraction ?? 0) - (b.gateFraction ?? 0);
+      break;
+    case "gates":
+      primary = (a.gateFraction ?? 0) - (b.gateFraction ?? 0);
+      tiebreak = a.confidenceScore - b.confidenceScore;
+      break;
+    case "time":
+      primary = a.updatedAt - b.updatedAt;
+      tiebreak = compareTicketTitles(a.title, b.title);
+      break;
+    case "alpha":
+      primary = compareTicketTitles(a.title, b.title);
+      tiebreak = a.updatedAt - b.updatedAt;
+      break;
+  }
+
+  let cmp = primary;
+  if (descending) cmp = -cmp;
+  if (cmp === 0) {
+    cmp = tiebreak;
+    if (descending) cmp = -cmp;
+  }
+  if (cmp === 0) cmp = a.id - b.id;
+  return cmp;
+}
+
+/** True when the search term matches the title or the id. */
+function ticketMatchesSearch(ticket: TicketRow, query: string): boolean {
+  if (query === "") return true;
+  if (ticket.title.toLowerCase().includes(query.toLowerCase())) return true;
+  return String(ticket.id).includes(query);
+}
+
+/** Filter by state, project, and search, then sort (FilterPanel parity). */
+export function filterTicketViews(
+  views: readonly TicketView[],
+  filter: TicketFilter = {},
+): TicketView[] {
+  const stateSet = filter.stateIds ? new Set<string>(filter.stateIds) : null;
+  const projectSet = filter.projectIds ? new Set<number>(filter.projectIds) : null;
+  const search = filter.search ?? "";
+  const out: TicketView[] = [];
+  for (const ticket of views) {
+    if (stateSet !== null && !stateSet.has(ticket.state)) continue;
+    if (projectSet !== null && !projectSet.has(ticket.projectId)) continue;
+    if (!ticketMatchesSearch(ticket, search)) continue;
+    out.push(ticket);
+  }
+  out.sort((a, b) =>
+    compareTicketViews(a, b, filter.sortKey ?? "confidence", filter.descending ?? true),
+  );
   return out;
 }
