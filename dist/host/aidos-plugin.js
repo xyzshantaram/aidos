@@ -27652,7 +27652,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return { ok: true, status: "pending", ticketId: args.ticketId, requestId: id, proposed: result.paths };
   }
   pendingApproval(agent, args) {
-    const rows = [...this._pendingApprovals.values()].filter((row) => row.ticketId === args.ticketId).sort((a, b) => a.at - b.at);
+    const wanted = Number(args.ticketId);
+    const rows = [...this._pendingApprovals.values()].filter((row) => row.ticketId === wanted).sort((a, b) => a.at - b.at);
     return rows[0] ?? null;
   }
   resolveApproval(agent, args) {
