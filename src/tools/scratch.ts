@@ -304,7 +304,17 @@ export function registerScratchTools(ctx: Context): void {
         const root = scratchRootForAgent(agent);
         const absPath = resolveScratchPath(root, args.path);
         // Run mkdir off the main thread so the signal can abort; prefer fs.mkdir if available.
-        const fs = (ctx as unknown as { fs?: { mkdir?: (p: string, opts: unknown) => Promise<void> } }).fs;
+        // #54: the property access must go through the same guarded probe as
+        // requireFs — Cordis THROWS on an undeclared service property ("cannot
+        // get property 'fs' without inject"), it does not return undefined, so
+        // this bare read escaped the try/catch that every other scratch tool
+        // wraps its fs access in.
+        let fs: { mkdir?: (p: string, opts: unknown) => Promise<void> } | undefined;
+        try {
+          fs = (ctx as unknown as { fs?: { mkdir?: (p: string, opts: unknown) => Promise<void> } }).fs;
+        } catch {
+          fs = undefined;
+        }
         if (fs?.mkdir) {
           await fs.mkdir(absPath, { recursive: true });
         } else {
