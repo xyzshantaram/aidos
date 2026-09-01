@@ -31,8 +31,10 @@ const FENCE = "---";
 // The prefix of every heading that opens a phase or a context section.
 const HEADING_PREFIX = "## ";
 
-// A heading that opens a phase. Every other `## ` heading opens a context
-// section.
+// #5/P11: the flat format has no phase headings. A legacy `## Phase N: ...`
+// heading is still RECOGNIZED — only so a pre-flat document imports without a
+// parse error — but it no longer opens phase state: it is consumed as prose
+// and the heading text survives as a context section, not as a PlanPhase.
 const PHASE_HEADING = /^## Phase (\d+): (.+)$/;
 
 // The state suffix of a phase title: an em dash and one backticked state
@@ -50,10 +52,12 @@ const CRITERIA_MARKER = "**Evaluate:**";
 const TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
 
 /**
- * One phase heading of the document, deduped, in document order. The raw
- * text holds the heading after the `## ` prefix, so the renderer re-emits
- * the heading with one prefix.
+ * #5/P11: deleted from the format. The document shape is flat — tickets in
+ * document order, no phase grouping, no `## Phase N` headings. (The type is
+ * kept as a deprecated alias below only so older imports keep compiling
+ * until their callers move; the parser never produces one.)
  */
+/** @deprecated the format is flat; PlanPhase is no longer part of a document. */
 export interface PlanPhase {
   number: number;
   title: string;
@@ -75,8 +79,8 @@ export interface PlanDocument {
   frontmatterData: Record<string, unknown>;
   preamble: string;
   contextSections: ContextSection[];
+  /** Flat, in document order. Order carries the sequence; there is no phase. */
   tickets: PlanTicket[];
-  phases: PlanPhase[];
 }
 
 /** The working data of one ticket before its body is complete. */
@@ -97,11 +101,8 @@ export function parsePlan(text: string): PlanDocument {
   const preamble = _takePreamble(lines, frontmatter.index);
   const contextSections: ContextSection[] = [];
   const rawTickets: RawTicket[] = [];
-  // Tickets before the first phase heading take phase 1. A heading that is
-  // not a phase marker never resets the phase.
-  let currentPhase = 1;
-  const phases: PlanPhase[] = [];
-  const phaseNumbers = new Set<number>();
+  // #5/P11: flat format. Every ticket takes the kernel's default phase (1);
+  // there is no current-phase state to carry through the document.
   let index = preamble.index;
   while (index < lines.length) {
     const line = lines[index];
@@ -110,27 +111,10 @@ export function parsePlan(text: string): PlanDocument {
       continue;
     }
     if (_isHeading(line)) {
-      const phase = _phaseOfHeading(line);
-      if (phase) {
-        // A phase marker sets the phase of every ticket after it. The first
-        // heading of one number is the record the renderer re-emits. The
-        // prose between the marker and the next heading or ticket is
-        // consumed and dropped, like context-section prose.
-        currentPhase = phase.number;
-        if (!phaseNumbers.has(phase.number)) {
-          phaseNumbers.add(phase.number);
-          phases.push(phase);
-        }
-        index += 1;
-        while (
-          index < lines.length &&
-          !_isHeading(lines[index]) &&
-          !TICKET_LINE.test(lines[index])
-        ) {
-          index += 1;
-        }
-        continue;
-      }
+      // #5/P11: EVERY heading is a context section now. A legacy
+      // `## Phase N: ...` heading keeps its text as the section heading, so a
+      // pre-flat document imports with its headings visible instead of
+      // vanishing, and no phase/set event ever fires from a document.
       const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
@@ -155,7 +139,7 @@ export function parsePlan(text: string): PlanDocument {
       );
     }
     rawTickets.push(
-      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, currentPhase),
+      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, 1),
     );
     index += 1;
   }
@@ -164,15 +148,14 @@ export function parsePlan(text: string): PlanDocument {
     frontmatterData: _parseFrontmatterData(frontmatter.text),
     preamble: preamble.text,
     contextSections,
-    phases,
     tickets: rawTickets.map((raw) => _finishTicket(raw)),
   };
 }
 
 /**
- * Write one plan document. The tickets keep their given order. The phase
- * headings emit in phase-number order, and the tickets of a phase with no
- * record emit before every phase heading.
+ * Write one plan document (#5/P11, flat shape): frontmatter, preamble,
+ * context sections, then every ticket in document order. No `## Phase N`
+ * heading is ever emitted — the exported state mark is the only state text.
  */
 export function renderPlan(doc: PlanDocument): string {
   const blocks: string[] = [];
@@ -187,42 +170,13 @@ export function renderPlan(doc: PlanDocument): string {
   for (const section of doc.contextSections) {
     blocks.push(_renderContextSection(section));
   }
-  for (const group of _ticketGroupsOf(doc)) {
-    if (group.phase) {
-      blocks.push(HEADING_PREFIX + group.phase.raw);
-    }
-    for (const ticket of group.tickets) {
-      blocks.push(_renderTicket(ticket).join("\n"));
-    }
+  for (const ticket of doc.tickets) {
+    blocks.push(_renderTicket(ticket).join("\n"));
   }
   if (blocks.length === 0) {
     return "";
   }
   return blocks.join("\n\n") + "\n";
-}
-
-/**
- * Group the tickets for rendering: first the tickets of a phase with no
- * phase record, then one group per recorded phase, ascending by number.
- */
-function _ticketGroupsOf(
-  doc: PlanDocument,
-): Array<{ phase?: PlanPhase; tickets: PlanTicket[] }> {
-  const recorded = [...doc.phases].sort((a, b) => a.number - b.number);
-  const groups: Array<{ phase?: PlanPhase; tickets: PlanTicket[] }> = [];
-  const unrecorded = doc.tickets.filter(
-    (ticket) => !recorded.some((phase) => phase.number === ticket.phase),
-  );
-  if (unrecorded.length > 0) {
-    groups.push({ tickets: unrecorded });
-  }
-  for (const phase of recorded) {
-    groups.push({
-      phase,
-      tickets: doc.tickets.filter((ticket) => ticket.phase === phase.number),
-    });
-  }
-  return groups;
 }
 
 // ---- reading ----
@@ -300,7 +254,12 @@ function _takeContextSection(
   }
   return {
     section: {
-      heading: lines[start].replace(/\s+$/, ""),
+      // #5/P11: the heading re-emits WITH its `## ` prefix. The old flat
+      // renderer assumed the prefix was already part of the stored heading
+      // (a phase-heading habit); without it a legacy `## Phase N: ...`
+      // heading exported WITHOUT the prefix, re-imported as prose, and the
+      // heading vanished on the round trip.
+      heading: HEADING_PREFIX + lines[start].slice(HEADING_PREFIX.length).replace(/\s+$/, ""),
       text: _trimBlankLines(lines.slice(start + 1, index)),
       index: sectionNumber,
     },

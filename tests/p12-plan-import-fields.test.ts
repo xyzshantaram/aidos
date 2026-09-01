@@ -1,19 +1,19 @@
 /**
- * P12. The plan import fields: phase headings, the description field, and
- * the multi line criteria round trip, through the live plan_import and plan
- * tools.
+ * P12 + #5/P11. The plan import fields under the FLAT format: the
+ * description field and the multi line criteria round trip, through the
+ * live plan_import and plan tools.
  *
- * The contract:
- * - A `## Phase <N>: <title>` heading sets the phase number and title of
- *   every ticket after it, until the next phase heading. An em-dash state
- *   suffix is not part of the title. Tickets before any phase heading and
- *   tickets under headings that do not match get phase 1.
+ * The contract (flat, settled 2026-08-24 by grilling):
+ * - There are NO phase headings. Every ticket takes the kernel's default
+ *   phase (1) on import; ticket order carries the sequence. A legacy
+ *   `## Phase N: ...` heading is consumed as a CONTEXT SECTION — a
+ *   pre-flat document imports without error and its headings stay visible
+ *   as sections — and no phase/set event ever fires from a document.
  * - The parsed ticket body lands in the description field, and the body
  *   field holds "".
- * - The export prefixes the marker and every criteria line with two spaces, so
- *   the document re-imports to identical criteria.
- * - The export emits one `## Phase N: <title>` heading per phase, so a
- *   phased document round trips, while a flat document stays flat.
+ * - The export prefixes the marker and every criteria line with two spaces,
+ *   so the document re-imports to identical criteria, and NEVER emits a
+ *   `## Phase N` heading.
  */
 
 import { describe, expect, it } from "vitest";
@@ -193,11 +193,11 @@ describe("plan import fields", () => {
     return successJson(await harness.runTool("plan_import", { file: planFile }));
   };
 
-  it("a phased plan imports the heading numbers and titles", async () => {
+  it("a legacy phased document imports flat: default phase, order from the document, no phase/set", async () => {
     await importPlan(PHASED_PLAN);
 
     const rows = await ticketRows(harness);
-    expect(rows.map((row) => row.phase)).toEqual([2, 2, 5]);
+    expect(rows.map((row) => row.phase)).toEqual([1, 1, 1]);
     expect(rows.map((row) => row.order)).toEqual([1, 2, 3]);
     expect(rows.map((row) => row.title)).toEqual([
       "Read the kernel",
@@ -207,28 +207,24 @@ describe("plan import fields", () => {
 
     const phaseEvents = harness
       .aidosEvents(harness.agent)
-      .filter((event) => event.kind === "phase/set") as PhaseSetEvent[];
-    expect(phaseEvents.map((event) => event.number)).toEqual([2, 5]);
-    expect(phaseEvents.map((event) => event.title)).toEqual([
-      "aidos core",
-      "launch",
-    ]);
+      .filter((event) => event.kind === "phase/set");
+    expect(phaseEvents).toEqual([]);
   });
 
-  it("a ticket under a non-phase heading keeps the last phase number", async () => {
+  it("a legacy non-phase heading is a context section, and its tickets import to phase 1", async () => {
     await importPlan(NON_PHASE_HEADING_PLAN);
 
     const rows = await ticketRows(harness);
     expect(rows.map((row) => row.title)).toEqual(["First", "Second"]);
-    expect(rows.map((row) => row.phase)).toEqual([3, 3]);
+    expect(rows.map((row) => row.phase)).toEqual([1, 1]);
   });
 
-  it("tickets before any phase heading get phase 1", async () => {
+  it("every ticket gets phase 1, wherever it sits relative to legacy headings", async () => {
     await importPlan(EARLY_TICKET_PLAN);
 
     const rows = await ticketRows(harness);
     expect(rows.map((row) => row.title)).toEqual(["Early", "Late"]);
-    expect(rows.map((row) => row.phase)).toEqual([1, 4]);
+    expect(rows.map((row) => row.phase)).toEqual([1, 1]);
   });
 
   it("the body prose lands in the description and the body holds empty text", async () => {
@@ -262,15 +258,22 @@ describe("plan import fields", () => {
     expect(secondRows[0].criteria).toBe(firstCriteria);
   });
 
-  it("a phased document with multi line criteria round trips", async () => {
+  it("a legacy phased document with multi line criteria round trips flat", async () => {
     await importPlan(PHASED_MULTI_CRITERIA_PLAN);
 
     const firstData = planFieldsOf(await ticketRows(harness));
-    expect(firstData.map((row) => row.phase)).toEqual([2, 2, 5]);
+    expect(firstData.map((row) => row.phase)).toEqual([1, 1, 1]);
 
+    // The legacy phase headings survive as ORDINARY context sections — the
+    // renderer never synthesizes a phase grouping, and byte-for-byte round
+    // tripping means the imported sections export verbatim. The flat-shape
+    // guarantee is: no code path EMITS a `## Phase N` heading from ticket
+    // or phase state.
     const exportedText = await exportPlanText(harness);
-    const headingCount = exportedText.split("## Phase 2: aidos core").length - 1;
-    expect(headingCount).toBe(1);
+    expect(exportedText.split("## Phase 2: aidos core").length - 1).toBe(1);
+    expect(exportedText.split("## Phase 5: launch").length - 1).toBe(1);
+    // Each section appears once, NOT once per ticket of the old phase.
+    expect(exportedText.split("## Phase 2: aidos core").length - 1).toBe(1);
 
     const importer = makeHarness();
     const secondFile = importer.tempPlanFile(exportedText);

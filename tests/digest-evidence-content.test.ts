@@ -1,0 +1,95 @@
+/**
+ * #63 follow-up: the injection digest carries the evidence row's
+ * HUMAN-READABLE content, not just its kind. A review note's text, an
+ * allowlist's paths, and an imported state's claim all surface in the line,
+ * capped so a long note cannot flood the digest. User asked for this after
+ * reading digests that said only "evidence attached: builtin:review_note".
+ */
+import { describe, expect, it } from "vitest";
+import { createHarness, asContext } from "./b1-harness";
+import { apply } from "../src/tools/aidos-tools";
+
+describe("the board-update digest carries evidence content", () => {
+  it("a review note's text rides the injection line, capped", async () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as any).service;
+    const agent = (harness as any).asAgent();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:review_note",
+      payload: { note: "the allowlist looks right" },
+    });
+    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
+    const lines = [...pending.values()].flat();
+    expect(lines.some((line) => line.includes('the allowlist looks right'))).toBe(true);
+
+    // A long note is ellipsized, not truncated silently mid-word with no mark.
+    svc.setTicket(agent, { title: "Probe 2" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:review_note",
+      payload: { note: "x".repeat(400) },
+    });
+    const lines2 = [...pending.values()].flat();
+    const long = lines2.find((line) => line.includes("xxx"));
+    expect(long).toBeDefined();
+    expect((long as string).endsWith("…\"")).toBe(true);
+  });
+
+  it("an allowlist attach lists its paths in the line", async () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as any).service;
+    const agent = (harness as any).asAgent();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:file_allowlist",
+      payload: { paths: ["src/client/", "src/host/aidos-core.ts"] },
+    });
+    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
+    const lines = [...pending.values()].flat();
+    expect(lines.some((line) => line.includes("2 path(s)") && line.includes("src/client/"))).toBe(true);
+  });
+
+  it("an imported_state attach names the claimed state", async () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as any).service;
+    const agent = (harness as any).asAgent();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    // imported_state is system-authored by design (the plan importer stamps
+    // it), so the user path refuses; drive the internal attach with the
+    // system actor exactly as planImport does.
+    (svc as any)._attachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:imported_state",
+      payload: { claimed_state: "in_progress" },
+    }, "system");
+    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
+    const lines = [...pending.values()].flat();
+    expect(lines.some((line) => line.includes("claimed in_progress"))).toBe(true);
+  });
+
+  it("a verdict row with no note still surfaces its first string field", async () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as any).service;
+    const agent = (harness as any).asAgent();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:user_verified",
+      payload: { summary: "checked on device at 360px" },
+    });
+    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
+    const lines = [...pending.values()].flat();
+    expect(lines.some((line) => line.includes("checked on device at 360px"))).toBe(true);
+  });
+});

@@ -516,6 +516,41 @@ export interface TicketSearchResult {
  * user-actor entry points under the `aidos` namespace. The agent tool
  * layer calls the agent-actor methods directly.
  */
+/**
+ * The digest suffix for one evidence row (#63 follow-up): surface the
+ * payload's HUMAN-READABLE content in the injection line, not just the kind.
+ * Review notes and verification notes ride a `note`; allowlists list their
+ * paths; anything else with a single string field uses that. Capped so a
+ * long note cannot flood the digest.
+ */
+function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): string {
+  const cap = 160;
+  const ellipsize = (text: string): string =>
+    text.length > cap ? `${text.slice(0, cap)}…` : text;
+  if (typeof payload.note === "string" && payload.note.trim() !== "") {
+    return ` — "${ellipsize(payload.note.trim())}"`;
+  }
+  if (Array.isArray(payload.paths)) {
+    const paths = payload.paths.filter((p): p is string => typeof p === "string");
+    if (paths.length > 0) {
+      return ` — ${paths.length} path(s): ${ellipsize(paths.join(", "))}`;
+    }
+  }
+  if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
+    return ` — claimed ${payload.claimed_state}`;
+  }
+  if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
+    // A verdict row with no note still says what was asserted, from the
+    // payload's first string field when there is one.
+    for (const value of Object.values(payload)) {
+      if (typeof value === "string" && value.trim() !== "") {
+        return ` — "${ellipsize(value.trim())}"`;
+      }
+    }
+  }
+  return "";
+}
+
 export class AidosService extends TypertRemoteService {
   static inject = [
     "agents",
@@ -756,21 +791,15 @@ registerAidosSessionEventTypes(ctx);
       order: row.order,
       phase: row.phase,
     }));
-    // One heading per stored phase, ascending by number. A flat store emits
-    // no phase headings, because the default phase holds no record.
-    const phases = [...(cache.state.phases.get(projectId) ?? new Map())]
-      .sort((a, b) => a[0] - b[0])
-      .map(([number, phase]) => ({
-        number,
-        title: phase.title,
-        raw: `Phase ${number}: ${phase.title}`,
-      }));
+    // #5/P11: the export is flat — every ticket in store order, no phase
+    // grouping, no `## Phase N` headings ever. The ticket's `phase` and
+    // `order` fields remain in the kernel; the document shape no longer
+    // carries them.
     return renderPlan({
       frontmatter: meta.frontmatter,
       frontmatterData: {},
       preamble: meta.preamble,
       contextSections: meta.contextSections,
-      phases,
       tickets,
     });
   }
@@ -1206,26 +1235,10 @@ registerAidosSessionEventTypes(ctx);
     });
 
     const ticketIds: TicketId[] = [];
-    // A heading phase commits before its first ticket, only when the store
-    // does not hold that phase yet. A flat document commits no phase, so it
-    // stays flat.
-    const headings = new Map(
-      document.phases.map((phase) => [phase.number, phase]),
-    );
+    // #5/P11: importing never commits a phase/set event. Every ticket takes
+    // the kernel's default phase, so an import leaves the store flat exactly
+    // as a create would.
     for (const ticket of document.tickets) {
-      const heading = headings.get(ticket.phase);
-      const phasesOfProject = cache.state.phases.get(projectId);
-      if (heading && !phasesOfProject?.has(ticket.phase)) {
-        this._commit(agent, {
-          kind: "phase/set",
-          version: 1,
-          projectId,
-          number: heading.number,
-          title: heading.title,
-          state: "open",
-          at: this._now(),
-        });
-      }
       // The body prose lands in the description, the body field stays empty.
       // Every ticket lands in open, order from the document.
       const ticketId = this._createTicketInternal(
@@ -1237,7 +1250,7 @@ registerAidosSessionEventTypes(ctx);
           body: "",
           criteria: ticket.criteria,
           order: ticket.order,
-          phase: ticket.phase,
+          phase: 1,
         },
       );
       // One imported_state row per ticket, author system.
@@ -1917,7 +1930,7 @@ registerAidosSessionEventTypes(ctx);
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}`,
+        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload),
       );
     }
     return row.payload;
