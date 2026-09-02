@@ -29210,7 +29210,8 @@ var PLAN_META_SCHEMA = {
   }
 };
 function present(title, kind, rawInput, chips = []) {
-  const capped = chips.slice(0, 4).filter((chip) => chip.trim() !== "");
+  const cap = (chip) => chip.length > 60 ? chip.slice(0, 60) + "\u2026" : chip;
+  const capped = chips.slice(0, 4).map(cap).filter((chip) => chip.trim() !== "");
   return {
     card: "generic",
     title,

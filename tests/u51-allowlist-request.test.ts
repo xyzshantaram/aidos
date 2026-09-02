@@ -98,6 +98,127 @@ describe("#51 the allowlist suggestion flow", () => {
     expect(svc.pendingApproval(agent, { ticketId: ticket.id })).toBeNull();
   });
 
+
+  it("rejection resolves with no row and steers the agent", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as unknown as { service: any }).service;
+    const agent = (harness as unknown as { asAgent: () => any }).asAgent();
+    const ws = mkdtempSync(join(tmpdir(), "ws51c-"));
+    mkdirSync(join(ws, "src"), { recursive: true });
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const proposal = svc.requestAllowlist(agent, {
+      ticketId: ticket.id,
+      paths: ["src"],
+    });
+    const resolved = svc.resolveApproval(agent, {
+      requestId: proposal.requestId,
+      approved: false,
+    });
+    expect(resolved.resolved).toContain("rejected");
+    // No row attached, no field written.
+    const row = svc.getTickets(agent).find((t: { id: number }) => t.id === ticket.id);
+    expect(row.allowlist).toEqual([]);
+  });
+
+  it("the sibling-prefix escape is refused (../ws-evil, not just ../etc)", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as unknown as { service: any }).service;
+    const agent = (harness as unknown as { asAgent: () => any }).asAgent();
+    const ws = mkdtempSync(join(tmpdir(), "ws51d-"));
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    // The exact case the startsWith check missed: a sibling whose name
+    // extends the workspace basename.
+    const sibling = ws + "-evil" + "/src";
+    mkdirSync(sibling, { recursive: true });
+    expect(() =>
+      svc.requestAllowlist(agent, { ticketId: ticket.id, paths: [sibling] }),
+    ).toThrow(/escapes the workspace/);
+  });
+
+  it("approve-time re-validation refuses edited paths that escape", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as unknown as { service: any }).service;
+    const agent = (harness as unknown as { asAgent: () => any }).asAgent();
+    const ws = mkdtempSync(join(tmpdir(), "ws51e-"));
+    mkdirSync(join(ws, "src"), { recursive: true });
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const proposal = svc.requestAllowlist(agent, {
+      ticketId: ticket.id,
+      paths: ["src"],
+    });
+    // The card's textarea was edited to an escaping path before approve.
+    const resolved = svc.resolveApproval(agent, {
+      requestId: proposal.requestId,
+      approved: true,
+      paths: ["../outside"],
+    });
+    expect(resolved.resolved).toContain("refused");
+    const row = svc.getTickets(agent).find((t: { id: number }) => t.id === ticket.id);
+    expect(row.allowlist).toEqual([]);
+  });
+
+  it("an unknown ticketId refuses instead of queueing an orphan", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as unknown as { service: any }).service;
+    const agent = (harness as unknown as { asAgent: () => any }).asAgent();
+    const ws = mkdtempSync(join(tmpdir(), "ws51f-"));
+    mkdirSync(join(ws, "src"), { recursive: true });
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    expect(() => svc.requestAllowlist(agent, { ticketId: 9999, paths: ["src"] })).toThrow(
+      /unknown ticket 9999/,
+    );
+  });
+
+  it("a resolver from another session is refused (cross-session protection)", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as unknown as { service: any }).service;
+    const agent = (harness as unknown as { asAgent: () => any }).asAgent();
+    const ws = mkdtempSync(join(tmpdir(), "ws51g-"));
+    mkdirSync(join(ws, "src"), { recursive: true });
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const proposal = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["src"] });
+    // A second agent (another session) tries to resolve A's request.
+    const other = harness.createAgent
+      ? (harness as any).createAgent()
+      : (harness as unknown as { service: any }).service
+      ? undefined
+      : undefined;
+    void other;
+    // A genuinely distinct agent (asAgent() returns the SAME object, so
+    // mutating its session.id corrupted the owner — the first cut of this
+    // test did exactly that and its "request survives" assertion failed).
+    const foreignAgent = (harness as unknown as { makeAgent: (o: { id: string }) => any }).makeAgent({
+      id: "session-foreign" as never,
+    });
+    (foreignAgent as { session: unknown }).session = {
+      id: "session-foreign",
+      header: { cwd: ws },
+    } as never;
+    expect(() =>
+      svc.resolveApproval(foreignAgent, {
+        requestId: proposal.requestId,
+        approved: true,
+        paths: ["src"],
+      }),
+    ).toThrow(/belongs to another session/);
+    // The request survives for the real owner.
+    expect(svc.pendingApproval(agent, { ticketId: ticket.id })).not.toBeNull();
+  });
+
   it("an unknown request id refuses", () => {
     const harness = createHarness();
     harness.installService();
