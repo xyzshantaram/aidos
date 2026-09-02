@@ -45,6 +45,26 @@
 - id: tool-ask-user
   name: '@deepseek-ai/dsh-tool-ask-user'
 
+# ── todos ───────────────────────────────────────────────────────────────────
+# The model-facing todo list (#81). dsh-base mounts this at the HOST plane,
+# but this preset builds its OWN tool realm — that is why bash/fs/web/jobs are
+# re-mounted above — so without this row an aidos session registers no
+# `todo_write` at all, and the agent falls back to inventing a markdown todo
+# file beside the very board that exists to track the work.
+#
+# The mask needs no change: src/tools/mask.ts derives its deny list from
+# TOOL_UNIVERSE, and todo_write is deliberately outside that universe, so the
+# list stays available in EVERY ticket state — including `open`, which is the
+# state planning happens in.
+#
+# Config matches dsh-base, so an aidos session behaves like a standard one.
+# The `todo/write` events this appends are what dotfiles-ai's host-plane
+# durable-todos projection folds, so that panel works here with no change.
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
 # ── delegation and workflows ────────────────────────────────────────────────
 # Host singletons (subagents registry) stay on host plane; this preset only
 # contributes the delegation tools + workflow engine. Mirrors standard preset's
