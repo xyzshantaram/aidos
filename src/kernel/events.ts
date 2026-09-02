@@ -38,6 +38,21 @@ export interface EvidenceAttachedEvent {
  * stamped `at` within the ticket's row list (monotonic per ticket, so it
  * names the row to drop); `kind` rides along as a sanity check for the fold.
  */
+/**
+ * Link one existing evidence row to one criterion label. `at` + `rowKind`
+ * name the row (same identity rule as evidence/detached); `criterion` is the
+ * verbatim criterion line it addresses, stored on the row's payload.criteria
+ * so grouping, coverage, and the #69 linker all read one channel.
+ */
+export interface EvidenceLinkedEvent {
+  kind: "evidence/linked";
+  version: 1;
+  ticketId: TicketId;
+  at: number;
+  rowKind: string;
+  criterion: string;
+}
+
 export interface EvidenceDetachedEvent {
   kind: "evidence/detached";
   version: 1;
@@ -113,6 +128,7 @@ export type AidosEvent =
   | TicketChangeEvent
   | EvidenceAttachedEvent
   | EvidenceDetachedEvent
+  | EvidenceLinkedEvent
   | PlanChangeEvent
   | CommentAddedEvent
   | RefusalEvent

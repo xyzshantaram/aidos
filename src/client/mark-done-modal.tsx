@@ -14,8 +14,9 @@ import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { ModalShell, NoteField } from "./ui";
-import type { TicketView } from "../kernel/projections";
+import { CriterionLinker } from "./criterion-linker";
 import type { EvidenceRow } from "../kernel/types";
+import type { TicketView } from "../kernel/projections";
 
 export interface MarkDoneModalProps {
   open: boolean;
@@ -98,17 +99,19 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
     <ModalShell title="Mark done" working={working} onClose={props.onClose}>
       {step === 1 ? (
         <div className="aidos-modal-form">
-          <p className="aidos-modal-body">The ticket criteria:</p>
+          <p className="aidos-modal-body">The ticket criteria, with their evidence:</p>
           {criteriaLines.length === 0 ? (
             <p className="aidos-detail-note">No criteria on this ticket.</p>
           ) : (
-            <ul className="aidos-check-list">
-              {criteriaLines.map((line) => (
-                <li className="aidos-check-row" key={line}>
-                  {line}
-                </li>
-              ))}
-            </ul>
+            <CriterionLinker
+              criteria={criteriaLines}
+              evidence={props.evidence}
+              ticketIdKey={String(props.ticketId)}
+              agentId={props.agentId}
+              onChanged={() => {
+                /* The projection frame re-renders on evidence/linked. */
+              }}
+            />
           )}
           <div className="aidos-form-actions">
             <button

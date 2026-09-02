@@ -28,6 +28,7 @@ import type { KindDef } from "../kernel/types";
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
 import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
+import { execFile } from "node:child_process";
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
@@ -113,6 +114,7 @@ declare module "@deepseek-ai/dsh-session/types" {
     "ticket/change": import("../kernel/events").TicketChangeEvent;
     "evidence/attached": import("../kernel/events").EvidenceAttachedEvent;
     "evidence/detached": import("../kernel/events").EvidenceDetachedEvent;
+    "evidence/linked": import("../kernel/events").EvidenceLinkedEvent;
     "plan/change": import("../kernel/events").PlanChangeEvent;
     "comment/added": import("../kernel/events").CommentAddedEvent;
     "aidos/refusal": import("../kernel/events").RefusalEvent;
@@ -299,6 +301,22 @@ export function applyEvidenceProjection(
     if (index < 0) return state;
     const next = [...rows];
     next.splice(index, 1);
+    return { ...state, [id]: next };
+  }
+  if (event.type === "evidence/linked") {
+    // Rewrite payload.criteria on the named row, immutably.
+    const id = String(event.data.ticketId);
+    const rows = state[id];
+    if (rows === undefined) return state;
+    const index = rows.findIndex(
+      (row) => row.at === event.data.at && row.kind === event.data.rowKind,
+    );
+    if (index < 0) return state;
+    const next = [...rows];
+    next[index] = {
+      ...next[index]!,
+      payload: { ...next[index]!.payload, criteria: event.data.criterion },
+    };
     return { ...state, [id]: next };
   }
   return state;
@@ -1356,6 +1374,52 @@ registerAidosSessionEventTypes(ctx);
     return this._detachEvidence(this._routedAgent(agent, args.ticketId), args as { ticketId: number; at: number; rowKind: string });
   }
 
+  /**
+   * #69: link one existing evidence row to one criterion (or clear the link
+   * with criterion=null). The user drives it from the criteria panel and the
+   * mark-done modal; the agent has no link path — evidence payload edits stay
+   * user-owned, per the same rule as detach.
+   */
+  @Remote("userLinkEvidence")
+  userLinkEvidence(
+    agent: Agent,
+    args: { ticketId: number | string; at: number; rowKind: string; criterion: string | null },
+  ): { ticketId: number; linked: boolean } {
+    return this._linkEvidence(
+      this._routedAgent(agent, args.ticketId),
+      args as { ticketId: number; at: number; rowKind: string; criterion: string | null },
+    );
+  }
+
+  /**
+   * #78: the recent git history of the ticket's workspace, for the commit
+   * picker. Read-only: one `git log` with a fixed format string, run with
+   * execFile (no shell), bounded output, in the workspace root.
+   */
+  @Remote("userRecentCommits")
+  userRecentCommits(agent: Agent, args: { ticketId: number | string }): Promise<{
+    ticketId: number;
+    commits: { hash: string; subject: string; author: string; date: string }[];
+  }> {
+    return this._recentCommits(this._routedAgent(agent, args.ticketId), args as { ticketId: number });
+  }
+
+  /**
+   * #78: attach one git commit as evidence. The commit is resolved through
+   * git show in the workspace root (never trusted from the client), and the
+   * row carries hash, subject, author, branch, and the short date.
+   */
+  @Remote("userAttachCommitEvidence")
+  userAttachCommitEvidence(
+    agent: Agent,
+    args: { ticketId: number | string; hash: string; note?: string },
+  ): Promise<{ ticketId: number; payload: Record<string, unknown> }> {
+    return this._attachCommitEvidence(
+      this._routedAgent(agent, args.ticketId),
+      args as { ticketId: number; hash: string; note?: string },
+    );
+  }
+
   /** Move one ticket as the agent. The gate enforces every transition. */
   agentMoveTicket(agent: Agent, args: MoveTicketArgs): {
     ticketId: number;
@@ -1937,6 +2001,174 @@ registerAidosSessionEventTypes(ctx);
       rowKind: args.rowKind,
     });
     return { ticketId, removed: 1 };
+  }
+
+  /**
+   * #78: run one read-only git command in the workspace root. execFile (no
+   * shell), a bounded timeout, and a fixed argument list — the hash a caller
+   * passes never reaches a shell and never splits into new arguments.
+   */
+  private _gitInWorkspace(
+    agent: Agent,
+    args: string[],
+  ): Promise<string> {
+    const workspace = this._workspacePath(agent);
+    return new Promise((resolvePromise, rejectPromise) => {
+      execFile(
+        "git",
+        args,
+        { cwd: workspace, timeout: 5000 },
+        (error, stdout) => {
+          if (error) {
+            rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error.message).split("\n")[0]));
+            return;
+          }
+          resolvePromise(stdout);
+        },
+      );
+    });
+  }
+
+  /** A hash-like token: hex, 7..64 chars. Anything else is refused. */
+  private _isHashLike(token: string): boolean {
+    return /^[0-9a-f]{7,64}$/i.test(token);
+  }
+
+  /** #78: the workspace's recent commits, newest first. */
+  private async _recentCommits(
+    agent: Agent,
+    args: { ticketId: number },
+  ): Promise<{
+    ticketId: number;
+    commits: { hash: string; subject: string; author: string; date: string }[];
+  }> {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const out = await this._gitInWorkspace(agent, [
+      "log",
+      "--max-count=20",
+      "--date=format:%Y-%m-%d %H:%M",
+      "--pretty=%H%x1f%h%x1f%s%x1f%an%x1f%ad",
+    ]);
+    const commits = out
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => line.split("\u001f"))
+      .filter((fields) => fields.length === 5)
+      .map((fields) => ({
+        hash: fields[1]!,
+        subject: fields[2]!,
+        author: fields[3]!,
+        date: fields[4]!,
+      }));
+    return { ticketId, commits };
+  }
+
+  /** #78: attach one commit as evidence, resolved in the workspace. */
+  private async _attachCommitEvidence(
+    agent: Agent,
+    args: { ticketId: number; hash: string; note?: string },
+  ): Promise<{ ticketId: number; payload: Record<string, unknown> }> {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const hash = args.hash.trim();
+    if (!this._isHashLike(hash)) {
+      throw new BadPayloadError("commit hash must be a 7-64 character hex string");
+    }
+    const raw = await this._gitInWorkspace(agent, [
+      "show",
+      "--no-patch",
+      "--date=format:%Y-%m-%d %H:%M",
+      "--pretty=%H%x1f%s%x1f%an%x1f%ad%x1f%D",
+      hash + "\0",
+    ]);
+    const fields = raw.split("\n")[0]!.trim().split("\u001f");
+    if (fields.length < 4) {
+      throw new BadPayloadError("git show returned an unexpected format for " + hash.slice(0, 12));
+    }
+    const [fullHash, subject, author, date] = fields as [string, string, string, string];
+    const decorations = fields[4] ?? "";
+    const branch = decorations.replace(/^HEAD -> /, "").split(", ")[0] ?? "";
+    const payload: Record<string, unknown> = {
+      commit: fullHash,
+      hash: fields[1] ?? fullHash.slice(0, 12),
+      subject,
+      author,
+      branch: branch === "" ? undefined : branch,
+      date,
+      ...(args.note !== undefined && args.note.trim() !== "" ? { note: args.note.trim() } : {}),
+    };
+    if (payload.branch === undefined) delete payload.branch;
+    const attached = this._attachEvidenceInternal(agent, ticketId, "user_commit", payload, "user");
+    return { ticketId, payload: attached };
+  }
+
+  /**
+   * #69: link (criterion) or unlink (criterion=null) one existing evidence
+   * row by appending one evidence/linked event. The criterion is validated
+   * against the ticket's criteria; the row must be live on the ticket.
+   */
+  private _linkEvidence(
+    agent: Agent,
+    args: { ticketId: number; at: number; rowKind: string; criterion: string | null },
+  ): { ticketId: number; linked: boolean } {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const rows = cache.state.evidence.get(ticketId) ?? [];
+    const row = rows.find((candidate) => candidate.at === args.at && candidate.kind === args.rowKind);
+    if (!row) {
+      throw new BadPayloadError("no evidence row matches the given at/kind");
+    }
+    const criterion = args.criterion === null ? null : args.criterion.trim();
+    if (criterion === null) {
+      this._commit(agent, {
+        kind: "evidence/linked",
+        version: 1,
+        ticketId,
+        at: args.at,
+        rowKind: args.rowKind,
+        criterion: "",
+      });
+      return { ticketId, linked: false };
+    }
+    if (criterion === "") {
+      throw new BadPayloadError("the criterion must be a non-empty line of the ticket's criteria, or null to unlink");
+    }
+    const valid = snapshot.criteria
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (!valid.includes(criterion)) {
+      throw new BadPayloadError("evidence criterion " + JSON.stringify(criterion) + " is not one of the ticket's criteria");
+    }
+    this._commit(agent, {
+      kind: "evidence/linked",
+      version: 1,
+      ticketId,
+      at: args.at,
+      rowKind: args.rowKind,
+      criterion,
+    });
+    return { ticketId, linked: true };
   }
 
   /**

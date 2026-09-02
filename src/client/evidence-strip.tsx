@@ -44,6 +44,8 @@ export interface EvidenceStripProps {
   deleting?: boolean;
   /** The criterion this row is linked to, when the caller knows it. */
   criterionLabel?: string;
+  /** Clears the row's criterion link (the ⨯-adjacent unlink affordance). */
+  onUnlink?: () => void;
 }
 
 export function EvidenceStrip(props: EvidenceStripProps) {
@@ -88,10 +90,25 @@ export function EvidenceStrip(props: EvidenceStripProps) {
               <PopOutIcon />
             </button>
           ) : null}
+          {props.onUnlink !== undefined ? (
+            <button
+              className="aidos-evidence-unlink"
+              title="Unlink from criterion"
+              aria-label="Unlink from criterion"
+              disabled={props.deleting === true}
+              onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
+                event.stopPropagation();
+                props.onUnlink?.();
+              }}
+            >
+              {"\u2a02"}
+            </button>
+          ) : null}
           {props.onDelete !== undefined ? (
           <button
             className="aidos-evidence-delete"
             title="Delete this evidence row"
+            aria-label="Delete this evidence row"
             disabled={props.deleting === true}
             onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
               event.stopPropagation();

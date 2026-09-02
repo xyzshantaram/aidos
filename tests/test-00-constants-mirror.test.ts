@@ -107,6 +107,13 @@ const MIRROR_BUILTIN_KINDS: KindDef[] = [
     weight: 0.0,
     allowedAuthors: ["system"],
   },
+  {
+    id: "builtin:user_commit",
+    label: "Git commit",
+    description: "One git commit from the ticket's workspace, resolved through git show at attach time.",
+    weight: 1.0,
+    allowedAuthors: ["user"],
+  },
 ];
 
 const MIRROR_DEFAULT_GATES: GateDef[] = [
@@ -141,7 +148,7 @@ describe("constants mirror", () => {
     expect(STATE_ORDER).toEqual(MIRROR_STATE_ORDER);
   });
 
-  it("restates BUILTIN_KINDS verbatim, all 12 rows", () => {
+  it("restates BUILTIN_KINDS verbatim, all 13 rows", () => {
     expect([...BUILTIN_KINDS]).toEqual(MIRROR_BUILTIN_KINDS);
   });
 

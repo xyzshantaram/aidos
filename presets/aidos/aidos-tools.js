@@ -25585,6 +25585,7 @@ import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "node:path";
+import { execFile } from "node:child_process";
 
 // src/kernel/constants.ts
 var BUILTIN_KINDS = [
@@ -25671,6 +25672,13 @@ var BUILTIN_KINDS = [
     description: "The state that a plan document claimed at import time.",
     weight: 0,
     allowedAuthors: ["system"]
+  },
+  {
+    id: "builtin:user_commit",
+    label: "Git commit",
+    description: "One git commit from the ticket's workspace, resolved through git show at attach time.",
+    weight: 1,
+    allowedAuthors: ["user"]
   }
 ];
 var DEFAULT_GATES = [
@@ -25815,6 +25823,7 @@ var SNAPSHOT_KEYS = [
 ];
 var EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 var EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
+var EVIDENCE_LINKED_KEYS = ["kind", "version", "ticketId", "at", "rowKind", "criterion"];
 var EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
 var PLAN_CHANGE_KEYS = ["kind", "version", "projectId", "plan", "at"];
 var PLAN_KEYS = ["frontmatter", "context", "rules"];
@@ -26103,6 +26112,40 @@ function validateEvidenceDetached(state, raw) {
     invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
+function validateEvidenceLinked(state, raw) {
+  expectKeys(raw, EVIDENCE_LINKED_KEYS, "evidence/linked");
+  if (raw.version !== 1) {
+    invariant("evidence/linked version must be 1");
+  }
+  expectInt(raw.ticketId, "ticket id", 1);
+  expectString(raw.rowKind, "evidence row kind");
+  if (raw.rowKind.length === 0) {
+    invariant("evidence row kind must not be empty");
+  }
+  expectNumber(raw.at, "evidence at");
+  expectString(raw.criterion, "evidence criterion");
+  const isUnlink = raw.criterion.trim().length === 0;
+  const ticketId = raw.ticketId;
+  const snapshot = state.tickets.get(ticketId);
+  if (!snapshot) {
+    invariant(`evidence references unknown ticket ${ticketId}`);
+  }
+  const rows = state.evidence.get(ticketId) ?? [];
+  const found = rows.some((row) => row.at === raw.at && row.kind === raw.rowKind);
+  if (!found) {
+    invariant(`evidence/linked names no live row (at=${String(raw.at)}, kind=${String(raw.rowKind)})`);
+  }
+  if (snapshot && !isUnlink) {
+    const valid = snapshot.criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    if (!valid.includes(raw.criterion.trim())) {
+      invariant(`evidence criterion ${JSON.stringify(raw.criterion)} is not one of the ticket's criteria`);
+    }
+  }
+  const lastAt = state.lastAt.get(ticketId);
+  if (lastAt !== void 0 && raw.at < lastAt) {
+    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
+  }
+}
 function validatePlanChange(_state, raw) {
   expectKeys(raw, PLAN_CHANGE_KEYS, "plan/change");
   if (raw.version !== 1) {
@@ -26238,8 +26281,12 @@ function validateAidosEvent(state, event) {
     case "evidence/detached":
       validateEvidenceDetached(state, raw);
       return;
+    case "evidence/linked":
+      validateEvidenceLinked(state, raw);
+      return;
     case "plan/change":
       validatePlanChange(state, raw);
+      return;
       return;
     case "comment/added":
       validateComment(state, raw);
@@ -26278,6 +26325,22 @@ function createInitialState() {
 function foldAidosEvents(state, event) {
   validateAidosEvent(state, event);
   switch (event.kind) {
+    case "evidence/linked": {
+      const rows = state.evidence.get(event.ticketId);
+      if (rows) {
+        const index = rows.findIndex(
+          (row) => row.at === event.at && row.kind === event.rowKind
+        );
+        if (index >= 0) {
+          const row = rows[index];
+          const next = [...rows];
+          const payload = { ...row.payload, criteria: event.criterion };
+          next[index] = { ...row, payload };
+          state.evidence.set(event.ticketId, next);
+        }
+      }
+      return state;
+    }
     case "ticket/change": {
       const id = event.ticket.id;
       const ticket = normalizeTicketSnapshot(
@@ -27082,6 +27145,7 @@ var AIDOS_EVENT_TYPES = /* @__PURE__ */ new Set([
   "ticket/change",
   "evidence/attached",
   "evidence/detached",
+  "evidence/linked",
   "plan/change",
   "comment/added",
   "aidos/refusal",
@@ -27301,6 +27365,21 @@ function applyEvidenceProjection(state, event) {
     next.splice(index, 1);
     return { ...state, [id]: next };
   }
+  if (event.type === "evidence/linked") {
+    const id = String(event.data.ticketId);
+    const rows = state[id];
+    if (rows === void 0) return state;
+    const index = rows.findIndex(
+      (row) => row.at === event.data.at && row.kind === event.data.rowKind
+    );
+    if (index < 0) return state;
+    const next = [...rows];
+    next[index] = {
+      ...next[index],
+      payload: { ...next[index].payload, criteria: event.data.criterion }
+    };
+    return { ...state, [id]: next };
+  }
   return state;
 }
 function applyPlanProjection(state, event) {
@@ -27450,8 +27529,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _resolveApproval_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _resolveApproval_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -27982,6 +28061,21 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   userDetachEvidence(agent, args) {
     return this._detachEvidence(this._routedAgent(agent, args.ticketId), args);
   }
+  userLinkEvidence(agent, args) {
+    return this._linkEvidence(
+      this._routedAgent(agent, args.ticketId),
+      args
+    );
+  }
+  userRecentCommits(agent, args) {
+    return this._recentCommits(this._routedAgent(agent, args.ticketId), args);
+  }
+  userAttachCommitEvidence(agent, args) {
+    return this._attachCommitEvidence(
+      this._routedAgent(agent, args.ticketId),
+      args
+    );
+  }
   /** Move one ticket as the agent. The gate enforces every transition. */
   agentMoveTicket(agent, args) {
     return this._moveTicket(agent, args, "agent");
@@ -28442,6 +28536,145 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return { ticketId, removed: 1 };
   }
   /**
+   * #78: run one read-only git command in the workspace root. execFile (no
+   * shell), a bounded timeout, and a fixed argument list — the hash a caller
+   * passes never reaches a shell and never splits into new arguments.
+   */
+  _gitInWorkspace(agent, args) {
+    const workspace = this._workspacePath(agent);
+    return new Promise((resolvePromise, rejectPromise) => {
+      execFile(
+        "git",
+        args,
+        { cwd: workspace, timeout: 5e3 },
+        (error51, stdout) => {
+          if (error51) {
+            rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error51.message).split("\n")[0]));
+            return;
+          }
+          resolvePromise(stdout);
+        }
+      );
+    });
+  }
+  /** A hash-like token: hex, 7..64 chars. Anything else is refused. */
+  _isHashLike(token) {
+    return /^[0-9a-f]{7,64}$/i.test(token);
+  }
+  /** #78: the workspace's recent commits, newest first. */
+  async _recentCommits(agent, args) {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const out = await this._gitInWorkspace(agent, [
+      "log",
+      "--max-count=20",
+      "--date=format:%Y-%m-%d %H:%M",
+      "--pretty=%H%x1f%h%x1f%s%x1f%an%x1f%ad"
+    ]);
+    const commits = out.split("\n").map((line) => line.trim()).filter((line) => line.length > 0).map((line) => line.split("")).filter((fields) => fields.length === 5).map((fields) => ({
+      hash: fields[1],
+      subject: fields[2],
+      author: fields[3],
+      date: fields[4]
+    }));
+    return { ticketId, commits };
+  }
+  /** #78: attach one commit as evidence, resolved in the workspace. */
+  async _attachCommitEvidence(agent, args) {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const hash2 = args.hash.trim();
+    if (!this._isHashLike(hash2)) {
+      throw new BadPayloadError("commit hash must be a 7-64 character hex string");
+    }
+    const raw = await this._gitInWorkspace(agent, [
+      "show",
+      "--no-patch",
+      "--date=format:%Y-%m-%d %H:%M",
+      "--pretty=%H%x1f%s%x1f%an%x1f%ad%x1f%D",
+      hash2 + "\0"
+    ]);
+    const fields = raw.split("\n")[0].trim().split("");
+    if (fields.length < 4) {
+      throw new BadPayloadError("git show returned an unexpected format for " + hash2.slice(0, 12));
+    }
+    const [fullHash, subject, author, date5] = fields;
+    const decorations = fields[4] ?? "";
+    const branch = decorations.replace(/^HEAD -> /, "").split(", ")[0] ?? "";
+    const payload = {
+      commit: fullHash,
+      hash: fields[1] ?? fullHash.slice(0, 12),
+      subject,
+      author,
+      branch: branch === "" ? void 0 : branch,
+      date: date5,
+      ...args.note !== void 0 && args.note.trim() !== "" ? { note: args.note.trim() } : {}
+    };
+    if (payload.branch === void 0) delete payload.branch;
+    const attached = this._attachEvidenceInternal(agent, ticketId, "user_commit", payload, "user");
+    return { ticketId, payload: attached };
+  }
+  /**
+   * #69: link (criterion) or unlink (criterion=null) one existing evidence
+   * row by appending one evidence/linked event. The criterion is validated
+   * against the ticket's criteria; the row must be live on the ticket.
+   */
+  _linkEvidence(agent, args) {
+    const ticketId = this._resolveTicketId(agent, args.ticketId);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    const rows = cache.state.evidence.get(ticketId) ?? [];
+    const row = rows.find((candidate) => candidate.at === args.at && candidate.kind === args.rowKind);
+    if (!row) {
+      throw new BadPayloadError("no evidence row matches the given at/kind");
+    }
+    const criterion = args.criterion === null ? null : args.criterion.trim();
+    if (criterion === null) {
+      this._commit(agent, {
+        kind: "evidence/linked",
+        version: 1,
+        ticketId,
+        at: args.at,
+        rowKind: args.rowKind,
+        criterion: ""
+      });
+      return { ticketId, linked: false };
+    }
+    if (criterion === "") {
+      throw new BadPayloadError("the criterion must be a non-empty line of the ticket's criteria, or null to unlink");
+    }
+    const valid = snapshot.criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    if (!valid.includes(criterion)) {
+      throw new BadPayloadError("evidence criterion " + JSON.stringify(criterion) + " is not one of the ticket's criteria");
+    }
+    this._commit(agent, {
+      kind: "evidence/linked",
+      version: 1,
+      ticketId,
+      at: args.at,
+      rowKind: args.rowKind,
+      criterion
+    });
+    return { ticketId, linked: true };
+  }
+  /**
    * One gate-checked move with the actor pinned at the entry point. The
    * gate's allowedActors list decides, so a human-only edge accepts a user
    * move here and refuses an agent move on the same check.
@@ -28869,6 +29102,9 @@ __decorateElement(_init, 1, "resolveApproval", _resolveApproval_dec, AidosServic
 __decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
+__decorateElement(_init, 1, "userLinkEvidence", _userLinkEvidence_dec, AidosService);
+__decorateElement(_init, 1, "userRecentCommits", _userRecentCommits_dec, AidosService);
+__decorateElement(_init, 1, "userAttachCommitEvidence", _userAttachCommitEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
 __decorateElement(_init, 1, "userSetPlanMeta", _userSetPlanMeta_dec, AidosService);

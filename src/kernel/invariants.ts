@@ -44,6 +44,7 @@ const SNAPSHOT_KEYS = [
 ];
 const EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 const EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
+const EVIDENCE_LINKED_KEYS = ["kind", "version", "ticketId", "at", "rowKind", "criterion"];
 const EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
 const PLAN_CHANGE_KEYS = ["kind", "version", "projectId", "plan", "at"];
 const PLAN_KEYS = ["frontmatter", "context", "rules"];
@@ -418,6 +419,50 @@ function validateEvidenceDetached(
   }
 }
 
+function validateEvidenceLinked(
+  state: AidosState,
+  raw: Record<string, unknown>,
+): void {
+  expectKeys(raw, EVIDENCE_LINKED_KEYS, "evidence/linked");
+  if (raw.version !== 1) {
+    invariant("evidence/linked version must be 1");
+  }
+  expectInt(raw.ticketId, "ticket id", 1);
+  expectString(raw.rowKind, "evidence row kind");
+  if ((raw.rowKind as string).length === 0) {
+    invariant("evidence row kind must not be empty");
+  }
+  expectNumber(raw.at, "evidence at");
+  expectString(raw.criterion, "evidence criterion");
+  const isUnlink = (raw.criterion as string).trim().length === 0;
+  // The row must exist AND, when linking, the criterion must be one of
+  // the ticket's. Empty criterion = unlink sentinel, membership not
+  // applicable.
+  const ticketId = raw.ticketId as TicketId;
+  const snapshot = state.tickets.get(ticketId);
+  if (!snapshot) {
+    invariant(`evidence references unknown ticket ${ticketId}`);
+  }
+  const rows = state.evidence.get(ticketId) ?? [];
+  const found = rows.some((row) => row.at === raw.at && row.kind === raw.rowKind);
+  if (!found) {
+    invariant(`evidence/linked names no live row (at=${String(raw.at)}, kind=${String(raw.rowKind)})`);
+  }
+  if (snapshot && !isUnlink) {
+    const valid = snapshot.criteria
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (!valid.includes((raw.criterion as string).trim())) {
+      invariant(`evidence criterion ${JSON.stringify(raw.criterion)} is not one of the ticket's criteria`);
+    }
+  }
+  const lastAt = state.lastAt.get(ticketId);
+  if (lastAt !== undefined && (raw.at as number) < lastAt) {
+    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
+  }
+}
+
 function validatePlanChange(
   _state: AidosState,
   raw: Record<string, unknown>,
@@ -577,8 +622,12 @@ export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
     case "evidence/detached":
       validateEvidenceDetached(state, raw);
       return;
+    case "evidence/linked":
+      validateEvidenceLinked(state, raw);
+      return;
     case "plan/change":
       validatePlanChange(state, raw);
+      return;
       return;
     case "comment/added":
       validateComment(state, raw);

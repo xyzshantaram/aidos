@@ -36,3 +36,29 @@ declare module "node:path" {
   export function resolve(...paths: string[]): string;
   export function basename(path: string): string;
 }
+declare module "child_process" {
+  /** One completed execFile run. */
+  export interface ExecFileResult {
+    stdout: string;
+    stderr: string;
+  }
+  export function execFile(
+    file: string,
+    args: string[],
+    options: { cwd: string; timeout: number },
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ): void;
+}
+declare module "node:child_process" {
+  /** One completed execFile run. */
+  export interface ExecFileResult {
+    stdout: string;
+    stderr: string;
+  }
+  export function execFile(
+    file: string,
+    args: string[],
+    options: { cwd: string; timeout: number },
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ): void;
+}

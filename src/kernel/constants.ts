@@ -96,6 +96,13 @@ export const BUILTIN_KINDS: readonly KindDef[] = [
     weight: 0.0,
     allowedAuthors: ["system"],
   },
+  {
+    id: "builtin:user_commit",
+    label: "Git commit",
+    description: "One git commit from the ticket's workspace, resolved through git show at attach time.",
+    weight: 1.0,
+    allowedAuthors: ["user"],
+  },
 ];
 
 /** The default gate config. Ported from the prototype's CLI spec. */

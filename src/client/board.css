@@ -2006,3 +2006,149 @@
 .aidos-collapse-body {
   margin-top: 4px;
 }
+
+/* ==== Evidence strips (#77) and criterion linking (#69) ==== */
+
+.aidos-evidence-list,
+.aidos-criterion-evidence,
+.aidos-criterion-linked {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aidos-evidence-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 6px var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.aidos-evidence-strip-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.aidos-evidence-strip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.aidos-evidence-strip-excerpt {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidos-evidence-strip-kind-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.aidos-evidence-strip-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.aidos-evidence-strip-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.aidos-evidence-unlink {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.aidos-evidence-unlink:hover {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+.aidos-evidence-unlink:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Criterion blocks: label row + its linked strips + the link picker. */
+.aidos-criterion-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.aidos-criterion-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.aidos-criterion-block.aidos-criterion-uncovered,
+.aidos-criterion.aidos-criterion-uncovered {
+  border-color: var(--state-awaiting);
+}
+
+.aidos-criterion-label {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.aidos-criterion-linker {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.aidos-criterion-linker select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--control-text);
+}
+
+.aidos-criterion-linker select:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+/* Evidence nested under a criterion line in the criteria panel. */
+.aidos-criterion-linked {
+  margin: 4px 0 0;
+  padding-left: 10px;
+}

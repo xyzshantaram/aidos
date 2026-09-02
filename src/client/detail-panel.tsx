@@ -13,6 +13,7 @@
 import react from "react";
 import { AllowlistEditor } from "./allowlist-editor";
 import { EvidenceViewer } from "./evidence-viewer";
+import { CriterionLinker, criterionOf } from "./criterion-linker";
 import { marked } from "marked";
 
 import {
@@ -275,6 +276,10 @@ function CriteriaPanel(props: {
   ticketIdKey: string;
   agentId: string;
   onSaved: () => void;
+  /** Opens the evidence viewer for one row (#50). */
+  onViewEvidence?: (row: EvidenceRowLike) => void;
+  /** The `at` of a row currently being deleted, if any. */
+  deletingAt?: number | null;
 }) {
   const [editingIndex, setEditingIndex] = react.useState<number | null>(null);
   const [saving, setSaving] = react.useState(false);
@@ -387,6 +392,21 @@ function CriteriaPanel(props: {
                     </span>
                   </span>
                 )}
+                {editingIndex !== index ? (
+                  <ul className="aidos-criterion-linked">
+                    {props.evidence
+                      .filter((row) => criterionOf(row) === line)
+                      .map((row) => (
+                        <li className="aidos-criterion-linked-row" key={String(row.at) + ":" + row.kind}>
+                          <EvidenceStrip
+                            row={row}
+                            onView={props.onViewEvidence}
+                            deleting={props.deletingAt === row.at}
+                          />
+                        </li>
+                      ))}
+                  </ul>
+                ) : null}
               </li>
             ))}
             <li className="aidos-criteria-add">
@@ -792,6 +812,8 @@ export function DetailPanel(props: DetailPanelBodyProps) {
         ticketIdKey={props.ticketIdKey}
         agentId={props.agentId}
         onSaved={props.onFieldSaved}
+        onViewEvidence={props.onViewEvidence}
+        deletingAt={deletingAt}
       />
       <DependencySection
         ticketId={props.ticketIdKey}

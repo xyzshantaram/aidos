@@ -52,12 +52,29 @@ export function createInitialState(): AidosState {
 export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosState {
   validateAidosEvent(state, event);
   switch (event.kind) {
+    case "evidence/linked": {
+      // Set payload.criteria on the named row. A mismatch is inert (the
+      // validator refuses it; the fold stays defensive anyway).
+      const rows = state.evidence.get(event.ticketId);
+      if (rows) {
+        const index = rows.findIndex(
+          (row) => row.at === event.at && row.kind === event.rowKind,
+        );
+        if (index >= 0) {
+          const row = rows[index]!;
+          const next = [...rows];
+          const payload = { ...row.payload, criteria: event.criterion };
+          next[index] = { ...row, payload };
+          state.evidence.set(event.ticketId, next);
+        }
+      }
+      return state;
+    }
     case "ticket/change": {
       const id = event.ticket.id;
       const ticket = normalizeTicketSnapshot(
         event.ticket as unknown as Record<string, unknown>,
       ) as unknown as TicketSnapshot;
-      // Last write wins per ticket id, in seq order.
       state.tickets.set(id, ticket);
       state.lastAt.set(id, event.at);
       state.lastRevision.set(id, ticket.revision);
