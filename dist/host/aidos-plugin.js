@@ -26104,10 +26104,6 @@ function validateEvidenceDetached(state, raw) {
   if (!state.tickets.has(ticketId)) {
     invariant(`evidence references unknown ticket ${ticketId}`);
   }
-  const lastAt = state.lastAt.get(ticketId);
-  if (lastAt !== void 0 && raw.at < lastAt) {
-    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
-  }
 }
 function validateEvidenceLinked(state, raw) {
   expectKeys(raw, EVIDENCE_LINKED_KEYS, "evidence/linked");
@@ -26137,10 +26133,6 @@ function validateEvidenceLinked(state, raw) {
     if (!valid.includes(raw.criterion.trim())) {
       invariant(`evidence criterion ${JSON.stringify(raw.criterion)} is not one of the ticket's criteria`);
     }
-  }
-  const lastAt = state.lastAt.get(ticketId);
-  if (lastAt !== void 0 && raw.at < lastAt) {
-    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
 function validatePlanChange(_state, raw) {
@@ -28341,7 +28333,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       "--no-patch",
       "--date=format:%Y-%m-%d %H:%M",
       "--pretty=%H%x1f%s%x1f%an%x1f%ad%x1f%D",
-      hash2 + "\0"
+      hash2
     ]);
     const fields = raw.split("\n")[0].trim().split("");
     if (fields.length < 4) {
@@ -28360,7 +28352,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ...args.note !== void 0 && args.note.trim() !== "" ? { note: args.note.trim() } : {}
     };
     if (payload.branch === void 0) delete payload.branch;
-    const attached = this._attachEvidenceInternal(agent, ticketId, "user_commit", payload, "user");
+    const attached = this._attachEvidenceInternal(agent, ticketId, "builtin:user_commit", payload, "user");
     return { ticketId, payload: attached };
   }
   /**

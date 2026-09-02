@@ -183,12 +183,107 @@ function parseAllowlistText(text: string): { ok: boolean; paths?: string[]; erro
   return { ok: true, paths };
 }
 
+/**
+ * #78: the git-commit picker. One dropdown of the workspace's recent commits
+ * (loaded once per kind selection via userRecentCommits) plus the shared
+ * note field; attaching names only the short hash — the host resolves the
+ * commit's real metadata through git show and stores it in the row.
+ */
+function CommitPickerForm(props: {
+  ticketId: number | string;
+  agentId: string;
+  onAttached?: () => void;
+  note: string;
+  setNote: (note: string) => void;
+  working: boolean;
+}) {
+  const [commits, setCommits] = react.useState<
+    { hash: string; subject: string; author: string; date: string }[]
+  >([]);
+  const [loadError, setLoadError] = react.useState<string | null>(null);
+  const [picked, setPicked] = react.useState("");
+  const [attaching, setAttaching] = react.useState(false);
+
+  react.useEffect(function () {
+    let alive = true;
+    callAidosRemote("userRecentCommits", { ticketId: props.ticketId }, props.agentId)
+      .then((out) => {
+        if (!alive) return;
+        const rows = (out as unknown as { commits?: { hash: string; subject: string; author: string; date: string }[] } | null)?.commits;
+        setCommits(Array.isArray(rows) ? rows : []);
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setLoadError(error instanceof AidosRemoteError ? error.message : String(error));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [props.ticketId, props.agentId]);
+
+  async function attach() {
+    if (attaching || picked === "") return;
+    setAttaching(true);
+    try {
+      await callAidosRemote(
+        "userAttachCommitEvidence",
+        { ticketId: props.ticketId, hash: picked, ...(props.note.trim() === "" ? {} : { note: props.note.trim() }) },
+        props.agentId,
+      );
+      showToast("Commit evidence attached", "success");
+      setPicked("");
+      props.setNote("");
+      props.onAttached?.();
+    } catch (error) {
+      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
+    } finally {
+      setAttaching(false);
+    }
+  }
+
+  return (
+    <div className="aidos-evidence-tailored">
+      <div className="aidos-modal-row">
+        <label>Recent commits</label>
+        {loadError !== null ? (
+          <p className="aidos-evidence-paste-error">{loadError}</p>
+        ) : (
+          <select
+            className="aidos-evidence-attach-kind-select"
+            value={picked}
+            disabled={attaching}
+            onChange={(event) => {
+              setPicked(event.target.value);
+            }}
+          >
+            <option value="">{commits.length === 0 ? "Loading commits…" : "Pick a commit…"}</option>
+            {commits.map((commit) => (
+              <option value={commit.hash} key={commit.hash}>
+                {commit.hash + " " + commit.subject + " — " + commit.author}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <NoteField note={props.note} working={props.working || attaching} onChange={props.setNote} label="Note (optional)" />
+      <div className="aidos-form-actions">
+        <button
+          className="aidos-btn aidos-btn-primary"
+          disabled={props.working || attaching || picked === ""}
+          onClick={() => void attach()}
+        >
+          {attaching ? "Working\u2026" : "Attach commit"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function TailoredForm(props: { ticketId: number | string; agentId: string; kind: string; onAttached: () => void }) {
   const [note, setNote] = react.useState("");
   const [pathsText, setPathsText] = react.useState("");
   const [payloadText, setPayloadText] = react.useState("");
   const [working, setWorking] = react.useState(false);
-
   async function attachWith(kind: string, payload: Record<string, unknown>) {
     if (working) return;
     setWorking(true);
@@ -238,6 +333,13 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
         </div>
       </div>
     );
+  }
+
+  // #78: git commit — a picker over the workspace's recent commits. The
+  // host resolves the real metadata at attach time; the picker only names
+  // a candidate hash.
+  if (props.kind === "builtin:user_commit") {
+    return <CommitPickerForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} note={note} setNote={setNote} working={working} />;
   }
 
   // Note-only kinds: a plain note rides as the payload's note field.

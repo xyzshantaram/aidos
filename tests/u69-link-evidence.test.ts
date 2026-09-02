@@ -74,3 +74,46 @@ describe("evidence/linked fold", () => {
       .toThrow(/names no live row/);
   });
 });
+
+// The #69 reviewer's blocking scenario: a row whose `at` predates later
+// writes (a comment, a move, another attach) must still be linkable — the
+// link REFERENCES an old row; it does not create a new timestamp. This is
+// the common case: agent rows attach first, the user links them later.
+describe("evidence/linked references older rows", () => {
+  it("links a row older than the ticket's lastAt", () => {
+    const state = baseState("runs on mobile", [row("builtin:user_signoff", 5)]);
+    // A later comment advanced lastAt to 10; the row is still at 5.
+    foldAidosEvents(state, {
+      kind: "comment/added",
+      version: 1,
+      ticketId: 1,
+      text: "later write",
+      author: "user",
+      at: 10,
+    } as never);
+    expect(state.lastAt.get(1)).toBe(10);
+    const next = foldAidosEvents(state, linkEvent(5, "builtin:user_signoff", "runs on mobile"));
+    const linked = next.evidence.get(1)!.find((r) => r.at === 5)!;
+    expect(linked.payload.criteria).toBe("runs on mobile");
+  });
+
+  it("detach also accepts an older row (same identity rule)", () => {
+    const state = baseState("runs on mobile", [row("builtin:user_signoff", 5)]);
+    foldAidosEvents(state, {
+      kind: "comment/added",
+      version: 1,
+      ticketId: 1,
+      text: "later write",
+      author: "user",
+      at: 10,
+    } as never);
+    const next = foldAidosEvents(state, {
+      kind: "evidence/detached",
+      version: 1,
+      ticketId: 1,
+      at: 5,
+      rowKind: "builtin:user_signoff",
+    } as never);
+    expect(next.evidence.get(1)!.some((r) => r.at === 5)).toBe(false);
+  });
+});

@@ -2093,7 +2093,7 @@ registerAidosSessionEventTypes(ctx);
       "--no-patch",
       "--date=format:%Y-%m-%d %H:%M",
       "--pretty=%H%x1f%s%x1f%an%x1f%ad%x1f%D",
-      hash + "\0",
+      hash,
     ]);
     const fields = raw.split("\n")[0]!.trim().split("\u001f");
     if (fields.length < 4) {
@@ -2112,7 +2112,7 @@ registerAidosSessionEventTypes(ctx);
       ...(args.note !== undefined && args.note.trim() !== "" ? { note: args.note.trim() } : {}),
     };
     if (payload.branch === undefined) delete payload.branch;
-    const attached = this._attachEvidenceInternal(agent, ticketId, "user_commit", payload, "user");
+    const attached = this._attachEvidenceInternal(agent, ticketId, "builtin:user_commit", payload, "user");
     return { ticketId, payload: attached };
   }
 

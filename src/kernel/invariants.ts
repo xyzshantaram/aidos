@@ -408,14 +408,13 @@ function validateEvidenceDetached(
     invariant("evidence row kind must not be empty");
   }
   expectNumber(raw.at, "evidence at");
-  // Rule 7: at must not fall for that ticket. Ticket must exist.
+  // A detach targets an EXISTING row, so its `at` may predate later writes;
+  // Rule 7 governs new timestamps, not references to old rows. Ticket
+  // existence is the invariant here; row liveness is enforced by the fold
+  // (only an exact at+kind match drops anything).
   const ticketId = raw.ticketId as TicketId;
   if (!state.tickets.has(ticketId)) {
     invariant(`evidence references unknown ticket ${ticketId}`);
-  }
-  const lastAt = state.lastAt.get(ticketId);
-  if (lastAt !== undefined && (raw.at as number) < lastAt) {
-    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
   }
 }
 
@@ -457,10 +456,10 @@ function validateEvidenceLinked(
       invariant(`evidence criterion ${JSON.stringify(raw.criterion)} is not one of the ticket's criteria`);
     }
   }
-  const lastAt = state.lastAt.get(ticketId);
-  if (lastAt !== undefined && (raw.at as number) < lastAt) {
-    invariant(`evidence at for ticket ${ticketId} must not fall below ${lastAt}`);
-  }
+  // The link targets an EXISTING row, so its `at` legitimately predates
+  // later writes on the ticket; the monotonicity rule (Rule 7) governs new
+  // timestamps, not references to old ones. The row-liveness check above is
+  // the real guard here.
 }
 
 function validatePlanChange(

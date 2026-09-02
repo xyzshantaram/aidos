@@ -669,6 +669,10 @@ function EvidencePanel(props: {
   agentId: string;
   /** Opens the evidence viewer for one row (#50). */
   onViewEvidence?: (row: EvidenceRowLike) => void;
+  /** The ticket's criteria lines, for the #69 linker section. */
+  criteria: string[];
+  /** Called after a link/unlink so the owner refreshes. */
+  onLinked: () => void;
 }) {
   return (
     <details
@@ -705,6 +709,22 @@ function EvidencePanel(props: {
             ))}
           </ul>
         )}
+        {props.criteria.length > 0 ? (
+          <details className="aidos-panel aidos-panel-nested">
+            <summary className="aidos-panel-head">
+              <span className="aidos-panel-title">Link evidence to criteria</span>
+            </summary>
+            <div className="aidos-panel-body">
+              <CriterionLinker
+                criteria={props.criteria}
+                evidence={props.evidence}
+                ticketIdKey={props.ticketIdKey}
+                agentId={props.agentId}
+                onChanged={props.onLinked}
+              />
+            </div>
+          </details>
+        ) : null}
         <EvidenceAttach ticketId={props.ticketIdKey} agentId={props.agentId} />
       </div>
     </details>
@@ -835,6 +855,8 @@ export function DetailPanel(props: DetailPanelBodyProps) {
         ticketIdKey={props.ticketIdKey}
         agentId={props.agentId}
         onViewEvidence={props.onViewEvidence}
+        criteria={criteriaLines(ticket.criteria)}
+        onLinked={props.onFieldSaved}
       />
     </>
   );
