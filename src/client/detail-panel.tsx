@@ -336,9 +336,9 @@ function CriteriaPanel(props: {
       </summary>
       <div className="aidos-panel-body">
         {lines.length === 0 ? (
-          <p className="aidos-detail-note">No criteria.</p>
-        ) : (
-          <ul className="aidos-criteria">
+          <p className="aidos-detail-note">No criteria yet — add the first one below.</p>
+        ) : null}
+        <ul className="aidos-criteria">
             {lines.map((line, index) => (
               <li
                 key={index + ":" + line}
@@ -416,7 +416,6 @@ function CriteriaPanel(props: {
               </button>
             </li>
           </ul>
-        )}
       </div>
     </details>
   );

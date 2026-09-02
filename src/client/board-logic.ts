@@ -356,7 +356,11 @@ export function uncoveredCriteria(
     // #69: a criterion with linked kinds is covered when ANY evidence row of
     // a linked kind exists — the text match above is not the only path.
     const linked = kindsForCriterion(group.criterion);
-    if (linked.length > 0 && evidence.some((row) => linked.includes(row.kind))) continue;
+    // The annotation may carry the short name (user_verified) or the full id
+    // (builtin:user_verified); accept either against the row's full kind.
+    const matches = (kind: string): boolean =>
+      linked.includes(kind) || linked.includes(kind.replace(/^builtin:/, ""));
+    if (linked.length > 0 && evidence.some((row) => matches(row.kind))) continue;
     out.push(group.criterion);
   }
   return out;
