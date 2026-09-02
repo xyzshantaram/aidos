@@ -250,6 +250,35 @@ export function parseCriteria(criteria: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+/**
+ * The per-criterion evidence-kind annotation (#69): a trailing HTML comment
+ * on the criterion line, `text <!-- kinds: a, b -->`. It rides the markdown
+ * verbatim (the plan renderer and parseCriteria both store lines whole), is
+ * human-readable in the raw field, and strips cleanly for display.
+ */
+const KINDS_ANNOTATION = /\s*<!--\s*kinds:\s*([a-z0-9_:,\- ]+?)\s*-->\s*$/i;
+
+/** The criterion text with any kind annotation stripped. */
+export function stripKindsAnnotation(line: string): string {
+  return line.replace(KINDS_ANNOTATION, "").trim();
+}
+
+/** The kinds named in the criterion's annotation, empty when it has none. */
+export function kindsForCriterion(line: string): string[] {
+  const match = KINDS_ANNOTATION.exec(line);
+  if (match === null) return [];
+  return match[1]
+    .split(",")
+    .map((kind) => kind.trim())
+    .filter((kind) => kind !== "");
+}
+
+/** Render one criterion line with a kind annotation ("" kinds clears it). */
+export function withKindsAnnotation(text: string, kinds: readonly string[]): string {
+  const clean = stripKindsAnnotation(text);
+  return kinds.length === 0 ? clean : `${clean} <!-- kinds: ${kinds.join(", ")} -->`;
+}
+
 /** The criteria-panel name for parseCriteria. */
 export function criteriaLines(criteria: string): string[] {
   return parseCriteria(criteria);
@@ -324,6 +353,10 @@ export function uncoveredCriteria(
   const out: string[] = [];
   for (const group of groups) {
     if (group.criterion === "" || group.matched) continue;
+    // #69: a criterion with linked kinds is covered when ANY evidence row of
+    // a linked kind exists — the text match above is not the only path.
+    const linked = kindsForCriterion(group.criterion);
+    if (linked.length > 0 && evidence.some((row) => linked.includes(row.kind))) continue;
     out.push(group.criterion);
   }
   return out;

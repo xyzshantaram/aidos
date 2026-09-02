@@ -70,6 +70,8 @@ async function uploadImagePaste(agentId: string, file: Blob, name: string): Prom
   const headers: Record<string, string> = {
     "content-type": file.type || "application/octet-stream",
     "x-file-name": name,
+    // The route requires the session: the agentId IS the session id.
+    "x-session-id": agentId,
   };
   // The workspace root rides the aidos Remote surface (read-only, the
   // session's own cwd); the paste route needs it as a header.

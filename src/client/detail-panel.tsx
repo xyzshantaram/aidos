@@ -26,9 +26,6 @@ import {
   stateLabel,
   ticketChipLabel,
   ringPercent,
-  kindColor,
-  kindKeyword,
-  kindDescription,
   uncoveredCriteria,
 } from "./board-logic";
 import { FieldEditor } from "./field-editor";
@@ -36,6 +33,7 @@ import { ActionBar } from "./action-bar";
 import { CommentsSection } from "./comments-section";
 import { EvidenceAttach, VerifyModal } from "./evidence-attach";
 import { AllowlistRequestCard } from "./allowlist-request-card";
+import { EvidenceStrip } from "./evidence-strip";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
@@ -673,50 +671,18 @@ function EvidencePanel(props: {
         ) : (
           <ul className="aidos-evidence-list">
             {props.evidence.map((row, index) => (
-              <li
-                className={
-                  props.onViewEvidence !== undefined
-                    ? "aidos-evidence-item aidos-clickable"
-                    : "aidos-evidence-item"
-                }
+              <EvidenceStrip
                 key={row.at ?? index}
-                onClick={() => {
-                  if (props.onViewEvidence !== undefined) {
-                    props.onViewEvidence(row);
-                  }
-                }}
-              >
-                <span
-                  className="aidos-chip aidos-chip-kind aidos-evidence-kind"
-                  style={{ background: kindColor(row.kind) }}
-                  title={kindDescription(row.kind)}
-                >
-                  <span className="aidos-chip-key">{kindKeyword(row.kind)}</span>
-                </span>
-                <span className="aidos-evidence-author">{row.author}</span>
-                {typeof row.payload.criteria === "string" ? (
-                  <span className="aidos-evidence-meta">
-                    {"criterion: " + row.payload.criteria}
-                  </span>
-                ) : null}
-                {row.kind === "builtin:imported_state" &&
-                typeof row.payload.claimed_state === "string" ? (
-                  <span className="aidos-evidence-meta">
-                    {"plan claimed: " + row.payload.claimed_state}
-                  </span>
-                ) : null}
-                <button
-                  className="aidos-evidence-delete"
-                  title="Delete this evidence row"
-                  disabled={props.deletingAt !== null}
-                  onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
-                    event.stopPropagation();
-                    props.onDelete(row);
-                  }}
-                >
-                  {"\u2715"}
-                </button>
-              </li>
+                row={row}
+                onView={props.onViewEvidence}
+                onDelete={props.onDelete}
+                deleting={props.deletingAt !== null}
+                criterionLabel={
+                  typeof row.payload.criteria === "string"
+                    ? row.payload.criteria
+                    : undefined
+                }
+              />
             ))}
           </ul>
         )}

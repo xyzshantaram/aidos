@@ -34,3 +34,21 @@ export function TrashIcon() {
     </svg>
   );
 }
+
+/** The pop-out icon (#69 strips): a square with an arrow leaving its corner. */
+export function PopOutIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M6.5 2H2v8h8V5.5" />
+      <path d="M7 2h3v3" />
+      <path d="M5 7l5-5" />
+    </svg>
+  );
+}
