@@ -627,7 +627,6 @@ export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
     case "plan/change":
       validatePlanChange(state, raw);
       return;
-      return;
     case "comment/added":
       validateComment(state, raw);
       return;

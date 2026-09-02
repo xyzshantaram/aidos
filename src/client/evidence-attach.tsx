@@ -19,9 +19,10 @@ import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { userEvidenceKinds } from "./user-evidence-kinds";
 import { parsePayloadText } from "./parse-payload-text";
-import { ModalShell, NoteField as NoteFieldShared } from "./ui";
+import { ModalShell, NoteField as NoteFieldShared, Collapse } from "./ui";
 import { EvidencePayloadView } from "./evidence-payload-view";
 import type { EvidenceRowLike } from "./board-logic";
+import { BUILTIN_KINDS } from "../kernel/constants";
 
 // ---- shared modal chrome (thin wrappers over ui.tsx) ------------------------
 
@@ -58,6 +59,80 @@ function NoteField(props: {
       working={props.working}
       onChange={props.onChange}
     />
+  );
+}
+
+// ---- shared reusable components for editors ---------------------------------
+
+/** A reusable one-per-line editor for paths, criteria, or similar line lists. */
+function LinesField(props: {
+  label: string;
+  value: string;
+  working: boolean;
+  placeholder?: string;
+  onChange: (text: string) => void;
+}) {
+  return (
+    <div className="aidos-modal-row">
+      <label>{props.label}</label>
+      <textarea
+        className="aidos-evidence-attach-note aidos-allowlist-input"
+        value={props.value}
+        disabled={props.working}
+        placeholder={props.placeholder}
+        onChange={(event) => {
+          props.onChange(event.target.value);
+        }}
+      />
+    </div>
+  );
+}
+
+/** Parse one-per-line text into an array of non-empty strings. */
+function parseLinesText(text: string): { ok: boolean; lines?: string[]; error?: string } {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+  if (lines.length === 0) {
+    return { ok: false, error: "Add at least one line." };
+  }
+  return { ok: true, lines };
+}
+
+/** Image paste/drop zone: extracted from VerifyModal so both it and AfterShotForm can use it. */
+function ImagePasteZone(props: {
+  imagePath: string | null;
+  uploading: boolean;
+  pasteError: string | null;
+  onFile: (file: File) => void;
+}) {
+  return (
+    <>
+      <div
+        className="aidos-evidence-paste-zone"
+        onPaste={(event: react.ClipboardEvent<HTMLDivElement>) => {
+          const file = Array.from(event.clipboardData.files)[0];
+          if (file) props.onFile(file);
+        }}
+        onDragOver={(event: react.DragEvent<HTMLDivElement>) => {
+          event.preventDefault();
+        }}
+        onDrop={(event: react.DragEvent<HTMLDivElement>) => {
+          event.preventDefault();
+          const file = Array.from(event.dataTransfer.files)[0];
+          if (file) props.onFile(file);
+        }}
+        tabIndex={0}
+      >
+        {props.uploading
+          ? "Uploading…"
+          : props.imagePath !== null
+            ? "Screenshot stored — paste again to replace."
+            : "Paste or drop a screenshot here (optional)"}
+      </div>
+      {props.pasteError !== null ? <p className="aidos-evidence-paste-error">{props.pasteError}</p> : null}
+    </>
   );
 }
 
@@ -142,46 +217,13 @@ export function VerifyModal(props: { ticketId: number | string; agentId: string;
       <p className="aidos-modal-body">
         {"You verified this ticket hands-on. Paste (Ctrl+V) or drop a screenshot to attach it."}
       </p>
-      <div
-        className="aidos-evidence-paste-zone"
-        onPaste={(event: react.ClipboardEvent<HTMLDivElement>) => {
-          const file = Array.from(event.clipboardData.files)[0];
-          if (file) void handleFile(file);
-        }}
-        onDragOver={(event: react.DragEvent<HTMLDivElement>) => {
-          event.preventDefault();
-        }}
-        onDrop={(event: react.DragEvent<HTMLDivElement>) => {
-          event.preventDefault();
-          const file = Array.from(event.dataTransfer.files)[0];
-          if (file) void handleFile(file);
-        }}
-        tabIndex={0}
-      >
-        {uploading
-          ? "Uploading\u2026"
-          : imagePath !== null
-            ? "Screenshot stored — paste again to replace."
-            : "Paste or drop a screenshot here (optional)"}
-      </div>
-      {pasteError !== null ? <p className="aidos-evidence-paste-error">{pasteError}</p> : null}
+      <ImagePasteZone imagePath={imagePath} uploading={uploading} pasteError={pasteError} onFile={handleFile} />
       <NoteField note={note} working={working} onChange={setNote} />
     </AttachModal>
   );
 }
 
 // ---- the tailored form for the remaining kinds -----------------------------
-
-function parseAllowlistText(text: string): { ok: boolean; paths?: string[]; error?: string } {
-  const paths = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "");
-  if (paths.length === 0) {
-    return { ok: false, error: "List at least one path." };
-  }
-  return { ok: true, paths };
-}
 
 /**
  * #78: the git-commit picker. One dropdown of the workspace's recent commits
@@ -272,18 +314,285 @@ function CommitPickerForm(props: {
           disabled={props.working || attaching || picked === ""}
           onClick={() => void attach()}
         >
-          {attaching ? "Working\u2026" : "Attach commit"}
+          {attaching ? "Working…" : "Attach commit"}
         </button>
       </div>
     </div>
   );
 }
 
+/** Editor for builtin:eval_criteria: one-per-line criteria list. */
+function EvalCriteriaForm(props: {
+  ticketId: number | string;
+  agentId: string;
+  onAttached?: () => void;
+}) {
+  const [criteriaText, setCriteriaText] = react.useState("");
+  const [note, setNote] = react.useState("");
+  const [working, setWorking] = react.useState(false);
+
+  const parsed = parseLinesText(criteriaText);
+
+  async function attach() {
+    if (working || !parsed.ok) return;
+    setWorking(true);
+    try {
+      const payload: Record<string, unknown> = { lines: parsed.lines };
+      if (note.trim() !== "") payload.note = note.trim();
+      await callAidosRemote(
+        "userAttachEvidence",
+        { ticketId: props.ticketId, kind: "builtin:eval_criteria", payload },
+        props.agentId,
+      );
+      showToast("Evaluation criteria attached", "success");
+      setCriteriaText("");
+      setNote("");
+      props.onAttached?.();
+    } catch (error) {
+      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="aidos-evidence-tailored">
+      <LinesField
+        label="Evaluation criteria (one per line)"
+        value={criteriaText}
+        working={working}
+        placeholder={"Criterion 1\nCriterion 2"}
+        onChange={setCriteriaText}
+      />
+      <NoteField note={note} working={working} onChange={setNote} />
+      <div className="aidos-form-actions">
+        <button
+          className="aidos-btn aidos-btn-primary"
+          disabled={working || !parsed.ok}
+          title={parsed.ok ? undefined : parsed.error}
+          onClick={() => void attach()}
+        >
+          {working ? "Working…" : "Attach"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Editor for builtin:agent_report: a report textarea + optional note. */
+function AgentReportForm(props: {
+  ticketId: number | string;
+  agentId: string;
+  onAttached?: () => void;
+}) {
+  const [reportText, setReportText] = react.useState("");
+  const [note, setNote] = react.useState("");
+  const [working, setWorking] = react.useState(false);
+
+  async function attach() {
+    if (working || reportText.trim() === "") return;
+    setWorking(true);
+    try {
+      const payload: Record<string, unknown> = { report: reportText.trim() };
+      if (note.trim() !== "") payload.note = note.trim();
+      await callAidosRemote(
+        "userAttachEvidence",
+        { ticketId: props.ticketId, kind: "builtin:agent_report", payload },
+        props.agentId,
+      );
+      showToast("Agent report attached", "success");
+      setReportText("");
+      setNote("");
+      props.onAttached?.();
+    } catch (error) {
+      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="aidos-evidence-tailored">
+      <div className="aidos-modal-row">
+        <label>Report</label>
+        <textarea
+          className="aidos-evidence-attach-note aidos-evidence-attach-tall"
+          value={reportText}
+          disabled={working}
+          placeholder="Describe the work performed…"
+          onChange={(event) => {
+            setReportText(event.target.value);
+          }}
+        />
+      </div>
+      <NoteField note={note} working={working} onChange={setNote} />
+      <div className="aidos-form-actions">
+        <button
+          className="aidos-btn aidos-btn-primary"
+          disabled={working || reportText.trim() === ""}
+          onClick={() => void attach()}
+        >
+          {working ? "Working…" : "Attach"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Editor for builtin:automated_check and builtin:test_run: command, result select, optional note. */
+function CheckResultForm(props: {
+  ticketId: number | string;
+  agentId: string;
+  kind: "builtin:automated_check" | "builtin:test_run";
+  onAttached?: () => void;
+}) {
+  const [command, setCommand] = react.useState("");
+  const [result, setResult] = react.useState<"pass" | "fail" | "">("");
+  const [note, setNote] = react.useState("");
+  const [working, setWorking] = react.useState(false);
+
+  async function attach() {
+    if (working || command.trim() === "" || result === "") return;
+    setWorking(true);
+    try {
+      const payload: Record<string, unknown> = {
+        command: command.trim(),
+        result,
+      };
+      if (note.trim() !== "") payload.note = note.trim();
+      await callAidosRemote(
+        "userAttachEvidence",
+        { ticketId: props.ticketId, kind: props.kind, payload },
+        props.agentId,
+      );
+      showToast(`${props.kind === "builtin:automated_check" ? "Automated check" : "Test run"} attached`, "success");
+      setCommand("");
+      setResult("");
+      setNote("");
+      props.onAttached?.();
+    } catch (error) {
+      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="aidos-evidence-tailored">
+      <div className="aidos-modal-row">
+        <label>Command</label>
+        <input
+          type="text"
+          className="aidos-command-input"
+          value={command}
+          disabled={working}
+          placeholder="npm run test"
+          onChange={(event) => {
+            setCommand(event.target.value);
+          }}
+        />
+      </div>
+      <div className="aidos-modal-row">
+        <label>Result</label>
+        <select
+          className="aidos-evidence-attach-kind-select"
+          value={result}
+          disabled={working}
+          onChange={(event) => {
+            setResult(event.target.value as "pass" | "fail" | "");
+          }}
+        >
+          <option value="">Choose a result…</option>
+          <option value="pass">Pass</option>
+          <option value="fail">Fail</option>
+        </select>
+      </div>
+      <NoteField note={note} working={working} onChange={setNote} />
+      <div className="aidos-form-actions">
+        <button
+          className="aidos-btn aidos-btn-primary"
+          disabled={working || command.trim() === "" || result === ""}
+          onClick={() => void attach()}
+        >
+          {working ? "Working…" : "Attach"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Editor for builtin:after_shot: image paste/drop zone + optional note. */
+function AfterShotForm(props: {
+  ticketId: number | string;
+  agentId: string;
+  onAttached?: () => void;
+}) {
+  const [imagePath, setImagePath] = react.useState<string | null>(null);
+  const [note, setNote] = react.useState("");
+  const [uploading, setUploading] = react.useState(false);
+  const [working, setWorking] = react.useState(false);
+  const [pasteError, setPasteError] = react.useState<string | null>(null);
+
+  async function handleFile(file: File) {
+    setPasteError(null);
+    setUploading(true);
+    try {
+      const path = await uploadImagePaste(props.agentId, file, file.name || "pasted-image.png");
+      setImagePath(path);
+      showToast("Screenshot stored", "success");
+    } catch (error) {
+      setPasteError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function attach() {
+    if (working || imagePath === null) return;
+    setWorking(true);
+    try {
+      const payload: Record<string, unknown> = { imagePath };
+      if (note.trim() !== "") payload.note = note.trim();
+      await callAidosRemote(
+        "userAttachEvidence",
+        { ticketId: props.ticketId, kind: "builtin:after_shot", payload },
+        props.agentId,
+      );
+      showToast("After shot attached", "success");
+      setImagePath(null);
+      setNote("");
+      props.onAttached?.();
+    } catch (error) {
+      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="aidos-evidence-tailored">
+      <ImagePasteZone imagePath={imagePath} uploading={uploading} pasteError={pasteError} onFile={handleFile} />
+      <NoteField note={note} working={working} onChange={setNote} />
+      <div className="aidos-form-actions">
+        <button
+          className="aidos-btn aidos-btn-primary"
+          disabled={working || uploading || imagePath === null}
+          onClick={() => void attach()}
+        >
+          {working ? "Working…" : "Attach"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The main tailored form that routes to each kind's editor. */
 function TailoredForm(props: { ticketId: number | string; agentId: string; kind: string; onAttached: () => void }) {
   const [note, setNote] = react.useState("");
   const [pathsText, setPathsText] = react.useState("");
   const [payloadText, setPayloadText] = react.useState("");
   const [working, setWorking] = react.useState(false);
+
   async function attachWith(kind: string, payload: Record<string, unknown>) {
     if (working) return;
     setWorking(true);
@@ -301,23 +610,18 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
     }
   }
 
-  // file_allowlist: a paths editor, no JSON.
+  // builtin:file_allowlist: a paths editor, no JSON.
   if (props.kind === "builtin:file_allowlist") {
-    const parsed = parseAllowlistText(pathsText);
+    const parsed = parseLinesText(pathsText);
     return (
       <div className="aidos-evidence-tailored">
-        <div className="aidos-modal-row">
-          <label>{"Allowed paths (one per line)"}</label>
-          <textarea
-            className="aidos-evidence-attach-note aidos-allowlist-input"
-            value={pathsText}
-            disabled={working}
-            placeholder={"src/client/\nsrc/host/aidos-core.ts"}
-            onChange={(event) => {
-              setPathsText(event.target.value);
-            }}
-          />
-        </div>
+        <LinesField
+          label="Allowed paths (one per line)"
+          value={pathsText}
+          working={working}
+          placeholder={"src/client/\nsrc/host/aidos-core.ts"}
+          onChange={setPathsText}
+        />
         <NoteField note={note} working={working} onChange={setNote} />
         <div className="aidos-form-actions">
           <button
@@ -325,60 +629,91 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
             disabled={working || !parsed.ok}
             title={parsed.ok ? undefined : parsed.error}
             onClick={() => {
-              if (parsed.ok) void attachWith(props.kind, { paths: parsed.paths });
+              if (parsed.ok) void attachWith(props.kind, { paths: parsed.lines });
             }}
           >
-            {working ? "Working\u2026" : "Attach"}
+            {working ? "Working…" : "Attach"}
           </button>
         </div>
       </div>
     );
   }
 
-  // #78: git commit — a picker over the workspace's recent commits. The
-  // host resolves the real metadata at attach time; the picker only names
-  // a candidate hash.
+  // builtin:eval_criteria: one-per-line criteria editor.
+  if (props.kind === "builtin:eval_criteria") {
+    return <EvalCriteriaForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} />;
+  }
+
+  // builtin:agent_report: report textarea + optional note.
+  if (props.kind === "builtin:agent_report") {
+    return <AgentReportForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} />;
+  }
+
+  // builtin:automated_check and builtin:test_run: command, result, optional note.
+  if (props.kind === "builtin:automated_check" || props.kind === "builtin:test_run") {
+    return (
+      <CheckResultForm
+        ticketId={props.ticketId}
+        agentId={props.agentId}
+        kind={props.kind}
+        onAttached={props.onAttached}
+      />
+    );
+  }
+
+  // builtin:after_shot: image paste zone + optional note.
+  if (props.kind === "builtin:after_shot") {
+    return <AfterShotForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} />;
+  }
+
+  // builtin:user_commit: git commit picker.
   if (props.kind === "builtin:user_commit") {
     return <CommitPickerForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} note={note} setNote={setNote} working={working} />;
   }
 
-  // Note-only kinds: a plain note rides as the payload's note field.
-  if (props.kind === "builtin:review_note" || props.kind === "builtin:user_verified" || props.kind === "builtin:user_signoff") {
+  // Note-only kinds: builtin:review_pass, builtin:review_note, builtin:comment.
+  if (
+    props.kind === "builtin:review_pass" ||
+    props.kind === "builtin:review_note" ||
+    props.kind === "builtin:comment"
+  ) {
     return (
       <div className="aidos-evidence-tailored">
         <NoteField note={note} working={working} onChange={setNote} label="Note" />
         <div className="aidos-form-actions">
           <button
             className="aidos-btn aidos-btn-primary"
-            disabled={working}
-            onClick={() => void attachWith(props.kind, note.trim() === "" ? {} : { note: note.trim() })}
+            disabled={working || note.trim() === ""}
+            onClick={() => void attachWith(props.kind, { note: note.trim() })}
           >
-            {working ? "Working\u2026" : "Attach"}
+            {working ? "Working…" : "Attach"}
           </button>
         </div>
       </div>
     );
   }
 
-  // Foreign/unknown kinds: the extenuating-circumstances JSON escape hatch.
+  // Foreign/unknown kinds: the extenuating-circumstances JSON escape hatch in a collapsed disclosure.
   const parsedPayload = parsePayloadText(payloadText);
   const structured = parsedPayload.ok ? parsedPayload.payload : {};
   const parseError = parsedPayload.ok ? null : parsedPayload.error;
+
   return (
     <div className="aidos-evidence-tailored">
-      <div className="aidos-modal-row">
-        <label>Payload JSON (optional object)</label>
-        <textarea
-          className="aidos-evidence-attach-note"
-          value={payloadText}
-          disabled={working}
-          placeholder={'{\n  "paths": ["src/"]\n}'}
-          onChange={(event) => {
-            setPayloadText(event.target.value);
-          }}
-        />
-      </div>
-      {parseError !== null ? <p className="aidos-evidence-paste-error">{parseError}</p> : null}
+      <Collapse summary="Raw JSON (optional object)" defaultOpen={false}>
+        <div className="aidos-modal-row">
+          <textarea
+            className="aidos-evidence-attach-note"
+            value={payloadText}
+            disabled={working}
+            placeholder={'{\n  "custom": "value"\n}'}
+            onChange={(event) => {
+              setPayloadText(event.target.value);
+            }}
+          />
+        </div>
+        {parseError !== null ? <p className="aidos-evidence-paste-error">{parseError}</p> : null}
+      </Collapse>
       <NoteField note={note} working={working} onChange={setNote} />
       <div className="aidos-form-actions">
         <button
@@ -390,7 +725,7 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
             void attachWith(props.kind, payload);
           }}
         >
-          {working ? "Working\u2026" : "Attach"}
+          {working ? "Working…" : "Attach"}
         </button>
       </div>
     </div>

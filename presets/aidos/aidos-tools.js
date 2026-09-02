@@ -26279,7 +26279,6 @@ function validateAidosEvent(state, event) {
     case "plan/change":
       validatePlanChange(state, raw);
       return;
-      return;
     case "comment/added":
       validateComment(state, raw);
       return;

@@ -15,6 +15,7 @@ import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { ModalShell, NoteField } from "./ui";
 import { CriterionLinker } from "./criterion-linker";
+import { EvidenceStrip } from "./evidence-strip";
 import type { EvidenceRow } from "../kernel/types";
 import type { TicketView } from "../kernel/projections";
 
@@ -45,20 +46,9 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 
-  const kindCounts = new Map<string, number>();
-  for (const row of props.evidence) {
-    kindCounts.set(row.kind, (kindCounts.get(row.kind) ?? 0) + 1);
-  }
-  const summary: { kind: string; count: number }[] = [];
-  for (const [kind, count] of kindCounts) {
-    summary.push({ kind, count });
-  }
-  summary.sort((a, b) => {
-    if (a.count !== b.count) return b.count - a.count;
-    if (a.kind < b.kind) return -1;
-    if (a.kind > b.kind) return 1;
-    return 0;
-  });
+  // Step two renders the rows themselves as strips, so no kind-count roll-up
+  // is computed any more — the strip already names kind, author, time, and
+  // the criterion each row addresses.
 
   async function confirm() {
     if (working) return;
@@ -126,15 +116,22 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
         </div>
       ) : (
         <div className="aidos-modal-form">
-          <p className="aidos-modal-body">The evidence summary:</p>
-          {summary.length === 0 ? (
+          <p className="aidos-modal-body">The evidence on this ticket:</p>
+          {props.evidence.length === 0 ? (
             <p className="aidos-detail-note">No evidence rows yet.</p>
           ) : (
-            <ul className="aidos-check-list">
-              {summary.map((entry) => (
-                <li className="aidos-check-row" key={entry.kind}>
-                  {entry.kind + ": " + entry.count}
-                </li>
+            <ul className="aidos-evidence-list">
+              {props.evidence.map((row, index) => (
+                <EvidenceStrip
+                  key={String(row.at ?? index) + ":" + row.kind}
+                  row={row}
+                  criterionLabel={
+                    typeof row.payload.criteria === "string" &&
+                    row.payload.criteria.trim() !== ""
+                      ? row.payload.criteria
+                      : undefined
+                  }
+                />
               ))}
             </ul>
           )}

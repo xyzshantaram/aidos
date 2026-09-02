@@ -52,3 +52,24 @@ export function PopOutIcon() {
     </svg>
   );
 }
+
+/**
+ * The warning triangle: marks a criterion no evidence covers yet. Like the
+ * others it inherits the current text color, so the caller decides the hue.
+ */
+export function WarningIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M6 1.5l4.5 8h-9z" />
+      <path d="M6 4.75v2.5" />
+      <path d="M6 8.6v.4" />
+    </svg>
+  );
+}

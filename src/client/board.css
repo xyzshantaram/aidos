@@ -435,27 +435,36 @@
 /* criteria — one bullet per criterion (spec §6) */
 .aidos-criteria {
   margin: 0;
-  padding-left: 18px;
-  list-style: disc;
+  padding-left: 0;
+  list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
+/* A criterion reads as a STRIP, matching the evidence strips it now carries:
+   same border, radius, surface, and padding, so the criteria panel and the
+   evidence panel speak one language. */
 .aidos-criterion {
   min-width: 0;
   font-size: 13px;
-  line-height: 22px;
-  padding-block: 2px;
-  color: var(--text-secondary);
+  line-height: 20px;
+  padding: 6px var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
 }
 
-/* One criterion row holds the label plus its icon controls. The controls
-   sit on the right and reach full opacity only on hover or focus inside
-   the row. */
+/* The uncovered treatment lives in ONE place, near the criterion-block rules
+   at the end of this file, so the strip and the block agree. */
+
+/* One criterion row holds the label plus its icon controls. The controls sit
+   at the end and are ALWAYS visible: the old hover-reveal (opacity 0 until
+   hover) made them unreadable and undiscoverable. */
 .aidos-criterion-row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
 }
@@ -466,12 +475,7 @@
   flex: none;
   gap: 2px;
   margin-left: auto;
-  opacity: 0;
-}
-
-.aidos-criterion-row:hover .aidos-criterion-actions,
-.aidos-criterion-row:focus-within .aidos-criterion-actions {
-  opacity: 1;
+  align-self: center;
 }
 
 /* Last row of the criteria block: an input plus a small add button. */
@@ -494,9 +498,24 @@
   color: var(--text-primary);
 }
 
+/* An uncovered criterion is the one you most need to READ, so it keeps full
+   text contrast and the ordinary strip surface. The signal is a warning
+   TRIANGLE at the head of the row, not a dimmed or recolored strip. */
 .aidos-criterion-uncovered {
-  color: var(--text-muted);
-  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.aidos-criterion-warn {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--state-awaiting);
+}
+
+/* The label takes the free space so the controls land at the row's end. */
+.aidos-criterion-text {
+  min-width: 0;
+  flex: 1;
 }
 
 .aidos-evidence-delete {
@@ -520,6 +539,14 @@
   background: var(--surface-active);
   color: #f9fafb;
 }
+
+/* The ✕ and ⊗ controls live on a strip too: resting fill, legible glyph. */
+.aidos-evidence-strip-actions .aidos-evidence-delete,
+.aidos-evidence-strip-actions .aidos-evidence-unlink {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
 
 .aidos-evidence-delete:disabled {
   opacity: 0.4;
@@ -688,6 +715,37 @@
   padding-block: 0.5rem;
   resize: none;
 }
+
+/* The evidence note is a one-or-two-line remark, not an essay field: the
+   default two-row textarea took far more vertical space than it earns in a
+   modal that also carries criteria, strips, and actions. */
+.aidos-evidence-attach-note {
+  height: 2.25rem;
+  min-height: 2.25rem;
+}
+
+/* An agent report or a check's output IS an essay field: same control, more
+   room. Compose it with the note class where a taller box is wanted. */
+.aidos-evidence-attach-note.aidos-evidence-attach-tall {
+  height: 6rem;
+  min-height: 6rem;
+  resize: vertical;
+}
+
+/* A command line is a single-line, monospaced input: same control chrome as
+   the other modal fields, with code-shaped text. */
+.aidos-command-input {
+  height: 2.25rem;
+  width: 100%;
+  padding-inline: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--control-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 
 .text-input::placeholder,
 .aidos-search-input::placeholder,
@@ -1030,9 +1088,26 @@
 
 .aidos-icon-btn:hover,
 .aidos-icon-btn:focus-visible {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+/* Icon controls that sit ON a strip (criteria rows, evidence rows) are always
+   visible and must read against the strip's own surface, so they carry a
+   resting fill and full-strength glyphs instead of a faint transparent hint. */
+.aidos-criterion-actions .aidos-icon-btn,
+.aidos-evidence-strip-actions .aidos-icon-btn {
   background: var(--surface-hover);
   color: var(--text-primary);
 }
+
+.aidos-criterion-actions .aidos-icon-btn:hover,
+.aidos-criterion-actions .aidos-icon-btn:focus-visible,
+.aidos-evidence-strip-actions .aidos-icon-btn:hover,
+.aidos-evidence-strip-actions .aidos-icon-btn:focus-visible {
+  background: var(--surface-active);
+}
+
 
 .aidos-detail-body {
   font-size: 0.875rem;
@@ -1559,6 +1634,31 @@
   gap: 8px;
 }
 
+/* The action bar's buttons are the primary verbs of the panel (Sign off,
+   Verify, Submit for review, Mark done), so they carry a raised resting fill
+   and full-strength text rather than the quiet secondary treatment. */
+.aidos-action-bar .aidos-btn {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  border-color: var(--border-focus);
+}
+
+.aidos-action-bar .aidos-btn:hover:not(:disabled) {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+/* A gated action still has to be READABLE while it is unavailable — its
+   tooltip names the missing evidence. Mute it, do not dissolve it. */
+.aidos-action-bar .aidos-btn:disabled,
+.aidos-action-bar .aidos-btn-disabled {
+  opacity: 1;
+  background: var(--surface);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+
 /* spoiler (submit-for-review) */
 .aidos-spoiler {
   display: flex;
@@ -2035,6 +2135,9 @@
   align-items: center;
   gap: 2px;
   flex: none;
+  /* Always at the end of the strip, whatever the excerpt's width. */
+  margin-left: auto;
+  align-self: center;
 }
 
 .aidos-evidence-unlink {
@@ -2079,8 +2182,10 @@
   border-radius: var(--radius-sm);
 }
 
-.aidos-criterion-block.aidos-criterion-uncovered,
-.aidos-criterion.aidos-criterion-uncovered {
+/* The linker's criterion block has no warning triangle of its own (its
+   "No evidence linked." line carries that), so it keeps the warning edge.
+   The criterion STRIP does not: its triangle is the signal. */
+.aidos-criterion-block.aidos-criterion-uncovered {
   border-color: var(--state-awaiting);
 }
 

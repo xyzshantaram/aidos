@@ -38,7 +38,7 @@ import { EvidenceStrip } from "./evidence-strip";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
-import { PencilIcon, TrashIcon } from "./icons";
+import { PencilIcon, TrashIcon, WarningIcon } from "./icons";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
@@ -366,7 +366,16 @@ function CriteriaPanel(props: {
                   />
                 ) : (
                   <span className="aidos-criterion-row">
-                    {line}
+                    {uncoveredSet.has(line) ? (
+                      <span
+                        className="aidos-criterion-warn"
+                        title="No evidence covers this criterion yet"
+                        aria-label="Uncovered criterion"
+                      >
+                        <WarningIcon />
+                      </span>
+                    ) : null}
+                    <span className="aidos-criterion-text">{line}</span>
                     <span className="aidos-criterion-actions">
                       <button
                         className="aidos-icon-btn"
