@@ -126,11 +126,23 @@ export function humanQueue<T extends TicketView>(
 ): QueueEntry[] {
   const entries = derivedQueue(tickets, evidenceKindsOf);
   for (const nomination of nominations) {
+    /*
+     * MATCH ON THE BOARD KEY ONLY (#93 re-review, finding 1).
+     *
+     * The first fix kept a `String(entry.ticket.id) === key` fallback "for
+     * safety" and thereby re-created the very bug it was fixing: own rows are
+     * stamped foreign:false so boardKeyOf ALREADY returns String(id) for
+     * them, which makes the fallback redundant for own rows and a source of
+     * FALSE POSITIVES on foreign ones. A numeric nomination for #12 attached
+     * its reason to a foreign `sess-abc:12`, putting the agent's ask on the
+     * wrong ticket and pointing its button at a write to the wrong ticket.
+     *
+     * A numeric nomination can only ever mean an OWN ticket anyway:
+     * suggestActions validates against the calling session's own state.
+     */
     const key = String(nomination.ticketId);
     const match = entries.find(
-      (entry) =>
-        (entry.boardKey === key || String(entry.ticket.id) === key) &&
-        entry.actionId === nomination.actionId,
+      (entry) => entry.boardKey === key && entry.actionId === nomination.actionId,
     );
     if (match === undefined) continue;
     match.nominationReason = nomination.reason;

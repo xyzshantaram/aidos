@@ -13,6 +13,8 @@ import { derivedQueue, humanQueue, queueCount, sortQueue } from "../src/client/h
 import type { Nomination } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
 import { boardKeyOf } from "../src/client/board-logic";
+import { queueEntriesFor } from "../src/client/queue-panel";
+import type { EvidenceRow } from "../src/kernel/types";
 
 const noEvidence = () => [] as string[];
 
@@ -206,16 +208,31 @@ describe("u93 human-queue: foreign rows on a merged board", () => {
     expect(rows[0].boardKey).toBe("12");
   });
 
-  it("evidence is resolved per row by board key, so a foreign row cannot read the own row's", () => {
-    const evidence: Record<string, string[]> = {
+  /*
+   * This drives queueEntriesFor -- the PRODUCTION lookup in queue-panel.tsx --
+   * rather than a lambda the test wrote itself. The re-review correctly
+   * failed the earlier version: it supplied its own boardKeyOf keyer, so it
+   * passed even with the production code reverted to String(ticket.id).
+   */
+  it("the production lookup resolves evidence per row, so a foreign row cannot read the own row's", () => {
+    const evidence = {
       // The OWN #12 has been verified; the foreign #12 has not.
-      "12": ["builtin:user_verified"],
+      "12": [{ kind: "builtin:user_verified" }],
       "session-abc:12": [],
-    };
-    const rows = derivedQueue([foreign], (t) => evidence[boardKeyOf(t)] ?? []);
-    // Without the fix this read the own row's user_verified and offered
-    // mark-done on a ticket that has no such row.
+    } as unknown as Record<string, EvidenceRow[]>;
+    const rows = queueEntriesFor([foreign] as never, evidence);
+    // Reverting queue-panel to String(ticket.id) makes this read the own
+    // row's user_verified and offer mark-done on a ticket with no such row.
     expect(rows.map((r) => r.actionId)).toEqual(["verify"]);
+  });
+
+  it("the production lookup still finds an OWN row's evidence", () => {
+    const evidence = {
+      "12": [{ kind: "builtin:user_verified" }],
+    } as unknown as Record<string, EvidenceRow[]>;
+    const awaitingOwn = makeTicket({ id: 12, state: "awaiting_verification" });
+    const rows = queueEntriesFor([awaitingOwn] as never, evidence);
+    expect(rows.map((r) => r.actionId)).toEqual(["verify", "mark-done"]);
   });
 
   it("own and foreign rows with the same number are two distinct entries", () => {

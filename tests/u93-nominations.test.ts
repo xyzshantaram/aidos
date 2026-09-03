@@ -173,18 +173,47 @@ describe("#93 nominations: a refused batch changes nothing", () => {
 });
 
 describe("#93 nominations: a dismissal sticks for the session", () => {
-  it("re-proposing a dismissed (ticket, action) is refused", () => {
+  it("re-proposing a dismissed (ticket, action) is ACCEPTED but flagged to the agent", () => {
     const { svc, agent } = setup();
     const ticket = svc.setTicket(agent, { title: "Probe" });
     const created = svc.suggestActions(agent, {
       suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "please" }],
     });
     svc.dismissNomination(agent, { nominationId: created.nominations[0].id });
-    expect(() =>
-      svc.suggestActions(agent, {
-        suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "please again" }],
-      }),
-    ).toThrow(/dismissed/);
+    const again = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "please again" }],
+    });
+    // Accepted -- refusing would let one dismissed entry kill a whole batch,
+    // and would make a genuinely-changed situation unraisable all session.
+    expect(again.accepted).toBe(1);
+    // ...but the agent is TOLD, which is what criterion 8 actually requires.
+    expect(again.previouslyDismissed).toEqual(["#" + ticket.id + " signoff"]);
+  });
+
+  it("an undismissed ask is not flagged", () => {
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const result = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "first ask" }],
+    });
+    expect(result.previouslyDismissed).toEqual([]);
+  });
+
+  it("a dismissed entry does not refuse the rest of its batch", () => {
+    const { svc, agent } = setup();
+    const a = svc.setTicket(agent, { title: "A" });
+    const b = svc.setTicket(agent, { title: "B" });
+    const created = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: a.id, actionId: "signoff", reason: "one" }],
+    });
+    svc.dismissNomination(agent, { nominationId: created.nominations[0].id });
+    const batch = svc.suggestActions(agent, {
+      suggestions: [
+        { ticketId: a.id, actionId: "signoff", reason: "again" },
+        { ticketId: b.id, actionId: "signoff", reason: "fresh" },
+      ],
+    });
+    expect(batch.accepted).toBe(2);
   });
 
   it("a dismissal is scoped to that action; another action on the same ticket still works", () => {

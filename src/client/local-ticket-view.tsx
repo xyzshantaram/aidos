@@ -30,6 +30,7 @@ import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
+import { boardKeyOf } from "./board-logic";
 import { ModalShell } from "./ui";
 import type { Nomination, QueueEntry } from "./human-queue";
 import type { RunOutcome } from "./approval-runner";
@@ -505,20 +506,20 @@ function ProjectionReader(props: ProjectionReaderProps) {
     setTicketParam(null);
   }
 
+  /*
+   * #93 re-review, finding 2: these two inlined their own board key and
+   * DIVERGED from boardKeyOf -- no `sourceSessionId !== undefined` guard, so a
+   * foreign row lacking that field produced "undefined:12" here while
+   * boardKeyOf produced "12", and onOpen feeding entry.boardKey into this
+   * lookup would silently open nothing. One implementation, imported.
+   */
   const selectedTicket =
     selectedKey === null
       ? null
-      : rawTickets.find(
-            (ticket) =>
-              (ticket.foreign ? ticket.sourceSessionId + ":" + ticket.id : String(ticket.id)) ===
-              selectedKey,
-          ) ?? null;
+      : rawTickets.find((ticket) => boardKeyOf(ticket) === selectedKey) ?? null;
 
-  const selectedBoardKey = selectedTicket
-    ? selectedTicket.foreign
-      ? selectedTicket.sourceSessionId + ":" + selectedTicket.id
-      : String(selectedTicket.id)
-    : null;
+  const selectedBoardKey =
+    selectedTicket === null ? null : boardKeyOf(selectedTicket);
 
   const selectedEvidence: EvidenceRow[] =
     selectedBoardKey === null ? [] : rawEvidence[selectedBoardKey] ?? [];

@@ -1399,7 +1399,13 @@ registerAidosSessionEventTypes(ctx);
   suggestActions(
     agent: Agent,
     args: { suggestions: { ticketId: number | string; actionId: string; reason: string }[] },
-  ): { ok: true; accepted: number; nominations: ActionNomination[] } {
+  ): {
+    ok: true;
+    accepted: number;
+    nominations: ActionNomination[];
+    /** Asks the human already dismissed this session; re-raised knowingly. */
+    previouslyDismissed: string[];
+  } {
     const sessionId = String(agent.session.id);
     const suggestions = args.suggestions ?? [];
     if (suggestions.length === 0) {
@@ -1440,15 +1446,6 @@ registerAidosSessionEventTypes(ctx);
       if (reason === "") {
         throw new Error(`nomination for #${ticketId} has no reason`);
       }
-      // A dismissal is remembered for the session's life (#93 review,
-      // finding 3): the human said no, so re-proposing the identical ask
-      // needs new grounds, not a retry.
-      if (this._dismissed.has(`${sessionId}|${ticketId}|${suggestion.actionId}`)) {
-        throw new Error(
-          `the human dismissed ${suggestion.actionId} for #${ticketId} in this session; ` +
-            `do not re-propose it without new grounds`,
-        );
-      }
       validated.push({ ticketId, actionId: suggestion.actionId, reason });
     }
 
@@ -1477,7 +1474,23 @@ registerAidosSessionEventTypes(ctx);
       this._nominations.set(nomination.id, nomination);
       accepted.push(nomination);
     }
-    return { ok: true, accepted: accepted.length, nominations: accepted };
+    /*
+     * ACCEPT-BUT-FLAG, not refuse (#93 re-review). A dismissal is remembered
+     * for the session so the agent can tell a declined ask from an unhandled
+     * one -- but refusing outright was wrong twice: one dismissed entry would
+     * refuse the WHOLE batch, and a legitimately-changed situation could
+     * never be re-raised for the session's life. The agent is told instead,
+     * and decides whether it has new grounds.
+     */
+    const previouslyDismissed = accepted
+      .filter((n) => this._dismissed.has(`${sessionId}|${n.ticketId}|${n.actionId}`))
+      .map((n) => `#${n.ticketId} ${n.actionId}`);
+    return {
+      ok: true,
+      accepted: accepted.length,
+      nominations: accepted,
+      previouslyDismissed,
+    };
   }
 
   /** The BOARD surface: this session's nominations, oldest first. */

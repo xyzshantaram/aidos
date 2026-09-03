@@ -721,6 +721,11 @@ function registerSuggestActions(ctx: Context): void {
           properties: {
             ok: { type: "boolean", const: true, required: true },
             accepted: { type: "integer", required: true },
+            previouslyDismissed: {
+              type: "array",
+              items: { type: "string" },
+              required: true,
+            },
           },
         },
         render: renderJson,
@@ -735,7 +740,12 @@ function registerSuggestActions(ctx: Context): void {
             },
           );
           ctx.logger?.info?.(`aidos: ${result.accepted} nomination(s) queued`);
-          return { ok: true as const, accepted: result.accepted };
+          return {
+            ok: true as const,
+            accepted: result.accepted,
+            // The human already said no to these once this session.
+            previouslyDismissed: result.previouslyDismissed,
+          };
         } catch (error) {
           refusal(error);
         }
