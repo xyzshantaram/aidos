@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { derivedQueue, humanQueue, queueCount } from "../src/client/human-queue";
+import { derivedQueue, humanQueue, queueCount, sortQueue } from "../src/client/human-queue";
 import type { Nomination } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
 
@@ -132,5 +132,51 @@ describe("u93 human-queue: the nominated half", () => {
       makeTicket({ id: 2, state: "awaiting_verification" }),
     ];
     expect(humanQueue(tickets, noEvidence)).toEqual(derivedQueue(tickets, noEvidence));
+  });
+});
+
+describe("u93 human-queue: sorting", () => {
+  const tickets = [
+    makeTicket({ id: 3, state: "open", phase: 1, order: 1, title: "Zebra", updatedAt: 10 }),
+    makeTicket({ id: 1, state: "open", phase: 1, order: 2, title: "Apple", updatedAt: 30 }),
+    makeTicket({ id: 2, state: "open", phase: 1, order: 3, title: "Mango", updatedAt: 20 }),
+  ];
+
+  it("by id sorts 1..N", () => {
+    const rows = humanQueue(tickets, noEvidence, [], "id");
+    expect(rows.map((r) => r.ticket.id)).toEqual([1, 2, 3]);
+  });
+
+  it("by recent puts the freshest update first", () => {
+    const rows = humanQueue(tickets, noEvidence, [], "recent");
+    expect(rows.map((r) => r.ticket.id)).toEqual([1, 2, 3].map((n) => n));
+    expect(rows.map((r) => r.ticket.updatedAt)).toEqual([30, 20, 10]);
+  });
+
+  it("by alpha sorts titles A-Z", () => {
+    const rows = humanQueue(tickets, noEvidence, [], "alpha");
+    expect(rows.map((r) => r.ticket.title)).toEqual(["Apple", "Mango", "Zebra"]);
+  });
+
+  it("suggested keeps nominations first; an explicit key does NOT", () => {
+    const nomination = {
+      id: "n1",
+      ticketId: 3,
+      actionId: "signoff" as const,
+      reason: "look here",
+      at: 0,
+    };
+    const suggested = humanQueue(tickets, noEvidence, [nomination], "suggested");
+    expect(suggested[0].ticket.id).toBe(3);
+    // "by id" means by id: picking a key does what it says.
+    const byId = humanQueue(tickets, noEvidence, [nomination], "id");
+    expect(byId.map((r) => r.ticket.id)).toEqual([1, 2, 3]);
+  });
+
+  it("sorting returns a new array and never mutates the input", () => {
+    const rows = humanQueue(tickets, noEvidence, [], "suggested");
+    const before = rows.map((r) => r.ticket.id);
+    sortQueue(rows, "alpha");
+    expect(rows.map((r) => r.ticket.id)).toEqual(before);
   });
 });

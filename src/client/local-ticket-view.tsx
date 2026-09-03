@@ -31,7 +31,7 @@ import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { ModalShell } from "./ui";
-import type { QueueEntry } from "./human-queue";
+import type { Nomination, QueueEntry } from "./human-queue";
 import type { RunOutcome } from "./approval-runner";
 import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
@@ -361,6 +361,26 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [createOpen, setCreateOpen] = react.useState(false);
   const [planOpen, setPlanOpen] = react.useState(false);
   const [queueOpen, setQueueOpen] = react.useState(false);
+  /*
+   * #93: nominations are fetched when the queue OPENS, not polled. They only
+   * annotate entries the derived queue already produced, so they can never
+   * change the badge count — which means there is nothing to keep live while
+   * the queue is shut.
+   */
+  const [nominations, setNominations] = react.useState<Nomination[]>([]);
+
+  const refreshNominations = react.useCallback(
+    function () {
+      void callAidosRemote("actionNominations", {}, sessionId)
+        .then((rows) => {
+          setNominations((rows as unknown as Nomination[]) ?? []);
+        })
+        .catch(() => {
+          setNominations([]);
+        });
+    },
+    [sessionId],
+  );
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
   const restoredRef = react.useRef(false);
@@ -597,6 +617,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
           setCreateOpen(true);
         }}
         onQueue={() => {
+          refreshNominations();
           setQueueOpen(true);
         }}
         queueCount={queueEntriesFor(rawTickets, rawEvidence).length}
@@ -665,11 +686,29 @@ function ProjectionReader(props: ProjectionReaderProps) {
       <QueuePanel
         tickets={rawTickets}
         evidenceByTicket={rawEvidence}
+        nominations={nominations}
         onOpen={(ticket) => {
           setQueueOpen(false);
           selectTicket(String(ticket.id));
         }}
-        onAct={performQueueAction}
+        onAct={async (entry, outcome) => {
+          await performQueueAction(entry, outcome);
+          // Acting on a nominated entry retires the nomination with it.
+          refreshNominations();
+        }}
+        onDismiss={(nominationId) => {
+          void callAidosRemote("dismissNomination", { nominationId }, sessionId)
+            .then(() => {
+              showToast("Suggestion dismissed", "info");
+              refreshNominations();
+            })
+            .catch((error: unknown) => {
+              showToast(
+                error instanceof Error ? error.message : String(error),
+                "refusal",
+              );
+            });
+        }}
       />
     </ModalShell>
   ) : null;

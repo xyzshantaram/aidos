@@ -27486,6 +27486,11 @@ function _evidenceDigestSuffix(kind, payload) {
   }
   return "";
 }
+var HUMAN_NOMINATION_ACTIONS = [
+  "signoff",
+  "verify",
+  "mark-done"
+];
 function validateAllowlistPaths(cwd, paths) {
   const base = resolve2(cwd);
   const contains = (candidate) => {
@@ -27520,8 +27525,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _resolveApproval_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _resolveApproval_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -27537,6 +27542,16 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     /** In-memory pending approvals keyed by request id. Restarts drop them. */
     __publicField(this, "_pendingApprovals", /* @__PURE__ */ new Map());
     __publicField(this, "_approvalSeq", 0);
+    // ---- the action-nomination store (#93) --------------------------------
+    /**
+     * Session-scoped nominations, keyed by id. Decided with the user
+     * 2026-09-03: NO kernel event and no durable field. A restart drops them
+     * and the queue degrades to its DERIVED half, which is recomputed from
+     * board state and needs no persistence — so the worst case is losing the
+     * agent's commentary, never losing the ask itself.
+     */
+    __publicField(this, "_nominations", /* @__PURE__ */ new Map());
+    __publicField(this, "_nominationSeq", 0);
     /**
      * The append path: validate the candidate against the folded state (the
      * invariant companion's check), append to the session log, then fold.
@@ -28041,6 +28056,76 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     });
     this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: paths });
     return { resolved: `approved: ${paths.join(", ")}` };
+  }
+  suggestActions(agent, args) {
+    const sessionId = String(agent.session.id);
+    const suggestions = args.suggestions ?? [];
+    if (suggestions.length === 0) {
+      throw new Error("no suggestions given");
+    }
+    const cap = 20;
+    const mine = [...this._nominations.values()].filter((n) => n.sessionId === sessionId);
+    if (mine.length + suggestions.length > cap) {
+      throw new Error(
+        `too many nominations (cap ${cap}); the human dismisses or acts on them to make room`
+      );
+    }
+    const state = this._cache(agent.session).state;
+    const accepted = [];
+    for (const suggestion of suggestions) {
+      const ticketId = Number(suggestion.ticketId);
+      if (!Number.isFinite(ticketId)) {
+        throw new Error(`bad ticketId ${String(suggestion.ticketId)}`);
+      }
+      if (state.tickets.get(ticketId) === void 0) {
+        throw new Error(`unknown ticket ${ticketId}`);
+      }
+      if (!HUMAN_NOMINATION_ACTIONS.includes(suggestion.actionId)) {
+        throw new Error(
+          `action ${suggestion.actionId} is not one a human performs; expected one of ` + HUMAN_NOMINATION_ACTIONS.join(", ")
+        );
+      }
+      const reason = (suggestion.reason ?? "").trim();
+      if (reason === "") {
+        throw new Error(`nomination for #${ticketId} has no reason`);
+      }
+      for (const [id, existing] of this._nominations) {
+        if (existing.sessionId === sessionId && existing.ticketId === ticketId && existing.actionId === suggestion.actionId) {
+          this._nominations.delete(id);
+        }
+      }
+      this._nominationSeq += 1;
+      const nomination = {
+        id: `nom-${Date.now()}-${this._nominationSeq}`,
+        sessionId,
+        ticketId,
+        actionId: suggestion.actionId,
+        reason,
+        at: this._now()
+      };
+      this._nominations.set(nomination.id, nomination);
+      accepted.push(nomination);
+    }
+    return { ok: true, accepted: accepted.length, nominations: accepted };
+  }
+  actionNominations(agent, _args) {
+    const sessionId = String(agent.session.id);
+    return [...this._nominations.values()].filter((row) => row.sessionId === sessionId).sort((a, b) => a.at - b.at);
+  }
+  dismissNomination(agent, args) {
+    const nomination = this._nominations.get(args.nominationId);
+    if (nomination === void 0) {
+      throw new Error(`unknown nomination ${args.nominationId}`);
+    }
+    if (nomination.sessionId !== String(agent.session.id)) {
+      throw new Error(`nomination ${args.nominationId} belongs to another session`);
+    }
+    this._nominations.delete(args.nominationId);
+    this._queueInjection(
+      agent.session,
+      `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ("${nomination.reason}") \u2014 do not re-propose it without new grounds`
+    );
+    return { dismissed: args.nominationId };
   }
   workspaceRoot(agent) {
     const cwd = agent.session?.header?.cwd ?? "";
@@ -29090,6 +29175,9 @@ __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosServ
 __decorateElement(_init, 1, "requestAllowlist", _requestAllowlist_dec, AidosService);
 __decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);
 __decorateElement(_init, 1, "resolveApproval", _resolveApproval_dec, AidosService);
+__decorateElement(_init, 1, "suggestActions", _suggestActions_dec, AidosService);
+__decorateElement(_init, 1, "actionNominations", _actionNominations_dec, AidosService);
+__decorateElement(_init, 1, "dismissNomination", _dismissNomination_dec, AidosService);
 __decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
@@ -29907,6 +29995,75 @@ function registerRequestAllowlist(ctx) {
     })
   );
 }
+function registerSuggestActions(ctx) {
+  ctx.tools.register(
+    defineTool2({
+      name: "suggest_actions",
+      description: "Nominate tickets for the human's attention (#93), each with a reason. They appear at the top of the board's 'Waiting on you' queue, so you never have to list what you need in prose and the human never has to hunt for the tickets. This does NOT create work: a nomination only annotates an ask the gate ALREADY allows, and one naming an action that is not currently available is dropped rather than shown as a button that cannot work. Returns at once - do not wait, do not poll: you are steered when the human acts on or dismisses one. Re-nominating the same ticket and action replaces the reason instead of stacking a duplicate row.",
+      parameters: {
+        suggestions: {
+          type: "array",
+          description: "The tickets to put in front of the human.",
+          required: true,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              ticketId: {
+                type: "integer",
+                description: "The ticket to nominate.",
+                required: true
+              },
+              actionId: {
+                type: "string",
+                enum: ["signoff", "verify", "mark-done"],
+                description: "The human action being asked for.",
+                required: true
+              },
+              reason: {
+                type: "string",
+                description: "Why THIS one, now - what it unblocks. Shown verbatim on the queue row.",
+                required: true
+              }
+            }
+          }
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            accepted: { type: "integer", required: true }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        try {
+          const result = ctx.aidos.suggestActions(
+            agent,
+            args
+          );
+          ctx.logger?.info?.(`aidos: ${result.accepted} nomination(s) queued`);
+          return { ok: true, accepted: result.accepted };
+        } catch (error51) {
+          refusal(error51);
+        }
+      },
+      presentCall: (a) => {
+        const req = a;
+        const rows = req.suggestions ?? [];
+        return present("Suggest actions", "edit", rows, [
+          rows.length + " ticket(s)",
+          rows.map((r) => "#" + r.ticketId).join(" ")
+        ]);
+      }
+    })
+  );
+}
 function registerPlanImport(ctx) {
   ctx.tools.register(
     defineTool2({
@@ -30082,6 +30239,7 @@ function apply(ctx, config2) {
   registerPlanMetaSet(ctx);
   registerScratchTools(ctx);
   registerRequestAllowlist(ctx);
+  registerSuggestActions(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);

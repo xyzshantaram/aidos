@@ -598,6 +598,34 @@ export interface PendingApproval {
 }
 
 /**
+ * The actions a human performs, and therefore the only ones the agent may
+ * nominate (#93). Kept in step with HUMAN_ACTIONS in src/client/human-queue.ts:
+ * the client drops a nomination whose action the gate refuses, and this list
+ * refuses one the human could never perform at all.
+ */
+export const HUMAN_NOMINATION_ACTIONS: readonly string[] = [
+  "signoff",
+  "verify",
+  "mark-done",
+];
+
+/**
+ * One agent-to-human suggestion (#93). Session-scoped by decision: a restart
+ * drops it and the queue falls back to its derived half.
+ */
+export interface ActionNomination {
+  id: string;
+  /** The nominating session; ticket ids collide across sessions. */
+  sessionId: string;
+  ticketId: number;
+  /** One of HUMAN_NOMINATION_ACTIONS. */
+  actionId: string;
+  /** Why the agent is asking for this one, in its own words. */
+  reason: string;
+  at: number;
+}
+
+/**
  * Validate one proposed allowlist path set (#51). Every path must resolve
  * inside the session workspace and exist on disk; the list must be non-empty;
  * duplicates are collapsed. Returns the bad paths so the refusal can name
@@ -1341,6 +1369,119 @@ registerAidosSessionEventTypes(ctx);
     this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: paths });
     return { resolved: `approved: ${paths.join(", ")}` };
   }
+
+  // ---- the action-nomination store (#93) --------------------------------
+
+  /**
+   * Session-scoped nominations, keyed by id. Decided with the user
+   * 2026-09-03: NO kernel event and no durable field. A restart drops them
+   * and the queue degrades to its DERIVED half, which is recomputed from
+   * board state and needs no persistence — so the worst case is losing the
+   * agent's commentary, never losing the ask itself.
+   */
+  private readonly _nominations = new Map<string, ActionNomination>();
+  private _nominationSeq = 0;
+
+  /**
+   * The AGENT surface: nominate tickets for the human's attention, each with
+   * a reason. This does NOT create work — a nomination only annotates an ask
+   * the gate already allows, and the client drops any that names an
+   * unavailable action. The agent cannot conjure a button.
+   */
+  @Remote("suggestActions")
+  suggestActions(
+    agent: Agent,
+    args: { suggestions: { ticketId: number | string; actionId: string; reason: string }[] },
+  ): { ok: true; accepted: number; nominations: ActionNomination[] } {
+    const sessionId = String(agent.session.id);
+    const suggestions = args.suggestions ?? [];
+    if (suggestions.length === 0) {
+      throw new Error("no suggestions given");
+    }
+    const cap = 20;
+    const mine = [...this._nominations.values()].filter((n) => n.sessionId === sessionId);
+    if (mine.length + suggestions.length > cap) {
+      throw new Error(
+        `too many nominations (cap ${cap}); the human dismisses or acts on them to make room`,
+      );
+    }
+    const state = this._cache(agent.session).state;
+    const accepted: ActionNomination[] = [];
+    for (const suggestion of suggestions) {
+      const ticketId = Number(suggestion.ticketId);
+      if (!Number.isFinite(ticketId)) {
+        throw new Error(`bad ticketId ${String(suggestion.ticketId)}`);
+      }
+      if (state.tickets.get(ticketId as TicketId) === undefined) {
+        throw new Error(`unknown ticket ${ticketId}`);
+      }
+      if (!HUMAN_NOMINATION_ACTIONS.includes(suggestion.actionId)) {
+        throw new Error(
+          `action ${suggestion.actionId} is not one a human performs; expected one of ` +
+            HUMAN_NOMINATION_ACTIONS.join(", "),
+        );
+      }
+      const reason = (suggestion.reason ?? "").trim();
+      if (reason === "") {
+        throw new Error(`nomination for #${ticketId} has no reason`);
+      }
+      // One nomination per (ticket, action): re-nominating REPLACES the
+      // reason rather than stacking a second identical row on the queue.
+      for (const [id, existing] of this._nominations) {
+        if (
+          existing.sessionId === sessionId &&
+          existing.ticketId === ticketId &&
+          existing.actionId === suggestion.actionId
+        ) {
+          this._nominations.delete(id);
+        }
+      }
+      this._nominationSeq += 1;
+      const nomination: ActionNomination = {
+        id: `nom-${Date.now()}-${this._nominationSeq}`,
+        sessionId,
+        ticketId,
+        actionId: suggestion.actionId,
+        reason,
+        at: this._now(),
+      };
+      this._nominations.set(nomination.id, nomination);
+      accepted.push(nomination);
+    }
+    return { ok: true, accepted: accepted.length, nominations: accepted };
+  }
+
+  /** The BOARD surface: this session's nominations, oldest first. */
+  @Remote("actionNominations")
+  actionNominations(agent: Agent, _args?: Record<string, never>): ActionNomination[] {
+    const sessionId = String(agent.session.id);
+    return [...this._nominations.values()]
+      .filter((row) => row.sessionId === sessionId)
+      .sort((a, b) => a.at - b.at);
+  }
+
+  /**
+   * Drop a nomination without acting on it. The agent is told, so it stops
+   * re-asking for something the human deliberately declined.
+   */
+  @Remote("dismissNomination")
+  dismissNomination(agent: Agent, args: { nominationId: string }): { dismissed: string } {
+    const nomination = this._nominations.get(args.nominationId);
+    if (nomination === undefined) {
+      throw new Error(`unknown nomination ${args.nominationId}`);
+    }
+    if (nomination.sessionId !== String(agent.session.id)) {
+      throw new Error(`nomination ${args.nominationId} belongs to another session`);
+    }
+    this._nominations.delete(args.nominationId);
+    this._queueInjection(
+      agent.session,
+      `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ` +
+        `("${nomination.reason}") — do not re-propose it without new grounds`,
+    );
+    return { dismissed: args.nominationId };
+  }
+
 
   /**
    * The session's workspace root, for client surfaces that need to address

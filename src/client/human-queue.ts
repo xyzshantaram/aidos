@@ -103,13 +103,16 @@ export function derivedQueue<T extends TicketView>(
  * action the gate does not allow, so a nomination naming an unavailable
  * action is dropped rather than shown as a button that cannot work.
  *
- * Nominated entries sort first, because the agent is telling the human where
- * to look.
+ * The order comes from `sortKey`. "suggested" (the default) puts the agent's
+ * nominations first, because it is pointing at where to look; every other key
+ * sorts PURELY by that key, so choosing one does what it says rather than
+ * quietly keeping a hidden primary sort.
  */
 export function humanQueue<T extends TicketView>(
   tickets: readonly T[],
   evidenceKindsOf: (ticket: T) => EvidenceKinds,
   nominations: readonly Nomination[] = [],
+  sortKey: QueueSortKey = "suggested",
 ): QueueEntry[] {
   const entries = derivedQueue(tickets, evidenceKindsOf);
   for (const nomination of nominations) {
@@ -122,12 +125,55 @@ export function humanQueue<T extends TicketView>(
     match.nominationReason = nomination.reason;
     match.nominationId = nomination.id;
   }
-  return entries.sort((a, b) => {
-    const aNominated = a.nominationReason !== undefined ? 0 : 1;
-    const bNominated = b.nominationReason !== undefined ? 0 : 1;
-    if (aNominated !== bNominated) return aNominated - bNominated;
-    return a.ticket.phase - b.ticket.phase || a.ticket.order - b.ticket.order;
-  });
+  return sortQueue(entries, sortKey);
+}
+
+/**
+ * How the queue is ordered. "suggested" is the default and is the only key
+ * that groups: the agent's nominations first, then board order. The rest are
+ * pure single-key sorts, because a human who picks "by id" means by id.
+ */
+export type QueueSortKey = "suggested" | "recent" | "id" | "alpha";
+
+export const QUEUE_SORT_LABELS: Record<QueueSortKey, string> = {
+  suggested: "Suggested first",
+  recent: "Recently updated",
+  id: "Ticket id",
+  alpha: "Title A\u2013Z",
+};
+
+/**
+ * Sort a queue. Returns a NEW array rather than sorting in place, so a caller
+ * re-sorting a memoized list cannot mutate what another render is reading.
+ */
+export function sortQueue(
+  entries: readonly QueueEntry[],
+  sortKey: QueueSortKey = "suggested",
+): QueueEntry[] {
+  const rows = [...entries];
+  switch (sortKey) {
+    case "recent":
+      // Newest first: "recently updated" means the freshest at the top.
+      return rows.sort(
+        (a, b) => b.ticket.updatedAt - a.ticket.updatedAt || a.ticket.id - b.ticket.id,
+      );
+    case "id":
+      return rows.sort((a, b) => a.ticket.id - b.ticket.id);
+    case "alpha":
+      // localeCompare so accented titles sort where a human expects.
+      return rows.sort(
+        (a, b) =>
+          a.ticket.title.localeCompare(b.ticket.title) || a.ticket.id - b.ticket.id,
+      );
+    case "suggested":
+    default:
+      return rows.sort((a, b) => {
+        const aNominated = a.nominationReason !== undefined ? 0 : 1;
+        const bNominated = b.nominationReason !== undefined ? 0 : 1;
+        if (aNominated !== bNominated) return aNominated - bNominated;
+        return a.ticket.phase - b.ticket.phase || a.ticket.order - b.ticket.order;
+      });
+  }
 }
 
 /** The badge count the human sees without opening the queue. */

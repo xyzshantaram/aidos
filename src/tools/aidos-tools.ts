@@ -671,6 +671,87 @@ function registerRequestAllowlist(ctx: Context): void {
   );
 }
 
+function registerSuggestActions(ctx: Context): void {
+  ctx.tools.register(
+    defineTool({
+      name: "suggest_actions",
+      description:
+        "Nominate tickets for the human's attention (#93), each with a reason. They appear " +
+        "at the top of the board's 'Waiting on you' queue, so you never have to list what " +
+        "you need in prose and the human never has to hunt for the tickets. This does NOT " +
+        "create work: a nomination only annotates an ask the gate ALREADY allows, and one " +
+        "naming an action that is not currently available is dropped rather than shown as a " +
+        "button that cannot work. Returns at once - do not wait, do not poll: you are " +
+        "steered when the human acts on or dismisses one. Re-nominating the same ticket and " +
+        "action replaces the reason instead of stacking a duplicate row.",
+      parameters: {
+        suggestions: {
+          type: "array",
+          description: "The tickets to put in front of the human.",
+          required: true as const,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              ticketId: {
+                type: "integer",
+                description: "The ticket to nominate.",
+                required: true as const,
+              },
+              actionId: {
+                type: "string",
+                enum: ["signoff", "verify", "mark-done"],
+                description: "The human action being asked for.",
+                required: true as const,
+              },
+              reason: {
+                type: "string",
+                description:
+                  "Why THIS one, now - what it unblocks. Shown verbatim on the queue row.",
+                required: true as const,
+              },
+            },
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            accepted: { type: "integer", required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        try {
+          const result = ctx.aidos.suggestActions(
+            agent,
+            args as {
+              suggestions: { ticketId: number; actionId: string; reason: string }[];
+            },
+          );
+          ctx.logger?.info?.(`aidos: ${result.accepted} nomination(s) queued`);
+          return { ok: true as const, accepted: result.accepted };
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (a) => {
+        const req = a as { suggestions?: { ticketId?: number; actionId?: string }[] };
+        const rows = req.suggestions ?? [];
+        return present("Suggest actions", "edit", rows, [
+          rows.length + " ticket(s)",
+          rows.map((r) => "#" + r.ticketId).join(" "),
+        ]);
+      },
+    }),
+  );
+}
+
 function registerPlanImport(ctx: Context): void {
   ctx.tools.register(
     defineTool({
@@ -890,6 +971,7 @@ export function apply(ctx: Context, config: unknown): void {
 
   registerScratchTools(ctx);
   registerRequestAllowlist(ctx);
+  registerSuggestActions(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);

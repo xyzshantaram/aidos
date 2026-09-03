@@ -13,12 +13,12 @@
  */
 import react from "react";
 
-import { humanQueue } from "./human-queue";
+import { humanQueue, QUEUE_SORT_LABELS } from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { parseCriteria } from "./board-logic";
 
-import type { Nomination, QueueEntry } from "./human-queue";
+import type { Nomination, QueueEntry, QueueSortKey } from "./human-queue";
 import type { RunOutcome, Step } from "./approval-runner";
 import type { ActionId } from "./action-visibility";
 import type { TicketView } from "../kernel/projections";
@@ -73,12 +73,14 @@ function stepsFor(entry: QueueEntry): Step[] {
 export function QueuePanel(props: QueuePanelProps) {
   const [running, setRunning] = react.useState<QueueEntry | null>(null);
   const [working, setWorking] = react.useState(false);
+  const [sortKey, setSortKey] = react.useState<QueueSortKey>("suggested");
 
   const entries = humanQueue(
     props.tickets,
     (ticket) =>
       (props.evidenceByTicket[String(ticket.id)] ?? []).map((row) => row.kind),
     props.nominations ?? [],
+    sortKey,
   );
 
   if (entries.length === 0) {
@@ -93,6 +95,27 @@ export function QueuePanel(props: QueuePanelProps) {
 
   return (
     <div className="aidos-queue">
+      <div className="aidos-queue-head">
+        <span className="aidos-queue-count">
+          {entries.length + (entries.length === 1 ? " ask" : " asks")}
+        </span>
+        <label className="aidos-queue-sort">
+          <span>Sort</span>
+          <select
+            className="aidos-select"
+            value={sortKey}
+            onChange={(event) => {
+              setSortKey(event.target.value as QueueSortKey);
+            }}
+          >
+            {(Object.keys(QUEUE_SORT_LABELS) as QueueSortKey[]).map((key) => (
+              <option key={key} value={key}>
+                {QUEUE_SORT_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
       <ul className="aidos-ticket-strips">
         {entries.map((entry) => (
           <TicketStrip

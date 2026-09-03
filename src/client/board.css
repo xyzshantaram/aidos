@@ -2399,3 +2399,24 @@
 .aidos-modal-wide {
   width: 720px;
 }
+
+/* #93: the queue's header — count on the left, sort on the right. */
+.aidos-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aidos-queue-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aidos-queue-sort {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
