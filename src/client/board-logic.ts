@@ -722,3 +722,73 @@ export function idColor(fullId: string): string {
   return BADGE_HUES[index];
 }
 
+
+/** The identity fields the selection resolver needs, beyond the board key. */
+export interface SelectionCandidate extends BoardKeyed {
+  workspaceKey: string;
+  slug: string;
+}
+
+/** What the detail panel should render, and whether the selection moved. */
+export interface SelectionResolution<T> {
+  /** The ticket to render. Null closes the panel. */
+  ticket: T | null;
+  /** Non-null when the same ticket now lives at a different board key. */
+  reanchorKey: BoardKey | null;
+  /** Why the panel is showing `ticket`. For tests and for reasoning. */
+  reason: "none" | "resolved" | "reanchored" | "held" | "gone";
+}
+
+/**
+ * #100: which ticket the detail panel shows, given a selection and a board.
+ *
+ * The panel used to be PURELY derived -- one missed lookup and it unmounted,
+ * dropping the reader back to the grid mid-read. The merge re-pulls after ANY
+ * board write, including someone else's, so it fired on other people's
+ * actions and felt random. It also took every modal with it: the evidence
+ * viewer, the allowlist editor, the signoff dialog and the mark-done modal
+ * all render INSIDE the panel, so a background refresh could vanish a dialog
+ * the user was typing into.
+ *
+ * Three steps:
+ *  1. the board key, as before;
+ *  2. RE-ANCHOR on the durable identity when the KEY itself changed. A row's
+ *     board key flips when it goes foreign -> own, but `workspaceKey:slug`
+ *     does not. Deliberately NOT matched on the numeric id: that confusion is
+ *     behind eleven separate bugs in this file's history;
+ *  3. otherwise HOLD the last resolved ticket while a pull is in flight, and
+ *     close only once the board is settled and the ticket is genuinely gone.
+ *
+ * Pure so it is testable: the caller owns the `previous` ref and the
+ * `boardSettling` flag, and this owns every decision made from them.
+ */
+export function resolveSelection<T extends SelectionCandidate>(
+  tickets: readonly T[],
+  selectedKey: BoardKey | null,
+  previous: T | null,
+  boardSettling: boolean,
+): SelectionResolution<T> {
+  if (selectedKey === null) {
+    return { ticket: null, reanchorKey: null, reason: "none" };
+  }
+  const resolved = tickets.find((ticket) => boardKeyOf(ticket) === selectedKey) ?? null;
+  if (resolved !== null) {
+    return { ticket: resolved, reanchorKey: null, reason: "resolved" };
+  }
+  if (previous !== null) {
+    const reanchored =
+      tickets.find((ticket) => fullTicketId(ticket) === fullTicketId(previous)) ?? null;
+    if (reanchored !== null) {
+      return {
+        ticket: reanchored,
+        reanchorKey: boardKeyOf(reanchored),
+        reason: "reanchored",
+      };
+    }
+    if (boardSettling) {
+      // The board is mid-pull. Absence proves nothing yet, so hold.
+      return { ticket: previous, reanchorKey: null, reason: "held" };
+    }
+  }
+  return { ticket: null, reanchorKey: null, reason: "gone" };
+}

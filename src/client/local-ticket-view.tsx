@@ -30,7 +30,7 @@ import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
-import { boardKeyOf } from "./board-logic";
+import { boardKeyOf, resolveSelection } from "./board-logic";
 import { ModalShell } from "./ui";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
 import { asBoardKey, fullTicketId } from "./board-logic";
@@ -601,27 +601,24 @@ function ProjectionReader(props: ProjectionReaderProps) {
    *     FLIGHT, and close only once the board is settled and the ticket is
    *     genuinely gone.
    */
-  const resolvedTicket =
-    selectedKey === null
-      ? null
-      : rawTickets.find((ticket) => boardKeyOf(ticket) === selectedKey) ?? null;
-
   const lastSelected = react.useRef<TicketViewType | null>(null);
-  if (resolvedTicket !== null) {
-    lastSelected.current = resolvedTicket;
-  } else if (selectedKey === null) {
+  const boardSettling = mergePending || isMergePulling(sessionId);
+  const resolution = resolveSelection(
+    rawTickets,
+    selectedKey,
+    lastSelected.current,
+    boardSettling,
+  );
+  // The ref is the only state this owns; every DECISION lives in the pure
+  // resolver, so there is exactly one implementation of it (the duplicate
+  // implementations in this file are what produced eleven wrong-ticket bugs).
+  if (resolution.reason === "resolved" || resolution.reason === "reanchored") {
+    lastSelected.current = resolution.ticket;
+  } else if (resolution.reason === "none" || resolution.reason === "gone") {
     lastSelected.current = null;
   }
 
-  const previous = lastSelected.current;
-  const reanchored =
-    resolvedTicket === null && previous !== null
-      ? rawTickets.find(
-          (ticket) => fullTicketId(ticket) === fullTicketId(previous),
-        ) ?? null
-      : null;
-
-  const reanchoredKey = reanchored === null ? null : boardKeyOf(reanchored);
+  const reanchoredKey = resolution.reanchorKey;
   react.useEffect(
     function () {
       // The ticket is the same ticket; only its address moved.
@@ -630,9 +627,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
     [reanchoredKey],
   );
 
-  const boardSettling = mergePending || isMergePulling(sessionId);
-  const selectedTicket =
-    resolvedTicket ?? reanchored ?? (boardSettling ? previous : null);
+  const selectedTicket = resolution.ticket;
 
   const selectedBoardKey =
     selectedTicket === null ? null : boardKeyOf(selectedTicket);
