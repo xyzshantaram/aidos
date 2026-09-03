@@ -35,6 +35,7 @@ import { CommentsSection } from "./comments-section";
 import { EvidenceAttach, VerifyModal } from "./evidence-attach";
 import { AllowlistRequestCard } from "./allowlist-request-card";
 import { EvidenceStrip } from "./evidence-strip";
+import { TicketStrip } from "./ticket-strip";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
@@ -492,31 +493,36 @@ function DependencyCard(props: {
       props.onJump(jumpKey);
     }
   };
+  /*
+   * #93: a dependency renders through the SHARED TicketStrip, not a private
+   * dep-card. A referenced ticket now looks identical in the dependency
+   * section, the human work queue, and (later) tool-call cards — which is the
+   * whole point of the component. The unknown-ref fallback keeps the strip's
+   * shape without inventing a ticket that does not exist.
+   */
+  if (known === undefined) {
+    return (
+      <li className="aidos-ticket-strip">
+        <div className="aidos-ticket-strip-main">
+          <span className="aidos-chip aidos-chip-dep" title={ref}>
+            {displayDep(ref)}
+          </span>
+          <span className="aidos-ticket-strip-body">
+            <span className="aidos-ticket-strip-title aidos-dep-card-unknown">
+              not on this board
+            </span>
+            <span className="aidos-ticket-strip-meta">{ref}</span>
+          </span>
+        </div>
+      </li>
+    );
+  }
   return (
-    <div className="aidos-dep-card">
-      <div className="aidos-dep-card-main">
-        <span className="aidos-chip aidos-chip-dep" title={ref}>
-          {displayDep(ref)}
-        </span>
-        {known !== undefined ? (
-          <>
-            <span className="aidos-dep-card-title" title={known.title}>
-              {known.title}
-            </span>
-            <span className={`aidos-chip aidos-chip-state-${known.state.replace(/\s+/g, "-")}`}>
-              {stateLabel(known.state)}
-            </span>
-          </>
-        ) : (
-          <span className="aidos-dep-card-title aidos-dep-card-unknown">not on this board</span>
-        )}
-      </div>
-      {props.onJump !== undefined ? (
-        <button className="aidos-btn aidos-dep-card-open" onClick={open} title={"Open " + ref}>
-          Open
-        </button>
-      ) : null}
-    </div>
+    <TicketStrip
+      ticket={known}
+      meta={"depends on " + displayDep(ref)}
+      onOpen={props.onJump !== undefined ? open : undefined}
+    />
   );
 }
 
@@ -600,7 +606,7 @@ function DependencySection(props: {
         {current.length === 0 ? (
           <p className="aidos-detail-note">No dependencies.</p>
         ) : (
-          <div className="aidos-dep-cards">
+          <ul className="aidos-ticket-strips">
             {current.map((ref) => (
               <DependencyCard
                 key={ref}
@@ -611,7 +617,7 @@ function DependencySection(props: {
                 workspaceKey={props.workspaceKey}
               />
             ))}
-          </div>
+          </ul>
         )}
         <div className="aidos-dep-search">
           <input

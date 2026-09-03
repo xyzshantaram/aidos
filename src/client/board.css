@@ -1980,48 +1980,17 @@
 
 /* Dependency mini-cards (#board-feedback): a dependency renders as a card
    with title + state + an Open button, not a bare chip. */
-.aidos-dep-cards {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
 
-.aidos-dep-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  padding: 6px 8px;
-  background: var(--surface);
-}
 
-.aidos-dep-card-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
 
-.aidos-dep-card-title {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
 
+/* The one dep-card survivor: the unknown-ref fallback inside a shared
+   TicketStrip (#93). Every other dep-card rule died with the private card. */
 .aidos-dep-card-unknown {
   color: var(--text-muted);
   font-style: italic;
 }
 
-.aidos-dep-card-open {
-  flex: none;
-}
 
 /* #51: the pending-approval card. Kind-generic: one card style for every
    agent-to-user ask (allowlist first). */
