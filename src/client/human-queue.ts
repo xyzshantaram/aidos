@@ -263,24 +263,66 @@ export function queueCount(entries: readonly QueueEntry[]): number {
  * opened the queue, and the row sat in board order with no hint that anything
  * had been proposed or why it did not take. Policy stays; silence goes.
  */
+/** The ticket state each human action applies to. */
+const ACTION_STATE: Record<string, string> = {
+  signoff: "open",
+  verify: "awaiting_verification",
+  "mark-done": "awaiting_verification",
+};
+
+/** Lifecycle order, so "past" can be distinguished from "not yet". */
+const STATE_SEQUENCE = ["open", "in_progress", "awaiting_verification", "done"];
+
+export type UnmatchedKind = "fulfilled" | "not-on-board" | "unavailable";
+
 export function unmatchedNominations<T extends TicketView>(
   tickets: readonly T[],
   evidenceKindsOf: (ticket: T) => EvidenceKinds,
   nominations: readonly Nomination[],
-): { nomination: Nomination; reason: string }[] {
+): { nomination: Nomination; kind: UnmatchedKind; reason: string }[] {
   const entries = derivedQueue(tickets, evidenceKindsOf);
-  const out: { nomination: Nomination; reason: string }[] = [];
+  const out: { nomination: Nomination; kind: UnmatchedKind; reason: string }[] = [];
   for (const nomination of nominations) {
     const key = String(nomination.ticketId);
     if (entries.some((e) => e.boardKey === key && e.actionId === nomination.actionId)) {
       continue;
     }
-    const onBoard = tickets.some((t) => boardKeyOf(t) === key);
+    const ticket = tickets.find((t) => boardKeyOf(t) === key);
+    if (ticket === undefined) {
+      out.push({
+        nomination,
+        kind: "not-on-board",
+        reason:
+          "#" + key + " is not on this board (it may belong to another session)",
+      });
+      continue;
+    }
+    /*
+     * FULFILLED, not broken. The first cut reported every unmatched
+     * nomination as a complaint, so signing off #100 -- doing exactly what
+     * was asked -- produced "#100 has no available signoff action right now".
+     * An ask whose ticket has MOVED PAST the state that action applies to has
+     * been answered, and nagging about it is worse than silence.
+     */
+    const wanted = ACTION_STATE[nomination.actionId];
+    const wantedAt = wanted === undefined ? -1 : STATE_SEQUENCE.indexOf(wanted);
+    const isAt = STATE_SEQUENCE.indexOf(ticket.state);
+    // PAST the state, not merely different from it: an open ticket has not
+    // fulfilled a mark-done ask, it has not reached it yet.
+    if (wantedAt >= 0 && isAt > wantedAt) {
+      out.push({
+        nomination,
+        kind: "fulfilled",
+        reason:
+          "#" + key + " is already " + ticket.state + "; the ask was answered",
+      });
+      continue;
+    }
     out.push({
       nomination,
-      reason: !onBoard
-        ? "#" + key + " is not on this board (it may belong to another session)"
-        : "#" + key + " has no available " + nomination.actionId + " action right now",
+      kind: "unavailable",
+      reason:
+        "#" + key + " has no available " + nomination.actionId + " action right now",
     });
   }
   return out;

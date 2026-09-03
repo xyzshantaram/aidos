@@ -118,6 +118,8 @@ export function QueuePanel(props: QueuePanelProps) {
   );
 
   const suggested = entries.filter((e) => e.nominationReason !== undefined).length;
+  // Only ASKS THAT NEED ATTENTION are surfaced. A fulfilled nomination means
+  // the human did the thing; saying so would be nagging about success.
   const unmatched = unmatchedNominations(
     props.tickets,
     (ticket) =>

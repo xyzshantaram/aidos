@@ -369,11 +369,54 @@ describe("u93 human-queue: unmatched nominations are reported", () => {
     );
     expect(rows).toHaveLength(1);
     expect(rows[0].reason).toContain("no available mark-done");
+    expect(rows[0].kind).toBe("unavailable");
   });
 
   it("reports nothing when the nomination matches", () => {
     expect(
       unmatchedNominations([makeTicket({ id: 1, state: "open" })], noEvidence, [nom()]),
     ).toEqual([]);
+  });
+});
+
+describe("u93 human-queue: a fulfilled ask is not a complaint", () => {
+  const nom = (over: Partial<Nomination> = {}): Nomination => ({
+    id: "n1",
+    ticketId: 1,
+    actionId: "signoff",
+    reason: "please",
+    at: 0,
+    ...over,
+  });
+
+  it("signing off retires the signoff ask as FULFILLED, not unavailable", () => {
+    // The exact case that produced the nagging message: the human did the
+    // thing that was asked, and was told the action was unavailable.
+    const rows = unmatchedNominations(
+      [makeTicket({ id: 1, state: "in_progress" })],
+      noEvidence,
+      [nom()],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kind).toBe("fulfilled");
+  });
+
+  it("an ask the ticket has not REACHED yet stays unavailable, not fulfilled", () => {
+    const rows = unmatchedNominations(
+      [makeTicket({ id: 1, state: "open" })],
+      noEvidence,
+      [nom({ actionId: "mark-done" })],
+    );
+    expect(rows[0].kind).toBe("unavailable");
+    expect(rows[0].reason).toContain("no available mark-done");
+  });
+
+  it("a ticket that reached done fulfils a verify ask", () => {
+    const rows = unmatchedNominations(
+      [makeTicket({ id: 1, state: "done" })],
+      noEvidence,
+      [nom({ actionId: "verify" })],
+    );
+    expect(rows[0].kind).toBe("fulfilled");
   });
 });

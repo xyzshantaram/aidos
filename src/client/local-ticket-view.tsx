@@ -33,7 +33,7 @@ import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { boardKeyOf } from "./board-logic";
 import { ModalShell } from "./ui";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
-import { asBoardKey } from "./board-logic";
+import { asBoardKey, fullTicketId } from "./board-logic";
 import type { BoardKey } from "./board-logic";
 import type { RunOutcome } from "./approval-runner";
 import { activeTicketRow } from "./active-ticket";
@@ -572,10 +572,58 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * boardKeyOf produced "12", and onOpen feeding entry.boardKey into this
    * lookup would silently open nothing. One implementation, imported.
    */
-  const selectedTicket =
+  /*
+   * #100: the detail panel used to be PURELY derived -- one missed lookup and
+   * it unmounted, dropping the reader back to the grid mid-read. The merge
+   * re-pulls after ANY board write, including someone else's, so this fired
+   * on other people's actions and felt random.
+   *
+   * It also took every modal with it: EvidenceViewer, AllowlistEditor,
+   * SignoffDialog and MarkDoneModal all render INSIDE the detail panel, so a
+   * refresh could vanish a dialog the user was typing into.
+   *
+   * Three-step resolution:
+   *  1. the board key, as before;
+   *  2. RE-ANCHOR on the durable identity when the key itself changed -- a
+   *     row's board key flips when it goes foreign->own, but workspaceKey:slug
+   *     does not. Deliberately NOT matched on the numeric id: that is the
+   *     confusion behind eleven separate bugs in this file's history;
+   *  3. otherwise keep showing the last resolved ticket WHILE A PULL IS IN
+   *     FLIGHT, and close only once the board is settled and the ticket is
+   *     genuinely gone.
+   */
+  const resolvedTicket =
     selectedKey === null
       ? null
       : rawTickets.find((ticket) => boardKeyOf(ticket) === selectedKey) ?? null;
+
+  const lastSelected = react.useRef<TicketViewType | null>(null);
+  if (resolvedTicket !== null) {
+    lastSelected.current = resolvedTicket;
+  } else if (selectedKey === null) {
+    lastSelected.current = null;
+  }
+
+  const previous = lastSelected.current;
+  const reanchored =
+    resolvedTicket === null && previous !== null
+      ? rawTickets.find(
+          (ticket) => fullTicketId(ticket) === fullTicketId(previous),
+        ) ?? null
+      : null;
+
+  const reanchoredKey = reanchored === null ? null : boardKeyOf(reanchored);
+  react.useEffect(
+    function () {
+      // The ticket is the same ticket; only its address moved.
+      if (reanchoredKey !== null) setSelectedKey(reanchoredKey);
+    },
+    [reanchoredKey],
+  );
+
+  const boardSettling = mergePending || isMergePulling(sessionId);
+  const selectedTicket =
+    resolvedTicket ?? reanchored ?? (boardSettling ? previous : null);
 
   const selectedBoardKey =
     selectedTicket === null ? null : boardKeyOf(selectedTicket);

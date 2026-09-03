@@ -181,9 +181,27 @@ export function ApprovalRunner(props: ApprovalRunnerProps) {
         <StepBody step={step} value={value} working={working} onChange={update} />
       </div>
       <div className="aidos-form-actions">
+        {/*
+          * CANCEL and REJECT are different answers and must not be one button
+          * (#100 follow-up). Cancel means "not deciding now": nothing is
+          * written and the ask stays in the queue. Reject means "no": the
+          * request is resolved and the agent is told.
+          *
+          * The runner shipped with Reject as its only visible exit, so a user
+          * who merely wanted out had to find the small close icon -- or click
+          * Reject, silently answering a question they meant to postpone.
+          */}
+        <button
+          className="aidos-btn"
+          disabled={working}
+          onClick={props.onClose}
+        >
+          Cancel
+        </button>
         <button
           className="aidos-btn aidos-btn-danger"
           disabled={working}
+          title="Answer no. The agent is told and the request is resolved."
           onClick={() => {
             props.onResolve({ status: "rejected" });
           }}
