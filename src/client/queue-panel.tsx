@@ -13,7 +13,7 @@
  */
 import react from "react";
 
-import { humanQueue, QUEUE_SORT_LABELS } from "./human-queue";
+import { humanQueue, unmatchedNominations, QUEUE_SORT_LABELS } from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { parseCriteria, boardKeyOf } from "./board-logic";
@@ -41,6 +41,10 @@ export interface QueuePanelProps {
   onOpen: (entry: QueueEntry) => void;
   /** Performs the action. Resolves when the board has been written. */
   onAct: (entry: QueueEntry, outcome: RunOutcome) => Promise<void>;
+  /** A failed fetch, so an empty queue is never mistaken for a working one. */
+  error?: string | null;
+  /** Re-fetch on demand. */
+  onRefresh?: () => void;
   /** Drops a nomination without acting on it. */
   onDismiss?: (nominationId: string) => void;
 }
@@ -113,6 +117,33 @@ export function QueuePanel(props: QueuePanelProps) {
     props.approvals ?? [],
   );
 
+  const suggested = entries.filter((e) => e.nominationReason !== undefined).length;
+  const unmatched = unmatchedNominations(
+    props.tickets,
+    (ticket) =>
+      (props.evidenceByTicket[boardKeyOf(ticket)] ?? []).map((row) => row.kind),
+    props.nominations ?? [],
+  );
+
+  /*
+   * An error must never render as an empty queue: "nothing is waiting on you"
+   * and "I could not find out" are opposite messages.
+   */
+  if (props.error != null && props.error !== "") {
+    return (
+      <div className="aidos-queue">
+        <p className="aidos-queue-empty">
+          {"Could not load the queue: " + props.error}
+        </p>
+        {props.onRefresh !== undefined ? (
+          <button className="aidos-btn" onClick={props.onRefresh}>
+            Retry
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
   if (entries.length === 0) {
     return (
       <div className="aidos-queue">
@@ -128,6 +159,7 @@ export function QueuePanel(props: QueuePanelProps) {
       <div className="aidos-queue-head">
         <span className="aidos-queue-count">
           {entries.length + (entries.length === 1 ? " ask" : " asks")}
+          {suggested > 0 ? " \u00b7 " + suggested + " suggested by the agent" : ""}
         </span>
         <label className="aidos-queue-sort">
           <span>Sort</span>
@@ -146,6 +178,18 @@ export function QueuePanel(props: QueuePanelProps) {
           </select>
         </label>
       </div>
+      {unmatched.length > 0 ? (
+        <ul className="aidos-queue-unmatched">
+          {unmatched.map((row) => (
+            <li key={row.nomination.id}>
+              {"The agent suggested " +
+                row.nomination.actionId +
+                " but it is not shown: " +
+                row.reason}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <ul className="aidos-ticket-strips">
         {entries.map((entry) => (
           <TicketStrip

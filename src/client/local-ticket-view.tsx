@@ -373,25 +373,64 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [nominations, setNominations] = react.useState<Nomination[]>([]);
   const [approvals, setApprovals] = react.useState<PendingApprovalLike[]>([]);
 
+  /*
+   * #93: the first cut swallowed both failures with `.catch(() => set([]))`,
+   * so a broken fetch was INDISTINGUISHABLE from "nothing is waiting on you"
+   * -- the worst possible failure mode for a queue whose entire job is
+   * telling you what is waiting. A failure now says so.
+   */
+  const [queueError, setQueueError] = react.useState<string | null>(null);
+
   const refreshNominations = react.useCallback(
     function () {
+      setQueueError(null);
+      /*
+       * INDEPENDENT fetches. A first attempt used Promise.all, which meant one
+       * failing remote wiped BOTH lists -- turning a partial outage into a
+       * total one. Each reports its own failure and neither can erase the
+       * other's result.
+       */
       void callAidosRemote("actionNominations", {}, sessionId)
         .then((rows) => {
           setNominations((rows as unknown as Nomination[]) ?? []);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           setNominations([]);
+          setQueueError(
+            "nominations: " +
+              (error instanceof Error ? error.message : String(error)),
+          );
         });
-      // #93: pending approval cards are asks too, and nothing surfaced them.
       void callAidosRemote("pendingApprovals", {}, sessionId)
         .then((rows) => {
           setApprovals((rows as unknown as PendingApprovalLike[]) ?? []);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           setApprovals([]);
+          setQueueError(
+            "approvals: " +
+              (error instanceof Error ? error.message : String(error)),
+          );
         });
     },
     [sessionId],
+  );
+
+  /*
+   * Keep the queue live WHILE IT IS OPEN. The first cut fetched only on open,
+   * reasoning that nominations cannot change the badge count -- true, but it
+   * means an agent nominating something while the queue is already open is
+   * invisible, and the human sees a stale list with no hint that it is stale.
+   */
+  react.useEffect(
+    function () {
+      if (!queueOpen) return;
+      const timer = setInterval(refreshNominations, 4000);
+      return function () {
+        clearInterval(timer);
+      };
+    },
+    [queueOpen, refreshNominations],
   );
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
@@ -781,6 +820,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
         evidenceByTicket={rawEvidence}
         nominations={nominations}
         approvals={approvals}
+        error={queueError}
+        onRefresh={refreshNominations}
         onOpen={(entry) => {
           setQueueOpen(false);
           selectTicket(entry.boardKey);

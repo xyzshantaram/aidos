@@ -253,3 +253,35 @@ export function sortQueue(
 export function queueCount(entries: readonly QueueEntry[]): number {
   return entries.length;
 }
+
+/**
+ * Nominations that matched NO entry, with why (#93).
+ *
+ * `humanQueue` drops an unmatched nomination on purpose -- the agent must not
+ * be able to conjure a button the gate refuses. But dropping it SILENTLY made
+ * a real bug undiagnosable: an agent nominated #100 for signoff, the human
+ * opened the queue, and the row sat in board order with no hint that anything
+ * had been proposed or why it did not take. Policy stays; silence goes.
+ */
+export function unmatchedNominations<T extends TicketView>(
+  tickets: readonly T[],
+  evidenceKindsOf: (ticket: T) => EvidenceKinds,
+  nominations: readonly Nomination[],
+): { nomination: Nomination; reason: string }[] {
+  const entries = derivedQueue(tickets, evidenceKindsOf);
+  const out: { nomination: Nomination; reason: string }[] = [];
+  for (const nomination of nominations) {
+    const key = String(nomination.ticketId);
+    if (entries.some((e) => e.boardKey === key && e.actionId === nomination.actionId)) {
+      continue;
+    }
+    const onBoard = tickets.some((t) => boardKeyOf(t) === key);
+    out.push({
+      nomination,
+      reason: !onBoard
+        ? "#" + key + " is not on this board (it may belong to another session)"
+        : "#" + key + " has no available " + nomination.actionId + " action right now",
+    });
+  }
+  return out;
+}

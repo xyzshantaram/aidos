@@ -9,7 +9,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { derivedQueue, humanQueue, queueCount, sortQueue } from "../src/client/human-queue";
+import {
+  derivedQueue,
+  humanQueue,
+  queueCount,
+  sortQueue,
+  unmatchedNominations,
+} from "../src/client/human-queue";
 import type { Nomination } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
 import { queueEntriesFor } from "../src/client/queue-panel";
@@ -327,5 +333,47 @@ describe("u93 human-queue: pending approvals are asks", () => {
       { ...approval, id: "req-2", ticketId: 999 },
     ]);
     expect(rows.filter((r) => r.approvalId === "req-2")).toEqual([]);
+  });
+});
+
+/**
+ * #93: an unmatched nomination must be VISIBLE, not silently dropped.
+ * A real report ("suggestions aren't working") was undiagnosable because the
+ * queue dropped a nomination with no trace of why.
+ */
+describe("u93 human-queue: unmatched nominations are reported", () => {
+  const nom = (over: Partial<Nomination> = {}): Nomination => ({
+    id: "n1",
+    ticketId: 1,
+    actionId: "signoff",
+    reason: "please",
+    at: 0,
+    ...over,
+  });
+
+  it("reports a nomination whose ticket is not on the board, and says so", () => {
+    const rows = unmatchedNominations(
+      [makeTicket({ id: 1, state: "open" })],
+      noEvidence,
+      [nom({ ticketId: 999 })],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toContain("not on this board");
+  });
+
+  it("reports a nomination whose action is unavailable, and says which", () => {
+    const rows = unmatchedNominations(
+      [makeTicket({ id: 1, state: "open" })],
+      noEvidence,
+      [nom({ actionId: "mark-done" })],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toContain("no available mark-done");
+  });
+
+  it("reports nothing when the nomination matches", () => {
+    expect(
+      unmatchedNominations([makeTicket({ id: 1, state: "open" })], noEvidence, [nom()]),
+    ).toEqual([]);
   });
 });
