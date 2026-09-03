@@ -74,7 +74,7 @@ export function AllowlistEditor(props: AllowlistEditorProps) {
            * from the union the editor shows. Compare BOARD KEYS, which is the
            * only address that identifies a row uniquely.
            */
-          if (boardKeyOf(row) === props.ticketIdKey || row.state !== "in_progress") {
+          if (row.id === props.ticketId || row.state !== "in_progress") {
             continue;
           }
           for (const path of row.allowlist ?? []) {

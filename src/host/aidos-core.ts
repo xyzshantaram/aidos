@@ -1362,7 +1362,11 @@ registerAidosSessionEventTypes(ctx);
    * them, and the ticket strip needs it to mark the rows that carry one.
    */
   @Remote("pendingApprovals")
-  pendingApprovals(agent: Agent, _args?: Record<string, never>): PendingApproval[] {
+  // The parameter MUST be named `args` (#93): the typert descriptor reflects
+  // on the parameter NAME, so `_args` -- the usual unused-parameter spelling --
+  // declares a Remote that accepts nothing, and every client call is refused
+  // with `unexpected "args"`. workspaceTickets above is the working precedent.
+  pendingApprovals(agent: Agent, args?: Record<string, never>): PendingApproval[] {
     const sessionId = String(agent.session.id);
     return [...this._pendingApprovals.values()]
       .filter((row) => row.sessionId === sessionId)
@@ -1562,7 +1566,10 @@ registerAidosSessionEventTypes(ctx);
 
   /** The BOARD surface: this session's nominations, oldest first. */
   @Remote("actionNominations")
-  actionNominations(agent: Agent, _args?: Record<string, never>): ActionNomination[] {
+  // Named `args`, not `_args`: see the note on pendingApprovals. This one
+  // silently refused every client call, which is why agent nominations never
+  // reached the queue.
+  actionNominations(agent: Agent, args?: Record<string, never>): ActionNomination[] {
     const sessionId = String(agent.session.id);
     return [...this._nominations.values()]
       .filter((row) => row.sessionId === sessionId)

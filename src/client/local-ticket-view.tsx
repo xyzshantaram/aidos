@@ -396,10 +396,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
         })
         .catch((error: unknown) => {
           setNominations([]);
-          setQueueError(
+          const detail =
             "nominations: " +
-              (error instanceof Error ? error.message : String(error)),
-          );
+            (error instanceof Error ? error.message : String(error));
+          // APPEND: both fetches wrote this slot, so two simultaneous
+          // failures showed as one and the first was invisible -- which is
+          // exactly how the _args bug hid on the nominations side.
+          setQueueError((prev) => (prev == null ? detail : prev + "; " + detail));
         });
       void callAidosRemote("pendingApprovals", {}, sessionId)
         .then((rows) => {
@@ -407,10 +410,10 @@ function ProjectionReader(props: ProjectionReaderProps) {
         })
         .catch((error: unknown) => {
           setApprovals([]);
-          setQueueError(
+          const detail =
             "approvals: " +
-              (error instanceof Error ? error.message : String(error)),
-          );
+            (error instanceof Error ? error.message : String(error));
+          setQueueError((prev) => (prev == null ? detail : prev + "; " + detail));
         });
     },
     [sessionId],

@@ -28056,7 +28056,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const rows = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId && row.ticketId === wanted).sort((a, b) => a.at - b.at);
     return rows[0] ?? null;
   }
-  pendingApprovals(agent, _args) {
+  // The parameter MUST be named `args` (#93): the typert descriptor reflects
+  // on the parameter NAME, so `_args` -- the usual unused-parameter spelling --
+  // declares a Remote that accepts nothing, and every client call is refused
+  // with `unexpected "args"`. workspaceTickets above is the working precedent.
+  pendingApprovals(agent, args) {
     const sessionId = String(agent.session.id);
     return [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId).sort((a, b) => a.at - b.at);
   }
@@ -28161,7 +28165,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       previouslyDismissed
     };
   }
-  actionNominations(agent, _args) {
+  // Named `args`, not `_args`: see the note on pendingApprovals. This one
+  // silently refused every client call, which is why agent nominations never
+  // reached the queue.
+  actionNominations(agent, args) {
     const sessionId = String(agent.session.id);
     return [...this._nominations.values()].filter((row) => row.sessionId === sessionId).sort((a, b) => a.at - b.at);
   }
