@@ -385,25 +385,33 @@ function ProjectionReader(props: ProjectionReaderProps) {
   /*
    * #21: which tiles carry the pending-approval flag.
    *
-   * A pending approval names a ticket by NUMERIC ID, and it always belongs
-   * to THIS session -- requestAllowlist validates against the calling
-   * session's own state. So the row it refers to is an own row, whose board
-   * key is String(id). Resolved through boardKeyOf on the actual row rather
-   * than built inline: constructing a key by hand is how the same bug
-   * happened eleven times, and #93's review found three of them at once.
+   * A pending approval names a ticket by NUMERIC ID and always belongs to
+   * THIS session -- requestAllowlist validates against the calling session's
+   * own state -- so the row it refers to is an own row, whose board key is
+   * String(id). That candidate key is VALIDATED against the real keys of the
+   * real rows rather than trusted: a mis-constructed key can then only fail
+   * to match, never flag the wrong tile. Constructing a key by hand and
+   * trusting it is how the same bug happened twelve times.
+   *
+   * NOT memoised (#21 review round 2, finding 1). It was, on [approvals,
+   * ownRows] -- and `ownRows` is rebuilt by Object.values(...).map(...) on
+   * every render, so its identity always changed and the memo re-ran every
+   * time anyway. It bought nothing and hid that fact behind a useMemo that
+   * looked like an optimisation. Two set builds over a handful of approvals
+   * is not worth memoising; the honest version is the plain one.
    */
-  const awaitingApprovalKeys = react.useMemo(
-    function () {
-      const keys = new Set<string>();
-      for (const approval of approvals) {
-        const wanted = String(approval.ticketId);
-        for (const row of ownRows) {
-          if (boardKeyOf(row) === wanted) keys.add(boardKeyOf(row));
-        }
-      }
-      return keys;
-    },
-    [approvals, ownRows],
+  /*
+   * Set<string>, not Set<BoardKey>: the candidate below is an UNBRANDED
+   * string built from a host-supplied number, and the brand refused to let
+   * it be tested against branded keys -- correctly. Widening here is the
+   * safe direction (a BoardKey is a string), and it keeps the check honest:
+   * an unbranded candidate can only ever fail to match a real key.
+   */
+  const ownBoardKeys = new Set<string>(ownRows.map((row) => boardKeyOf(row)));
+  const awaitingApprovalKeys = new Set(
+    approvals
+      .map((approval) => String(approval.ticketId))
+      .filter((key) => ownBoardKeys.has(key)),
   );
 
   /*
