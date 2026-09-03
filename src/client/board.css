@@ -2528,3 +2528,20 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/*
+ * #100: the detail panel's "this ticket is not on the board right now"
+ * notice. The panel no longer closes when a row goes momentarily missing --
+ * it says so and keeps the reader's place, along with any modal they had
+ * open inside it. Warning-toned because it means the view may be stale, not
+ * because anything is broken.
+ */
+.aidos-detail-absent {
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--state-awaiting) 55%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--state-awaiting) 16%, transparent);
+  color: color-mix(in srgb, var(--state-awaiting) 34%, #ffffff);
+  font-size: 12px;
+  line-height: 1.4;
+}

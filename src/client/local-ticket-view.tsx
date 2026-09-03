@@ -626,13 +626,14 @@ function ProjectionReader(props: ProjectionReaderProps) {
    *     genuinely gone.
    */
   const lastSelected = react.useRef<TicketViewType | null>(null);
-  const boardSettling = mergePending || isMergePulling(sessionId);
-  const resolution = resolveSelection(
-    rawTickets,
-    selectedKey,
-    lastSelected.current,
-    boardSettling,
-  );
+  /*
+   * #100 second attempt. No `boardSettling` argument: the merge pull clears
+   * its in-flight flag BEFORE it triggers the re-render, so the flag is
+   * already false on exactly the render that lands the new board -- which is
+   * the render that used to eject the reader. Passing it was worse than
+   * useless, because it made the hold look covered while it was not.
+   */
+  const resolution = resolveSelection(rawTickets, selectedKey, lastSelected.current);
   // The ref is the only state this owns; every DECISION lives in the pure
   // resolver, so there is exactly one implementation of it (the duplicate
   // implementations in this file are what produced eleven wrong-ticket bugs).
@@ -702,9 +703,24 @@ function ProjectionReader(props: ProjectionReaderProps) {
     remember(view.workspaceKey + ":" + String(view.id), view);
   }
 
+  /*
+   * #100: when the held ticket is absent from the current board, SAY SO
+   * instead of closing. The reader keeps their place and their open modals,
+   * and learns why the panel looks stale -- rather than being ejected and
+   * left to guess, which is what the original bug felt like.
+   */
+  const absentNotice = resolution.absent ? (
+    <div className="aidos-detail-absent" role="status">
+      This ticket is not on the board right now. You are seeing the last
+      version that loaded. Close the panel to return to the grid.
+    </div>
+  ) : null;
+
   const detailPanel =
     selectedTicket === null ? null : (
-      <DetailView
+      <>
+        {absentNotice}
+        <DetailView
         key={selectedBoardKey}
         ticket={selectedTicket}
         evidence={selectedEvidence}
@@ -721,7 +737,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
         }}
         ticketsByKey={ticketsByKey}
         onJump={selectTicket}
-      />
+        />
+      </>
     );
   const createModal = (
     <CreateTicketModal

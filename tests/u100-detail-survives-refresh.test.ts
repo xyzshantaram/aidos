@@ -14,6 +14,8 @@
  * about the RESOLUTION rather than about any one modal.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { asBoardKey, boardKeyOf, resolveSelection } from "../src/client/board-logic";
@@ -39,7 +41,7 @@ function foreign(id: number, slug: string, session: string): Row {
 describe("#100 the detail panel survives a board refresh", () => {
   it("resolves normally when the row is present", () => {
     const row = own(12, "a-ticket");
-    const out = resolveSelection([row], boardKeyOf(row), null, false);
+    const out = resolveSelection([row], boardKeyOf(row), null);
     expect(out.ticket).toBe(row);
     expect(out.reason).toBe("resolved");
     expect(out.reanchorKey).toBeNull();
@@ -52,7 +54,7 @@ describe("#100 the detail panel survives a board refresh", () => {
      * and closed the panel.
      */
     const row = own(12, "a-ticket");
-    const out = resolveSelection([], boardKeyOf(row), row, true);
+    const out = resolveSelection([], boardKeyOf(row), row);
     expect(out.ticket).toBe(row);
     expect(out.reason).toBe("held");
   });
@@ -61,25 +63,37 @@ describe("#100 the detail panel survives a board refresh", () => {
     // The report came from viewing a foreign ticket: foreign rows come from
     // the merge, so a re-pull is exactly when they vanish.
     const row = foreign(12, "a-ticket", "sess-other");
-    const out = resolveSelection([], boardKeyOf(row), row, true);
+    const out = resolveSelection([], boardKeyOf(row), row);
     expect(out.ticket).toBe(row);
     expect(out.reason).toBe("held");
   });
 
-  it("closes only once the board is SETTLED and the ticket is really gone", () => {
+  it("HOLDS even when no pull is in flight, and says the row is absent", () => {
+    /*
+     * THE CORRECTED CONTRACT, and the reason the first fix did not work.
+     *
+     * That fix held only while a pull was in flight. But the merge pull
+     * clears its in-flight flag BEFORE it triggers the re-render, so on
+     * exactly the render that lands the new board the flag is already
+     * false -- the hold never covered the render that ejected the reader,
+     * and the user reported the bug still happening.
+     *
+     * There is no trustworthy "the board is complete" signal, so the panel
+     * no longer pretends to have one. A selection ends when the USER ends
+     * it; an absent row is REPORTED, not acted on.
+     */
     const row = own(12, "a-ticket");
-    const out = resolveSelection([], boardKeyOf(row), row, false);
-    expect(out.ticket).toBeNull();
-    expect(out.reason).toBe("gone");
+    const out = resolveSelection([], boardKeyOf(row), row);
+    expect(out.ticket).toBe(row);
+    expect(out.reason).toBe("held");
+    expect(out.absent).toBe(true);
   });
 
-  it("closes when the user closes it, pull in flight or not", () => {
+  it("the USER closing it is the only thing that closes it", () => {
     const row = own(12, "a-ticket");
-    for (const settling of [true, false]) {
-      const out = resolveSelection([row], null, row, settling);
-      expect(out.ticket).toBeNull();
-      expect(out.reason).toBe("none");
-    }
+    const out = resolveSelection([row], null, row);
+    expect(out.ticket).toBeNull();
+    expect(out.reason).toBe("none");
   });
 });
 
@@ -92,7 +106,7 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
      */
     const before = foreign(12, "a-ticket", "sess-other");
     const after = own(12, "a-ticket");
-    const out = resolveSelection([after], boardKeyOf(before), before, false);
+    const out = resolveSelection([after], boardKeyOf(before), before);
     expect(out.ticket).toBe(after);
     expect(out.reason).toBe("reanchored");
     expect(out.reanchorKey).toBe(boardKeyOf(after));
@@ -101,7 +115,7 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
   it("re-anchors the other way too, own becoming foreign", () => {
     const before = own(12, "a-ticket");
     const after = foreign(12, "a-ticket", "sess-other");
-    const out = resolveSelection([after], boardKeyOf(before), before, false);
+    const out = resolveSelection([after], boardKeyOf(before), before);
     expect(out.ticket).toBe(after);
     expect(out.reanchorKey).toBe(boardKeyOf(after));
   });
@@ -111,7 +125,7 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
     // would show outdated data. The found row wins.
     const before = foreign(12, "a-ticket", "sess-other");
     const after = own(12, "a-ticket");
-    const out = resolveSelection([after], boardKeyOf(before), before, true);
+    const out = resolveSelection([after], boardKeyOf(before), before);
     expect(out.reason).toBe("reanchored");
     expect(out.ticket).toBe(after);
   });
@@ -126,9 +140,12 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
      */
     const before = foreign(12, "my-ticket", "sess-other");
     const impostor = own(12, "a-completely-different-ticket");
-    const out = resolveSelection([impostor], boardKeyOf(before), before, false);
-    expect(out.ticket).toBeNull();
-    expect(out.reason).toBe("gone");
+    const out = resolveSelection([impostor], boardKeyOf(before), before);
+    // Held (the reader keeps their place), and crucially NOT swapped onto
+    // the impostor -- which is the failure this test exists to prevent.
+    expect(out.ticket).toBe(before);
+    expect(out.ticket).not.toBe(impostor);
+    expect(out.absent).toBe(true);
   });
 
   it("does not RE-ANCHOR across workspaces on a shared slug", () => {
@@ -141,9 +158,9 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
       slug: "same-slug",
       foreign: false,
     };
-    const out = resolveSelection([elsewhere], boardKeyOf(before), before, false);
-    expect(out.ticket).toBeNull();
-    expect(out.reason).toBe("gone");
+    const out = resolveSelection([elsewhere], boardKeyOf(before), before);
+    expect(out.ticket).toBe(before);
+    expect(out.ticket).not.toBe(elsewhere);
   });
 
   it("documents the KNOWN GAP: a board key is not workspace-qualified", () => {
@@ -167,7 +184,7 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
       slug: "same-slug",
       foreign: false,
     };
-    const out = resolveSelection([elsewhere], boardKeyOf(before), before, false);
+    const out = resolveSelection([elsewhere], boardKeyOf(before), before);
     expect(out.reason).toBe("resolved");
     expect(out.ticket).toBe(elsewhere);
   });
@@ -175,14 +192,64 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
   it("holds rather than re-anchoring when nothing matches mid-pull", () => {
     const before = own(12, "a-ticket");
     const unrelated = own(99, "something-else");
-    const out = resolveSelection([unrelated], boardKeyOf(before), before, true);
+    const out = resolveSelection([unrelated], boardKeyOf(before), before);
     expect(out.reason).toBe("held");
     expect(out.ticket).toBe(before);
   });
 
   it("never holds a ticket the user never opened", () => {
-    const out = resolveSelection([], asBoardKey("12"), null, true);
+    const out = resolveSelection([], asBoardKey("12"), null);
     expect(out.ticket).toBeNull();
     expect(out.reason).toBe("gone");
+  });
+});
+
+describe("#100 the hold cannot be re-gated on a flag the caller gets wrong", () => {
+  const logic = readFileSync(
+    new URL("../src/client/board-logic.ts", import.meta.url),
+    "utf8",
+  );
+  const view = readFileSync(
+    new URL("../src/client/local-ticket-view.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("resolveSelection takes no board-settling argument", () => {
+    /*
+     * THE LESSON of this ticket's first failed fix, encoded.
+     *
+     * That fix was a correct pure function fed a wrong input: it held only
+     * while `boardSettling` was true, and the caller computed that from a
+     * flag the merge pull clears BEFORE it triggers the re-render. Every
+     * unit test passed, because they all took `boardSettling` as a
+     * parameter and therefore asserted the caller's bug into existence
+     * rather than catching it.
+     *
+     * A unit test of a pure function can never catch a wrong argument. The
+     * only durable fix was to REMOVE the parameter, so there is no input
+     * left to get wrong -- and this guards that removal, because
+     * reintroducing the flag would silently restore the bug with the whole
+     * suite green.
+     */
+    const signature = logic.slice(
+      logic.indexOf("export function resolveSelection"),
+      logic.indexOf("): SelectionResolution<T> {"),
+    );
+    expect(signature).not.toContain("boardSettling");
+    expect(signature).not.toContain("settling");
+  });
+
+  it("the view does not pass a settling flag into the selection", () => {
+    const call = view.slice(view.indexOf("resolveSelection("));
+    const args = call.slice(0, call.indexOf(");"));
+    expect(args).not.toContain("isMergePulling");
+    expect(args).not.toContain("mergePending");
+  });
+
+  it("the panel closes on an explicit close, never on absence", () => {
+    // `closeDetail` is the only thing that clears the selection key, and an
+    // absent row produces a NOTICE rather than a close.
+    expect(view).toContain("resolution.absent");
+    expect(view).toContain("aidos-detail-absent");
   });
 });

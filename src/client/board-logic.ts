@@ -822,6 +822,11 @@ export interface SelectionResolution<T> {
   reanchorKey: BoardKey | null;
   /** Why the panel is showing `ticket`. For tests and for reasoning. */
   reason: "none" | "resolved" | "reanchored" | "held" | "gone";
+  /**
+   * The held ticket is not on the current board. The panel keeps showing it
+   * and says so, rather than ejecting the reader mid-read.
+   */
+  absent: boolean;
 }
 
 /**
@@ -851,14 +856,13 @@ export function resolveSelection<T extends SelectionCandidate>(
   tickets: readonly T[],
   selectedKey: BoardKey | null,
   previous: T | null,
-  boardSettling: boolean,
 ): SelectionResolution<T> {
   if (selectedKey === null) {
-    return { ticket: null, reanchorKey: null, reason: "none" };
+    return { ticket: null, reanchorKey: null, reason: "none", absent: false };
   }
   const resolved = tickets.find((ticket) => boardKeyOf(ticket) === selectedKey) ?? null;
   if (resolved !== null) {
-    return { ticket: resolved, reanchorKey: null, reason: "resolved" };
+    return { ticket: resolved, reanchorKey: null, reason: "resolved", absent: false };
   }
   if (previous !== null) {
     const reanchored =
@@ -868,12 +872,29 @@ export function resolveSelection<T extends SelectionCandidate>(
         ticket: reanchored,
         reanchorKey: boardKeyOf(reanchored),
         reason: "reanchored",
+        absent: false,
       };
     }
-    if (boardSettling) {
-      // The board is mid-pull. Absence proves nothing yet, so hold.
-      return { ticket: previous, reanchorKey: null, reason: "held" };
-    }
+    /*
+     * HOLD UNCONDITIONALLY. The first fix held only while a pull was in
+     * flight, and the user reported the bug still happening -- correctly.
+     * The merge pull clears its own flag BEFORE it triggers the re-render:
+     *
+     *     setMerge(...)                      // cache updated
+     *     setMergePulling(sessionId, false)  // flag cleared FIRST
+     *     setMergeState(result)              // THEN the re-render
+     *
+     * so on precisely the render that lands the new board, "a pull is in
+     * flight" is already false. The hold never covered the render that
+     * matters. The pure function was right and its INPUT was wrong, which
+     * unit tests taking that input as a parameter can never catch.
+     *
+     * There is no reliable "the board is complete now" signal to wait for,
+     * so this stops pretending there is: a selection is ended by the USER,
+     * not by a row's momentary absence. When the ticket really is gone the
+     * panel says so (`absent`) instead of ejecting the reader mid-read.
+     */
+    return { ticket: previous, reanchorKey: null, reason: "held", absent: true };
   }
-  return { ticket: null, reanchorKey: null, reason: "gone" };
+  return { ticket: null, reanchorKey: null, reason: "gone", absent: false };
 }
