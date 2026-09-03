@@ -592,6 +592,42 @@
   letter-spacing: 0.04em;
 }
 
+/* #21 "they shouldn't be clutter, they should contribute info".
+
+   Every chip used to be a saturated FILL. On a tile carrying five evidence
+   kinds that is five competing colour blocks, and the eye cannot tell which
+   one matters -- loudness applied uniformly is the same as no emphasis at
+   all. So the colour moves from the fill to the TEXT and a hairline border,
+   over a near-transparent tint of the same hue. The kind stays instantly
+   identifiable by colour, but the tile reads as text with accents instead of
+   a row of buttons.
+
+   `color-mix` is used against `currentColor` so a single rule covers every
+   hue: the inline style still sets one colour per kind, and the tint and
+   border derive from it. The chips that must stay loud -- the id badge and
+   the state chip -- deliberately keep their fill. */
+.aidos-chip-kind,
+.aidos-chip-dep {
+  background: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 40%, transparent);
+  color: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 72%, #ffffff);
+}
+
+/* The dependency chip's icon: dimmer than the id it introduces, because the
+   id is the information and the arrow is only grammar (#21). */
+.aidos-chip-dep-icon {
+  margin-inline-end: 3px;
+  opacity: 0.65;
+  font-weight: 400;
+}
+
+/* The metric chips' key is now an ICON (#21), so it needs no letter spacing
+   and should sit quieter than the value it introduces. */
+.aidos-chip-metric .aidos-chip-key {
+  opacity: 0.7;
+  font-weight: 400;
+}
+
 .aidos-chip-key {
   padding-inline: 7px;
 }
@@ -601,7 +637,13 @@
   display: inline-flex;
   align-items: center;
   padding-inline: 5px;
-  background: #f9fafb;
+  /* #21: the count segment used to invert to a near-white block, which made
+     the count the LOUDEST thing on the tile -- louder than the kind it
+     counts. It is now a deeper tint of the same hue: still clearly a second
+     segment, no longer a flare. */
+  background: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 30%, transparent);
+  border-inline-start: 1px solid color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 40%, transparent);
+  color: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 82%, #ffffff);
   font-weight: 700;
 }
 

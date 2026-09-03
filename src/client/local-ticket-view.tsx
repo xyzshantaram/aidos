@@ -324,6 +324,15 @@ function ProjectionReader(props: ProjectionReaderProps) {
     merge !== null
       ? merge.tickets.filter((row) => row.sourceSessionId !== sessionId)
       : [];
+  /*
+   * #21: the viewing session's OWN workspace, taken from its own rows --
+   * which are in the own workspace by definition. Deliberately NOT the
+   * `workspaceKey` computed below for filter storage: that one degrades to
+   * `default:<sessionId>` on a mixed board, which is fine as a storage
+   * bucket and useless as an identity. Undefined when the session has no
+   * rows yet, and the id chips then stay fully qualified.
+   */
+  const ownWorkspaceKey = ownRows.length > 0 ? ownRows[0].workspaceKey : undefined;
   const boardTickets: Array<TicketViewType & { sourceSessionId?: string; foreign?: boolean }> = [
     ...ownRows,
     ...foreignRows,
@@ -732,6 +741,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   } else {
     body = (
       <TicketView
+        ownWorkspaceKey={ownWorkspaceKey}
         sessionId={sessionId}
         tickets={filtered}
         allTicketsCount={allTicketsCount}

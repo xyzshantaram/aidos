@@ -363,8 +363,28 @@ describe("ticketChipLabel", () => {
   });
 
   it("uses the ticket's own workspace key", () => {
+    /*
+     * #21: this test's NAME always said "uses the ticket's own workspace
+     * key" while its assertion demanded the opposite -- a ticket in
+     * `--srv-other--` had to render as `aidos#5`, i.e. the workspace key
+     * IGNORED and a hardcoded label substituted. It documented the bug as
+     * intended behaviour, which is why the bug survived: the label erased
+     * the very distinction it appeared to draw, so a foreign ticket was
+     * indistinguishable from a local one on the board's most prominent chip.
+     */
     const ticket = makeTicket({ id: 5, workspaceKey: "--srv-other--" });
-    expect(ticketChipLabel(ticket)).toBe("aidos#5");
+    expect(ticketChipLabel(ticket)).toBe("other#5");
+  });
+
+  it("drops the prefix for a ticket in the viewing workspace", () => {
+    // In a LIST the prefix is identical on every row, so it is furniture.
+    const ticket = makeTicket({ id: 5, workspaceKey: "--srv-mine--" });
+    expect(ticketChipLabel(ticket, "--srv-mine--")).toBe("5");
+  });
+
+  it("keeps the prefix for a ticket from another workspace", () => {
+    const ticket = makeTicket({ id: 5, workspaceKey: "--srv-other--" });
+    expect(ticketChipLabel(ticket, "--srv-mine--")).toBe("other#5");
   });
 });
 

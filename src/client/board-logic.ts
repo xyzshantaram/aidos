@@ -16,7 +16,8 @@
  * element type, so a TicketView input yields TicketView output.
  */
 
-import { BUILTIN_KINDS } from "../kernel/constants";
+import { BUILTIN_KINDS, DEFAULT_GATES } from "../kernel/constants";
+import { STATE_ORDER } from "../kernel/types";
 import type { TicketState } from "../kernel/types";
 
 /**
@@ -522,6 +523,74 @@ export interface KindCount {
   color: string;
 }
 
+/** The gate shape the implication rule reads. Structural, not the full GateDef. */
+export interface GateLike {
+  fromState: TicketState;
+  toState: TicketState;
+  requiredKinds: readonly string[];
+}
+
+/**
+ * The evidence kinds a ticket's STATE already proves it has.
+ *
+ * #21: an evidence chip should contribute information. A ticket sitting in
+ * `in_progress` could only get there through the gate that demands
+ * `user_signoff`, so a SIGNED OFF chip beside an "In progress" state chip is
+ * pure restatement -- it spends tile space to tell the reader something the
+ * chip next to it already said.
+ *
+ * Derived from DEFAULT_GATES and STATE_ORDER rather than hardcoded, so
+ * changing a gate's requiredKinds automatically changes what counts as
+ * implied. A kind is implied when the ticket has reached (or passed) the
+ * state that its gate leads to.
+ */
+export function stateImpliedKinds(
+  state: TicketState,
+  /*
+   * The gate table, injectable ONLY so the rules below are testable. The
+   * send-back guard is defensive -- every shipped gate that runs backward
+   * has an empty requiredKinds today, so reading DEFAULT_GATES directly
+   * made the guard impossible to exercise and it survived a mutation test.
+   * A rule with no reachable test is a rule nobody can trust.
+   */
+  gates: readonly GateLike[] = DEFAULT_GATES,
+): Set<string> {
+  const reached = STATE_ORDER.indexOf(state);
+  const implied = new Set<string>();
+  if (reached < 0) return implied;
+  for (const gate of gates) {
+    const target = STATE_ORDER.indexOf(gate.toState);
+    // Only FORWARD gates imply anything: the send-back edge
+    // (awaiting_verification -> in_progress) proves nothing about evidence.
+    if (target <= STATE_ORDER.indexOf(gate.fromState)) continue;
+    if (target >= 0 && reached >= target) {
+      for (const kind of gate.requiredKinds) implied.add(kind);
+    }
+  }
+  return implied;
+}
+
+/**
+ * The kind counts worth showing on a TILE: the full set minus the chips the
+ * state already implies.
+ *
+ * A kind with MORE THAN ONE row is never suppressed, however implied it is:
+ * two `review_pass` rows mean the work took two review rounds, and that is
+ * one of the most informative things a tile can say (#96). The rule is
+ * "drop the restatement", not "drop the history".
+ *
+ * The DETAIL panel deliberately does NOT use this -- there, completeness is
+ * the point and the full evidence record must stay visible.
+ */
+export function tileKindCounts(
+  state: TicketState,
+  counts: readonly KindCount[],
+  gates: readonly GateLike[] = DEFAULT_GATES,
+): KindCount[] {
+  const implied = stateImpliedKinds(state, gates);
+  return counts.filter((count) => count.count > 1 || !implied.has(count.kind));
+}
+
 /**
  * Count evidence rows by kind, sorted by descending count then kind name.
  * Each tag carries a deterministic color from the kind name.
@@ -547,14 +616,45 @@ export function evidenceKindCounts(
 }
 
 /**
- * The display form of one stored dependency reference. A reference is
- * `<workspaceKey>:<ticketId>`; the board renders it as `aidos#<ticketId>`
- * (the workspace key is stripped, no colon after `aidos`). A reference that
- * is not in that shape passes through unchanged.
+ * The last meaningful segment of a workspace key, for display.
+ *
+ * `--home-sid-repos-aidos--` -> `aidos`. Two workspaces whose keys end in
+ * the same segment collide HERE and are told apart by the id badge's colour
+ * hash (C5) and by the full reference in the chip's tooltip -- the label is
+ * a hint, never the identity.
  */
-export function displayDep(ref: string): string {
-  return ref.replace(/^--.*--:/, "aidos#");
+export function workspaceLabel(workspaceKey: string): string {
+  const parts = workspaceKey.split("-").filter((part) => part !== "");
+  return parts.length === 0 ? workspaceKey : parts[parts.length - 1];
 }
+
+/**
+ * The display form of one stored dependency reference.
+ *
+ * #21: a dependency chip should carry INFORMATION, and the information a
+ * reader needs is "which ticket, and is it one of ours?". The old form
+ * rewrote every `<workspaceKey>:` prefix to the literal string `aidos#`,
+ * which ERASED the distinction it looked like it was drawing: a dependency
+ * on a genuinely foreign workspace rendered identically to a local one, so
+ * the prefix cost space while telling the reader nothing.
+ *
+ * Now: a LOCAL dependency renders as the bare ticket id, because the
+ * workspace is the one you are already looking at. A FOREIGN dependency
+ * keeps a workspace label, because that is the case where the prefix is the
+ * whole point. Pass ownWorkspaceKey to get the distinction; omit it and
+ * every prefixed reference is treated as foreign, which is the safe default
+ * (it shows MORE, never less).
+ */
+export function displayDep(ref: string, ownWorkspaceKey?: string): string {
+  const match = /^(--.*--):(.*)$/.exec(ref);
+  if (match === null) return ref;
+  const [, workspaceKey, tail] = match;
+  if (ownWorkspaceKey !== undefined && workspaceKey === ownWorkspaceKey) {
+    return tail;
+  }
+  return workspaceLabel(workspaceKey) + "#" + tail;
+}
+
 
 /**
  * The full ticket id: the workspace key, a colon, and the slug. The
@@ -570,15 +670,30 @@ export function fullTicketId(ticket: {
 }
 
 /**
- * The short chip label of one ticket: `aidos#<id>`. The chip shows the
- * number because a slug is too long for a chip. The title attribute keeps
- * the full id from fullTicketId.
+ * The short chip label of one ticket. The chip shows the NUMBER because a
+ * slug is too long for a chip; the title attribute keeps the full id from
+ * fullTicketId.
+ *
+ * #21: this used to render `aidos#<id>` for EVERY ticket, because the old
+ * displayDep rewrote any workspace prefix to the literal string "aidos". On
+ * a board whose rows all share one workspace -- which is every board today,
+ * since the merge is per-workspace -- that prefix was identical on every
+ * chip: five characters of furniture repeated down the grid, carrying no
+ * information and actively hiding the one case where a prefix MATTERS.
+ *
+ * Pass ownWorkspaceKey in a LIST (grid, strips) to get the bare id, and a
+ * workspace label only when the ticket genuinely comes from elsewhere. Omit
+ * it on a single prominent chip (the detail header) where the fully
+ * qualified id is worth the space.
  */
-export function ticketChipLabel(ticket: {
-  id: number;
-  workspaceKey: string;
-}): string {
-  return displayDep(ticket.workspaceKey + ":" + ticket.id);
+export function ticketChipLabel(
+  ticket: {
+    id: number;
+    workspaceKey: string;
+  },
+  ownWorkspaceKey?: string,
+): string {
+  return displayDep(ticket.workspaceKey + ":" + ticket.id, ownWorkspaceKey);
 }
 
 /** The id badge hues. Each entry is a mid-saturation background for white text. */

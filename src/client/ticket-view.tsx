@@ -38,6 +38,8 @@ export interface TicketViewProps {
   /** #93: how many asks are waiting on the human, for the badge. */
   queueCount?: number;
   projects?: { id: number; name: string }[];
+  /** #21: the viewing session's workspace, so local id chips drop the prefix. */
+  ownWorkspaceKey?: string;
 }
 
 export function TicketView(props: TicketViewProps) {
@@ -48,6 +50,7 @@ export function TicketView(props: TicketViewProps) {
       key={boardKeyOf(ticket)}
       ticket={ticket}
       evidence={props.evidenceByTicket?.[boardKeyOf(ticket)] ?? []}
+      ownWorkspaceKey={props.ownWorkspaceKey}
       selected={boardKeyOf(ticket) === props.selectedId}
       active={boardKeyOf(ticket) === props.activeTicketId}
       onSelect={() => {

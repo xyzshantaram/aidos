@@ -650,13 +650,30 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
     return <CommitPickerForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} note={note} setNote={setNote} working={working} />;
   }
 
-  // Note-only kinds: builtin:review_pass, builtin:review_note.
-  // builtin:comment retired here too (#96, folded into review_note) —
-  // it is still a valid kind for a pre-existing row, just no longer offered.
-  if (props.kind === "builtin:review_pass" || props.kind === "builtin:review_note") {
+  /*
+   * Note-carrying review kinds: review_pass, review_fail, review_note.
+   *
+   * builtin:comment retired here too (#96, folded into review_note) -- still
+   * a valid kind for a pre-existing row, just no longer offered.
+   *
+   * #96 review finding 1: review_fail is USER-AUTHORABLE, so the human's
+   * kind picker offers it -- but it was missing from this branch and fell
+   * through to the raw-JSON escape hatch at the bottom of this file. That
+   * was wrong twice over: it showed a raw-JSON surface for a blessed kind
+   * (the exact thing #68 exists to eliminate), and that form permits an
+   * EMPTY note, so a failed review could be recorded carrying no verdict at
+   * all -- the one thing the kind exists to carry.
+   */
+  const REVIEW_VERDICT_LABEL: Record<string, string> = {
+    "builtin:review_pass": "What was reviewed, and why it is accepted",
+    "builtin:review_fail": "The verdict and the findings",
+    "builtin:review_note": "Note",
+  };
+  const verdictLabel = REVIEW_VERDICT_LABEL[props.kind];
+  if (verdictLabel !== undefined) {
     return (
       <div className="aidos-evidence-tailored">
-        <NoteField note={note} working={working} onChange={setNote} label="Note" />
+        <NoteField note={note} working={working} onChange={setNote} label={verdictLabel} />
         <div className="aidos-form-actions">
           <button
             className="aidos-btn aidos-btn-primary"

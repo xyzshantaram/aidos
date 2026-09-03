@@ -98,9 +98,20 @@ export interface Nomination {
 
 /**
  * The derived queue: every ticket with an available human action, in board
- * order. A ticket with two available human actions yields two entries —
- * `verify` and `mark-done` are genuinely different asks and collapsing them
- * would hide the second.
+ * order. A ticket with two available human actions normally yields two
+ * entries, because they are genuinely different asks and dropping one would
+ * hide it.
+ *
+ * ONE deliberate exception, and it is enforced in the body below: when
+ * `mark-done` is available, `verify` is dropped. Verify being available
+ * means the ticket can be verified; mark-done being available means it
+ * ALREADY HAS a user_verified row, so offering Verify beside Mark Done
+ * reads as "do this again" on a ticket that is already verified.
+ *
+ * This is a QUEUE-only collapse. `actionsFor` in action-visibility.ts is
+ * untouched, so the detail panel's action bar still offers both -- a human
+ * may legitimately want to attach a second verification (another
+ * screenshot, another note) before marking done.
  */
 export function derivedQueue<T extends TicketView>(
   tickets: readonly T[],

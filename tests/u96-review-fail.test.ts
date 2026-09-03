@@ -203,3 +203,42 @@ describe("#96 a failed review is distinguishable at a glance", () => {
     expect(css).toContain("--verdict-fail:");
   });
 });
+
+describe("#96 the human attach surface for the review kinds", () => {
+  const form = readFileSync(
+    new URL("../src/client/evidence-attach.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("gives review_fail a tailored form, not the raw-JSON escape hatch", () => {
+    /*
+     * Review finding 1. review_fail is user-authorable, so the human's kind
+     * picker offers it -- but it was missing from the note-carrying branch
+     * and fell through to the JSON escape hatch at the bottom of the file.
+     * That surface is for FOREIGN and unknown kinds; showing it for a
+     * blessed builtin is exactly what #68 exists to eliminate.
+     */
+    expect(form).toContain("builtin:review_fail");
+  });
+
+  it("requires a verdict: review_fail cannot be attached empty", () => {
+    /*
+     * The escape-hatch form's button is disabled only on a JSON parse error,
+     * so falling through to it ALSO permitted an empty note -- a failed
+     * review carrying no verdict, which is the one thing the kind exists to
+     * carry. The tailored branch disables on an empty note instead.
+     */
+    const branch = form.slice(form.indexOf("REVIEW_VERDICT_LABEL"));
+    const body = branch.slice(0, branch.indexOf("// Foreign/unknown kinds"));
+    expect(body).toContain("builtin:review_fail");
+    expect(body).toContain('note.trim() === ""');
+  });
+
+  it("does not offer the retired comment kind a tailored form either", () => {
+    // F3: the offering gate is user-evidence-kinds.ts, but pinning both
+    // layers means "no longer offered anywhere" is actually enforced twice.
+    const branch = form.slice(form.indexOf("REVIEW_VERDICT_LABEL"));
+    const body = branch.slice(0, branch.indexOf("// Foreign/unknown kinds"));
+    expect(body).not.toContain("builtin:comment");
+  });
+});
