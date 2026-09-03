@@ -650,12 +650,10 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
     return <CommitPickerForm ticketId={props.ticketId} agentId={props.agentId} onAttached={props.onAttached} note={note} setNote={setNote} working={working} />;
   }
 
-  // Note-only kinds: builtin:review_pass, builtin:review_note, builtin:comment.
-  if (
-    props.kind === "builtin:review_pass" ||
-    props.kind === "builtin:review_note" ||
-    props.kind === "builtin:comment"
-  ) {
+  // Note-only kinds: builtin:review_pass, builtin:review_note.
+  // builtin:comment retired here too (#96, folded into review_note) —
+  // it is still a valid kind for a pre-existing row, just no longer offered.
+  if (props.kind === "builtin:review_pass" || props.kind === "builtin:review_note") {
     return (
       <div className="aidos-evidence-tailored">
         <NoteField note={note} working={working} onChange={setNote} label="Note" />

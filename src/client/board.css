@@ -43,6 +43,12 @@
   --state-awaiting: #a07a2a;
   --state-done: #3f8a52;
   --metric-bg: #3a3c41;
+
+  /* #96: a failed review is a VERDICT, not a state. It gets its own token
+     rather than borrowing --state-awaiting, so recolouring the state chips
+     never silently recolours a verdict, and vice versa. Same mid-saturation
+     family so white text stays readable on it. */
+  --verdict-fail: #a5453c;
 }
 
 /* ── 2. Typography + base ──────────────────────────────── */

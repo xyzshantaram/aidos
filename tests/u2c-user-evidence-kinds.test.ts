@@ -12,9 +12,15 @@ import { BUILTIN_KINDS } from "../src/kernel/constants";
 import { userEvidenceKinds } from "../src/client/user-evidence-kinds";
 
 describe("u2c user-evidence-kinds: userEvidenceKinds", () => {
-  it("returns exactly the user-allowed kinds minus the system-only kind", () => {
+  it("returns the user-allowed kinds minus the system-only and retired kinds", () => {
     const expected = BUILTIN_KINDS.filter(
-      (kind) => kind.allowedAuthors.includes("user") && kind.id !== "builtin:imported_state",
+      (kind) =>
+        kind.allowedAuthors.includes("user") &&
+        kind.id !== "builtin:imported_state" &&
+        // #96: builtin:comment folded into builtin:review_note. It stays a
+        // valid kind so pre-existing rows still render, but it is never
+        // OFFERED again -- two kinds doing one job is the clutter this removed.
+        kind.id !== "builtin:comment",
     )
       .map((kind) => kind.id)
       .sort();
@@ -22,6 +28,12 @@ describe("u2c user-evidence-kinds: userEvidenceKinds", () => {
       .map((kind) => kind.id)
       .sort();
     expect(actual).toEqual(expected);
+  });
+
+  it("never offers the retired comment kind, and still offers the remark kind", () => {
+    const ids = userEvidenceKinds().map((kind) => kind.id);
+    expect(ids).not.toContain("builtin:comment");
+    expect(ids).toContain("builtin:review_note");
   });
 
   it("lists the human-only kinds first in the fixed order", () => {

@@ -110,9 +110,24 @@ export function derivedQueue<T extends TicketView>(
   for (const ticket of tickets) {
     if (ticket.state === "done") continue;
     const kinds = evidenceKindsOf(ticket);
-    for (const action of actionsFor(ticket, kinds)) {
-      if (!HUMAN_ACTIONS.has(action.id)) continue;
-      if (action.unavailableReason !== undefined) continue;
+    const available = actionsFor(ticket, kinds).filter(
+      (action) => HUMAN_ACTIONS.has(action.id) && action.unavailableReason === undefined,
+    );
+    /*
+     * QUEUE-ONLY simplification (user ask, 2026-09-03): once mark-done is
+     * ready, drop "verify" from the QUEUE listing — the row already exists,
+     * so re-showing Verify next to Mark Done reads as "do this again" on a
+     * ticket that has already been verified.
+     *
+     * This must NOT touch actionsFor / action-visibility.ts: the detail
+     * panel's own action bar keeps BOTH buttons always, deliberately — a
+     * human may still want to attach a second verification (another
+     * screenshot, another note) before marking done. Only the queue's
+     * one-line-per-ask summary collapses the two.
+     */
+    const ids = new Set(available.map((a) => a.id));
+    for (const action of available) {
+      if (action.id === "verify" && ids.has("mark-done")) continue;
       entries.push({
         ticket,
         boardKey: boardKeyOf(ticket),

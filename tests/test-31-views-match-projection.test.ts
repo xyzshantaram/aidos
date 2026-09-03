@@ -84,8 +84,9 @@ const EXPECTED_KINDS: KindDef[] = [
   },
   {
     id: "builtin:comment",
-    label: "Comment",
-    description: "A remark on the ticket.",
+    label: "Comment (deprecated)",
+    description:
+      "DEPRECATED — folded into builtin:review_note, which is identical in weight and authorship. Kept here only so a pre-existing evidence row of this kind still validates and renders; no longer offered for new rows. Do not confuse with the ticket's COMMENT THREAD (CommentRecord/userAddComment), a separate durable mechanism this kind never wrote to.",
     weight: 0.5,
     allowedAuthors: ["user", "agent"],
   },
@@ -105,9 +106,9 @@ const EXPECTED_KINDS: KindDef[] = [
   },
   {
     id: "builtin:review_pass",
-    label: "Review pass",
+    label: "Review — accepted",
     description:
-      "An independent review of the change: a reviewer subagent or the human read it and reported findings. The orchestrator's own read does not qualify.",
+      "An independent review of the change accepted it: a reviewer subagent or the human read it, reported findings, and PASSED it. The orchestrator's own read does not qualify. A failing review is recorded with builtin:review_fail instead — never here.",
     weight: 1.0,
     allowedAuthors: ["agent", "user"],
   },

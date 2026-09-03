@@ -429,7 +429,8 @@ const AIDOS_GUIDANCE =
   "Run the ticket lifecycle of the session's project with the board tools. " +
   "get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. " +
   "set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. " +
-  "attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. " +
+  "attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. " +
+  "review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. " +
   "move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. " +
   "plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. " +
   "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
@@ -729,13 +730,13 @@ function registerAttachEvidence(ctx: Context): void {
     defineTool({
       name: "attach_evidence",
       description:
-        "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them.",
+        "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_fail, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them. review_pass means a reviewer ACCEPTED the change and is the gate key; a FAILING review is review_fail, which satisfies no gate.",
       parameters: {
         ticketId: { oneOf: [{ type: "integer" }, { type: "string" }], required: true, description: "The ticket that receives the evidence, by numeric id or slug." },
         kind: {
           type: "string",
           required: true,
-          description: "The evidence kind: one of the agent-allowed kinds (automated_check, review_pass, review_note, agent_report).",
+          description: "The evidence kind: one of the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report). Use review_pass only for an accepted review; use review_fail when the reviewer found a defect and did not pass it.",
         },
         payload: {
           type: "object",

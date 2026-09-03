@@ -46,12 +46,23 @@ describe("u93 human-queue: the derived half", () => {
     expect(entries.map((e) => e.actionId)).toEqual(["verify"]);
   });
 
-  it("once user_verified is attached, the ask becomes mark-done as well", () => {
+  it("once user_verified is attached, mark-done REPLACES verify in the queue", () => {
+    // #93 follow-up (user ask, 2026-09-03): re-showing Verify next to
+    // Mark Done reads as "do this again" on an already-verified ticket.
+    // The detail panel's action bar is unaffected — only the queue collapses.
     const entries = derivedQueue(
       [makeTicket({ id: 1, state: "awaiting_verification" })],
       () => ["builtin:user_verified"],
     );
-    expect(entries.map((e) => e.actionId)).toEqual(["verify", "mark-done"]);
+    expect(entries.map((e) => e.actionId)).toEqual(["mark-done"]);
+  });
+
+  it("before verifying, only verify shows — mark-done is not yet available", () => {
+    const entries = derivedQueue(
+      [makeTicket({ id: 1, state: "awaiting_verification" })],
+      () => [],
+    );
+    expect(entries.map((e) => e.actionId)).toEqual(["verify"]);
   });
 
   it("a done ticket never appears", () => {
@@ -237,7 +248,13 @@ describe("u93 human-queue: foreign rows on a merged board", () => {
     } as unknown as Record<string, EvidenceRow[]>;
     const awaitingOwn = makeTicket({ id: 12, state: "awaiting_verification" });
     const rows = queueEntriesFor([awaitingOwn] as never, evidence);
-    expect(rows.map((r) => r.actionId)).toEqual(["verify", "mark-done"]);
+    /*
+     * mark-done, not [verify, mark-done]: the queue now collapses the pair
+     * once mark-done is ready. This still DISCRIMINATES the bug it guards --
+     * if the lookup missed the own row's user_verified, mark-done would not
+     * be available and this would read ["verify"] instead.
+     */
+    expect(rows.map((r) => r.actionId)).toEqual(["mark-done"]);
   });
 
   it("own and foreign rows with the same number are two distinct entries", () => {

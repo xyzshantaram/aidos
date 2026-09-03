@@ -62,16 +62,25 @@ export const BUILTIN_KINDS: readonly KindDef[] = [
   },
   {
     id: "builtin:review_pass",
-    label: "Review pass",
+    label: "Review \u2014 accepted",
     description:
-      "An independent review of the change: a reviewer subagent or the human read it and reported findings. The orchestrator's own read does not qualify.",
+      "An independent review of the change accepted it: a reviewer subagent or the human read it, reported findings, and PASSED it. The orchestrator's own read does not qualify. A failing review is recorded with builtin:review_fail instead \u2014 never here.",
     weight: 1.0,
     allowedAuthors: ["agent", "user"],
   },
   {
+    id: "builtin:review_fail",
+    label: "Review \u2014 failed",
+    description:
+      "An independent review of the change FAILED it: a reviewer subagent or the human found a defect and did not pass it. Contributes to nothing \u2014 it never satisfies a gate. Kept alongside any later builtin:review_pass so the review history (how many rounds, what each found) stays visible.",
+    weight: 0,
+    allowedAuthors: ["agent", "user"],
+  },
+  {
     id: "builtin:review_note",
-    label: "Review note",
-    description: "A remark from a review.",
+    label: "Remark",
+    description:
+      "A remark: a note from a review round, or a general comment on the ticket. The one surviving free-form remark kind after builtin:comment folded into it — same weight, same authors, one kind instead of two doing the same job.",
     weight: 0.5,
     allowedAuthors: ["agent", "user"],
   },
@@ -84,8 +93,9 @@ export const BUILTIN_KINDS: readonly KindDef[] = [
   },
   {
     id: "builtin:comment",
-    label: "Comment",
-    description: "A remark on the ticket.",
+    label: "Comment (deprecated)",
+    description:
+      "DEPRECATED — folded into builtin:review_note, which is identical in weight and authorship. Kept here only so a pre-existing evidence row of this kind still validates and renders; no longer offered for new rows. Do not confuse with the ticket's COMMENT THREAD (CommentRecord/userAddComment), a separate durable mechanism this kind never wrote to.",
     weight: 0.5,
     allowedAuthors: ["user", "agent"],
   },

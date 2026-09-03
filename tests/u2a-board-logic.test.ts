@@ -396,7 +396,10 @@ describe("kindKeyword", () => {
     expect(kindKeyword("builtin:imported_state")).toBe("IMPORTED");
     expect(kindKeyword("builtin:automated_check")).toBe("CHECK");
     expect(kindKeyword("builtin:user_verified")).toBe("VERIFIED");
-    expect(kindKeyword("builtin:review_pass")).toBe("REVIEWED");
+    // #96: the pass/fail pair reads as a verdict, not as "a pass over the
+    // code". The two tokens must be distinguishable at a glance on a chip.
+    expect(kindKeyword("builtin:review_pass")).toBe("ACCEPTED");
+    expect(kindKeyword("builtin:review_fail")).toBe("FAILED");
   });
 
   it("never returns the raw kind id of a builtin kind", () => {

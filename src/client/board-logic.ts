@@ -450,6 +450,13 @@ const KIND_COLORS = [
 ];
 
 export function kindColor(kind: string): string {
+  /*
+   * #96: a FAILED review is a stronger signal than routine hash-distinctness
+   * gives it -- it needs to read as a warning at a glance, the same weight
+   * the "Needs approval" chip carries, not whatever the hash happens to land
+   * on next to a plain review_note.
+   */
+  if (kind === "builtin:review_fail") return "var(--verdict-fail)";
   let hash = 0;
   for (let i = 0; i < kind.length; i++) {
     hash = (hash * 31 + kind.charCodeAt(i)) | 0;
@@ -495,7 +502,8 @@ const KIND_KEYWORDS: Record<string, string> = {
   "builtin:agent_report": "REPORT",
   "builtin:automated_check": "CHECK",
   "builtin:test_run": "TESTS",
-  "builtin:review_pass": "REVIEWED",
+  "builtin:review_pass": "ACCEPTED",
+  "builtin:review_fail": "FAILED",
   "builtin:review_note": "NOTE",
 };
 
