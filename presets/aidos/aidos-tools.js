@@ -29569,7 +29569,9 @@ function evidencePayloadExcerpt(payload) {
     return p.note.trim().slice(0, 160);
   }
   if (Array.isArray(p.paths)) return p.paths.length + " path(s)";
-  if (typeof p.claimed_state === "string") return "claimed " + p.claimed_state;
+  if (typeof p.claimed_state === "string") {
+    return "claimed " + p.claimed_state.slice(0, 60);
+  }
   if (typeof p.commit === "string") return "commit " + p.commit.slice(0, 12);
   if (typeof p.imagePath === "string") return "screenshot";
   if (typeof p.verdict === "string") return p.verdict.slice(0, 160);
