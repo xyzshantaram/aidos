@@ -608,24 +608,39 @@
    the state chip -- deliberately keep their fill. */
 .aidos-chip-kind,
 .aidos-chip-dep {
-  background: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 40%, transparent);
-  color: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 72%, #ffffff);
+  /* #21 review F1: the first attempt used text at 72% hue over a 14% tint,
+     which MEASURED at 2.44:1 on a hovered tile -- literally the grey-on-grey
+     this ticket's oldest criterion forbids. Two causes: the kind palette held
+     no hues at all (see KIND_COLORS in board-logic.ts), and the chip
+     background is TRANSLUCENT, so contrast depends on the backdrop and
+     .aidos-tile:hover lightens it. Both backdrops are now checked.
+
+     Measured worst case across every hue, --verdict-fail, and BOTH the
+     resting and hovered tile: 5.81:1. The previous pair was 2.44:1. */
+  background: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 45%, transparent);
+  color: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 38%, #ffffff);
 }
 
 /* The dependency chip's icon: dimmer than the id it introduces, because the
    id is the information and the arrow is only grammar (#21). */
 .aidos-chip-dep-icon {
-  margin-inline-end: 3px;
-  opacity: 0.65;
-  font-weight: 400;
+  /* #21 review F1: `opacity: 0.65` on already-tinted text measured 2.83:1.
+     Dimming a foreground that is already low-contrast is how an icon becomes
+     a smudge. The icon inherits the chip's (now AA-passing) colour instead,
+     and the SVG's stroke weight -- not transparency -- does the de-emphasis. */
+  display: inline-flex;
+  align-items: center;
+  margin-inline-end: 4px;
 }
 
 /* The metric chips' key is now an ICON (#21), so it needs no letter spacing
    and should sit quieter than the value it introduces. */
 .aidos-chip-metric .aidos-chip-key {
-  opacity: 0.7;
-  font-weight: 400;
+  /* The key is an ICON now, so it needs to align rather than be dimmed.
+     The old `opacity: 0.7` was the same mistake as the dep icon above. */
+  display: inline-flex;
+  align-items: center;
 }
 
 .aidos-chip-key {
@@ -641,9 +656,15 @@
      the count the LOUDEST thing on the tile -- louder than the kind it
      counts. It is now a deeper tint of the same hue: still clearly a second
      segment, no longer a flare. */
+  /* #21 review F1: the count segment mixed its TEXT at 82% and its BACKGROUND
+     at 30% of the same hue -- moving both ends toward each other, which is
+     arithmetically guaranteed to be lower contrast than the chip itself. It
+     measured worse than the chip everywhere. The text now INHERITS the chip's
+     colour and only the background deepens, so the segment reads as a segment
+     without trading away legibility. */
   background: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 30%, transparent);
-  border-inline-start: 1px solid color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 40%, transparent);
-  color: color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 82%, #ffffff);
+  border-inline-start: 1px solid color-mix(in srgb, var(--chip-hue, var(--badge-hue-1)) 45%, transparent);
+  color: inherit;
   font-weight: 700;
 }
 
@@ -1930,9 +1951,60 @@
   display: inline-flex;
   align-items: center;
   padding-inline: 5px;
+  font-weight: 700;
+}
+
+/*
+ * #21, the attention hierarchy the user set: "only gate is allowed to draw
+ * attention, as is ticket id and status".
+ *
+ * The GATE keeps the near-white value pill. It is the only metric that
+ * controls anything -- it is literally what stands between a ticket and its
+ * next state -- so it earns the loudest treatment on the card.
+ */
+.aidos-chip-gate .aidos-chip-value {
   background: #f9fafb;
   color: #232324;
-  font-weight: 700;
+}
+
+/*
+ * CONFIDENCE is advisory: it never unlocks anything, so it must never look
+ * like it does. It used to share the gate's stark white pill, which gave an
+ * advisory number the same visual authority as the gate. It now uses the
+ * same quiet tint as the evidence chips, over a NEUTRAL hue so it recedes
+ * from the coloured kind chips too.
+ *
+ * Measured (both backdrops): 8.76 / 7.39 on the chip and 6.42 / 5.56 on the
+ * value. Quiet is not the same as unreadable -- the earlier grey-on-grey
+ * failure came from a 72% text mix, not from using a grey hue.
+ */
+.aidos-chip-conf {
+  --chip-hue: var(--text-secondary);
+  background: color-mix(in srgb, var(--chip-hue) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chip-hue) 45%, transparent);
+  color: color-mix(in srgb, var(--chip-hue) 38%, #ffffff);
+}
+
+/*
+ * #21: the pending-approval flag beside the ticket id.
+ *
+ * Warning-yellow, and deliberately the only OTHER thing on the card allowed
+ * to draw attention alongside the gate, the id and the state chip. It marks
+ * the one condition that is blocked on the human, so a card that needs them
+ * should be findable at a glance across the grid.
+ */
+.aidos-chip-approval-flag {
+  --chip-hue: var(--state-awaiting);
+  padding-inline: 4px;
+  background: color-mix(in srgb, var(--chip-hue) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chip-hue) 60%, transparent);
+  color: color-mix(in srgb, var(--chip-hue) 30%, #ffffff);
+}
+
+.aidos-chip-conf .aidos-chip-value {
+  background: color-mix(in srgb, var(--chip-hue) 30%, transparent);
+  border-inline-start: 1px solid color-mix(in srgb, var(--chip-hue) 45%, transparent);
+  color: inherit;
 }
 
 /* #68: structured evidence payload fields (the no-raw-JSON rule). */

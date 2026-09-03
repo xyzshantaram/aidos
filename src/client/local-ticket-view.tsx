@@ -383,6 +383,30 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [approvals, setApprovals] = react.useState<PendingApprovalLike[]>([]);
 
   /*
+   * #21: which tiles carry the pending-approval flag.
+   *
+   * A pending approval names a ticket by NUMERIC ID, and it always belongs
+   * to THIS session -- requestAllowlist validates against the calling
+   * session's own state. So the row it refers to is an own row, whose board
+   * key is String(id). Resolved through boardKeyOf on the actual row rather
+   * than built inline: constructing a key by hand is how the same bug
+   * happened eleven times, and #93's review found three of them at once.
+   */
+  const awaitingApprovalKeys = react.useMemo(
+    function () {
+      const keys = new Set<string>();
+      for (const approval of approvals) {
+        const wanted = String(approval.ticketId);
+        for (const row of ownRows) {
+          if (boardKeyOf(row) === wanted) keys.add(boardKeyOf(row));
+        }
+      }
+      return keys;
+    },
+    [approvals, ownRows],
+  );
+
+  /*
    * #93: the first cut swallowed both failures with `.catch(() => set([]))`,
    * so a broken fetch was INDISTINGUISHABLE from "nothing is waiting on you"
    * -- the worst possible failure mode for a queue whose entire job is
@@ -737,6 +761,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
     body = (
       <TicketView
         ownWorkspaceKey={ownWorkspaceKey}
+        awaitingApprovalKeys={awaitingApprovalKeys}
         sessionId={sessionId}
         tickets={filtered}
         allTicketsCount={allTicketsCount}

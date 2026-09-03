@@ -213,14 +213,33 @@ describe("u2b board-logic: evidenceKindCounts", () => {
     expect(counts[1].count).toBe(1);
   });
 
-  it("ties broken by kind name ascending", () => {
+  it("untimestamped rows keep ARRIVAL order, not alphabetical", () => {
+    /*
+     * #21: the contract changed from "most rows first, then alphabetically"
+     * to CHRONOLOGICAL -- the chip row is a timeline of what happened, in
+     * the order it happened. Alphabetical is an order nobody reads for.
+     *
+     * A row with no timestamp cannot be placed in time, so it falls back to
+     * the order it arrived in the input, which is the closest thing to
+     * chronology available and is stable. Alphabetical remains only as the
+     * last tie-break, when even arrival order is equal.
+     */
     const evidence: EvidenceRowLike[] = [
       row("zeta", {}),
       row("alpha", {}),
     ];
     const counts = evidenceKindCounts(evidence);
-    expect(counts[0].kind).toBe("alpha");
-    expect(counts[1].kind).toBe("zeta");
+    expect(counts[0].kind).toBe("zeta");
+    expect(counts[1].kind).toBe("alpha");
+  });
+
+  it("orders by timestamp when rows carry one", () => {
+    const evidence: EvidenceRowLike[] = [
+      { kind: "later", payload: {}, at: 300 },
+      { kind: "earlier", payload: {}, at: 100 },
+    ];
+    const counts = evidenceKindCounts(evidence);
+    expect(counts.map((c) => c.kind)).toEqual(["earlier", "later"]);
   });
 
   it("each tag carries a deterministic color from the kind name", () => {

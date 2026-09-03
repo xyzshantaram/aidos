@@ -199,3 +199,192 @@ describe("#21 the chip look lives in the stylesheet, not in inline styles", () =
     expect(body).not.toContain("#f9fafb");
   });
 });
+
+describe("#21 the tile wiring and its tooltips", () => {
+  const tile = readFileSync(
+    new URL("../src/client/ticket-tile.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("passes the VIEWING session's workspace to the dependency chip", () => {
+    /*
+     * Review F2. This passed `ticket.workspaceKey` -- the TILE's own ticket's
+     * workspace -- into a parameter meaning the viewing session's. On a
+     * foreign tile the two differ, so a foreign ticket's dependency on its
+     * OWN workspace rendered as a bare number, indistinguishable from one of
+     * ours, while the id chip on the same tile correctly said "other#5". The
+     * same tile disagreed with itself. Twelfth instance of the address-space
+     * confusion, one call site from the fix that motivated this ticket.
+     */
+    expect(tile).toContain("displayDep(ref, props.ownWorkspaceKey)");
+    expect(tile).not.toContain("displayDep(ref, ticket.workspaceKey)");
+  });
+
+  it("passes the viewing workspace to the id chip too", () => {
+    expect(tile).toContain("ticketChipLabel(ticket, props.ownWorkspaceKey)");
+  });
+
+  it("passes the state so implied chips are suppressed", () => {
+    expect(tile).toContain("state={ticket.state}");
+  });
+
+  it("every chip whose label became an icon keeps a title AND an aria-label", () => {
+    /*
+     * Review F4: `title` on a <span> inside a <button> NEVER reaches the
+     * accessible name -- title is only a fallback for an element with no
+     * other name source, and these spans have text content. With the glyph
+     * aria-hidden, a screen reader heard a bare "3/4": strictly worse than
+     * the word "Gate" it replaced. The user's condition for replacing a
+     * label was that hovering still explains it; that has to hold for people
+     * who cannot hover at all.
+     */
+    expect(tile.match(/aria-label=/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    expect(tile).toContain('title={"Depends on " + ref}');
+    expect(tile).toContain('aria-label={"Depends on " + ref}');
+    expect(tile).toContain("title={fullTicketId(ticket)}");
+  });
+
+  it("uses real icons, not font glyphs", () => {
+    // Glyph availability is a gamble (a missing one renders as tofu) and a
+    // font decides its stroke weight, which is what made them "kinda thin".
+    expect(tile).toContain("KeyIcon");
+    expect(tile).toContain("ForkIcon");
+    expect(tile).toContain("CompassIcon");
+    for (const glyph of ["\u25e7", "\u25d1", "\u21b3"]) {
+      expect(tile).not.toContain(glyph);
+    }
+  });
+
+  it("puts confidence last, after the dependencies", () => {
+    // User's ask: confidence is advisory, so it reads last.
+    // Measured in the CHIP ROW, not the whole file -- the import line lists
+    // the icons alphabetically and would make this assertion meaningless.
+    const chips = tile.slice(tile.indexOf('className="aidos-tile-chips"'));
+    expect(chips.indexOf("CompassIcon")).toBeGreaterThan(chips.indexOf("ForkIcon"));
+    expect(chips.indexOf("CompassIcon")).toBeGreaterThan(chips.indexOf("KeyIcon"));
+    expect(chips.indexOf("ForkIcon")).toBeGreaterThan(chips.indexOf("KeyIcon"));
+  });
+});
+
+describe("#21 the icon set has one stroke weight", () => {
+  const icons = readFileSync(
+    new URL("../src/client/icons.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("sets an explicit stroke width", () => {
+    /*
+     * Every icon previously omitted stroke-width, so all rendered at the SVG
+     * default of 1px. A hairline beside 600-weight 11px text reads as a grey
+     * smudge however bright the colour token is -- which is why the user saw
+     * "too low contrast" AND "icons are kinda thin" as one complaint.
+     */
+    expect(icons).toContain("ICON_STROKE");
+    expect(icons).toContain("strokeWidth: ICON_STROKE");
+  });
+
+  it("has no <svg> that bypasses the shared props", () => {
+    // A future icon must not be able to reintroduce a hairline.
+    const svgOpens = icons.match(/<svg\b/g) ?? [];
+    const shared = icons.match(/<svg \{\.\.\.iconProps\(\)\}>/g) ?? [];
+    expect(shared.length).toBe(svgOpens.length);
+  });
+});
+
+describe("#21 the chip row reads as a timeline, in order", () => {
+  it("IMPORTED always leads, whatever its timestamp says", () => {
+    /*
+     * User's ask: "imported should go at the beginning". It is the ticket's
+     * ORIGIN -- the state a plan document claimed before anything happened
+     * here -- so it leads even when timestamps disagree. They often do: an
+     * import stamps every row at the same instant, and a re-import can stamp
+     * it later than real work that preceded it.
+     */
+    const counts = evidenceKindCounts([
+      { kind: "builtin:user_signoff", payload: {}, at: 100 },
+      { kind: "builtin:imported_state", payload: {}, at: 900 },
+      { kind: "builtin:automated_check", payload: {}, at: 200 },
+    ]);
+    expect(counts[0].kind).toBe("builtin:imported_state");
+  });
+
+  it("then everything else in the order it happened", () => {
+    const counts = evidenceKindCounts([
+      { kind: "builtin:user_verified", payload: {}, at: 400 },
+      { kind: "builtin:automated_check", payload: {}, at: 200 },
+      { kind: "builtin:imported_state", payload: {}, at: 999 },
+      { kind: "builtin:user_signoff", payload: {}, at: 100 },
+      { kind: "builtin:review_pass", payload: {}, at: 300 },
+    ]);
+    expect(counts.map((c) => c.kind)).toEqual([
+      "builtin:imported_state",
+      "builtin:user_signoff",
+      "builtin:automated_check",
+      "builtin:review_pass",
+      "builtin:user_verified",
+    ]);
+  });
+
+  it("a repeated kind keeps its FIRST position and reports the count", () => {
+    // Two review rounds must not jump review_pass to the end: its place is
+    // where it entered the story, and the count segment says it recurred.
+    const counts = evidenceKindCounts([
+      { kind: "builtin:review_pass", payload: {}, at: 100 },
+      { kind: "builtin:user_verified", payload: {}, at: 200 },
+      { kind: "builtin:review_pass", payload: {}, at: 300 },
+    ]);
+    expect(counts[0].kind).toBe("builtin:review_pass");
+    expect(counts[0].count).toBe(2);
+  });
+});
+
+describe("#21 only the gate, id, state and blocked-on-you may draw attention", () => {
+  const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+  const tile = readFileSync(
+    new URL("../src/client/ticket-tile.tsx", import.meta.url),
+    "utf8",
+  );
+
+  function ruleBody(selector: string): string {
+    const at = css.indexOf(selector);
+    expect(at).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("}", at));
+  }
+
+  it("the GATE keeps the loud near-white value", () => {
+    // It is the only metric that controls anything, so it earns the volume.
+    expect(ruleBody(".aidos-chip-gate .aidos-chip-value {")).toContain("#f9fafb");
+  });
+
+  it("CONFIDENCE does not, because it is advisory", () => {
+    /*
+     * Confidence never unlocks anything, so it must not carry the gate's
+     * visual authority. It shared the same stark white pill, which gave an
+     * advisory number the same weight as the thing that actually gates.
+     */
+    const value = ruleBody(".aidos-chip-conf .aidos-chip-value {");
+    expect(value).not.toContain("#f9fafb");
+    expect(value).toContain("color-mix");
+  });
+
+  it("the pending-approval flag is warning-tinted and sits by the id", () => {
+    expect(ruleBody(".aidos-chip-approval-flag {")).toContain("--state-awaiting");
+    // Beside the id chip, before the state chip: it is card-level context,
+    // not another entry in the chip row at the bottom.
+    const meta = tile.slice(
+      tile.indexOf('className="aidos-tile-meta"'),
+      tile.indexOf('className="aidos-tile-title"'),
+    );
+    expect(meta).toContain("aidos-chip-approval-flag");
+    expect(meta).toContain("AlertCircleIcon");
+  });
+
+  it("the flag is keyed by BOARD KEY, never a bare id", () => {
+    const view = readFileSync(
+      new URL("../src/client/ticket-view.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(view).toContain("awaitingApprovalKeys?.has(boardKeyOf(ticket))");
+    expect(view).not.toContain("awaitingApprovalKeys?.has(String(ticket.id))");
+  });
+});

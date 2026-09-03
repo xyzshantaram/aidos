@@ -4,10 +4,15 @@
  * one row splits: the keyword keeps the kind color, and the count segment
  * inverts it. The title holds the kind description.
  *
- * #21: pass `state` to drop the chips that state already implies (a SIGNED
- * OFF chip beside an "In progress" chip restates it). Omit `state` and every
- * kind shows -- which is what the DETAIL panel wants, where completeness is
- * the point.
+ * #21: `state` drops the chips that state already implies (a SIGNED OFF chip
+ * beside an "In progress" chip restates it).
+ *
+ * It is REQUIRED. It was optional, justified by "the DETAIL panel wants
+ * every kind" -- but the detail panel does not use this component at all; it
+ * renders its own full evidence list. So the branch had no caller and its
+ * stated reason described one that does not exist (#21 review F6/W9), which
+ * a mutation confirmed by deleting the branch with the suite still green. An
+ * unreachable branch defended by a false rationale is worse than no branch.
  */
 
 import react from "react";
@@ -18,13 +23,12 @@ import type { TicketState } from "../kernel/types";
 
 export interface EvidenceTagsProps {
   evidence: readonly EvidenceRowLike[];
-  /** When given, kinds implied by this state are dropped. */
-  state?: TicketState;
+  /** Kinds implied by this state are dropped. Required: see the note above. */
+  state: TicketState;
 }
 
 export function EvidenceTags({ evidence, state }: EvidenceTagsProps) {
-  const all = evidenceKindCounts(evidence);
-  const counts = state === undefined ? all : tileKindCounts(state, all);
+  const counts = tileKindCounts(state, evidenceKindCounts(evidence));
   if (counts.length === 0) return null;
   // #55: the IMPORTED badge's value half is the claimed ticket state from
   // the row payload, not a bare count.

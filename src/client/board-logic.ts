@@ -440,14 +440,30 @@ export function evidenceIsMany(
  * Deterministic color for a kind name, picked from a fixed palette. The
  * hash folds over the kind characters and the index is stable for the same
  * name across renders.
+ *
+ * #21: this palette used to contain NO COLOURS -- six greys taken from the
+ * border, text and surface tokens. Every evidence chip was therefore a grey
+ * chip, which is a direct violation of this ticket's oldest criterion ("no
+ * badge or pill anywhere renders grey text on a grey background") and the
+ * reason the user reported the allowlist and dependency chips as unreadable.
+ * It only became obvious once the chips moved from saturated fills to tinted
+ * text, because a grey FILL with white text is legible while grey text on a
+ * grey tint is not. Measured: --surface-hover gave a contrast ratio of 2.84,
+ * far below the 4.5 AA floor.
+ *
+ * The id badges' hue palette is reused deliberately: one set of hues for the
+ * whole board means a colour means "a hue", not "a hue from whichever list
+ * this component happened to import".
  */
 const KIND_COLORS = [
-  "var(--border)",
-  "var(--border-subtle)",
-  "var(--text-secondary)",
-  "var(--text-muted)",
-  "var(--surface-active)",
-  "var(--surface-hover)",
+  "var(--badge-hue-1)",
+  "var(--badge-hue-2)",
+  "var(--badge-hue-3)",
+  "var(--badge-hue-4)",
+  "var(--badge-hue-5)",
+  "var(--badge-hue-6)",
+  "var(--badge-hue-7)",
+  "var(--badge-hue-8)",
 ];
 
 export function kindColor(kind: string): string {
@@ -539,10 +555,21 @@ export interface GateLike {
  * pure restatement -- it spends tile space to tell the reader something the
  * chip next to it already said.
  *
- * Derived from DEFAULT_GATES and STATE_ORDER rather than hardcoded, so
- * changing a gate's requiredKinds automatically changes what counts as
- * implied. A kind is implied when the ticket has reached (or passed) the
- * state that its gate leads to.
+ * Derived from the gate table and STATE_ORDER rather than hardcoded, so
+ * changing a gate's requiredKinds changes what counts as implied. A kind is
+ * implied when the ticket has reached (or passed) the state its gate leads
+ * to.
+ *
+ * KNOWN LIMITATION (#21 review F5), stated rather than papered over: the
+ * default table is DEFAULT_GATES, the CONSTANT, while the running service
+ * resolves `config.gates`, which a workspace may customise. In such a
+ * workspace a tile could suppress a chip the live gates do not actually
+ * imply. This is not specific to this function -- the whole client imports
+ * BUILTIN_KINDS and DEFAULT_GATES directly and has no channel for the live
+ * config at all -- so it is filed as its own ticket rather than bodged here.
+ * The blast radius is bounded: suppression only ever HIDES a chip from a
+ * tile, never invents one, and the detail panel renders the full evidence
+ * list independently.
  */
 export function stateImpliedKinds(
   state: TicketState,
@@ -555,9 +582,17 @@ export function stateImpliedKinds(
    */
   gates: readonly GateLike[] = DEFAULT_GATES,
 ): Set<string> {
+  /*
+   * #21 review F6: there was an `if (reached < 0) return implied;` guard
+   * here. A mutation removing it survived the whole suite -- because it is
+   * DEAD: with reached === -1, `reached >= target` is false for every valid
+   * gate, so the loop already yields an empty set. Deleted rather than given
+   * a test, because a test for an unreachable branch pins nothing. This
+   * commit's own message argues that a rule with no reachable test is a rule
+   * nobody can trust; shipping one anyway would have been the same error.
+   */
   const reached = STATE_ORDER.indexOf(state);
   const implied = new Set<string>();
-  if (reached < 0) return implied;
   for (const gate of gates) {
     const target = STATE_ORDER.indexOf(gate.toState);
     // Only FORWARD gates imply anything: the send-back edge
@@ -599,15 +634,58 @@ export function evidenceKindCounts(
   evidence: readonly EvidenceRowLike[],
 ): KindCount[] {
   const counts = new Map<string, number>();
+  /*
+   * #21: chips sort CHRONOLOGICALLY, by when each kind first appeared.
+   *
+   * The old order was "most rows first, then alphabetically by kind id",
+   * which is an ordering nobody reads for. Chronological tells the ticket's
+   * story in the order it actually happened -- signed off, then checked,
+   * then accepted, then verified -- so the chip row is a timeline rather
+   * than a bag. It is also honest: it shows the order events REALLY
+   * occurred rather than an idealised lifecycle, so a ticket that was sent
+   * back and re-reviewed reads differently from one that went straight
+   * through, which is exactly the difference worth seeing.
+   *
+   * FIRST occurrence, not last: a kind's place is where it entered the
+   * story. Two review rounds keep review_pass at its first position and say
+   * "2" on the count segment, rather than jumping to the end.
+   */
+  const firstAt = new Map<string, number>();
+  let sequence = 0;
+  const arrival = new Map<string, number>();
   for (const row of evidence) {
     counts.set(row.kind, (counts.get(row.kind) ?? 0) + 1);
+    if (!arrival.has(row.kind)) arrival.set(row.kind, sequence++);
+    if (typeof row.at === "number") {
+      const seen = firstAt.get(row.kind);
+      if (seen === undefined || row.at < seen) firstAt.set(row.kind, row.at);
+    }
   }
   const out: KindCount[] = [];
   for (const [kind, count] of counts) {
     out.push({ kind, count, color: kindColor(kind) });
   }
   out.sort((a, b) => {
-    if (b.count !== a.count) return b.count - a.count;
+    /*
+     * IMPORTED always leads (#21, user's ask). It is the ticket's ORIGIN --
+     * the state a plan document claimed before anything happened here -- so
+     * it is the first thing in the story even when its timestamp says
+     * otherwise (an import stamps every row at the same instant, and a
+     * re-import can stamp it later than real work). Reading order is
+     * top-to-bottom, left-to-right: gate, origin, then what happened.
+     */
+    const aFirst = a.kind === "builtin:imported_state";
+    const bFirst = b.kind === "builtin:imported_state";
+    if (aFirst !== bFirst) return aFirst ? -1 : 1;
+    const at = firstAt.get(a.kind);
+    const bt = firstAt.get(b.kind);
+    // A row with no timestamp cannot be placed in time. Rather than sorting
+    // it to an arbitrary end, fall back to ARRIVAL ORDER in the input, which
+    // is the closest thing to chronology available and is stable.
+    if (at !== undefined && bt !== undefined && at !== bt) return at - bt;
+    const aa = arrival.get(a.kind) ?? 0;
+    const ba = arrival.get(b.kind) ?? 0;
+    if (aa !== ba) return aa - ba;
     if (a.kind < b.kind) return -1;
     if (a.kind > b.kind) return 1;
     return 0;
@@ -619,9 +697,16 @@ export function evidenceKindCounts(
  * The last meaningful segment of a workspace key, for display.
  *
  * `--home-sid-repos-aidos--` -> `aidos`. Two workspaces whose keys end in
- * the same segment collide HERE and are told apart by the id badge's colour
- * hash (C5) and by the full reference in the chip's tooltip -- the label is
- * a hint, never the identity.
+ * the same segment collide HERE, and the full reference in the chip's
+ * `title`/`aria-label` is what tells them apart -- the label is a hint,
+ * never the identity.
+ *
+ * #21 review F7 corrected an overclaim here: this used to also credit "the
+ * id badge's colour hash (C5)". That is false for the chip this function
+ * actually feeds, because dependency chips set no per-chip hue and all
+ * render in the one fallback colour -- two colliding workspaces produce
+ * pixel-identical chips. The hash does distinguish ID badges, and even
+ * there only 7 times in 8, since the palette holds 8 hues.
  */
 export function workspaceLabel(workspaceKey: string): string {
   const parts = workspaceKey.split("-").filter((part) => part !== "");

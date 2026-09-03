@@ -1,20 +1,42 @@
 /**
  * Small inline icon components. Each renders a 12px square, inherits the
  * current text color, and carries no color of its own.
+ *
+ * #21, from the user: the icons "are also kinda thin". They were — none of
+ * them set `stroke-width`, so every one rendered at the SVG default of 1px.
+ * A 1px hairline beside 600-weight 11px text reads as a grey smudge however
+ * bright the colour token is, which is why raising contrast alone did not
+ * fix it. `ICON_STROKE` is now shared, so the whole set has one weight and
+ * a future icon cannot quietly reintroduce a hairline.
  */
 
 import react from "react";
 
+/**
+ * The shared stroke weight. 1.6 matches the visual weight of the 600-weight
+ * chip text at this size: thinner greys out, thicker blots at 12px.
+ */
+const ICON_STROKE = 1.6;
+
+/** The props every icon shares. Spread first so a caller can still override. */
+function iconProps() {
+  return {
+    width: 12,
+    height: 12,
+    viewBox: "0 0 12 12",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: ICON_STROKE,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+    focusable: false,
+  };
+}
+
 export function PencilIcon() {
   return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      stroke="currentColor"
-      aria-hidden="true"
-    >
+    <svg {...iconProps()}>
       <path d="M8.5 1.5l2 2L4 10l-2.5.5L2 8z" />
     </svg>
   );
@@ -22,14 +44,7 @@ export function PencilIcon() {
 
 export function TrashIcon() {
   return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      stroke="currentColor"
-      aria-hidden="true"
-    >
+    <svg {...iconProps()}>
       <path d="M2 3.5h8M5 3.5V2h2v1.5M3 3.5l.5 7h5l.5-7M5 5.5v3M7 5.5v3" />
     </svg>
   );
@@ -38,14 +53,7 @@ export function TrashIcon() {
 /** The pop-out icon (#69 strips): a square with an arrow leaving its corner. */
 export function PopOutIcon() {
   return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      stroke="currentColor"
-      aria-hidden="true"
-    >
+    <svg {...iconProps()}>
       <path d="M6.5 2H2v8h8V5.5" />
       <path d="M7 2h3v3" />
       <path d="M5 7l5-5" />
@@ -59,17 +67,84 @@ export function PopOutIcon() {
  */
 export function WarningIcon() {
   return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      stroke="currentColor"
-      aria-hidden="true"
-    >
+    <svg {...iconProps()}>
       <path d="M6 1.5l4.5 8h-9z" />
       <path d="M6 4.75v2.5" />
       <path d="M6 8.6v.4" />
+    </svg>
+  );
+}
+
+/**
+ * The GATE icon: a key (#21, user's choice).
+ *
+ * The gate is the lock on a transition and evidence is what opens it, so a
+ * key says "how much of what unlocks this is present". It replaces the word
+ * "Gate", which was four characters of furniture repeated on every tile.
+ */
+export function KeyIcon() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="4.2" cy="4.2" r="2.5" />
+      <path d="M6 6l4.5 4.5" />
+      <path d="M8.6 8.6l-1 1" />
+      <path d="M9.7 9.7l-1 1" />
+    </svg>
+  );
+}
+
+/**
+ * The DEPENDENCY icon: a fork, in the branch / merge-request sense (#21,
+ * user's choice).
+ *
+ * A dependency is another line of work this one joins onto, which is what a
+ * branch glyph already says in every tool a developer reads. It replaces a
+ * bare arrow, which said "something goes somewhere" and no more.
+ */
+export function ForkIcon() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="3.4" cy="2.6" r="1.4" />
+      <circle cx="3.4" cy="9.4" r="1.4" />
+      <circle cx="8.6" cy="2.6" r="1.4" />
+      <path d="M3.4 4v4" />
+      <path d="M8.6 4v1.4c0 1.2-.7 1.6-1.8 1.6H3.4" />
+    </svg>
+  );
+}
+
+/**
+ * The CONFIDENCE icon: a compass (#21, user's choice).
+ *
+ * Confidence is ADVISORY — it never unlocks anything — and a compass reads
+ * as a bearing rather than a gate, which is exactly the distinction the
+ * tooltip then spells out. A key and a compass side by side say "one of
+ * these controls something and the other does not".
+ */
+export function CompassIcon() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="6" cy="6" r="4.6" />
+      <path d="M8 4L5.2 5.2 4 8l2.8-1.2z" />
+    </svg>
+  );
+}
+
+/**
+ * The PENDING-APPROVAL icon: an exclamation in a circle (#21, user's ask).
+ *
+ * Sits beside the ticket id when the ticket has an allowlist request waiting
+ * for the human. It is the one thing on a card that is BLOCKED ON THEM, so
+ * it is allowed to draw attention where the rest of the chip row is not --
+ * the card's attention budget goes to the gate, the id, the status, and
+ * this.
+ */
+export function AlertCircleIcon() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="6" cy="6" r="4.6" />
+      <path d="M6 3.5v3" />
+      <path d="M6 8.3v.35" />
     </svg>
   );
 }
