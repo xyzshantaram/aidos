@@ -48,6 +48,38 @@ export function parseAllowlistText(text: string): string[] {
   return [...seen];
 }
 
+
+/**
+ * The union of paths already writable by OTHER in-progress tickets.
+ *
+ * Extracted from the editor's effect (#93 review 5). It was called
+ * "structurally untestable without jsdom", but the untestability was
+ * self-inflicted: the logic sat inside a useEffect. Pure, it needs no DOM --
+ * and it needs to be tested, because an uncovered line here is what let a
+ * reviewer's mutation get committed unnoticed.
+ *
+ * `selfKey` is the BOARD KEY of the ticket being edited. Comparing bare
+ * numeric ids here excluded every OTHER ticket sharing that number on a
+ * merged board, silently dropping their paths from the union.
+ */
+export function otherAllowlistUnion(
+  rows: readonly TicketRowLike[],
+  selfKey: string,
+): string[] {
+  const union: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (boardKeyOf(row) === selfKey || row.state !== "in_progress") continue;
+    for (const path of row.allowlist ?? []) {
+      if (!seen.has(path)) {
+        seen.add(path);
+        union.push(path);
+      }
+    }
+  }
+  return union;
+}
+
 export function AllowlistEditor(props: AllowlistEditorProps) {
   const [text, setText] = react.useState(
     props.currentAllowlist.join("\n"),
@@ -64,26 +96,7 @@ export function AllowlistEditor(props: AllowlistEditorProps) {
           | TicketRowLike[]
           | { tickets?: TicketRowLike[] };
         const list = Array.isArray(rows) ? rows : (rows?.tickets ?? []);
-        const union: string[] = [];
-        const seen = new Set<string>();
-        for (const row of list) {
-          /*
-           * #93 fourth review, finding 4. This excluded "this ticket" by BARE
-           * NUMERIC ID, so on a merged board it also excluded every OTHER
-           * ticket that happens to share that number -- dropping their paths
-           * from the union the editor shows. Compare BOARD KEYS, which is the
-           * only address that identifies a row uniquely.
-           */
-          if (row.id === props.ticketId || row.state !== "in_progress") {
-            continue;
-          }
-          for (const path of row.allowlist ?? []) {
-            if (!seen.has(path)) {
-              seen.add(path);
-              union.push(path);
-            }
-          }
-        }
+        const union = otherAllowlistUnion(list, props.ticketIdKey);
         if (!cancelled) setOthers(union);
       } catch {
         // The preview is advisory; a failed read leaves it empty.
