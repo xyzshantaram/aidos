@@ -1,0 +1,120 @@
+/**
+ * #93: the TICKET STRIP. One ticket rendered as a compact row — id chip,
+ * title, state chip, gate fraction — with slots the CALLER fills for the
+ * meta and actions that matter in its context.
+ *
+ * The same treatment `EvidenceStrip` got, and for the same reason: a ticket
+ * referenced (rather than opened) should look identical everywhere it
+ * appears. Deliberate consumers:
+ *
+ *  - the human work queue (#93): meta is the prompt and any agent
+ *    nomination reason; actions are Sign off / Verify / Mark done / Dismiss.
+ *  - the dependency section: meta is the edge direction; the action is Open.
+ *  - tool-call result cards (#73): meta is whatever that call is about, and
+ *    the actions are the call's own.
+ *
+ * The strip renders no action of its own and knows no board verbs, so
+ * adding a consumer never means editing this file.
+ */
+import react from "react";
+
+import {
+  badgeClass,
+  formatGateFraction,
+  fullTicketId,
+  hasCriteria,
+  idColor,
+  stateLabel,
+  ticketChipLabel,
+} from "./board-logic";
+import { PopOutIcon } from "./icons";
+
+import type { TicketView } from "../kernel/projections";
+
+/** The minimum a strip needs. Anything TicketView-shaped satisfies it. */
+export type TicketStripTicket = Pick<
+  TicketView,
+  "id" | "title" | "state" | "slug" | "workspaceKey"
+> &
+  Partial<Pick<TicketView, "gatePresent" | "gateTotal" | "criteria">>;
+
+export interface TicketStripProps {
+  ticket: TicketStripTicket;
+  /**
+   * The context line under the title. A string renders as plain meta; a node
+   * lets a caller mix chips or emphasis into it.
+   */
+  meta?: react.ReactNode;
+  /** Opens the ticket in the detail panel. Renders the pop-out affordance. */
+  onOpen?: () => void;
+  /** Caller-supplied action buttons, rendered after the open affordance. */
+  actions?: react.ReactNode;
+  /** Dims the row while one of its actions is in flight. */
+  working?: boolean;
+  /** Marks the row as the one the agent is pointing at. */
+  highlighted?: boolean;
+}
+
+export function TicketStrip(props: TicketStripProps) {
+  const ticket = props.ticket;
+  const full = fullTicketId(ticket as TicketView);
+  const className =
+    "aidos-ticket-strip" +
+    (props.highlighted === true ? " aidos-ticket-strip-highlighted" : "") +
+    (props.working === true ? " aidos-ticket-strip-working" : "");
+  const showGate =
+    ticket.gatePresent !== undefined || ticket.gateTotal !== undefined;
+  return (
+    <li className={className}>
+      <div className="aidos-ticket-strip-main">
+        <span
+          className="aidos-chip aidos-chip-id"
+          style={{ background: idColor(full) }}
+          title={full}
+        >
+          {ticketChipLabel(ticket as TicketView)}
+        </span>
+        <span className="aidos-ticket-strip-body">
+          <span className="aidos-ticket-strip-title" title={ticket.title}>
+            {ticket.title}
+          </span>
+          {props.meta !== undefined ? (
+            <span className="aidos-ticket-strip-meta">{props.meta}</span>
+          ) : null}
+        </span>
+        <span className="aidos-ticket-strip-chips">
+          <span className={badgeClass(ticket.state)}>{stateLabel(ticket.state)}</span>
+          {showGate ? (
+            <span className="aidos-chip aidos-chip-metric" title="Gate progress">
+              <span className="aidos-chip-key">Gate</span>
+              <span className="aidos-chip-value">
+                {formatGateFraction(
+                  ticket.gatePresent ?? null,
+                  ticket.gateTotal ?? null,
+                  hasCriteria(ticket as TicketView),
+                )}
+              </span>
+            </span>
+          ) : null}
+        </span>
+        <span className="aidos-ticket-strip-actions">
+          {props.onOpen !== undefined ? (
+            <button
+              className="aidos-icon-btn"
+              title={"Open " + full}
+              aria-label={"Open " + full}
+              disabled={props.working === true}
+              onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
+                event.stopPropagation();
+                props.onOpen?.();
+              }}
+            >
+              <PopOutIcon />
+            </button>
+          ) : null}
+          {props.actions}
+        </span>
+      </div>
+    </li>
+  );
+}

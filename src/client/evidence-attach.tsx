@@ -19,7 +19,7 @@ import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { userEvidenceKinds } from "./user-evidence-kinds";
 import { parsePayloadText } from "./parse-payload-text";
-import { ModalShell, NoteField as NoteFieldShared, Collapse } from "./ui";
+import { ModalShell, NoteField as NoteFieldShared, Collapse, LinesField } from "./ui";
 import { EvidencePayloadView } from "./evidence-payload-view";
 import type { EvidenceRowLike } from "./board-logic";
 import { BUILTIN_KINDS } from "../kernel/constants";
@@ -64,29 +64,8 @@ function NoteField(props: {
 
 // ---- shared reusable components for editors ---------------------------------
 
-/** A reusable one-per-line editor for paths, criteria, or similar line lists. */
-function LinesField(props: {
-  label: string;
-  value: string;
-  working: boolean;
-  placeholder?: string;
-  onChange: (text: string) => void;
-}) {
-  return (
-    <div className="aidos-modal-row">
-      <label>{props.label}</label>
-      <textarea
-        className="aidos-evidence-attach-note aidos-allowlist-input"
-        value={props.value}
-        disabled={props.working}
-        placeholder={props.placeholder}
-        onChange={(event) => {
-          props.onChange(event.target.value);
-        }}
-      />
-    </div>
-  );
-}
+// LinesField now lives in ui.tsx (#93): the allowlist editor, the per-kind
+// evidence editors, and the approval runner's path-list step share it.
 
 /** Parse one-per-line text into an array of non-empty strings. */
 function parseLinesText(text: string): { ok: boolean; lines?: string[]; error?: string } {

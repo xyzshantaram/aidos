@@ -2222,3 +2222,152 @@
   margin: 4px 0 0;
   padding-left: 10px;
 }
+
+/* ---------------------------------------------------------------------------
+   #93 TICKET STRIP + the human work queue, and #85's approval runner.
+   Deliberately mirrors the evidence-strip rules above: the two strips are one
+   family, so a referenced ticket and a referenced evidence row read alike.
+   --------------------------------------------------------------------------- */
+
+.aidos-ticket-strips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.aidos-ticket-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 6px var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.aidos-ticket-strip-highlighted {
+  border-color: var(--accent-blue);
+}
+
+.aidos-ticket-strip-working {
+  opacity: 0.6;
+}
+
+.aidos-ticket-strip-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.aidos-ticket-strip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.aidos-ticket-strip-title {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidos-ticket-strip-meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.aidos-ticket-strip-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.aidos-ticket-strip-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  /* Same rule the evidence strip follows: actions always at the end. */
+  margin-left: auto;
+  align-self: center;
+}
+
+/* The queue itself. */
+.aidos-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aidos-queue-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aidos-queue-reason {
+  color: var(--accent-blue);
+}
+
+/* The count the human sees without opening the queue. */
+.aidos-queue-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent-blue);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* #85 runner steps. */
+.aidos-runner-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aidos-runner-step-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.aidos-runner-step-prompt {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aidos-runner-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.aidos-runner-checklist label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}

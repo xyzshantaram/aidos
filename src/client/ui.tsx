@@ -168,3 +168,40 @@ export function NoteField(props: {
     </div>
   );
 }
+
+/**
+ * A one-per-line list editor. Promoted out of evidence-attach.tsx (#93) so
+ * the allowlist editor, the per-kind evidence editors, and the approval
+ * runner's path-list step all share ONE implementation rather than three
+ * copies that drift.
+ */
+export function LinesField(props: {
+  label: string;
+  value: string;
+  working?: boolean;
+  placeholder?: string;
+  onChange: (text: string) => void;
+}) {
+  return (
+    <div className="aidos-modal-row">
+      <label>{props.label}</label>
+      <textarea
+        className="aidos-evidence-attach-note aidos-allowlist-input"
+        value={props.value}
+        disabled={props.working}
+        placeholder={props.placeholder}
+        onChange={(event) => {
+          props.onChange(event.target.value);
+        }}
+      />
+    </div>
+  );
+}
+
+/** Split a one-per-line field into trimmed, non-empty entries. */
+export function linesOf(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "");
+}
