@@ -25640,15 +25640,22 @@ var BUILTIN_KINDS = [
   },
   {
     id: "builtin:review_pass",
-    label: "Review pass",
-    description: "An independent review of the change: a reviewer subagent or the human read it and reported findings. The orchestrator's own read does not qualify.",
+    label: "Review \u2014 accepted",
+    description: "An independent review of the change accepted it: a reviewer subagent or the human read it, reported findings, and PASSED it. The orchestrator's own read does not qualify. A failing review is recorded with builtin:review_fail instead \u2014 never here.",
     weight: 1,
     allowedAuthors: ["agent", "user"]
   },
   {
+    id: "builtin:review_fail",
+    label: "Review \u2014 failed",
+    description: "An independent review of the change FAILED it: a reviewer subagent or the human found a defect and did not pass it. Contributes to nothing \u2014 it never satisfies a gate. Kept alongside any later builtin:review_pass so the review history (how many rounds, what each found) stays visible.",
+    weight: 0,
+    allowedAuthors: ["agent", "user"]
+  },
+  {
     id: "builtin:review_note",
-    label: "Review note",
-    description: "A remark from a review.",
+    label: "Remark",
+    description: "A remark: a note from a review round, or a general comment on the ticket. The one surviving free-form remark kind after builtin:comment folded into it \u2014 same weight, same authors, one kind instead of two doing the same job.",
     weight: 0.5,
     allowedAuthors: ["agent", "user"]
   },
@@ -25661,8 +25668,8 @@ var BUILTIN_KINDS = [
   },
   {
     id: "builtin:comment",
-    label: "Comment",
-    description: "A remark on the ticket.",
+    label: "Comment (deprecated)",
+    description: "DEPRECATED \u2014 folded into builtin:review_note, which is identical in weight and authorship. Kept here only so a pre-existing evidence row of this kind still validates and renders; no longer offered for new rows. Do not confuse with the ticket's COMMENT THREAD (CommentRecord/userAddComment), a separate durable mechanism this kind never wrote to.",
     weight: 0.5,
     allowedAuthors: ["user", "agent"]
   },
@@ -29801,7 +29808,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them. Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. The depth guard refuses a subagent anyway, so the filter is a second layer.";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them. Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. The depth guard refuses a subagent anyway, so the filter is a second layer.";
 function registerGetTickets(ctx) {
   ctx.tools.register(
     defineTool2({
@@ -30064,13 +30071,13 @@ function registerAttachEvidence(ctx) {
   ctx.tools.register(
     defineTool2({
       name: "attach_evidence",
-      description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them.",
+      description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_fail, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them. review_pass means a reviewer ACCEPTED the change and is the gate key; a FAILING review is review_fail, which satisfies no gate.",
       parameters: {
         ticketId: { oneOf: [{ type: "integer" }, { type: "string" }], required: true, description: "The ticket that receives the evidence, by numeric id or slug." },
         kind: {
           type: "string",
           required: true,
-          description: "The evidence kind: one of the agent-allowed kinds (automated_check, review_pass, review_note, agent_report)."
+          description: "The evidence kind: one of the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report). Use review_pass only for an accepted review; use review_fail when the reviewer found a defect and did not pass it."
         },
         payload: {
           type: "object",
