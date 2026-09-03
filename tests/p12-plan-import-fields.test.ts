@@ -161,7 +161,9 @@ function makeHarness(): Harness {
 
 /** The ticket rows of one project, sorted by phase and order. */
 async function ticketRows(harness: Harness): Promise<Record<string, unknown>[]> {
-  const listed = successJson(await harness.runTool("get_tickets", {}));
+  // #92: get_tickets returns SUMMARY rows by default; these assertions are
+  // about the full plan fields, so they ask for them explicitly.
+  const listed = successJson(await harness.runTool("get_tickets", { detail: "full" }));
   return (listed.tickets as Record<string, unknown>[]) ?? [];
 }
 

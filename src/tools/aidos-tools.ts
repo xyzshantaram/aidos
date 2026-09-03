@@ -19,6 +19,7 @@ import { HarnessError } from "@deepseek-ai/dsh-llm";
 import type { JsonValue } from "@deepseek-ai/dsh-session";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+import type { TicketView } from "../kernel/projections";
 import { STATE_ORDER } from "../kernel/types";
 import type { ContextSection } from "../kernel/types";
 import {
@@ -114,11 +115,44 @@ const TICKET_VIEW_SCHEMA = {
 const DESCRIPTION_EXCERPT = 200;
 const DEFAULT_LIMIT = 30;
 
-function summarizeTicket(view: Record<string, unknown>): Record<string, unknown> {
-  const description = typeof view.description === "string" ? view.description : "";
+
+/** A short, bounded excerpt of an evidence payload (#92). */
+function evidencePayloadExcerpt(payload: unknown): string {
+  if (payload === null || typeof payload !== "object") return "";
+  const p = payload as Record<string, unknown>;
+  if (typeof p.note === "string" && p.note.trim() !== "") {
+    return p.note.trim().slice(0, 160);
+  }
+  if (Array.isArray(p.paths)) return p.paths.length + " path(s)";
+  if (typeof p.claimed_state === "string") return "claimed " + p.claimed_state;
+  if (typeof p.commit === "string") return "commit " + p.commit.slice(0, 12);
+  if (typeof p.imagePath === "string") return "screenshot";
+  if (typeof p.verdict === "string") return p.verdict.slice(0, 160);
+  if (typeof p.report === "string") return p.report.slice(0, 160);
+  return "";
+}
+
+interface TicketSummary {
+  id: number;
+  title: string;
+  state: string;
+  phase: number;
+  order: number;
+  slug: string;
+  updatedAt: number;
+  confidenceScore: number;
+  gatePresent: number | null;
+  gateTotal: number | null;
+  dependsOnCount: number;
+  allowlistCount: number;
+  hasCriteria: boolean;
+  descriptionExcerpt: string;
+  descriptionTruncated: boolean;
+}
+
+function summarizeTicket(view: TicketView): TicketSummary {
+  const description = view.description ?? "";
   const truncated = description.length > DESCRIPTION_EXCERPT;
-  const dependsOn = Array.isArray(view.dependsOn) ? view.dependsOn : [];
-  const allowlist = Array.isArray(view.allowlist) ? view.allowlist : [];
   return {
     id: view.id,
     title: view.title,
@@ -130,10 +164,9 @@ function summarizeTicket(view: Record<string, unknown>): Record<string, unknown>
     confidenceScore: view.confidenceScore,
     gatePresent: view.gatePresent,
     gateTotal: view.gateTotal,
-    dependsOnCount: dependsOn.length,
-    allowlistCount: allowlist.length,
-    hasCriteria:
-      typeof view.criteria === "string" && view.criteria.trim() !== "",
+    dependsOnCount: view.dependsOn?.length ?? 0,
+    allowlistCount: view.allowlist?.length ?? 0,
+    hasCriteria: typeof view.criteria === "string" && view.criteria.trim() !== "",
     descriptionExcerpt: truncated
       ? description.slice(0, DESCRIPTION_EXCERPT)
       : description,
@@ -434,6 +467,22 @@ function registerGetTickets(ctx: Context): void {
           type: "boolean",
           description: "Sort direction. Default: true.",
         },
+        detail: {
+          type: "string",
+          enum: ["summary", "full"],
+          description:
+            "summary (default) returns compact rows with a truncated description " +
+            "excerpt; full returns complete rows. Prefer summary and follow up " +
+            "with get_ticket for the one you need - a full board read is large.",
+        },
+        limit: {
+          type: "integer",
+          description: "Max rows to return. Default 30.",
+        },
+        offset: {
+          type: "integer",
+          description: "Rows to skip, for paging. Default 0.",
+        },
       },
       output: {
         schema: {
@@ -441,7 +490,15 @@ function registerGetTickets(ctx: Context): void {
           additionalProperties: false,
           properties: {
             ok: { type: "boolean", const: true, required: true },
-            tickets: { type: "array", required: true, items: TICKET_VIEW_SCHEMA },
+            tickets: {
+              type: "array",
+              required: true,
+              items: { oneOf: [TICKET_SUMMARY_SCHEMA, TICKET_VIEW_SCHEMA] },
+            },
+            total: { type: "integer", required: true },
+            returned: { type: "integer", required: true },
+            hasMore: { type: "boolean", required: true },
+            nextOffset: { oneOf: [{ type: "integer" }, { type: "null" }], required: true },
           },
         },
         render: renderJson,
@@ -451,7 +508,7 @@ function registerGetTickets(ctx: Context): void {
         ctx.logger?.info?.(`aidos: get_tickets called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: get_tickets args ${JSON.stringify(args)}`);
         try {
-          const tickets = ctx.aidos.getTickets(agent, {
+          const all = ctx.aidos.getTickets(agent, {
             projectId: args.projectId,
             stateIds: args.stateIds,
             projectIds: args.projectIds,
@@ -459,8 +516,29 @@ function registerGetTickets(ctx: Context): void {
             sortKey: args.sortKey,
             descending: args.descending,
           });
-          ctx.logger?.info?.(`aidos: get_tickets returned ${tickets.length} ticket(s) for agent ${agent.session?.id}`);
-          return { ok: true, tickets };
+          // Filters apply BEFORE the page is cut, so a page is a page of
+          // matches rather than a filtered page (#92).
+          const total = all.length;
+          const offset = Math.max(0, args.offset ?? 0);
+          const limit = Math.max(1, args.limit ?? DEFAULT_LIMIT);
+          const page = all.slice(offset, offset + limit);
+          const full = args.detail === "full";
+          const tickets = full
+            ? page
+            : page.map(summarizeTicket);
+          const end = offset + page.length;
+          const hasMore = end < total;
+          ctx.logger?.info?.(
+            `aidos: get_tickets returned ${page.length}/${total} ticket(s) (${full ? "full" : "summary"}) for agent ${agent.session?.id}`,
+          );
+          return {
+            ok: true,
+            tickets,
+            total,
+            returned: page.length,
+            hasMore,
+            nextOffset: hasMore ? end : null,
+          };
         } catch (error) {
           refusal(error);
         }
@@ -471,6 +549,82 @@ function registerGetTickets(ctx: Context): void {
         if (args.search !== undefined && args.search !== "") filters.push("search: " + args.search);
         if (args.projectId !== undefined) filters.push("project " + args.projectId);
         return present("Read the board", "read", args.projectId, filters);
+      },
+    }),
+  );
+}
+
+function registerGetTicket(ctx: Context): void {
+  ctx.tools.register(
+    defineTool({
+      name: "get_ticket",
+      description:
+        "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, " +
+        "plus its evidence rows and comments. The companion to get_tickets, which returns " +
+        "compact summary rows by default - read the board to find what you need, then read " +
+        "the one ticket you are about to work on. Accepts a composite " +
+        "'<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
+      parameters: {
+        ticketId: {
+          type: "integer",
+          description: "The ticket to read. A composite id may be passed as a string.",
+          required: true as const,
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticket: { ...TICKET_VIEW_SCHEMA, required: true },
+            evidence: {
+              type: "array",
+              required: true,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  kind: { type: "string", required: true },
+                  author: { type: "string", required: true },
+                  at: { type: "number", required: true },
+                  excerpt: { type: "string", required: true },
+                },
+              },
+            },
+            commentCount: { type: "integer", required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        try {
+          const result = ctx.aidos.getTicket(agent, { ticketId: args.ticketId });
+          return {
+            ok: true as const,
+            ticket: result.ticket,
+            // BOUNDED on purpose (#92): a payload can be a whole reviewer
+            // report. The agent gets kind, author, when, and a short excerpt;
+            // the full payload lives in the evidence viewer.
+            evidence: result.evidence.map((row) => ({
+              kind: row.kind,
+              author: row.author,
+              at: row.at,
+              excerpt: evidencePayloadExcerpt(row.payload),
+            })),
+            // The comment BODIES are not returned: a long thread is exactly
+            // the kind of payload #92 exists to keep out of context. The count
+            // tells the agent whether it needs to look.
+            commentCount: result.comments.length,
+          };
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (a) => {
+        const req = a as { ticketId?: number };
+        return present("Read ticket", "read", req.ticketId, ["#" + req.ticketId]);
       },
     }),
   );
@@ -1046,6 +1200,7 @@ export function apply(ctx: Context, config: unknown): void {
   registerScratchTools(ctx);
   registerRequestAllowlist(ctx);
   registerSuggestActions(ctx);
+  registerGetTicket(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);

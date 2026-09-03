@@ -108,7 +108,7 @@ describe("plan round trip live", () => {
     const ticketIds = (result.tickets as number[]) ?? [];
     expect(ticketIds.length).toBe(3);
 
-    const listed = successJson(await harness.runTool("get_tickets", {}));
+    const listed = successJson(await harness.runTool("get_tickets", { detail: "full" }));
     const tickets = (listed.tickets as Record<string, unknown>[]) ?? [];
     expect(tickets.length).toBe(3);
     expect(tickets.map((t) => t.title)).toEqual([
@@ -125,7 +125,7 @@ describe("plan round trip live", () => {
 
   it("the body prose lands in the description and the body holds empty text", async () => {
     successJson(await harness.runTool("plan_import", { file: planFile }));
-    const listed = successJson(await harness.runTool("get_tickets", {}));
+    const listed = successJson(await harness.runTool("get_tickets", { detail: "full" }));
     const tickets = (listed.tickets as Record<string, unknown>[]) ?? [];
     const description = tickets[1].description as string;
     expect(description).toContain("Pick one spelling for each flag.");
@@ -140,7 +140,7 @@ describe("plan round trip live", () => {
 
   it("every imported ticket lands in open", async () => {
     successJson(await harness.runTool("plan_import", { file: planFile }));
-    const listed = successJson(await harness.runTool("get_tickets", {}));
+    const listed = successJson(await harness.runTool("get_tickets", { detail: "full" }));
     const tickets = (listed.tickets as Record<string, unknown>[]) ?? [];
     expect(tickets.map((t) => t.state)).toEqual(["open", "open", "open"]);
   });
@@ -183,7 +183,7 @@ describe("plan round trip live", () => {
   it("a round trip keeps the ticket data", async () => {
     // First import
     successJson(await harness.runTool("plan_import", { file: planFile }));
-    const firstListed = successJson(await harness.runTool("get_tickets", {}))
+    const firstListed = successJson(await harness.runTool("get_tickets", { detail: "full" }))
       .tickets as Record<string, unknown>[];
     const firstData = firstListed.map((t) => ({
       title: t.title,
@@ -206,7 +206,7 @@ describe("plan round trip live", () => {
     const secondPlanFile = importer.tempPlanFile(exportedText);
     successJson(await importer.runTool("plan_import", { file: secondPlanFile }));
 
-    const secondListed = successJson(await importer.runTool("get_tickets", {}))
+    const secondListed = successJson(await importer.runTool("get_tickets", { detail: "full" }))
       .tickets as Record<string, unknown>[];
     const secondData = secondListed.map((t) => ({
       title: t.title,
@@ -262,7 +262,7 @@ describe("plan round trip live", () => {
     successJson(await harness.runTool("plan_import", { file: planFile }));
 
     // Get the imported ticket IDs (they all start in open state)
-    const listed = successJson(await harness.runTool("get_tickets", {}))
+    const listed = successJson(await harness.runTool("get_tickets", { detail: "full" }))
       .tickets as Record<string, unknown>[];
     
     const ticket1Id = (listed[0] as Record<string, unknown>).id as number;
@@ -335,7 +335,7 @@ describe("plan round trip live", () => {
 
   it("an unparsable line imports nothing", async () => {
     failureJson(await harness.runTool("plan_import", { file: badPlanFile }));
-    const listed = successJson(await harness.runTool("get_tickets", {}));
+    const listed = successJson(await harness.runTool("get_tickets", { detail: "full" }));
     expect(((listed.tickets as unknown[]) ?? []).length).toBe(0);
   });
 
