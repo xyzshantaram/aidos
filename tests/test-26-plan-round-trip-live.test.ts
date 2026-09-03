@@ -292,9 +292,10 @@ describe("plan round trip live", () => {
     
     // Create a new ticket and drive it through all states the agent can reach,
     // then create another new ticket to show the done mark from imported claim
-    const created = successJson(await harness.runTool("set_ticket", { title: "Will reach awaiting" }))
-      .ticket as Record<string, unknown>;
-    const newTicketId = created.id as number;
+    const created = successJson(
+      await harness.runTool("set_ticket", { title: "Will reach awaiting" }),
+    );
+    const newTicketId = created.ticketId as number;
     harness.seedEvidence(harness.agent, newTicketId, "builtin:user_signoff");
     successJson(await harness.runTool("move_ticket", { ticketId: newTicketId, to: "in_progress" }));
     successJson(

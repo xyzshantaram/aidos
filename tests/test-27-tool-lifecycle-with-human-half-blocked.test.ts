@@ -29,7 +29,7 @@ describe("lifecycle with the human half blocked", () => {
     const created = successJson(
       await harness.runTool("set_ticket", { title: "Walk the lifecycle", body: "A body." }),
     );
-    ticketId = (created.ticket as Record<string, unknown>).id as number;
+    ticketId = created.ticketId as number;
   });
 
   async function stateOf() {

@@ -42,7 +42,7 @@ describe("no agent path to done", () => {
   /** Drive one ticket to awaiting_verification through the tools. */
   async function driveToAwaitingVerification() {
     const created = successJson(await harness.runTool("set_ticket", { title: "Ticket one", body: "A body." }));
-    ticketId = (created.ticket as Record<string, unknown>).id as number;
+    ticketId = created.ticketId as number;
     harness.seedEvidence(harness.agent, ticketId, "builtin:user_signoff");
     successJson(await harness.runTool("move_ticket", { ticketId, to: "in_progress" }));
     for (const kind of AGENT_AUTHORABLE_KINDS) {
@@ -98,7 +98,7 @@ describe("no agent path to done", () => {
 
   it("done is refused from the earlier states", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "Still open", body: "A body." }));
-    const openTicket = (created.ticket as Record<string, unknown>).id as number;
+    const openTicket = created.ticketId as number;
 
     const fromOpen = failureJson(
       await harness.runTool("move_ticket", { ticketId: openTicket, to: "done" }),

@@ -163,3 +163,82 @@ describe("#92 get_ticket", () => {
     expect(JSON.stringify(result)).toMatch(/9999|unknown/i);
   });
 });
+
+/**
+ * #92: write results return only what the caller COULD NOT HAVE KNOWN.
+ *
+ * Echoing back the title, description, or evidence payload the agent just
+ * sent teaches it nothing and costs the same tokens twice -- and an evidence
+ * payload can be an entire reviewer report.
+ */
+describe("#92 write results are compact", () => {
+  it("set_ticket does not echo the fields the caller sent", async () => {
+    const harness = setup();
+    const res = json(
+      await harness.runTool("set_ticket", {
+        title: "Echo check",
+        description: LONG,
+        criteria: "a criterion",
+      }),
+    );
+    expect(res.ticket).toBeUndefined();
+    expect(JSON.stringify(res)).not.toContain(LONG.slice(0, 100));
+    // ...but every SERVER-DERIVED fact is there.
+    expect(typeof res.ticketId).toBe("number");
+    expect(res.created).toBe(true);
+    expect(res.state).toBe("open");
+    expect(typeof res.projectId).toBe("number");
+    expect(res).toHaveProperty("gateTotal");
+    expect(typeof res.confidenceScore).toBe("number");
+  });
+
+  it("editing an existing ticket reports created false", async () => {
+    const harness = setup();
+    const made = json(await harness.runTool("set_ticket", { title: "First" }));
+    const edited = json(
+      await harness.runTool("set_ticket", { ticketId: made.ticketId, title: "Second" }),
+    );
+    expect(edited.created).toBe(false);
+    expect(edited.ticketId).toBe(made.ticketId);
+  });
+
+  it("attach_evidence does not echo the payload back", async () => {
+    const harness = setup();
+    const made = json(await harness.runTool("set_ticket", { title: "Evidence" }));
+    const res = json(
+      await harness.runTool("attach_evidence", {
+        ticketId: made.ticketId,
+        kind: "builtin:agent_report",
+        payload: { note: LONG },
+      }),
+    );
+    expect(res.payload).toBeUndefined();
+    expect(JSON.stringify(res).length).toBeLessThan(400);
+    expect(res.kind).toBe("builtin:agent_report");
+  });
+
+  it("attach_evidence reports whether the row moved the gate", async () => {
+    const harness = setup();
+    const made = json(await harness.runTool("set_ticket", { title: "Gate" }));
+    harness.seedEvidence(harness.agent, made.ticketId, "builtin:user_signoff");
+    await harness.runTool("move_ticket", { ticketId: made.ticketId, to: "in_progress" });
+    const first = json(
+      await harness.runTool("attach_evidence", {
+        ticketId: made.ticketId,
+        kind: "builtin:automated_check",
+        payload: { note: "suite green" },
+      }),
+    );
+    expect(first.gateSatisfied).toBe(false);
+    const second = json(
+      await harness.runTool("attach_evidence", {
+        ticketId: made.ticketId,
+        kind: "builtin:review_pass",
+        payload: { note: "reviewed" },
+      }),
+    );
+    // The gate closing is the ACTUAL reason to attach evidence, and it is a
+    // fact the agent cannot compute for itself.
+    expect(second.gateSatisfied).toBe(true);
+  });
+});

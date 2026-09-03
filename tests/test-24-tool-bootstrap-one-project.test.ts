@@ -41,13 +41,13 @@ describe("the service bootstrap is deterministic", () => {
 
   it("the bootstrap binds one workspace project", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "First" }));
-    const firstProject = (created.ticket as Record<string, unknown>).projectId;
+    const firstProject = created.projectId;
     expect(firstProject).toBe(1);
   });
 
   it("a second service over the same session creates no second project", async () => {
     const first = successJson(await harness.runTool("set_ticket", { title: "Made first" }));
-    const firstProject = (first.ticket as Record<string, unknown>).projectId;
+    const firstProject = first.projectId;
 
     // A fresh service folds the same session log; its bootstrap must bind the
     // same project instead of creating a second one.
@@ -59,7 +59,7 @@ describe("the service bootstrap is deterministic", () => {
     apply(asContext(second.ctx), {});
 
     const again = successJson(await second.runTool("set_ticket", { title: "Made second" }));
-    const secondProject = (again.ticket as Record<string, unknown>).projectId;
+    const secondProject = again.projectId;
     expect(secondProject).toBe(firstProject);
   });
 });

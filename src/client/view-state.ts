@@ -10,11 +10,18 @@ import type { CommentRecord, EvidenceRow } from "../kernel/types";
 /** The applied filter state of one session. */
 export type AppliedState = FilterState;
 
-/** The hardcoded defaults. All states, confidence descending, no search. */
+/**
+ * The hardcoded defaults. All states, most recently updated first, no search.
+ *
+ * #95: this led with CONFIDENCE, which is explicitly advisory and never
+ * unlocks anything -- so the board opened sorted by a number that means
+ * little, and "what moved recently?" needed a manual sort every session.
+ * Only the DEFAULT changes: a chosen sort persists through view-state.
+ */
 export const DEFAULT_APPLIED: AppliedState = {
   projectIds: null,
   stateIds: [...STATE_CHECKLIST_ORDER],
-  sortKey: "confidence",
+  sortKey: "time",
   descending: true,
   search: "",
 };

@@ -30006,7 +30006,14 @@ function registerSetTicket(ctx) {
           additionalProperties: false,
           properties: {
             ok: { type: "boolean", const: true, required: true },
-            ticket: TICKET_ROW_SCHEMA
+            ticketId: { type: "integer", required: true },
+            projectId: { type: "integer", required: true },
+            created: { type: "boolean", required: true },
+            state: { type: "string", required: true },
+            gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            confidenceScore: { type: "number", required: true },
+            updatedAt: { type: "number", required: true }
           }
         },
         render: renderJson2
@@ -30016,9 +30023,21 @@ function registerSetTicket(ctx) {
         ctx.logger?.info?.(`aidos: set_ticket called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: set_ticket args ${JSON.stringify(args)}`);
         try {
+          const created = args.ticketId === void 0;
           const ticket = ctx.aidos.setTicket(agent, { ...args });
           ctx.logger?.info?.(`aidos: set_ticket wrote ticket ${ticket.id} for agent ${agent.session?.id}`);
-          return { ok: true, ticket };
+          const view = ctx.aidos.getTicket(agent, { ticketId: ticket.id }).ticket;
+          return {
+            ok: true,
+            ticketId: view.id,
+            projectId: view.projectId,
+            created,
+            state: view.state,
+            gatePresent: view.gatePresent,
+            gateTotal: view.gateTotal,
+            confidenceScore: view.confidenceScore,
+            updatedAt: view.updatedAt
+          };
         } catch (error51) {
           refusal(error51);
         }
@@ -30058,7 +30077,11 @@ function registerAttachEvidence(ctx) {
             ok: { type: "boolean", const: true, required: true },
             ticketId: { type: "integer", required: true },
             kind: { type: "string", required: true },
-            payload: { type: "object", additionalProperties: true, required: true }
+            updatedAt: { type: "number", required: true },
+            gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateSatisfied: { type: "boolean", required: true },
+            confidenceScore: { type: "number", required: true }
           }
         },
         render: renderJson2
@@ -30074,11 +30097,16 @@ function registerAttachEvidence(ctx) {
             payload: args.payload
           });
           ctx.logger?.info?.(`aidos: attach_evidence recorded ${view.kind} for ticket ${view.ticketId}`);
+          const after = ctx.aidos.getTicket(agent, { ticketId: view.ticketId }).ticket;
           return {
             ok: true,
             ticketId: view.ticketId,
             kind: view.kind,
-            payload: view.payload
+            updatedAt: after.updatedAt,
+            gatePresent: after.gatePresent,
+            gateTotal: after.gateTotal,
+            gateSatisfied: after.gateTotal !== null && after.gatePresent !== null ? after.gatePresent >= after.gateTotal : false,
+            confidenceScore: after.confidenceScore
           };
         } catch (error51) {
           refusal(error51, { kind: args.kind });

@@ -43,9 +43,11 @@ describe("the author is the agent, never the payload", () => {
       await harness.runTool("set_ticket", { title: "Ticket one", body: "A body." }),
     );
     expect(created.ok).toBe(true);
-    const ticketId = created.ticket as Record<string, unknown>;
-    expect(ticketId.id).toBe(1);
-    expect(ticketId.state).toBe("open");
+    // #92: set_ticket returns a compact, server-derived confirmation rather
+    // than echoing the row the caller just sent.
+    expect(created.ticketId).toBe(1);
+    expect(created.created).toBe(true);
+    expect(created.state).toBe("open");
 
     const listed = successJson(await harness.runTool("get_tickets", {}));
     expect(listed.ok).toBe(true);
@@ -56,7 +58,7 @@ describe("the author is the agent, never the payload", () => {
 
   it("a payload author key does not change the stored author", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    const ticketId = (created.ticket as Record<string, unknown>).id as number;
+    const ticketId = created.ticketId as number;
 
     successJson(
       await harness.runTool("attach_evidence", {
@@ -73,7 +75,7 @@ describe("the author is the agent, never the payload", () => {
 
   it("a payload actor key does not change the stored author", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    const ticketId = (created.ticket as Record<string, unknown>).id as number;
+    const ticketId = created.ticketId as number;
 
     successJson(
       await harness.runTool("attach_evidence", {
@@ -90,7 +92,7 @@ describe("the author is the agent, never the payload", () => {
 
   it("the payload is stored without a change", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    const ticketId = (created.ticket as Record<string, unknown>).id as number;
+    const ticketId = created.ticketId as number;
     const payload = { author: "user", actor: "user", note: "three" };
 
     successJson(
@@ -107,7 +109,7 @@ describe("the author is the agent, never the payload", () => {
 
   it("every evidence row the tools author carries the agent", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    const ticketId = (created.ticket as Record<string, unknown>).id as number;
+    const ticketId = created.ticketId as number;
     successJson(
       await harness.runTool("set_ticket", { ticketId, title: "New" }),
     );
@@ -126,7 +128,7 @@ describe("the author is the agent, never the payload", () => {
 
   it("a refusal is JSON, never a traceback", async () => {
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    const ticketId = (created.ticket as Record<string, unknown>).id as number;
+    const ticketId = created.ticketId as number;
     const refusal = failureJson(
       await harness.runTool("move_ticket", { ticketId, to: "in_progress" }),
     );

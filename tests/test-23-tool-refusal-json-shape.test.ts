@@ -28,7 +28,7 @@ describe("refusal shape at the tool layer", () => {
     harness.installService();
     apply(asContext(harness.ctx), {});
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    ticketId = (created.ticket as Record<string, unknown>).id as number;
+    ticketId = created.ticketId as number;
   });
 
   it("a refused move renders the gate_refused shape", async () => {

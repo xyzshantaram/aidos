@@ -663,7 +663,14 @@ function registerSetTicket(ctx: Context): void {
           additionalProperties: false,
           properties: {
             ok: { type: "boolean", const: true, required: true },
-            ticket: TICKET_ROW_SCHEMA,
+            ticketId: { type: "integer", required: true },
+            projectId: { type: "integer", required: true },
+            created: { type: "boolean", required: true },
+            state: { type: "string", required: true },
+            gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            confidenceScore: { type: "number", required: true },
+            updatedAt: { type: "number", required: true },
           },
         },
         render: renderJson,
@@ -673,9 +680,28 @@ function registerSetTicket(ctx: Context): void {
         ctx.logger?.info?.(`aidos: set_ticket called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: set_ticket args ${JSON.stringify(args)}`);
         try {
+          const created = args.ticketId === undefined;
           const ticket = ctx.aidos.setTicket(agent, { ...args });
           ctx.logger?.info?.(`aidos: set_ticket wrote ticket ${ticket.id} for agent ${agent.session?.id}`);
-          return { ok: true, ticket };
+          /*
+           * #92: return only what the CALLER COULD NOT HAVE KNOWN. Echoing the
+           * title, description, and criteria back teaches the agent nothing --
+           * it just sent them -- while costing the same tokens twice. What it
+           * genuinely cannot know is server-derived: the assigned id, the
+           * recomputed gate and confidence, and the resulting state.
+           */
+          const view = ctx.aidos.getTicket(agent, { ticketId: ticket.id }).ticket;
+          return {
+            ok: true as const,
+            ticketId: view.id,
+            projectId: view.projectId,
+            created,
+            state: view.state,
+            gatePresent: view.gatePresent,
+            gateTotal: view.gateTotal,
+            confidenceScore: view.confidenceScore,
+            updatedAt: view.updatedAt,
+          };
         } catch (error) {
           refusal(error);
         }
@@ -718,7 +744,11 @@ function registerAttachEvidence(ctx: Context): void {
             ok: { type: "boolean", const: true, required: true },
             ticketId: { type: "integer", required: true },
             kind: { type: "string", required: true },
-            payload: { type: "object", additionalProperties: true, required: true },
+            updatedAt: { type: "number", required: true },
+            gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateSatisfied: { type: "boolean", required: true },
+            confidenceScore: { type: "number", required: true },
           },
         },
         render: renderJson,
@@ -734,11 +764,25 @@ function registerAttachEvidence(ctx: Context): void {
             payload: args.payload,
           });
           ctx.logger?.info?.(`aidos: attach_evidence recorded ${view.kind} for ticket ${view.ticketId}`);
+          /*
+           * #92: the payload is NOT echoed. The agent just sent it, and for a
+           * reviewer report that is kilobytes returned for no information.
+           * What it cannot know is whether the row MOVED THE GATE -- which is
+           * the actual reason for attaching evidence at all.
+           */
+          const after = ctx.aidos.getTicket(agent, { ticketId: view.ticketId }).ticket;
           return {
-            ok: true,
+            ok: true as const,
             ticketId: view.ticketId,
             kind: view.kind,
-            payload: view.payload as Record<string, JsonValue>,
+            updatedAt: after.updatedAt,
+            gatePresent: after.gatePresent,
+            gateTotal: after.gateTotal,
+            gateSatisfied:
+              after.gateTotal !== null && after.gatePresent !== null
+                ? after.gatePresent >= after.gateTotal
+                : false,
+            confidenceScore: after.confidenceScore,
           };
         } catch (error) {
           refusal(error, { kind: args.kind });

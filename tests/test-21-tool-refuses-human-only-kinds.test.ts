@@ -31,7 +31,7 @@ describe("attach_evidence refuses human only kinds", () => {
     harness.installService();
     apply(asContext(harness.ctx), {});
     const created = successJson(await harness.runTool("set_ticket", { title: "T" }));
-    ticketId = (created.ticket as Record<string, unknown>).id as number;
+    ticketId = created.ticketId as number;
   });
 
   it("user signoff is refused with the human_only_kind shape", async () => {

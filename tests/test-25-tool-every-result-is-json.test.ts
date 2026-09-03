@@ -65,7 +65,7 @@ describe("every tool renders JSON", () => {
     harness.installService();
     apply(asContext(harness.ctx), {});
     const created = successJson(await harness.runTool("set_ticket", { title: "Ticket one" }));
-    ticketId = (created.ticket as Record<string, unknown>).id as number;
+    ticketId = created.ticketId as number;
     smallPlanFile = harness.tempPlanFile(SMALL_PLAN);
     badPlanFile = harness.tempPlanFile(BAD_PLAN);
   });

@@ -34,7 +34,7 @@ describe("review pass is its own kind at the tool layer", () => {
     const created = successJson(
       await harness.runTool("set_ticket", { title: "Needs a review", body: "A body." }),
     );
-    ticketId = (created.ticket as Record<string, unknown>).id as number;
+    ticketId = created.ticketId as number;
     harness.seedEvidence(harness.agent, ticketId, "builtin:user_signoff");
     successJson(await harness.runTool("move_ticket", { ticketId, to: "in_progress" }));
   });
