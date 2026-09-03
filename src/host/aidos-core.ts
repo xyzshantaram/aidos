@@ -541,10 +541,23 @@ export interface TicketSearchResult {
  * paths; anything else with a single string field uses that. Capped so a
  * long note cannot flood the digest.
  */
+/**
+ * The one truncation rule for digest text (#106).
+ *
+ * This was a closure inside _evidenceDigestSuffix, so the comment digest
+ * could not reuse it without writing a SECOND rule -- and two truncation
+ * rules drift, which is how this codebase ended up with eleven copies of a
+ * board key. Hoisted rather than duplicated. The cap exists so one long note
+ * cannot flood a digest that may batch many changes.
+ */
+const DIGEST_TEXT_CAP = 160;
+
+function _ellipsize(text: string): string {
+  return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}…` : text;
+}
+
 function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): string {
-  const cap = 160;
-  const ellipsize = (text: string): string =>
-    text.length > cap ? `${text.slice(0, cap)}…` : text;
+  const ellipsize = _ellipsize;
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
     return ` — "${ellipsize(payload.note.trim())}"`;
   }
@@ -985,7 +998,7 @@ registerAidosSessionEventTypes(ctx);
     if (args.ticketId !== undefined) {
       return this._editTicket(agent, args, "agent");
     }
-    return this._createTicket(agent, args);
+    return this._createTicket(agent, args, "agent");
   }
 
   /**
@@ -999,7 +1012,7 @@ registerAidosSessionEventTypes(ctx);
     if (args.ticketId !== undefined) {
       return this._editTicket(this._routedAgent(agent, args.ticketId), args, "user");
     }
-    return this._createTicket(agent, args);
+    return this._createTicket(agent, args, "user");
   }
 
   /**
@@ -1849,6 +1862,24 @@ registerAidosSessionEventTypes(ctx);
       at: this._now(),
     });
     this.ctx.logger?.info?.(`aidos: plan meta set by ${actor} for project ${projectId} in session ${agent.session.id}`);
+    /*
+     * #106: the plan's frontmatter, preamble and context sections are the
+     * project's standing instructions -- the agent reads them as direction.
+     * A human rewriting them and the agent not noticing is among the worst
+     * cases in this list, because the agent then works to a plan that no
+     * longer says what it thinks it says. Names the blocks that changed, not
+     * their text: the context cap alone is 2000 lines.
+     */
+    if (actor !== "agent") {
+      const blocks = (["frontmatter", "preamble", "contextSections"] as const)
+        .filter((field) => args[field] !== undefined);
+      if (blocks.length > 0) {
+        this._queueInjection(
+          agent.session,
+          `Plan edited by ${actor} for project ${projectId}: ${blocks.join(", ")}`,
+        );
+      }
+    }
     return this._planMetaOf(projectId, cache.state);
   }
 
@@ -2086,8 +2117,14 @@ registerAidosSessionEventTypes(ctx);
 
   // ---- internals: ticket writes ----
 
-  /** Create one ticket in open, creating the phase when it is absent. */
-  private _createTicket(agent: Agent, args: SetTicketArgs): TicketRow {
+  /**
+   * Create one ticket in open, creating the phase when it is absent.
+   *
+   * #106: takes the ACTOR, which it previously discarded while its sibling
+   * _editTicket carried one. Without it there was no way to tell a ticket
+   * the human filed from one the agent filed, so neither could be reported.
+   */
+  private _createTicket(agent: Agent, args: SetTicketArgs, actor: Actor): TicketRow {
     const title = args.title;
     if (typeof title !== "string" || title.trim() === "") {
       throw new BadPayloadError("set_ticket requires a title to create a ticket");
@@ -2132,6 +2169,15 @@ registerAidosSessionEventTypes(ctx);
     const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
     if (!snapshot) {
       throw new Error("a created ticket is missing from the folded state");
+    }
+    // #106: every user action reaches the agent. A ticket the human files is
+    // work the agent may be expected to pick up; hearing about it only on the
+    // next board read is exactly the prose-hunting this digest removes.
+    if (actor !== "agent") {
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${snapshot.title}) CREATED by ${actor}`,
+      );
     }
     return rowOf(snapshot);
   }
@@ -2189,6 +2235,24 @@ registerAidosSessionEventTypes(ctx);
       ticket: snapshot,
       at,
     });
+    /*
+     * #106 audit: the allowlist branch below was the ONLY edit reported.
+     * A human rewriting a ticket's CRITERIA -- the very thing the agent is
+     * judged against -- changed nothing the agent could see. Same for the
+     * description, the title and the dependencies. Report which fields
+     * moved, not their full text: descriptions here run to kilobytes, and
+     * #92 exists because flooding the agent's context is a real cost.
+     */
+    if (actor !== "agent") {
+      const changed = (["title", "description", "criteria", "body", "dependsOn"] as const)
+        .filter((field) => args[field] !== undefined);
+      if (changed.length > 0) {
+        this._queueInjection(
+          agent.session,
+          `Ticket #${ticketId} (${snapshot.title}) edited by ${actor}: ${changed.join(", ")}`,
+        );
+      }
+    }
     if (actor !== "agent" && allowlist !== undefined) {
       this._queueInjection(
         agent.session,
@@ -2260,6 +2324,24 @@ registerAidosSessionEventTypes(ctx);
       at: args.at,
       rowKind: args.rowKind,
     });
+    /*
+     * #106 audit: a DETACH changes the gate. Evidence the agent may have
+     * relied on -- a review pass, a signoff -- can disappear and the agent
+     * would carry on believing the ticket was unblocked. Removal is at least
+     * as consequential as attachment, and only attachment was reported.
+     */
+    /*
+     * No actor guard, unlike the sibling reports: detach has NO agent path
+     * at all -- it is reachable only through the userDetachEvidence Remote,
+     * because evidence is append-only for the agent (SPEC-B1 section 5). So
+     * the actor is always the human, and inventing a parameter to check it
+     * would only imply a path that does not exist.
+     */
+    const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+    this._queueInjection(
+      agent.session,
+      `Ticket #${ticketId} (${title}) evidence DETACHED by user: ${args.rowKind}`,
+    );
     return { ticketId, removed: 1 };
   }
 
@@ -2428,6 +2510,20 @@ registerAidosSessionEventTypes(ctx);
       rowKind: args.rowKind,
       criterion,
     });
+    /*
+     * #106: user-only, like detach -- reachable only through the
+     * userLinkEvidence Remote, so no actor guard is needed or honest here.
+     * Linking evidence to a criterion is how the human says WHICH promise a
+     * row keeps, and the agent is judged against exactly those criteria.
+     */
+    {
+      const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${title}) evidence ${args.rowKind} ${what} by user`,
+      );
+    }
     return { ticketId, linked: true };
   }
 
@@ -2519,6 +2615,29 @@ registerAidosSessionEventTypes(ctx);
       author: actor,
       at,
     });
+    /*
+     * #106: tell the agent. This was the ONLY user-actor write in the
+     * service that queued no digest line -- evidence attach, moves and
+     * allowlist updates all do. So a human could type a remark on a ticket,
+     * see it stored and rendered, and the agent would never hear it. The
+     * worst shape of failure this project keeps hitting: the surface looks
+     * like it worked.
+     *
+     * Guarded on the actor exactly as _attachEvidence is: the agent must
+     * never be fed its own writes, which is a feedback loop, and #63's whole
+     * design is that the injection carries what the HUMAN did.
+     *
+     * The TEXT rides along, not a bare "a comment was added" -- the content
+     * is the entire value, and a bare notification would send the agent off
+     * to read the ticket, which is the prose-hunting problem #93 exists to
+     * remove.
+     */
+    if (actor !== "agent") {
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${snapshot.title}) comment by ${actor}: "${_ellipsize(args.text.trim())}"`,
+      );
+    }
     return { ticketId, text: args.text, author: actor, at };
   }
 
