@@ -657,6 +657,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const queueModal = queueOpen ? (
     <ModalShell
       title="Waiting on you"
+      wide
       onClose={() => {
         setQueueOpen(false);
       }}

@@ -85,6 +85,8 @@ export function ModalShell(props: {
   onClose: () => void;
   onConfirm?: () => void;
   confirmLabel?: string;
+  /** Wider layout for list surfaces (#93): the queue, pickers, search results. */
+  wide?: boolean;
   children: react.ReactNode;
 }) {
   const working = props.working === true;
@@ -107,7 +109,7 @@ export function ModalShell(props: {
       }}
     >
       <div
-        className="aidos-modal"
+        className={"aidos-modal" + (props.wide === true ? " aidos-modal-wide" : "")}
         onClick={(event: react.MouseEvent<HTMLDivElement>) => {
           event.stopPropagation();
         }}
