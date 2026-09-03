@@ -27201,9 +27201,12 @@ var OwnerUnavailable = class extends Error {
     this.sessionId = sessionId;
   }
 };
+var DIGEST_TEXT_CAP = 160;
+function _ellipsize(text) {
+  return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}\u2026` : text;
+}
 function _evidenceDigestSuffix(kind, payload) {
-  const cap = 160;
-  const ellipsize = (text) => text.length > cap ? `${text.slice(0, cap)}\u2026` : text;
+  const ellipsize = _ellipsize;
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
     return ` \u2014 "${ellipsize(payload.note.trim())}"`;
   }
@@ -27549,13 +27552,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (args.ticketId !== void 0) {
       return this._editTicket(agent, args, "agent");
     }
-    return this._createTicket(agent, args);
+    return this._createTicket(agent, args, "agent");
   }
   userSetTicket(agent, args) {
     if (args.ticketId !== void 0) {
       return this._editTicket(this._routedAgent(agent, args.ticketId), args, "user");
     }
-    return this._createTicket(agent, args);
+    return this._createTicket(agent, args, "user");
   }
   searchTickets(agent, args) {
     const query = (args.query ?? "").toLowerCase().trim();
@@ -28076,6 +28079,15 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       at: this._now()
     });
     this.ctx.logger?.info?.(`aidos: plan meta set by ${actor} for project ${projectId} in session ${agent.session.id}`);
+    if (actor !== "agent") {
+      const blocks = ["frontmatter", "preamble", "contextSections"].filter((field) => args[field] !== void 0);
+      if (blocks.length > 0) {
+        this._queueInjection(
+          agent.session,
+          `Plan edited by ${actor} for project ${projectId}: ${blocks.join(", ")}`
+        );
+      }
+    }
     return this._planMetaOf(projectId, cache.state);
   }
   // ---- internals: the session port ----
@@ -28256,8 +28268,14 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return { projectId };
   }
   // ---- internals: ticket writes ----
-  /** Create one ticket in open, creating the phase when it is absent. */
-  _createTicket(agent, args) {
+  /**
+   * Create one ticket in open, creating the phase when it is absent.
+   *
+   * #106: takes the ACTOR, which it previously discarded while its sibling
+   * _editTicket carried one. Without it there was no way to tell a ticket
+   * the human filed from one the agent filed, so neither could be reported.
+   */
+  _createTicket(agent, args, actor) {
     const title = args.title;
     if (typeof title !== "string" || title.trim() === "") {
       throw new BadPayloadError("set_ticket requires a title to create a ticket");
@@ -28297,6 +28315,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
     if (!snapshot) {
       throw new Error("a created ticket is missing from the folded state");
+    }
+    if (actor !== "agent") {
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${snapshot.title}) CREATED by ${actor}`
+      );
     }
     return rowOf(snapshot);
   }
@@ -28352,6 +28376,15 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticket: snapshot,
       at
     });
+    if (actor !== "agent") {
+      const changed = ["title", "description", "criteria", "body", "dependsOn"].filter((field) => args[field] !== void 0);
+      if (changed.length > 0) {
+        this._queueInjection(
+          agent.session,
+          `Ticket #${ticketId} (${snapshot.title}) edited by ${actor}: ${changed.join(", ")}`
+        );
+      }
+    }
     if (actor !== "agent" && allowlist !== void 0) {
       this._queueInjection(
         agent.session,
@@ -28416,6 +28449,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       at: args.at,
       rowKind: args.rowKind
     });
+    const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+    this._queueInjection(
+      agent.session,
+      `Ticket #${ticketId} (${title}) evidence DETACHED by user: ${args.rowKind}`
+    );
     return { ticketId, removed: 1 };
   }
   /**
@@ -28555,6 +28593,14 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       rowKind: args.rowKind,
       criterion
     });
+    {
+      const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${title}) evidence ${args.rowKind} ${what} by user`
+      );
+    }
     return { ticketId, linked: true };
   }
   /**
@@ -28633,6 +28679,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       author: actor,
       at
     });
+    if (actor !== "agent") {
+      this._queueInjection(
+        agent.session,
+        `Ticket #${ticketId} (${snapshot.title}) comment by ${actor}: "${_ellipsize(args.text.trim())}"`
+      );
+    }
     return { ticketId, text: args.text, author: actor, at };
   }
   /**
