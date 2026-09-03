@@ -905,7 +905,11 @@ export function DetailView(props: DetailViewProps) {
     try {
       await callAidosRemote(
         "userMoveTicket",
-        { ticketId: ticket.id, to: "awaiting_verification" },
+        // #93 third review, finding 1: this sent the bare `ticket.id` while
+        // every sibling write in this component uses props.ticketIdKey. For a
+        // FOREIGN row _routedAgent returns the caller unchanged for a number,
+        // so Submit for review moved the caller's OWN ticket with that id.
+        { ticketId: props.ticketIdKey, to: "awaiting_verification" },
         agentId,
       );
       showToast("Submitted for review", "success");

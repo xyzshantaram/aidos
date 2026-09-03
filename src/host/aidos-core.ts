@@ -1411,9 +1411,22 @@ registerAidosSessionEventTypes(ctx);
     if (suggestions.length === 0) {
       throw new Error("no suggestions given");
     }
+    /*
+     * The cap counts only genuinely NEW (ticket, action) pairs (#93 third
+     * review, finding 5). Counting every suggestion made a REPLACING
+     * re-nomination look like a new one, so at the cap an agent could never
+     * revise the reason on an ask it had already made -- it could only be
+     * refused, forever.
+     */
     const cap = 20;
     const mine = [...this._nominations.values()].filter((n) => n.sessionId === sessionId);
-    if (mine.length + suggestions.length > cap) {
+    const existingPairs = new Set(mine.map((n) => `${n.ticketId}|${n.actionId}`));
+    const incomingNew = new Set(
+      suggestions
+        .map((sug) => `${Number(sug.ticketId)}|${sug.actionId}`)
+        .filter((pair) => !existingPairs.has(pair)),
+    );
+    if (mine.length + incomingNew.size > cap) {
       throw new Error(
         `too many nominations (cap ${cap}); the human dismisses or acts on them to make room`,
       );

@@ -12,7 +12,6 @@ import { describe, expect, it } from "vitest";
 import { derivedQueue, humanQueue, queueCount, sortQueue } from "../src/client/human-queue";
 import type { Nomination } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
-import { boardKeyOf } from "../src/client/board-logic";
 import { queueEntriesFor } from "../src/client/queue-panel";
 import type { EvidenceRow } from "../src/kernel/types";
 
@@ -238,5 +237,45 @@ describe("u93 human-queue: foreign rows on a merged board", () => {
   it("own and foreign rows with the same number are two distinct entries", () => {
     const rows = derivedQueue([own, foreign], () => []);
     expect(new Set(rows.map((r) => r.boardKey)).size).toBe(rows.length);
+  });
+});
+
+/**
+ * #93 THIRD review, finding 6: the headline fix of 0dd7cf1 -- removing the
+ * `|| String(entry.ticket.id) === key` fallback from the nomination matcher --
+ * had ZERO coverage. The reviewer re-added the fallback and all 38 tests still
+ * passed. This is the guard that makes that impossible.
+ */
+describe("u93 human-queue: a numeric nomination never lands on a foreign row", () => {
+  it("does not attach its reason to a foreign row with the same number", () => {
+    const own = makeTicket({ id: 12, state: "open", title: "Own twelve" });
+    const foreign = {
+      ...makeTicket({ id: 12, state: "awaiting_verification", title: "Foreign twelve" }),
+      foreign: true,
+      sourceSessionId: "sess-abc",
+    };
+    const rows = humanQueue([own, foreign], () => [], [
+      { id: "n1", ticketId: 12, actionId: "verify", reason: "look here", at: 0 },
+    ]);
+    // #12 own is `open`, so its only ask is signoff; the verify ask belongs to
+    // the FOREIGN row. With the fallback restored the reason attaches there --
+    // putting the agent's ask, and its write button, on the wrong ticket.
+    const flagged = rows.filter((r) => r.nominationReason !== undefined);
+    expect(flagged).toEqual([]);
+  });
+
+  it("still attaches to the OWN row when the action does match", () => {
+    const own = makeTicket({ id: 12, state: "open", title: "Own twelve" });
+    const foreign = {
+      ...makeTicket({ id: 12, state: "open", title: "Foreign twelve" }),
+      foreign: true,
+      sourceSessionId: "sess-abc",
+    };
+    const rows = humanQueue([own, foreign], () => [], [
+      { id: "n1", ticketId: 12, actionId: "signoff", reason: "this one", at: 0 },
+    ]);
+    const flagged = rows.filter((r) => r.nominationReason !== undefined);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0].boardKey).toBe("12");
   });
 });

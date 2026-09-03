@@ -227,5 +227,55 @@ describe("#93 nominations: a dismissal sticks for the session", () => {
       suggestions: [{ ticketId: ticket.id, actionId: "verify", reason: "different ask" }],
     });
     expect(next.accepted).toBe(1);
+    // #93 third review, finding 6: asserting only accepted===1 could not fail,
+    // because it is always 1. Dropping actionId from the _dismissed key left
+    // every test green. THIS is the assertion that pins action scoping.
+    expect(next.previouslyDismissed).toEqual([]);
+  });
+});
+
+/** #93 third review, finding 5: the cap must not block revising a reason. */
+describe("#93 nominations: the cap counts new pairs, not resubmissions", () => {
+  it("at the cap, an existing ask can still have its reason revised", () => {
+    const { svc, agent } = setup();
+    const tickets = Array.from({ length: 20 }, (_u, i) =>
+      svc.setTicket(agent, { title: "T" + i }),
+    );
+    svc.suggestActions(agent, {
+      suggestions: tickets.map((t) => ({
+        ticketId: t.id,
+        actionId: "signoff",
+        reason: "first",
+      })),
+    });
+    // Full. Revising one of them is a REPLACEMENT, not a new ask.
+    const revised = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: tickets[0].id, actionId: "signoff", reason: "revised" }],
+    });
+    expect(revised.accepted).toBe(1);
+    expect(svc.actionNominations(agent)).toHaveLength(20);
+    const row = svc
+      .actionNominations(agent)
+      .find((n: { ticketId: number }) => n.ticketId === tickets[0].id);
+    expect(row.reason).toBe("revised");
+  });
+
+  it("but a genuinely new ask past the cap is still refused", () => {
+    const { svc, agent } = setup();
+    const tickets = Array.from({ length: 21 }, (_u, i) =>
+      svc.setTicket(agent, { title: "T" + i }),
+    );
+    svc.suggestActions(agent, {
+      suggestions: tickets.slice(0, 20).map((t) => ({
+        ticketId: t.id,
+        actionId: "signoff",
+        reason: "r",
+      })),
+    });
+    expect(() =>
+      svc.suggestActions(agent, {
+        suggestions: [{ ticketId: tickets[20].id, actionId: "signoff", reason: "one more" }],
+      }),
+    ).toThrow(/too many nominations/);
   });
 });

@@ -521,6 +521,16 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const selectedBoardKey =
     selectedTicket === null ? null : boardKeyOf(selectedTicket);
 
+  /*
+   * #93 third review, finding 2: this was String(activeTicketId(...)), a bare
+   * id compared against boardKeyOf in ticket-view, so a FOREIGN active ticket
+   * highlighted the wrong card (or none). Resolve the row, then key it.
+   */
+  const activeId = activeTicketId(rawTickets);
+  const activeRow =
+    activeId === null ? null : rawTickets.find((t) => t.id === activeId) ?? null;
+  const activeBoardKey = activeRow === null ? null : boardKeyOf(activeRow);
+
   const selectedEvidence: EvidenceRow[] =
     selectedBoardKey === null ? [] : rawEvidence[selectedBoardKey] ?? [];
 
@@ -605,7 +615,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         allTicketsCount={allTicketsCount}
         applied={applied}
         selectedId={selectedKey}
-        activeTicketId={activeTicketId(rawTickets) === null ? null : String(activeTicketId(rawTickets))}
+        activeTicketId={activeBoardKey}
         evidenceByTicket={rawEvidence}
         onSelect={selectTicket}
         onApply={applyState}

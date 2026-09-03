@@ -5,7 +5,7 @@
 
 import react from "react";
 
-import { STATE_CHECKLIST_ORDER, autocompleteTickets, fullTicketId, idColor, stateLabel, ticketChipLabel } from "./board-logic";
+import { STATE_CHECKLIST_ORDER, autocompleteTickets, fullTicketId, idColor, stateLabel, ticketChipLabel, boardKeyOf } from "./board-logic";
 import { logDebug } from "./log";
 import type { AppliedState } from "./view-state";
 import {
@@ -247,7 +247,7 @@ export function FilterPanel(props: FilterPanelProps) {
                 onMouseDown={(event: react.MouseEvent<HTMLButtonElement>) => {
                   event.preventDefault();
                   clearSearch();
-                  props.onJump(String(ticket.id));
+                  props.onJump(boardKeyOf(ticket));
                 }}
               >
                 <span className="aidos-suggestion-title">{ticket.title}</span>
@@ -392,7 +392,7 @@ export function FilterPanel(props: FilterPanelProps) {
                   onMouseDown={(event: react.MouseEvent<HTMLButtonElement>) => {
                     event.preventDefault();
                     clearSearch();
-                    props.onJump(String(ticket.id));
+                    props.onJump(boardKeyOf(ticket));
                   }}
                 >
                   <span className="aidos-suggestion-title">{ticket.title}</span>
