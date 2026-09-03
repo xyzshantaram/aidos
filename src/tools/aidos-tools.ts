@@ -99,6 +99,70 @@ const TICKET_VIEW_SCHEMA = {
   },
 } as const;
 
+
+/**
+ * #92: the SUMMARY row. A board read is the agent's most frequent action and
+ * was its most expensive: an unfiltered `get_tickets` returned ~58 KB of JSON,
+ * because every row carried its full description (several are 2-4 KB of
+ * settled design prose), criteria, and body. Two or three board reads cost
+ * more context than the work they informed.
+ *
+ * The fix is the DEFAULT, not the data -- descriptions are long here by
+ * design, they are the decision record. So the tool ships a summary and the
+ * caller asks for full rows when it genuinely needs them.
+ */
+const DESCRIPTION_EXCERPT = 200;
+const DEFAULT_LIMIT = 30;
+
+function summarizeTicket(view: Record<string, unknown>): Record<string, unknown> {
+  const description = typeof view.description === "string" ? view.description : "";
+  const truncated = description.length > DESCRIPTION_EXCERPT;
+  const dependsOn = Array.isArray(view.dependsOn) ? view.dependsOn : [];
+  const allowlist = Array.isArray(view.allowlist) ? view.allowlist : [];
+  return {
+    id: view.id,
+    title: view.title,
+    state: view.state,
+    phase: view.phase,
+    order: view.order,
+    slug: view.slug,
+    updatedAt: view.updatedAt,
+    confidenceScore: view.confidenceScore,
+    gatePresent: view.gatePresent,
+    gateTotal: view.gateTotal,
+    dependsOnCount: dependsOn.length,
+    allowlistCount: allowlist.length,
+    hasCriteria:
+      typeof view.criteria === "string" && view.criteria.trim() !== "",
+    descriptionExcerpt: truncated
+      ? description.slice(0, DESCRIPTION_EXCERPT)
+      : description,
+    descriptionTruncated: truncated,
+  };
+}
+
+const TICKET_SUMMARY_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    id: { type: "integer", required: true },
+    title: { type: "string", required: true },
+    state: { type: "string", required: true },
+    phase: { type: "integer", required: true },
+    order: { type: "integer", required: true },
+    slug: { type: "string", required: true },
+    updatedAt: { type: "number", required: true },
+    confidenceScore: { type: "number", required: true },
+    gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+    gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+    dependsOnCount: { type: "integer", required: true },
+    allowlistCount: { type: "integer", required: true },
+    hasCriteria: { type: "boolean", required: true },
+    descriptionExcerpt: { type: "string", required: true },
+    descriptionTruncated: { type: "boolean", required: true },
+  },
+} as const;
+
 const PLAN_META_SCHEMA = {
   type: "object",
   additionalProperties: false,

@@ -36,6 +36,8 @@ import { EvidenceAttach, VerifyModal } from "./evidence-attach";
 import { AllowlistRequestCard } from "./allowlist-request-card";
 import { EvidenceStrip } from "./evidence-strip";
 import { TicketStrip } from "./ticket-strip";
+import { boardKeyOf } from "./board-logic";
+import type { BoardKey } from "./board-logic";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
@@ -77,7 +79,7 @@ export interface DetailPanelProps {
   /** Every board-known ticket view keyed for dependency cards. */
   ticketsByKey?: Map<string, TicketView>;
   /** Jump the board's selection to another ticket (dependency cards). */
-  onJump?: (key: string) => void;
+  onJump?: (key: BoardKey) => void;
 }
 
 /**
@@ -477,7 +479,7 @@ function DependencyCard(props: {
   depRef: string;
   agentId: string;
   ticketsByKey?: Map<string, TicketView>;
-  onJump?: (key: string) => void;
+  onJump?: (key: BoardKey) => void;
   workspaceKey?: string;
 }) {
   const ref = props.depRef;
@@ -487,12 +489,23 @@ function DependencyCard(props: {
   // board" for every plain-id dependency before.
   const key = ref.includes(":") ? ref : (props.workspaceKey ?? "") + ":" + ref;
   const known = props.ticketsByKey?.get(key) ?? props.ticketsByKey?.get(ref);
-  const jumpKey = key;
-  const open = () => {
-    if (props.onJump !== undefined) {
-      props.onJump(jumpKey);
-    }
-  };
+  /*
+   * #93 fourth review, finding 3, found again by the compiler the moment
+   * BoardKey was branded: this jumped with `key`, a DEPENDENCY REF
+   * (`workspaceKey:id`). That is a different address space -- and not even a
+   * unique one, since every session in a workspace shares the workspace key.
+   * The receiver resolves board keys, so the ref matched nothing and the
+   * detail panel silently CLOSED instead of opening the dependency.
+   *
+   * Jump by the resolved row's board key; an unresolved ref cannot be opened
+   * at all, so it offers no jump.
+   */
+  const open =
+    known === undefined || props.onJump === undefined
+      ? undefined
+      : () => {
+          props.onJump?.(boardKeyOf(known));
+        };
   /*
    * #93: a dependency renders through the SHARED TicketStrip, not a private
    * dep-card. A referenced ticket now looks identical in the dependency
@@ -521,7 +534,7 @@ function DependencyCard(props: {
     <TicketStrip
       ticket={known}
       meta={"depends on " + displayDep(ref)}
-      onOpen={props.onJump !== undefined ? open : undefined}
+      onOpen={open}
     />
   );
 }
@@ -538,7 +551,7 @@ function DependencySection(props: {
   agentId: string;
   onSaved: () => void;
   /** Jump the board's selection to one dependency ticket. */
-  onJump?: (key: string) => void;
+  onJump?: (key: BoardKey) => void;
   /** Every board-known ticket view, keyed by `workspaceKey:id` and plain id. */
   ticketsByKey?: Map<string, TicketView>;
   /** The referencing ticket's workspaceKey: resolves plain-id refs. */

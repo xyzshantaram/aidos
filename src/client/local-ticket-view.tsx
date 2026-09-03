@@ -33,8 +33,10 @@ import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { boardKeyOf } from "./board-logic";
 import { ModalShell } from "./ui";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
+import { asBoardKey } from "./board-logic";
+import type { BoardKey } from "./board-logic";
 import type { RunOutcome } from "./approval-runner";
-import { activeTicketId } from "./active-ticket";
+import { activeTicketRow } from "./active-ticket";
 import { logDebug } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
@@ -358,7 +360,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [applied, setAppliedStateLocal] = react.useState<AppliedState>(function () {
     return cloneAppliedState(DEFAULT_APPLIED);
   });
-  const [selectedKey, setSelectedKey] = react.useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = react.useState<BoardKey | null>(null);
   const [createOpen, setCreateOpen] = react.useState(false);
   const [planOpen, setPlanOpen] = react.useState(false);
   const [queueOpen, setQueueOpen] = react.useState(false);
@@ -437,9 +439,15 @@ function ProjectionReader(props: ProjectionReaderProps) {
       deepLinkHandled.current = true;
       const id = ticketIdFromSearch(window.location.search);
       if (id === null) return;
-      const exists = rawTickets.some((ticket) => ticket.id === id);
-      if (exists) {
-        setSelectedKey(String(id));
+      /*
+       * A deep link carries a bare id, so resolve it to a ROW and key that
+       * row -- String(id) is only a valid board key for an OWN ticket, so a
+       * link to a foreign row selected nothing or the wrong card. Found by
+       * the compiler when BoardKey was branded (#93).
+       */
+      const row = rawTickets.find((ticket) => ticket.id === id);
+      if (row !== undefined) {
+        setSelectedKey(boardKeyOf(row));
       } else {
         showToast("Ticket " + id + " not found", "info");
       }
@@ -500,7 +508,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
     applyState(cloneAppliedState(DEFAULT_APPLIED));
   }
 
-  function selectTicket(key: string) {
+  function selectTicket(key: BoardKey) {
     if (selectedKey === key) {
       closeDetail();
       return;
@@ -535,9 +543,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * id compared against boardKeyOf in ticket-view, so a FOREIGN active ticket
    * highlighted the wrong card (or none). Resolve the row, then key it.
    */
-  const activeId = activeTicketId(rawTickets);
-  const activeRow =
-    activeId === null ? null : rawTickets.find((t) => t.id === activeId) ?? null;
+  const activeRow = activeTicketRow(rawTickets);
   const activeBoardKey = activeRow === null ? null : boardKeyOf(activeRow);
 
   const selectedEvidence: EvidenceRow[] =
@@ -557,10 +563,25 @@ function ProjectionReader(props: ProjectionReaderProps) {
 
   // Dependency cards (#board-feedback): every known ticket keyed by plain id
   // and by workspaceKey:id so a ref resolves to a card with title + state.
+  /*
+   * #93 fourth review, finding 2. This wrote `workspaceKey:id` as if it were
+   * an address, but every session in a workspace shares the workspace key, so
+   * that string COLLIDES across sessions -- and foreign rows were written
+   * last, overwriting own rows. An `aidos#12` dependency card rendered the
+   * foreign ticket's title and state.
+   *
+   * FIRST WRITE WINS, and rawTickets puts own rows first, so a legacy
+   * dependency ref resolves to the OWN ticket -- the only board a plain ref
+   * could have meant. The board key is written too, and is unambiguous.
+   */
   const ticketsByKey = new Map<string, TicketViewType>();
+  const remember = (key: string, view: TicketViewType) => {
+    if (!ticketsByKey.has(key)) ticketsByKey.set(key, view);
+  };
   for (const view of rawTickets) {
-    ticketsByKey.set(String(view.id), view);
-    ticketsByKey.set(view.workspaceKey + ":" + String(view.id), view);
+    remember(boardKeyOf(view), view);
+    remember(String(view.id), view);
+    remember(view.workspaceKey + ":" + String(view.id), view);
   }
 
   const detailPanel =
@@ -591,7 +612,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
         setCreateOpen(false);
       }}
       onCreated={(id) => {
-        selectTicket(String(id));
+        // A ticket created HERE is always an own row, so its plain id is its
+        // board key. One of the few honest uses of the escape hatch.
+        selectTicket(asBoardKey(String(id)));
       }}
       agentId={sessionId}
     />

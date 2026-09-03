@@ -781,6 +781,42 @@ registerAidosSessionEventTypes(ctx);
     });
   }
 
+  /**
+   * ONE ticket in full, with its evidence and comments (#92).
+   *
+   * The companion to summary board reads. `getTickets` stays a FULL-row API
+   * because internal callers depend on it -- `src/tools/allowlist.ts` computes
+   * the write boundary from its `allowlist` field, and summarising it there
+   * would quietly weaken the file guard. So the summarising happens in the
+   * TOOL layer, where the token cost actually lands, and this method is how a
+   * caller gets everything back for the one ticket it is about to work on.
+   *
+   * Accepts a composite `sessionId:id` so a foreign ticket resolves too.
+   */
+  getTicket(
+    agent: Agent,
+    args: { ticketId: number | string },
+  ): {
+    ticket: TicketView;
+    evidence: EvidenceRow[];
+    comments: CommentRecord[];
+  } {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const id = this._resolveTicketId(routed, args.ticketId);
+    const cache = this._cache(routed.session);
+    this._sync(routed.session, cache);
+    const views = ticketsProjection(cache.state, this._resolvedConfig);
+    const ticket = views.get(id as TicketId);
+    if (ticket === undefined) {
+      throw new UnknownTicket(id);
+    }
+    return {
+      ticket,
+      evidence: [...(cache.state.evidence.get(id as TicketId) ?? [])],
+      comments: [...(cache.state.comments.get(id as TicketId) ?? [])],
+    };
+  }
+
   /** The distinct ticket states of one agent's session (the mask input). */
   ticketStates(agent: Agent): TicketState[] {
     const cache = this._cache(agent.session);

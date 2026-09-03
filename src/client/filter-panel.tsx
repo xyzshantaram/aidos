@@ -5,6 +5,7 @@
 
 import react from "react";
 
+import type { BoardKey } from "./board-logic";
 import { STATE_CHECKLIST_ORDER, autocompleteTickets, fullTicketId, idColor, stateLabel, ticketChipLabel, boardKeyOf } from "./board-logic";
 import { logDebug } from "./log";
 import type { AppliedState } from "./view-state";
@@ -22,7 +23,7 @@ export interface FilterPanelProps {
   applied: AppliedState;
   tickets: TicketView[];
   onApply: (state: AppliedState) => void;
-  onJump: (key: string) => void;
+  onJump: (key: BoardKey) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }

@@ -31,6 +31,39 @@ export interface BoardKeyed {
 }
 
 /**
+ * A BOARD KEY: the address of a row on the merged workspace board.
+ *
+ * BRANDED DELIBERATELY (#93). Four independent reviews found TEN instances of
+ * one defect: a value from one address space used where another was expected.
+ * There are three spaces, and every one of them was `string | number`, so
+ * TypeScript accepted every confusion silently:
+ *
+ *   - a TICKET ID (`12`) is unique only within one session;
+ *   - a BOARD KEY (`"12"` or `"sess-abc:12"`) is unique across the merged board;
+ *   - a DEPENDENCY REF (`"workspaceKey:12"`) is unique across NOTHING, because
+ *     every session in a workspace shares the workspace key.
+ *
+ * Care does not scale against a type system that says string is string. The
+ * brand turns that whole class from silent runtime corruption -- reading the
+ * wrong ticket's evidence, WRITING to the wrong ticket -- into a compile
+ * error at the point of confusion.
+ */
+declare const boardKeyBrand: unique symbol;
+export type BoardKey = string & { readonly [boardKeyBrand]: true };
+
+/**
+ * Assert that a string already IS a board key, for values arriving from
+ * outside the type system: persisted view state, a deep link, a prop crossing
+ * a boundary this refactor has not reached yet.
+ *
+ * This is the ESCAPE HATCH and it is named loudly on purpose. Every call is a
+ * place the brand is not actually being enforced. Prefer boardKeyOf.
+ */
+export function asBoardKey(value: string): BoardKey {
+  return value as BoardKey;
+}
+
+/**
  * THE board key of a row — the single implementation.
  *
  * This lived as a local closure inside ticket-view.tsx, and #93's review
@@ -39,10 +72,12 @@ export interface BoardKeyed {
  * or a same-numbered own ticket's), and an action on it wrote to the own
  * ticket with that number. Anything addressing a board row uses this.
  */
-export function boardKeyOf(ticket: BoardKeyed): string {
-  return ticket.foreign === true && ticket.sourceSessionId !== undefined
-    ? ticket.sourceSessionId + ":" + ticket.id
-    : String(ticket.id);
+export function boardKeyOf(ticket: BoardKeyed): BoardKey {
+  return (
+    ticket.foreign === true && ticket.sourceSessionId !== undefined
+      ? ticket.sourceSessionId + ":" + ticket.id
+      : String(ticket.id)
+  ) as BoardKey;
 }
 
 /** The ticket fields the board logic reads. TicketView satisfies this. */

@@ -10,6 +10,7 @@ import { FilterPanel } from "./filter-panel";
 import type { AppliedState } from "./view-state";
 import { TicketTile } from "./ticket-tile";
 import { boardKeyOf } from "./board-logic";
+import type { BoardKey } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 
 /** One merged board row (own rows carry foreign: false or the field is absent). */
@@ -22,13 +23,13 @@ export interface TicketViewProps {
   allTicketsCount: number;
   applied: AppliedState;
   /** Board keys (own "id", foreign "sessionId:id") of the selection and the active row. */
-  selectedId: string | null;
-  activeTicketId: string | null;
+  selectedId: BoardKey | null;
+  activeTicketId: BoardKey | null;
   /** Board key to its evidence rows. Undefined falls back to empty. */
   evidenceByTicket?: Record<string, EvidenceRow[]>;
-  onSelect: (key: string) => void;
+  onSelect: (key: BoardKey) => void;
   onApply: (state: AppliedState) => void;
-  onJump: (key: string) => void;
+  onJump: (key: BoardKey) => void;
   onClearFilters: () => void;
   onPlan: () => void;
   onCreate: () => void;

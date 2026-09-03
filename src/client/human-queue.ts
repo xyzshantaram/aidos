@@ -20,6 +20,7 @@
 import type { TicketView } from "../kernel/projections";
 import { actionsFor } from "./action-visibility";
 import { boardKeyOf } from "./board-logic";
+import type { BoardKey } from "./board-logic";
 import type { ActionId, EvidenceKinds } from "./action-visibility";
 
 /**
@@ -55,7 +56,7 @@ export interface QueueEntry {
    * bug, where a bare String(ticket.id) made a foreign ticket read another
    * ticket's evidence and an action on it write to the wrong ticket.
    */
-  boardKey: string;
+  boardKey: BoardKey;
   /** The action they can take right now. */
   actionId: ActionId;
   /** The button label, straight from the action descriptor. */
