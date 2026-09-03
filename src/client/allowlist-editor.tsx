@@ -12,6 +12,8 @@
 
 import react from "react";
 
+import { boardKeyOf } from "./board-logic";
+
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 
@@ -29,6 +31,9 @@ interface TicketRowLike {
   id: number;
   state: string;
   allowlist?: string[];
+  /** Present on merged rows; needed to address the row unambiguously. */
+  sourceSessionId?: string;
+  foreign?: boolean;
 }
 
 /** Parse the text area: one path per line, trimmed, empties dropped, deduped. */
@@ -62,7 +67,16 @@ export function AllowlistEditor(props: AllowlistEditorProps) {
         const union: string[] = [];
         const seen = new Set<string>();
         for (const row of list) {
-          if (row.id === props.ticketId || row.state !== "in_progress") continue;
+          /*
+           * #93 fourth review, finding 4. This excluded "this ticket" by BARE
+           * NUMERIC ID, so on a merged board it also excluded every OTHER
+           * ticket that happens to share that number -- dropping their paths
+           * from the union the editor shows. Compare BOARD KEYS, which is the
+           * only address that identifies a row uniquely.
+           */
+          if (boardKeyOf(row) === props.ticketIdKey || row.state !== "in_progress") {
+            continue;
+          }
           for (const path of row.allowlist ?? []) {
             if (!seen.has(path)) {
               seen.add(path);
