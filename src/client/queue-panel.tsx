@@ -16,7 +16,7 @@ import react from "react";
 import { humanQueue, QUEUE_SORT_LABELS } from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
-import { parseCriteria } from "./board-logic";
+import { parseCriteria, boardKeyOf } from "./board-logic";
 
 import type { Nomination, QueueEntry, QueueSortKey } from "./human-queue";
 import type { RunOutcome, Step } from "./approval-runner";
@@ -30,7 +30,8 @@ export interface QueuePanelProps {
   evidenceByTicket: Record<string, readonly EvidenceRow[]>;
   nominations?: readonly Nomination[];
   /** Opens a ticket in the detail panel. */
-  onOpen: (ticket: TicketView) => void;
+  /** Opens the ticket in the detail panel, addressed by its BOARD key. */
+  onOpen: (entry: QueueEntry) => void;
   /** Performs the action. Resolves when the board has been written. */
   onAct: (entry: QueueEntry, outcome: RunOutcome) => Promise<void>;
   /** Drops a nomination without acting on it. */
@@ -77,8 +78,10 @@ export function QueuePanel(props: QueuePanelProps) {
 
   const entries = humanQueue(
     props.tickets,
+    // The BOARD key, not the bare id: a foreign ticket's evidence is filed
+    // under `sourceSessionId:id`, so String(ticket.id) read the wrong rows.
     (ticket) =>
-      (props.evidenceByTicket[String(ticket.id)] ?? []).map((row) => row.kind),
+      (props.evidenceByTicket[boardKeyOf(ticket)] ?? []).map((row) => row.kind),
     props.nominations ?? [],
     sortKey,
   );
@@ -119,7 +122,7 @@ export function QueuePanel(props: QueuePanelProps) {
       <ul className="aidos-ticket-strips">
         {entries.map((entry) => (
           <TicketStrip
-            key={String(entry.ticket.id) + ":" + entry.actionId}
+            key={entry.boardKey + ":" + entry.actionId}
             ticket={entry.ticket}
             highlighted={entry.nominationReason !== undefined}
             meta={
@@ -132,7 +135,7 @@ export function QueuePanel(props: QueuePanelProps) {
               )
             }
             onOpen={() => {
-              props.onOpen(entry.ticket);
+              props.onOpen(entry);
             }}
             actions={
               <>
@@ -176,10 +179,21 @@ export function QueuePanel(props: QueuePanelProps) {
             setWorking(true);
             void props
               .onAct(running, outcome)
-              .catch(() => undefined)
               .then(() => {
+                // Only a SUCCESSFUL action closes the modal.
                 setWorking(false);
                 setRunning(null);
+              })
+              .catch(() => {
+                /*
+                 * #93 review, finding 4: the first cut swallowed the failure
+                 * and closed the modal as if the write had landed, so a
+                 * refusal showed only as a toast over a dismissed dialog.
+                 * Keep the modal open on failure — the caller has already
+                 * surfaced the reason — so the human can retry or cancel
+                 * deliberately rather than wonder whether it worked.
+                 */
+                setWorking(false);
               });
           }}
         />
@@ -197,7 +211,7 @@ export function queueEntriesFor(
   return humanQueue(
     tickets,
     (ticket) =>
-      (evidenceByTicket[String(ticket.id)] ?? []).map((row) => row.kind),
+      (evidenceByTicket[boardKeyOf(ticket)] ?? []).map((row) => row.kind),
     nominations,
   );
 }

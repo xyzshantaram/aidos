@@ -27290,6 +27290,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     __publicField(this, "_nominations", /* @__PURE__ */ new Map());
     __publicField(this, "_nominationSeq", 0);
     /**
+     * Dismissals, keyed `sessionId|ticketId|actionId`, for the session's life
+     * (#93 review, finding 3). Without this the agent could re-propose an ask
+     * the human had just declined, and could not tell a dismissed item from an
+     * unhandled one -- the steering injection alone was a one-shot signal.
+     */
+    __publicField(this, "_dismissed", /* @__PURE__ */ new Set());
+    /**
      * The append path: validate the candidate against the folded state (the
      * invariant companion's check), append to the session log, then fold.
      * A violation throws InvariantError and the log does not change.
@@ -27808,7 +27815,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
     }
     const state = this._cache(agent.session).state;
-    const accepted = [];
+    const validated = [];
     for (const suggestion of suggestions) {
       const ticketId = Number(suggestion.ticketId);
       if (!Number.isFinite(ticketId)) {
@@ -27826,8 +27833,17 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (reason === "") {
         throw new Error(`nomination for #${ticketId} has no reason`);
       }
+      if (this._dismissed.has(`${sessionId}|${ticketId}|${suggestion.actionId}`)) {
+        throw new Error(
+          `the human dismissed ${suggestion.actionId} for #${ticketId} in this session; do not re-propose it without new grounds`
+        );
+      }
+      validated.push({ ticketId, actionId: suggestion.actionId, reason });
+    }
+    const accepted = [];
+    for (const entry of validated) {
       for (const [id, existing] of this._nominations) {
-        if (existing.sessionId === sessionId && existing.ticketId === ticketId && existing.actionId === suggestion.actionId) {
+        if (existing.sessionId === sessionId && existing.ticketId === entry.ticketId && existing.actionId === entry.actionId) {
           this._nominations.delete(id);
         }
       }
@@ -27835,9 +27851,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const nomination = {
         id: `nom-${Date.now()}-${this._nominationSeq}`,
         sessionId,
-        ticketId,
-        actionId: suggestion.actionId,
-        reason,
+        ticketId: entry.ticketId,
+        actionId: entry.actionId,
+        reason: entry.reason,
         at: this._now()
       };
       this._nominations.set(nomination.id, nomination);
@@ -27858,6 +27874,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new Error(`nomination ${args.nominationId} belongs to another session`);
     }
     this._nominations.delete(args.nominationId);
+    this._dismissed.add(
+      `${nomination.sessionId}|${nomination.ticketId}|${nomination.actionId}`
+    );
     this._queueInjection(
       agent.session,
       `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ("${nomination.reason}") \u2014 do not re-propose it without new grounds`

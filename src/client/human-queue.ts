@@ -19,6 +19,7 @@
 
 import type { TicketView } from "../kernel/projections";
 import { actionsFor } from "./action-visibility";
+import { boardKeyOf } from "./board-logic";
 import type { ActionId, EvidenceKinds } from "./action-visibility";
 
 /**
@@ -47,6 +48,14 @@ export const QUEUE_PROMPTS: Record<string, string> = {
 export interface QueueEntry {
   /** The ticket awaiting the human. */
   ticket: TicketView;
+  /**
+   * THE address of this row on the merged board: a plain id for an own
+   * ticket, `sourceSessionId:id` for a foreign one. Carried on the entry so
+   * no consumer can re-derive it wrongly — #93's review found exactly that
+   * bug, where a bare String(ticket.id) made a foreign ticket read another
+   * ticket's evidence and an action on it write to the wrong ticket.
+   */
+  boardKey: string;
   /** The action they can take right now. */
   actionId: ActionId;
   /** The button label, straight from the action descriptor. */
@@ -87,6 +96,7 @@ export function derivedQueue<T extends TicketView>(
       if (action.unavailableReason !== undefined) continue;
       entries.push({
         ticket,
+        boardKey: boardKeyOf(ticket),
         actionId: action.id,
         label: action.label,
         prompt: QUEUE_PROMPTS[action.id] ?? action.label,
@@ -119,7 +129,8 @@ export function humanQueue<T extends TicketView>(
     const key = String(nomination.ticketId);
     const match = entries.find(
       (entry) =>
-        String(entry.ticket.id) === key && entry.actionId === nomination.actionId,
+        (entry.boardKey === key || String(entry.ticket.id) === key) &&
+        entry.actionId === nomination.actionId,
     );
     if (match === undefined) continue;
     match.nominationReason = nomination.reason;

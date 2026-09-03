@@ -644,7 +644,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
     const payload: Record<string, unknown> = {};
     if (note !== "") payload.note = note;
     if (criterion !== undefined) payload.criteria = criterion;
-    const ticketId = entry.ticket.id;
+    /*
+     * The BOARD key, not the bare id. #93's review found that a plain number
+     * makes _routedAgent return the CALLER unchanged, so signing off foreign
+     * #12 wrote to own #12. The composite `sourceSessionId:id` is what routes
+     * the write to the owning session.
+     */
+    const ticketId = entry.boardKey;
     try {
       if (entry.actionId === "signoff") {
         await callAidosRemote(
@@ -652,11 +658,27 @@ function ProjectionReader(props: ProjectionReaderProps) {
           { ticketId, kind: "builtin:user_signoff", payload },
           sessionId,
         );
-        await callAidosRemote(
-          "userMoveTicket",
-          { ticketId, to: "in_progress" },
-          sessionId,
-        );
+        /*
+         * #93 review, finding 4: signoff is two writes and cannot be atomic
+         * across two Remotes. If the MOVE fails the evidence row is already
+         * attached, so say so precisely rather than reporting a flat failure
+         * that invites the human to retry and attach a second row.
+         */
+        try {
+          await callAidosRemote(
+            "userMoveTicket",
+            { ticketId, to: "in_progress" },
+            sessionId,
+          );
+        } catch (moveError) {
+          const detail =
+            moveError instanceof Error ? moveError.message : String(moveError);
+          throw new Error(
+            `the signoff row was attached to #${ticketId}, but the move to ` +
+              `in_progress failed: ${detail} — the row is already there, so move ` +
+              `the ticket from its detail panel rather than signing off again`,
+          );
+        }
         showToast("Signed off", "success");
       } else if (entry.actionId === "verify") {
         await callAidosRemote(
@@ -687,9 +709,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
         tickets={rawTickets}
         evidenceByTicket={rawEvidence}
         nominations={nominations}
-        onOpen={(ticket) => {
+        onOpen={(entry) => {
           setQueueOpen(false);
-          selectTicket(String(ticket.id));
+          selectTicket(entry.boardKey);
         }}
         onAct={async (entry, outcome) => {
           await performQueueAction(entry, outcome);

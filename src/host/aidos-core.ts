@@ -1381,6 +1381,13 @@ registerAidosSessionEventTypes(ctx);
    */
   private readonly _nominations = new Map<string, ActionNomination>();
   private _nominationSeq = 0;
+  /**
+   * Dismissals, keyed `sessionId|ticketId|actionId`, for the session's life
+   * (#93 review, finding 3). Without this the agent could re-propose an ask
+   * the human had just declined, and could not tell a dismissed item from an
+   * unhandled one -- the steering injection alone was a one-shot signal.
+   */
+  private readonly _dismissed = new Set<string>();
 
   /**
    * The AGENT surface: nominate tickets for the human's attention, each with
@@ -1406,7 +1413,15 @@ registerAidosSessionEventTypes(ctx);
       );
     }
     const state = this._cache(agent.session).state;
-    const accepted: ActionNomination[] = [];
+
+    /*
+     * VALIDATE THE WHOLE BATCH FIRST, then commit (#93 review, finding 2).
+     * The first cut validated and mutated in one pass, so a batch of
+     * [valid, bad] reported a refusal to the agent while the valid entry had
+     * ALREADY landed -- and worse, had already deleted the nomination it
+     * replaced. A refused call must change nothing.
+     */
+    const validated: { ticketId: number; actionId: string; reason: string }[] = [];
     for (const suggestion of suggestions) {
       const ticketId = Number(suggestion.ticketId);
       if (!Number.isFinite(ticketId)) {
@@ -1425,13 +1440,27 @@ registerAidosSessionEventTypes(ctx);
       if (reason === "") {
         throw new Error(`nomination for #${ticketId} has no reason`);
       }
+      // A dismissal is remembered for the session's life (#93 review,
+      // finding 3): the human said no, so re-proposing the identical ask
+      // needs new grounds, not a retry.
+      if (this._dismissed.has(`${sessionId}|${ticketId}|${suggestion.actionId}`)) {
+        throw new Error(
+          `the human dismissed ${suggestion.actionId} for #${ticketId} in this session; ` +
+            `do not re-propose it without new grounds`,
+        );
+      }
+      validated.push({ ticketId, actionId: suggestion.actionId, reason });
+    }
+
+    const accepted: ActionNomination[] = [];
+    for (const entry of validated) {
       // One nomination per (ticket, action): re-nominating REPLACES the
       // reason rather than stacking a second identical row on the queue.
       for (const [id, existing] of this._nominations) {
         if (
           existing.sessionId === sessionId &&
-          existing.ticketId === ticketId &&
-          existing.actionId === suggestion.actionId
+          existing.ticketId === entry.ticketId &&
+          existing.actionId === entry.actionId
         ) {
           this._nominations.delete(id);
         }
@@ -1440,9 +1469,9 @@ registerAidosSessionEventTypes(ctx);
       const nomination: ActionNomination = {
         id: `nom-${Date.now()}-${this._nominationSeq}`,
         sessionId,
-        ticketId,
-        actionId: suggestion.actionId,
-        reason,
+        ticketId: entry.ticketId,
+        actionId: entry.actionId,
+        reason: entry.reason,
         at: this._now(),
       };
       this._nominations.set(nomination.id, nomination);
@@ -1474,6 +1503,9 @@ registerAidosSessionEventTypes(ctx);
       throw new Error(`nomination ${args.nominationId} belongs to another session`);
     }
     this._nominations.delete(args.nominationId);
+    this._dismissed.add(
+      `${nomination.sessionId}|${nomination.ticketId}|${nomination.actionId}`,
+    );
     this._queueInjection(
       agent.session,
       `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ` +

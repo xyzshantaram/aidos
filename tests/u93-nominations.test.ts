@@ -134,3 +134,69 @@ describe("#93 nominations: dismissal", () => {
     );
   });
 });
+
+/** #93 review, findings 2 and 3. */
+describe("#93 nominations: a refused batch changes nothing", () => {
+  it("a batch with a bad entry commits NONE of it", () => {
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    expect(() =>
+      svc.suggestActions(agent, {
+        suggestions: [
+          { ticketId: ticket.id, actionId: "signoff", reason: "valid one" },
+          { ticketId: 9999, actionId: "signoff", reason: "bad one" },
+        ],
+      }),
+    ).toThrow(/unknown ticket 9999/);
+    // The valid entry must NOT have landed.
+    expect(svc.actionNominations(agent)).toHaveLength(0);
+  });
+
+  it("a refused batch does not destroy the nomination it would have replaced", () => {
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.suggestActions(agent, {
+      suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "original" }],
+    });
+    expect(() =>
+      svc.suggestActions(agent, {
+        suggestions: [
+          { ticketId: ticket.id, actionId: "signoff", reason: "replacement" },
+          { ticketId: 9999, actionId: "signoff", reason: "bad one" },
+        ],
+      }),
+    ).toThrow(/unknown ticket 9999/);
+    const rows = svc.actionNominations(agent);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("original");
+  });
+});
+
+describe("#93 nominations: a dismissal sticks for the session", () => {
+  it("re-proposing a dismissed (ticket, action) is refused", () => {
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const created = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "please" }],
+    });
+    svc.dismissNomination(agent, { nominationId: created.nominations[0].id });
+    expect(() =>
+      svc.suggestActions(agent, {
+        suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "please again" }],
+      }),
+    ).toThrow(/dismissed/);
+  });
+
+  it("a dismissal is scoped to that action; another action on the same ticket still works", () => {
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const created = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "please" }],
+    });
+    svc.dismissNomination(agent, { nominationId: created.nominations[0].id });
+    const next = svc.suggestActions(agent, {
+      suggestions: [{ ticketId: ticket.id, actionId: "verify", reason: "different ask" }],
+    });
+    expect(next.accepted).toBe(1);
+  });
+});

@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { derivedQueue, humanQueue, queueCount, sortQueue } from "../src/client/human-queue";
 import type { Nomination } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
+import { boardKeyOf } from "../src/client/board-logic";
 
 const noEvidence = () => [] as string[];
 
@@ -178,5 +179,47 @@ describe("u93 human-queue: sorting", () => {
     const before = rows.map((r) => r.ticket.id);
     sortQueue(rows, "alpha");
     expect(rows.map((r) => r.ticket.id)).toEqual(before);
+  });
+});
+
+/**
+ * #93 review, finding 1 (CRITICAL): the queue keyed evidence lookups and its
+ * write target with a bare String(ticket.id). On a MERGED board a foreign
+ * ticket is addressed `sourceSessionId:id`, so a foreign row read the wrong
+ * evidence — and an action on it wrote to the own ticket with that number.
+ */
+describe("u93 human-queue: foreign rows on a merged board", () => {
+  const foreign = {
+    ...makeTicket({ id: 12, state: "awaiting_verification", title: "Foreign twelve" }),
+    foreign: true,
+    sourceSessionId: "session-abc",
+  };
+  const own = makeTicket({ id: 12, state: "open", title: "Own twelve" });
+
+  it("a foreign entry carries the COMPOSITE board key, not the bare id", () => {
+    const rows = derivedQueue([foreign], () => []);
+    expect(rows[0].boardKey).toBe("session-abc:12");
+  });
+
+  it("an own entry keeps the plain id as its board key", () => {
+    const rows = derivedQueue([own], () => []);
+    expect(rows[0].boardKey).toBe("12");
+  });
+
+  it("evidence is resolved per row by board key, so a foreign row cannot read the own row's", () => {
+    const evidence: Record<string, string[]> = {
+      // The OWN #12 has been verified; the foreign #12 has not.
+      "12": ["builtin:user_verified"],
+      "session-abc:12": [],
+    };
+    const rows = derivedQueue([foreign], (t) => evidence[boardKeyOf(t)] ?? []);
+    // Without the fix this read the own row's user_verified and offered
+    // mark-done on a ticket that has no such row.
+    expect(rows.map((r) => r.actionId)).toEqual(["verify"]);
+  });
+
+  it("own and foreign rows with the same number are two distinct entries", () => {
+    const rows = derivedQueue([own, foreign], () => []);
+    expect(new Set(rows.map((r) => r.boardKey)).size).toBe(rows.length);
   });
 });

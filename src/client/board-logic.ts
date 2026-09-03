@@ -19,6 +19,32 @@
 import { BUILTIN_KINDS } from "../kernel/constants";
 import type { TicketState } from "../kernel/types";
 
+/**
+ * A row addressable on the merged workspace board. Own rows are plain ids;
+ * FOREIGN rows (from another session, merged in by workspaceTickets) are
+ * addressed `sourceSessionId:id`, because ids collide across sessions.
+ */
+export interface BoardKeyed {
+  id: number | string;
+  foreign?: boolean;
+  sourceSessionId?: string;
+}
+
+/**
+ * THE board key of a row — the single implementation.
+ *
+ * This lived as a local closure inside ticket-view.tsx, and #93's review
+ * found the consequence: the work queue keyed its evidence lookups with a
+ * bare `String(ticket.id)`, so a foreign ticket read the WRONG rows (empty,
+ * or a same-numbered own ticket's), and an action on it wrote to the own
+ * ticket with that number. Anything addressing a board row uses this.
+ */
+export function boardKeyOf(ticket: BoardKeyed): string {
+  return ticket.foreign === true && ticket.sourceSessionId !== undefined
+    ? ticket.sourceSessionId + ":" + ticket.id
+    : String(ticket.id);
+}
+
 /** The ticket fields the board logic reads. TicketView satisfies this. */
 interface TicketLike {
   id: number;

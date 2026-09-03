@@ -9,6 +9,7 @@ import react from "react";
 import { FilterPanel } from "./filter-panel";
 import type { AppliedState } from "./view-state";
 import { TicketTile } from "./ticket-tile";
+import { boardKeyOf } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 
 /** One merged board row (own rows carry foreign: false or the field is absent). */
@@ -41,10 +42,6 @@ export interface TicketViewProps {
 export function TicketView(props: TicketViewProps) {
   const [collapsed, setCollapsed] = react.useState(false);
 
-  const boardKeyOf = (ticket: BoardTicket) =>
-    ticket.foreign === true && ticket.sourceSessionId !== undefined
-      ? ticket.sourceSessionId + ":" + ticket.id
-      : String(ticket.id);
   const tiles = props.tickets.map((ticket) => (
     <TicketTile
       key={boardKeyOf(ticket)}
