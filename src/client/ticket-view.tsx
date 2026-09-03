@@ -31,6 +31,10 @@ export interface TicketViewProps {
   onClearFilters: () => void;
   onPlan: () => void;
   onCreate: () => void;
+  /** #93: opens the human work queue. Absent hides the button entirely. */
+  onQueue?: () => void;
+  /** #93: how many asks are waiting on the human, for the badge. */
+  queueCount?: number;
   projects?: { id: number; name: string }[];
 }
 
@@ -90,6 +94,18 @@ export function TicketView(props: TicketViewProps) {
           {props.tickets.length + " of " + props.allTicketsCount + " tickets"}
         </span>
         <span className="aidos-toolbar-actions">
+          {props.onQueue !== undefined ? (
+            <button
+              className="aidos-btn"
+              onClick={props.onQueue}
+              title="What is waiting on you"
+            >
+              {"Waiting on you"}
+              {props.queueCount !== undefined && props.queueCount > 0 ? (
+                <span className="aidos-queue-badge">{props.queueCount}</span>
+              ) : null}
+            </button>
+          ) : null}
           <button className="aidos-btn" onClick={props.onPlan}>
             Plan
           </button>

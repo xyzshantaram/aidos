@@ -29,6 +29,10 @@ import { TicketView } from "./ticket-view";
 import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
+import { QueuePanel, queueEntriesFor } from "./queue-panel";
+import { ModalShell } from "./ui";
+import type { QueueEntry } from "./human-queue";
+import type { RunOutcome } from "./approval-runner";
 import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
 import { showToast } from "./toast-store";
@@ -356,6 +360,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [selectedKey, setSelectedKey] = react.useState<string | null>(null);
   const [createOpen, setCreateOpen] = react.useState(false);
   const [planOpen, setPlanOpen] = react.useState(false);
+  const [queueOpen, setQueueOpen] = react.useState(false);
   const [errorTimedOut, setErrorTimedOut] = react.useState(false);
   const deepLinkHandled = react.useRef(false);
   const restoredRef = react.useRef(false);
@@ -591,9 +596,82 @@ function ProjectionReader(props: ProjectionReaderProps) {
         onCreate={() => {
           setCreateOpen(true);
         }}
+        onQueue={() => {
+          setQueueOpen(true);
+        }}
+        queueCount={queueEntriesFor(rawTickets, rawEvidence).length}
       />
     );
   }
+
+  /**
+   * #93: the queue's actions go through the SAME remotes the detail panel
+   * uses — signoff attaches the row then moves, verify attaches only, and
+   * mark-done moves. One write path, so the queue can never drift from what
+   * the buttons on a ticket do.
+   */
+  async function performQueueAction(
+    entry: QueueEntry,
+    outcome: RunOutcome,
+  ): Promise<void> {
+    if (outcome.status === "rejected") return;
+    const first = outcome.values[0];
+    const note =
+      first !== undefined && first.kind === "confirm" ? first.note.trim() : "";
+    const criterion =
+      first !== undefined && first.kind === "confirm" ? first.criterion : undefined;
+    const payload: Record<string, unknown> = {};
+    if (note !== "") payload.note = note;
+    if (criterion !== undefined) payload.criteria = criterion;
+    const ticketId = entry.ticket.id;
+    try {
+      if (entry.actionId === "signoff") {
+        await callAidosRemote(
+          "userAttachEvidence",
+          { ticketId, kind: "builtin:user_signoff", payload },
+          sessionId,
+        );
+        await callAidosRemote(
+          "userMoveTicket",
+          { ticketId, to: "in_progress" },
+          sessionId,
+        );
+        showToast("Signed off", "success");
+      } else if (entry.actionId === "verify") {
+        await callAidosRemote(
+          "userAttachEvidence",
+          { ticketId, kind: "builtin:user_verified", payload },
+          sessionId,
+        );
+        showToast("Verified", "success");
+      } else if (entry.actionId === "mark-done") {
+        await callAidosRemote("userMoveTicket", { ticketId, to: "done" }, sessionId);
+        showToast("Marked done", "success");
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), "refusal");
+      throw error;
+    }
+  }
+
+  const queueModal = queueOpen ? (
+    <ModalShell
+      title="Waiting on you"
+      onClose={() => {
+        setQueueOpen(false);
+      }}
+    >
+      <QueuePanel
+        tickets={rawTickets}
+        evidenceByTicket={rawEvidence}
+        onOpen={(ticket) => {
+          setQueueOpen(false);
+          selectTicket(String(ticket.id));
+        }}
+        onAct={performQueueAction}
+      />
+    </ModalShell>
+  ) : null;
 
   const planModal = (
     <PlanMetaModal
@@ -629,6 +707,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       </div>
       {createModal}
       {planModal}
+      {queueModal}
       {/* The toast container is a sibling of the layout, not a child, so it
           persists across the slot-mutation remount. The single-string toast
           state and its timer are gone; the module-level toast store owns
