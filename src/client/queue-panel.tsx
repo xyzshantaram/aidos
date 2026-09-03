@@ -39,7 +39,14 @@ export interface QueuePanelProps {
 
 /** The step list an action collects before it can be performed. */
 function stepsFor(entry: QueueEntry): Step[] {
-  const criteria = parseCriteria(entry.ticket.criteria ?? "");
+  /*
+   * The criterion picker belongs ONLY to verify. Signoff authorises work to
+   * START — nothing is proven yet, so there is no criterion to attest, and
+   * offering one invites a meaningless link. Mark-done attaches no evidence
+   * row at all (it is purely a move), so it has nothing to link either.
+   */
+  const criteria =
+    entry.actionId === "verify" ? parseCriteria(entry.ticket.criteria ?? "") : [];
   const titles: Record<string, string> = {
     signoff: "Sign off on " + entry.ticket.title,
     verify: "Verify " + entry.ticket.title,
