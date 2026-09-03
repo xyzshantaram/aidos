@@ -27262,8 +27262,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _resolveApproval_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _resolveApproval_dec = [Remote("resolveApproval")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -27765,6 +27765,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const rows = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId && row.ticketId === wanted).sort((a, b) => a.at - b.at);
     return rows[0] ?? null;
   }
+  pendingApprovals(agent, _args) {
+    const sessionId = String(agent.session.id);
+    return [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId).sort((a, b) => a.at - b.at);
+  }
   resolveApproval(agent, args) {
     const pending = this._pendingApprovals.get(args.requestId);
     if (pending === void 0) {
@@ -27809,7 +27813,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     const cap = 20;
     const mine = [...this._nominations.values()].filter((n) => n.sessionId === sessionId);
-    if (mine.length + suggestions.length > cap) {
+    const existingPairs = new Set(mine.map((n) => `${n.ticketId}|${n.actionId}`));
+    const incomingNew = new Set(
+      suggestions.map((sug) => `${Number(sug.ticketId)}|${sug.actionId}`).filter((pair) => !existingPairs.has(pair))
+    );
+    if (mine.length + incomingNew.size > cap) {
       throw new Error(
         `too many nominations (cap ${cap}); the human dismisses or acts on them to make room`
       );
@@ -27833,11 +27841,6 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (reason === "") {
         throw new Error(`nomination for #${ticketId} has no reason`);
       }
-      if (this._dismissed.has(`${sessionId}|${ticketId}|${suggestion.actionId}`)) {
-        throw new Error(
-          `the human dismissed ${suggestion.actionId} for #${ticketId} in this session; do not re-propose it without new grounds`
-        );
-      }
       validated.push({ ticketId, actionId: suggestion.actionId, reason });
     }
     const accepted = [];
@@ -27859,7 +27862,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       this._nominations.set(nomination.id, nomination);
       accepted.push(nomination);
     }
-    return { ok: true, accepted: accepted.length, nominations: accepted };
+    const previouslyDismissed = accepted.filter((n) => this._dismissed.has(`${sessionId}|${n.ticketId}|${n.actionId}`)).map((n) => `#${n.ticketId} ${n.actionId}`);
+    return {
+      ok: true,
+      accepted: accepted.length,
+      nominations: accepted,
+      previouslyDismissed
+    };
   }
   actionNominations(agent, _args) {
     const sessionId = String(agent.session.id);
@@ -28930,6 +28939,7 @@ __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
 __decorateElement(_init, 1, "requestAllowlist", _requestAllowlist_dec, AidosService);
 __decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);
+__decorateElement(_init, 1, "pendingApprovals", _pendingApprovals_dec, AidosService);
 __decorateElement(_init, 1, "resolveApproval", _resolveApproval_dec, AidosService);
 __decorateElement(_init, 1, "suggestActions", _suggestActions_dec, AidosService);
 __decorateElement(_init, 1, "actionNominations", _actionNominations_dec, AidosService);

@@ -32,7 +32,7 @@ import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { boardKeyOf } from "./board-logic";
 import { ModalShell } from "./ui";
-import type { Nomination, QueueEntry } from "./human-queue";
+import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
 import type { RunOutcome } from "./approval-runner";
 import { activeTicketId } from "./active-ticket";
 import { logDebug } from "./log";
@@ -369,6 +369,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * the queue is shut.
    */
   const [nominations, setNominations] = react.useState<Nomination[]>([]);
+  const [approvals, setApprovals] = react.useState<PendingApprovalLike[]>([]);
 
   const refreshNominations = react.useCallback(
     function () {
@@ -378,6 +379,14 @@ function ProjectionReader(props: ProjectionReaderProps) {
         })
         .catch(() => {
           setNominations([]);
+        });
+      // #93: pending approval cards are asks too, and nothing surfaced them.
+      void callAidosRemote("pendingApprovals", {}, sessionId)
+        .then((rows) => {
+          setApprovals((rows as unknown as PendingApprovalLike[]) ?? []);
+        })
+        .catch(() => {
+          setApprovals([]);
         });
     },
     [sessionId],
@@ -646,7 +655,19 @@ function ProjectionReader(props: ProjectionReaderProps) {
     entry: QueueEntry,
     outcome: RunOutcome,
   ): Promise<void> {
-    if (outcome.status === "rejected") return;
+    if (outcome.status === "rejected") {
+      // Rejecting an APPROVAL must resolve its card, or it lingers forever
+      // and the agent is never told. Rejecting a gate ask writes nothing.
+      if (entry.approvalId !== undefined) {
+        await callAidosRemote(
+          "resolveApproval",
+          { requestId: entry.approvalId, approved: false },
+          sessionId,
+        );
+        showToast("Request rejected", "info");
+      }
+      return;
+    }
     const first = outcome.values[0];
     const note =
       first !== undefined && first.kind === "confirm" ? first.note.trim() : "";
@@ -663,6 +684,22 @@ function ProjectionReader(props: ProjectionReaderProps) {
      */
     const ticketId = entry.boardKey;
     try {
+      /*
+       * #93: an approval entry resolves the pending CARD; it does not attach
+       * evidence itself. resolveApproval re-validates the edited paths and
+       * performs the user-authored attach plus the field write in one step.
+       */
+      if (entry.approvalId !== undefined) {
+        const step = outcome.values[0];
+        const paths = step !== undefined && step.kind === "path-list" ? step.paths : [];
+        await callAidosRemote(
+          "resolveApproval",
+          { requestId: entry.approvalId, approved: true, paths },
+          sessionId,
+        );
+        showToast("Approved " + paths.length + " path(s)", "success");
+        return;
+      }
       if (entry.actionId === "signoff") {
         await callAidosRemote(
           "userAttachEvidence",
@@ -720,6 +757,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         tickets={rawTickets}
         evidenceByTicket={rawEvidence}
         nominations={nominations}
+        approvals={approvals}
         onOpen={(entry) => {
           setQueueOpen(false);
           selectTicket(entry.boardKey);

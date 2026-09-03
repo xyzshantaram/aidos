@@ -279,3 +279,53 @@ describe("u93 human-queue: a numeric nomination never lands on a foreign row", (
     expect(flagged[0].boardKey).toBe("12");
   });
 });
+
+/**
+ * #93: a PENDING APPROVAL is an ask in its own right. Nothing surfaced these —
+ * `pendingApproval` is per-ticket, so a queued card was invisible unless the
+ * human already had that ticket open. Five stacked up unseen in one session.
+ */
+describe("u93 human-queue: pending approvals are asks", () => {
+  const ticket = makeTicket({ id: 7, state: "in_progress", title: "In flight" });
+  const approval = {
+    id: "req-1",
+    ticketId: 7,
+    kind: "allowlist",
+    prompt: "Approve write access for ticket #7",
+    payload: { paths: ["src/host", "tests"] },
+    at: 5,
+  };
+
+  it("an in_progress ticket with a pending approval enters the queue", () => {
+    // Without the approval it has NO human action at all.
+    expect(humanQueue([ticket], () => [])).toEqual([]);
+    const rows = humanQueue([ticket], () => [], [], "suggested", [approval]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].approvalId).toBe("req-1");
+    expect(rows[0].approvalPaths).toEqual(["src/host", "tests"]);
+  });
+
+  it("the prompt names how many paths are proposed", () => {
+    const rows = humanQueue([ticket], () => [], [], "suggested", [approval]);
+    expect(rows[0].prompt).toContain("2 path(s)");
+  });
+
+  it("an approval outranks a nomination, because the agent is BLOCKED on it", () => {
+    const open = makeTicket({ id: 8, state: "open", title: "Waiting" });
+    const rows = humanQueue(
+      [open, ticket],
+      () => [],
+      [{ id: "n1", ticketId: 8, actionId: "signoff", reason: "please", at: 0 }],
+      "suggested",
+      [approval],
+    );
+    expect(rows[0].approvalId).toBe("req-1");
+  });
+
+  it("an approval naming a ticket not on the board is dropped", () => {
+    const rows = humanQueue([ticket], () => [], [], "suggested", [
+      { ...approval, id: "req-2", ticketId: 999 },
+    ]);
+    expect(rows.filter((r) => r.approvalId === "req-2")).toEqual([]);
+  });
+});

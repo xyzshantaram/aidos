@@ -1316,6 +1316,24 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
+   * EVERY pending approval for this session, oldest first (#93).
+   *
+   * `pendingApproval` above answers "is one waiting on THIS ticket?", which
+   * only helps a human already looking at that ticket. Nothing could answer
+   * "is anything waiting on me at all?", so a queued approval card was
+   * invisible until you happened to open the right ticket — five of them
+   * stacked up unseen in one session. The work queue needs this to surface
+   * them, and the ticket strip needs it to mark the rows that carry one.
+   */
+  @Remote("pendingApprovals")
+  pendingApprovals(agent: Agent, _args?: Record<string, never>): PendingApproval[] {
+    const sessionId = String(agent.session.id);
+    return [...this._pendingApprovals.values()]
+      .filter((row) => row.sessionId === sessionId)
+      .sort((a, b) => a.at - b.at);
+  }
+
+  /**
    * The BOARD surface: resolve one pending approval. `approved` carries the
    * (possibly edited) paths; `rejected` resolves with no attach. Either way
    * the queue drops the request and the digest tells the agent the outcome.

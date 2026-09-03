@@ -18,7 +18,12 @@ import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { parseCriteria, boardKeyOf } from "./board-logic";
 
-import type { Nomination, QueueEntry, QueueSortKey } from "./human-queue";
+import type {
+  Nomination,
+  PendingApprovalLike,
+  QueueEntry,
+  QueueSortKey,
+} from "./human-queue";
 import type { RunOutcome, Step } from "./approval-runner";
 import type { ActionId } from "./action-visibility";
 import type { TicketView } from "../kernel/projections";
@@ -29,6 +34,8 @@ export interface QueuePanelProps {
   /** Keyed exactly as the board keys it, so foreign rows resolve too. */
   evidenceByTicket: Record<string, readonly EvidenceRow[]>;
   nominations?: readonly Nomination[];
+  /** Pending approval cards for this session (#51), surfaced as asks. */
+  approvals?: readonly PendingApprovalLike[];
   /** Opens a ticket in the detail panel. */
   /** Opens the ticket in the detail panel, addressed by its BOARD key. */
   onOpen: (entry: QueueEntry) => void;
@@ -60,6 +67,25 @@ function stepsFor(entry: QueueEntry): Step[] {
     verify: "Attaches your user_verified row. It does not move the ticket.",
     "mark-done": "This is the final state. Only you can set it.",
   };
+  /*
+   * An approval entry is not a gate ask: the agent proposed something and is
+   * BLOCKED until answered. It runs a path-list step pre-filled with what was
+   * proposed, so the human edits or accepts in place -- the shape #98 wants
+   * for signoff too.
+   */
+  if (entry.approvalId !== undefined) {
+    return [
+      {
+        kind: "path-list",
+        title: "Approve file access for " + entry.ticket.title,
+        prompt:
+          "The agent proposed these paths. Edit or remove any of them; " +
+          "approving grants write access to exactly this list.",
+        label: "Paths (one per line)",
+        paths: entry.approvalPaths ?? [],
+      },
+    ];
+  }
   return [
     {
       kind: "confirm",
@@ -84,6 +110,7 @@ export function QueuePanel(props: QueuePanelProps) {
       (props.evidenceByTicket[boardKeyOf(ticket)] ?? []).map((row) => row.kind),
     props.nominations ?? [],
     sortKey,
+    props.approvals ?? [],
   );
 
   if (entries.length === 0) {
@@ -124,7 +151,10 @@ export function QueuePanel(props: QueuePanelProps) {
           <TicketStrip
             key={entry.boardKey + ":" + entry.actionId}
             ticket={entry.ticket}
-            highlighted={entry.nominationReason !== undefined}
+            highlighted={
+              entry.nominationReason !== undefined || entry.approvalId !== undefined
+            }
+            awaitingApproval={entry.approvalId !== undefined}
             meta={
               entry.nominationReason !== undefined ? (
                 <span className="aidos-queue-reason">
@@ -173,8 +203,16 @@ export function QueuePanel(props: QueuePanelProps) {
           }}
           onResolve={(outcome: RunOutcome) => {
             if (outcome.status === "rejected") {
-              setRunning(null);
-              return;
+              /*
+               * A rejected APPROVAL must still reach onAct: the pending card
+               * has to be resolved or it lingers forever and the agent is
+               * never told. A rejected gate ask writes nothing, so it just
+               * closes.
+               */
+              if (running.approvalId === undefined) {
+                setRunning(null);
+                return;
+              }
             }
             setWorking(true);
             void props

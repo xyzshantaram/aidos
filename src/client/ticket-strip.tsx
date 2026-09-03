@@ -53,6 +53,13 @@ export interface TicketStripProps {
   working?: boolean;
   /** Marks the row as the one the agent is pointing at. */
   highlighted?: boolean;
+  /**
+   * #93: this ticket carries a PENDING APPROVAL REQUEST the human has not
+   * answered. Shown as its own chip because a queued approval card was
+   * otherwise invisible unless you already had that ticket open -- five
+   * stacked up unseen in one session before this existed.
+   */
+  awaitingApproval?: boolean;
 }
 
 export function TicketStrip(props: TicketStripProps) {
@@ -83,6 +90,14 @@ export function TicketStrip(props: TicketStripProps) {
           ) : null}
         </span>
         <span className="aidos-ticket-strip-chips">
+          {props.awaitingApproval === true ? (
+            <span
+              className="aidos-chip aidos-chip-awaiting-approval"
+              title="This ticket has a request waiting for your approval"
+            >
+              Needs approval
+            </span>
+          ) : null}
           <span className={badgeClass(ticket.state)}>{stateLabel(ticket.state)}</span>
           {showGate ? (
             <span className="aidos-chip aidos-chip-metric" title="Gate progress">

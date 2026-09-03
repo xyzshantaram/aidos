@@ -66,6 +66,24 @@ export interface QueueEntry {
   nominationReason?: string;
   /** The nomination's id, so dismissing can name it. */
   nominationId?: string;
+  /** Set when this entry IS a pending approval card rather than a gate ask. */
+  approvalId?: string;
+  /** The paths the agent proposed, for an allowlist approval. */
+  approvalPaths?: string[];
+}
+
+/**
+ * A pending approval card as the host hands it to the client (#51). The queue
+ * surfaces these because nothing else did: `pendingApproval` is per-ticket, so
+ * a queued card was invisible unless you already had that ticket open.
+ */
+export interface PendingApprovalLike {
+  id: string;
+  ticketId: number | string;
+  kind: string;
+  prompt: string;
+  payload?: Record<string, unknown>;
+  at: number;
 }
 
 /** A nomination as the host hands it to the client. */
@@ -123,8 +141,35 @@ export function humanQueue<T extends TicketView>(
   evidenceKindsOf: (ticket: T) => EvidenceKinds,
   nominations: readonly Nomination[] = [],
   sortKey: QueueSortKey = "suggested",
+  approvals: readonly PendingApprovalLike[] = [],
 ): QueueEntry[] {
   const entries = derivedQueue(tickets, evidenceKindsOf);
+  /*
+   * A pending approval is an ask in its own right, not a gate-derived one:
+   * the agent requested something and the human has not answered. It is
+   * appended rather than derived, because no ticket state implies it.
+   */
+  for (const approval of approvals) {
+    const key = String(approval.ticketId);
+    const ticket = tickets.find((t) => boardKeyOf(t) === key);
+    if (ticket === undefined) continue;
+    const paths = Array.isArray(approval.payload?.paths)
+      ? (approval.payload.paths as unknown[]).filter(
+          (p): p is string => typeof p === "string",
+        )
+      : [];
+    entries.push({
+      ticket,
+      boardKey: boardKeyOf(ticket),
+      actionId: "allowlist",
+      label: "Review request",
+      prompt:
+        approval.prompt +
+        (paths.length > 0 ? ` \u2014 ${paths.length} path(s)` : ""),
+      approvalId: approval.id,
+      approvalPaths: paths,
+    });
+  }
   for (const nomination of nominations) {
     /*
      * MATCH ON THE BOARD KEY ONLY (#93 re-review, finding 1).
@@ -191,6 +236,10 @@ export function sortQueue(
     case "suggested":
     default:
       return rows.sort((a, b) => {
+        // A pending approval outranks everything: the agent is BLOCKED on it.
+        const aApproval = a.approvalId !== undefined ? 0 : 1;
+        const bApproval = b.approvalId !== undefined ? 0 : 1;
+        if (aApproval !== bApproval) return aApproval - bApproval;
         const aNominated = a.nominationReason !== undefined ? 0 : 1;
         const bNominated = b.nominationReason !== undefined ? 0 : 1;
         if (aNominated !== bNominated) return aNominated - bNominated;
