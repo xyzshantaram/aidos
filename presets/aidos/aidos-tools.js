@@ -27030,7 +27030,21 @@ function registerScratchTools(ctx) {
             ok: { type: "boolean", const: true, required: true },
             path: { type: "string", required: true },
             scratch_root: { type: "string", required: true },
-            operation: { type: "string", enum: ["create", "update"], required: true }
+            operation: { type: "string", enum: ["create", "update"], required: true },
+            /*
+             * Whether the write went through the `write` TOOL, so the file
+             * is registered as observed and a following scratch_edit will
+             * be allowed to edit it.
+             *
+             * In-band because the warning for the fallback goes to
+             * ctx.logger, which the MODEL NEVER SEES: the agent about to hit
+             * FS_NOT_OBSERVED had no way to know. Declared here in the same
+             * change that returns it -- a service returning a field its
+             * schema does not declare is what made request_allowlist THROW
+             * under additionalProperties: false (#104 follow-up), and that
+             * is a mistake worth making only once.
+             */
+            observed: { type: "boolean", required: true }
           }
         },
         render: renderJson
@@ -27072,7 +27086,7 @@ function registerScratchTools(ctx) {
             const reported = delegated.value?.operation;
             const operation = reported === "create" || reported === "update" ? reported : existed ? "update" : "create";
             ctx.logger?.info?.(`aidos: scratch_write ${operation} ${absPath} (delegated)`);
-            return { ok: true, path: absPath, scratch_root: root, operation };
+            return { ok: true, path: absPath, scratch_root: root, operation, observed: true };
           }
           ctx.logger?.warn?.(
             `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs -- the file will NOT be registered as observed, so a following scratch_edit may refuse it`
@@ -27084,7 +27098,13 @@ function registerScratchTools(ctx) {
         }
         const outcome = await fs.writeText(target, args.content, void 0, exec.signal);
         ctx.logger?.info?.(`aidos: scratch_write ${outcome.operation} ${absPath}`);
-        return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
+        return {
+          ok: true,
+          path: absPath,
+          scratch_root: root,
+          operation: outcome.operation,
+          observed: false
+        };
       }
     })
   );
@@ -27151,10 +27171,20 @@ function registerScratchTools(ctx) {
             "AIDOS_EDIT_GRAMMAR_UNSUPPORTED"
           );
         }
+        if (!wantsAnchors && typeof args.old_string !== "string") {
+          throw new HarnessError(
+            JSON.stringify({
+              ok: false,
+              error: "edit_arguments_incomplete",
+              message: "a literal edit needs `old_string` (and `new_string`); pass `edits` for the anchor grammar"
+            }),
+            "AIDOS_EDIT_ARGUMENTS_INCOMPLETE"
+          );
+        }
         const delegatedArgs = wantsAnchors ? { [pathKey]: absPath, edits: args.edits } : {
           [pathKey]: absPath,
           old_string: args.old_string,
-          new_string: args.new_string
+          new_string: args.new_string ?? ""
         };
         if (!wantsAnchors && args.replace_all !== void 0 && accepts("replace_all")) {
           delegatedArgs.replace_all = args.replace_all;

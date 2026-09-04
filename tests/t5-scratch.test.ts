@@ -322,6 +322,16 @@ describe("#82 parity with the default dsh edit/write tools", () => {
   });
 
   it("only forwards replace_all when the backend declares it", async () => {
+    /*
+     * The negative half used to call the ANCHOR backend, which never passes
+     * replace_all and whose branch structurally cannot forward it -- so that
+     * assertion could not fail whatever the gate did. Deleting the very gate
+     * this test is named after left the suite green.
+     *
+     * The discriminating case is a backend with the literal grammar and NO
+     * replace_all, called WITH replace_all: true. That is the only shape
+     * where the gate is the thing deciding.
+     */
     const { harness, seen } = harnessWithEdit(LITERAL_GRAMMAR);
     await harness.runTool("scratch_write", { path: "r.txt", content: "a\n" });
     await harness.runTool("scratch_edit", {
@@ -332,13 +342,64 @@ describe("#82 parity with the default dsh edit/write tools", () => {
     });
     expect(seen[0].replace_all).toBe(true);
 
-    const anchor = harnessWithEdit(ANCHOR_GRAMMAR);
-    await anchor.harness.runTool("scratch_write", { path: "r.txt", content: "a\n" });
-    await anchor.harness.runTool("scratch_edit", {
+    const without = harnessWithEdit({
+      file_path: { type: "string", required: true },
+      old_string: { type: "string", required: true },
+      new_string: { type: "string", required: true },
+    } as unknown as Record<string, never>);
+    await without.harness.runTool("scratch_write", { path: "r.txt", content: "a\n" });
+    await without.harness.runTool("scratch_edit", {
       path: "r.txt",
-      edits: [["aaa", "bbb", "c"]],
+      old_string: "a",
+      new_string: "b",
+      replace_all: true,
     });
-    expect(anchor.seen[0].replace_all).toBeUndefined();
+    expect(without.seen.length, "the edit must still be performed").toBe(1);
+    expect(
+      without.seen[0].replace_all,
+      "a backend that does not declare replace_all must not receive it",
+    ).toBeUndefined();
+  });
+
+  it("refuses the LITERAL grammar when the backend declares only anchors", async () => {
+    /*
+     * The mirror of the anchor refusal, and it had ZERO coverage: deleting
+     * the whole literal-grammar guard changed nothing. Its mirror image was
+     * covered, which is exactly the asymmetry that hides a branch.
+     */
+    const { harness, seen } = harnessWithEdit(ANCHOR_GRAMMAR);
+    await harness.runTool("scratch_write", { path: "l.txt", content: "a\n" });
+    const outcome = await harness.runTool("scratch_edit", {
+      path: "l.txt",
+      old_string: "a",
+      new_string: "b",
+    });
+    expect(outcome.isError).toBe(true);
+    expect(outcome.error?.message).toContain("literal grammar");
+    expect(seen.length, "the backend must not be called with a shape it cannot parse").toBe(0);
+  });
+
+  it("refuses a literal edit with no old_string, rather than forwarding undefined", async () => {
+    /*
+     * scratch_edit declares old_string/new_string as OPTIONAL, because the
+     * anchor grammar does not use them -- so a caller can reach the literal
+     * branch with neither. It forwarded them unconditionally, and the real
+     * backend does `args.old_string.length`, which is a TypeError rather
+     * than a refusal. A confusing downstream crash is exactly what the
+     * grammar guard exists to prevent.
+     */
+    const { harness, seen } = harnessWithEdit(LITERAL_GRAMMAR);
+    await harness.runTool("scratch_write", { path: "n.txt", content: "a\n" });
+    const outcome = await harness.runTool("scratch_edit", { path: "n.txt" });
+    expect(outcome.isError).toBe(true);
+    /*
+     * Asserting the CODE, not the substring "old_string". The backend's own
+     * schema validation rejects this call too, and its message also names
+     * the field -- so a substring assertion stayed green with the guard
+     * deleted and proved nothing about the guard. Only this code is ours.
+     */
+    expect(outcome.error?.message).toContain("edit_arguments_incomplete");
+    expect(seen.length).toBe(0);
   });
 
   it("scratch_write OBSERVES an existing file before overwriting it", async () => {
@@ -395,6 +456,31 @@ describe("#82 parity with the default dsh edit/write tools", () => {
     const outcome = await harness.runTool("scratch_write", { path: "new.txt", content: "one" });
     // No read tool is registered, so the probe would have said "create".
     expect((outcome.value as { operation?: string }).operation).toBe("update");
+  });
+
+  it("reports observation IN BAND, because the agent never sees a log line", async () => {
+    /*
+     * The fallback warning goes to ctx.logger, which the MODEL never reads,
+     * while the result said `{ok: true}` with no hint the file was
+     * unobserved -- so the agent about to hit FS_NOT_OBSERVED had no way to
+     * know. The flag says which path the write took.
+     */
+    const fallback = scratchHarness();
+    const raw = await fallback.runTool("scratch_write", { path: "u.txt", content: "one" });
+    expect((raw.value as { observed?: boolean }).observed).toBe(false);
+
+    const delegating = scratchHarness();
+    delegating.ctx.tools.register(
+      defineTool({
+        name: "write",
+        description: "a test write backend",
+        parameters: { file_path: { type: "string", required: true } } as never,
+        output: { schema: { type: "object", additionalProperties: true }, render: () => [] },
+        execute: async () => ({ ok: true, operation: "create" }),
+      }) as never,
+    );
+    const viaTool = await delegating.runTool("scratch_write", { path: "o.txt", content: "one" });
+    expect((viaTool.value as { observed?: boolean }).observed).toBe(true);
   });
 
   it("keeps a raw-fs fallback, and SAYS it is unobserved", async () => {
