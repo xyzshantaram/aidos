@@ -22,6 +22,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -41,6 +42,45 @@ const manifest = JSON.parse(
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+/*
+ * UPSTREAM HEAD, NOT UPSTREAM'S WORKING TREE.
+ *
+ * The first version read the working tree and it failed for the wrong
+ * reason, twice: aidos's suite went red because dotfiles-ai had UNCOMMITTED
+ * edits in flight (once the user's tool-name badge work, once new files
+ * appearing mid-session). A drift check that fires on someone else's
+ * work-in-progress is a false alarm, and it once got this repo's own commit
+ * shipped with a red suite because the "failure" looked like drift.
+ *
+ * The committed state is what "upstream changed" can mean: it is stable
+ * under concurrent editing, it is exactly what re-vendoring should pin to,
+ * and a work-in-progress file is by definition not finished. If the git
+ * read fails (not a repo, file untracked), fall back to the working tree so
+ * the check still runs.
+ */
+function upstreamText(upstreamPath: string): string {
+  try {
+    // `git show HEAD:<path>` resolves the path from the REPO ROOT, not from
+    // -C, so the source directory's path relative to the toplevel is what
+    // the spec needs. Getting this wrong silently fell back to the working
+    // tree -- the exact behaviour this function exists to avoid -- which is
+    // why the toplevel is resolved explicitly and the show is one command.
+    const toplevel = execFileSync(
+      "git",
+      ["-C", manifest.source, "rev-parse", "--show-toplevel"],
+      { encoding: "utf8" },
+    ).trim();
+    const relative = upstreamPath.slice(toplevel.length + 1);
+    return execFileSync(
+      "git",
+      ["-C", manifest.source, "show", `HEAD:${relative}`],
+      { encoding: "utf8" },
+    ) as string;
+  } catch {
+    return readFileSync(upstreamPath, "utf8");
+  }
 }
 
 describe("#82 vendored tool-render files", () => {
@@ -90,7 +130,7 @@ describe("#82 vendored tool-render files", () => {
         drifted.push(`${upstream}: GONE from upstream (renamed or deleted)`);
         continue;
       }
-      const current = readFileSync(upstreamPath, "utf8");
+      const current = upstreamText(upstreamPath);
       const currentHash = sha256(current);
       if (currentHash === entry.sha256) continue;
 

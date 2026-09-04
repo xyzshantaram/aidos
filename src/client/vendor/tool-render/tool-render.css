@@ -1,7 +1,7 @@
 .tool-render-row {
   align-items: center;
   min-width: 0;
-  height: 1.5rem;
+  height: 2rem;
   display: flex;
   position: relative;
   overflow: hidden;
@@ -9,18 +9,15 @@
 .tool-render-row[data-expandable] {
   cursor: pointer;
 }
-.tool-render-leading {
-  width: 1rem;
-  height: 1rem;
-  color: var(--dsw-alias-label-tertiary);
-  flex: none;
-  justify-content: center;
-  align-items: center;
-  margin-right: 0.375rem;
-  display: inline-flex;
-}
 .tool-render-chevron {
   color: var(--dsw-alias-label-secondary);
+  flex: none;
+  margin-right: 0.25rem;
+  transform: rotate(-90deg);
+  transition: transform 0.12s;
+}
+.tool-render-chevron-open {
+  transform: rotate(0deg);
 }
 .tool-render-title {
   color: var(--dsw-alias-label-secondary);
@@ -28,8 +25,42 @@
   font-size: 0.875rem;
   line-height: 1.5rem;
 }
+/* The always-on raw tool-name badge: the row's own icon plus the registered
+   tool name, on a hashed-hue background. */
+.tool-render-name-badge {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.25rem;
+  width: 6.75rem;
+  height: 1.5rem;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid;
+  border-radius: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  margin-right: 0.375rem;
+  color: var(--dsw-alias-label-primary);
+}
+.tool-render-name-badge-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+.tool-render-name-badge-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  font-weight: 500;
+}
 /* The producer/source badge on a context-injection or send_message row.
-   A small pill, not the sentence-in-body treatment it replaces. */
+   A small pill, not the sentence-in-body treatment it replaces. This is the
+   older optional per-row badge, not the tool-name badge above. */
 .tool-render-badge {
   flex: none;
   white-space: nowrap;
@@ -135,12 +166,15 @@
   background: rgba(255, 85, 85, 0.08);
   font-weight: 500;
 }
-.tool-render-row[data-state="error"] .tool-render-leading {
-  transform: scale(1.3);
-}
 .tool-render-row[data-state="error"] .tool-render-title {
   color: var(--dsw-alias-state-error-primary);
   font-weight: 500;
+}
+/* A stopped call mutes its title and summary, since it no longer has its own
+   state dot to mark it. */
+.tool-render-row[data-state="stopped"] .tool-render-title,
+.tool-render-row[data-state="stopped"] .tool-render-summary {
+  color: var(--dsw-alias-label-tertiary);
 }
 .tool-render-code {
   box-sizing: border-box;
@@ -333,7 +367,7 @@
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 0.75rem;
   background: var(--dsw-alias-bg-layer-1);
-  padding: 0.3125rem 0.5rem;
+  padding: 0.15625rem 0.5rem;
 }
 .tool-render-card[data-escalated] {
   outline: 3px solid var(--dsh-outline-escalated);
@@ -349,10 +383,14 @@
 }
 /* An errored call is outlined the way an escalated one is, in red and a little
    thinner. The outline follows the card's rounded corners. It replaces the old
-   tinted row background and inset left bar. The enlarged red status dot on the
-   row is kept. */
+   tinted row background and inset left bar. */
 .tool-render-card[data-error] {
   outline: 2px solid var(--dsw-alias-state-error-primary);
+}
+/* A stopped call (interrupted) gets a dimmer red outline, since it no longer
+   carries its own state dot. */
+.tool-render-card[data-stopped] {
+  outline: 2px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent);
 }
 .tool-render-card:hover {
   border-color: var(--dsw-alias-border-l3);
@@ -531,4 +569,141 @@
   color: var(--dsw-alias-label-primary);
   padding: 0.125rem 0;
   white-space: pre-wrap;
+}
+
+/* read_image and see image bodies. One bounded container per card, with one
+   interior scroll area. Picture cards hold mixed content, so this rule is
+   shaped like .tool-render-markdown-body but stands alone instead of
+   overloading it. */
+.tool-render-image-body {
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 0.375rem;
+  margin: 0.25rem 0 0.125rem 0.25rem;
+  max-height: 25rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.625rem;
+}
+.tool-render-image-body > .tool-render-markdown-body {
+  margin: 0 0 0.375rem;
+}
+/* The picture shrinks to the card width, keeps its aspect ratio, and never
+   grows past its natural pixel size. width and height stay auto, so the
+   browser only ever scales down. The link centers the picture when it is
+   narrower than the card. */
+.tool-render-image-link {
+  display: flex;
+  justify-content: center;
+}
+/* A 2px border in a LABEL token, not a border token: the border tokens are
+   tuned to sit quietly against panel backgrounds, which is exactly wrong
+   here, where the job is to mark where the picture's own edge is against
+   arbitrary image content. */
+.tool-render-image {
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  border: 2px solid var(--dsw-alias-label-tertiary);
+  border-radius: 0.25rem;
+}
+/* Metadata lines under the picture: name, type, full path. */
+.tool-render-image-meta {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  overflow-wrap: anywhere;
+  margin-top: 0.375rem;
+}
+/* A path the route cannot serve. The message sits where the picture would
+   sit, so a broken load is always visible. */
+.tool-render-image-broken {
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0;
+  text-align: center;
+}
+/* The see row description clamp. The cap applies only while collapsed, so
+   this rule rides beside .tool-render-markdown-body and comes after it in
+   this file to win the max-height and overflow contest. */
+.tool-render-see-desc {
+  max-height: 8rem;
+  overflow: hidden;
+}
+.tool-render-see-toggle {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  margin: 0 0 0.375rem;
+  padding: 0;
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+.tool-render-see-toggle:hover {
+  color: var(--dsw-alias-label-primary);
+  text-decoration: underline;
+}
+
+/* Compaction checkpoint card. One line per compacted message, count-badged
+   tool strips, elision notes, and a stats footer. Message lines clamp to a
+   single line with an ellipsis: the full text lives on the surface the
+   marker replaced, so the card only summarizes. */
+.tool-render-compaction {
+  flex-direction: column;
+  display: flex;
+  padding-bottom: 0.25rem;
+}
+.tool-render-compaction-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.0625rem 0 0.0625rem 0.25rem;
+}
+.tool-render-compaction-role {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+  font-size: 0.6875rem;
+  line-height: 1.125rem;
+  text-transform: uppercase;
+}
+.tool-render-compaction-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+.tool-render-compaction-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.0625rem 0 0.0625rem 0.25rem;
+}
+.tool-render-compaction-strip .tool-render-compaction-text {
+  flex: 0 1 auto;
+}
+.tool-render-compaction-note {
+  color: var(--dsw-alias-label-caption);
+  font-style: italic;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.0625rem 0 0.0625rem 0.25rem;
+}
+.tool-render-compaction-stats {
+  color: var(--dsw-alias-label-caption);
+  font-size: 0.6875rem;
+  line-height: 1.125rem;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  margin-top: 0.25rem;
+  padding: 0.25rem 0 0 0.25rem;
 }
