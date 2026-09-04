@@ -19,6 +19,8 @@ import { HarnessError } from "@deepseek-ai/dsh-llm";
 import type { JsonValue } from "@deepseek-ai/dsh-session";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+import { WORKTREE_ROOT } from "../kernel/worktree";
+import { workspaceKeyFromPath } from "../kernel/slug";
 import type { TicketView } from "../kernel/projections";
 import { STATE_ORDER } from "../kernel/types";
 import type { ContextSection } from "../kernel/types";
@@ -1324,6 +1326,29 @@ function aidosGuidanceText(ctx: Context): string {
     } catch (error) {
       ctx.logger?.warn?.(`aidos: scratch root unavailable for the guidance note: ${error instanceof Error ? error.message : String(error)}`);
       note = "";
+    }
+    /*
+     * #101: name the WORKSPACE KEY and the worktree convention.
+     *
+     * The key is the piece that cannot be guessed -- it is a canonicalised
+     * form of the workspace path -- while the rest of the path is a rule.
+     * Given the key, a ticket's worktree is derivable, so one line here
+     * replaces retyping a path into every subagent prompt by hand.
+     *
+     * It also states the boundary that the write guard enforces, so a
+     * subagent learns the rule from the prompt rather than from a refusal.
+     */
+    const cwd = agent.session?.header?.cwd;
+    if (cwd !== undefined && cwd !== "") {
+      const workspaceKey = workspaceKeyFromPath(cwd);
+      note +=
+        ` This workspace's key is ${workspaceKey}. Each in-progress ticket has` +
+        ` its own git worktree at ${WORKTREE_ROOT}/${workspaceKey}/<ticketId>,` +
+        ` created when the ticket enters in_progress and removed when it is` +
+        ` marked done. A SUBAGENT MUST WORK THERE, never in the shared` +
+        ` working tree: mutating the shared tree races the orchestrator's` +
+        ` commits, which has already put a regression into this repository` +
+        ` once (#101), and the write guard now refuses it.\n`;
     }
   }
   return AIDOS_GUIDANCE + note;

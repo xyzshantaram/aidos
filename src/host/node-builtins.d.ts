@@ -16,11 +16,15 @@ declare module "fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
+  /** #101: link node_modules into a fresh worktree, which has none. */
+  export function symlinkSync(target: string, path: string, type?: string): void;
 }
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
+  /** #101: link node_modules into a fresh worktree, which has none. */
+  export function symlinkSync(target: string, path: string, type?: string): void;
 }
 declare module "path" {
   export function isAbsolute(path: string): boolean;
@@ -28,6 +32,7 @@ declare module "path" {
   export function relative(from: string, to: string): string;
   export function resolve(...paths: string[]): string;
   export function basename(path: string): string;
+  export function dirname(path: string): string;
 }
 declare module "node:path" {
   export function isAbsolute(path: string): boolean;
@@ -35,6 +40,7 @@ declare module "node:path" {
   export function relative(from: string, to: string): string;
   export function resolve(...paths: string[]): string;
   export function basename(path: string): string;
+  export function dirname(path: string): string;
 }
 declare module "child_process" {
   /** One completed execFile run. */

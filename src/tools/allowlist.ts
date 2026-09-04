@@ -6,6 +6,9 @@
  * SPEC-B1.md sections 4b and 4 are the contract.
  */
 
+import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+import { workspaceKeyFromPath } from "../kernel/slug";
+import { WORKTREE_ROOT } from "../kernel/worktree";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { FsTarget } from "@deepseek-ai/dsh-fs";
@@ -83,6 +86,39 @@ export function writeBoundaryReason(
     // No scratch root (no cwd) → skip the exemption, fall through to union.
   }
   const cwd = agent.session?.header?.cwd;
+  /*
+   * #101: a SUBAGENT may not write the shared working tree at all.
+   *
+   * THE INCIDENT (2026-09-03, real): a reviewer mutation-tested a line by
+   * reverting it in the shared tree; the orchestrator committed with
+   * `git add -A` while that mutation was live, and it rode into the commit.
+   * The suite passed because the mutated line had no coverage -- precisely
+   * what the reviewer was demonstrating -- and the reviewer's restore left
+   * `git status` clean, so the tree looked healthy while the repository
+   * carried the regression.
+   *
+   * Every earlier attempt at this was DISCIPLINE: tell the reviewer to use a
+   * worktree, tell it to restore afterwards. Discipline is exactly what
+   * failed. This is the physical version: the write is refused, so the race
+   * cannot happen at all.
+   *
+   * Checked AFTER the scratch exemption, so a subagent keeps its scratch
+   * root -- that is outside the workspace and is where it is meant to work.
+   * It also has its ticket's worktree under /tmp/dsh/aidos and /tmp/dsh for
+   * artifacts, and its findings return through its report. The user's
+   * reasoning, recorded verbatim: "why would the reviewer ever read/write
+   * the real tree?"
+   */
+  if (delegationDepthOf(agent) !== 0 && cwd !== undefined && isUnder(cwd, path)) {
+    const workspaceKey = workspaceKeyFromPath(cwd);
+    return (
+      "a subagent may not write to the shared working tree (#101): " +
+      "mutating it races the orchestrator's commits, which has already put a " +
+      "regression into this repository once. Work in this ticket's worktree " +
+      `under ${WORKTREE_ROOT}/${workspaceKey}/<ticketId>, or in the scratch ` +
+      "root; put larger artifacts in /tmp/dsh and report the path."
+    );
+  }
   const aidosSvc = (ctx as unknown as { aidos?: { allowlistUnion(a: Agent): string[] }; get?: (k: string) => unknown }).aidos
     ?? ((ctx as unknown as { get?: (k: string) => unknown }).get?.("aidos") as { allowlistUnion(a: Agent): string[] } | undefined);
   const union = aidosSvc ? aidosSvc.allowlistUnion(agent) : [];

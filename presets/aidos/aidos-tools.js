@@ -10912,7 +10912,61 @@ var require_dist = __commonJS({
 import z3 from "@deepseek-ai/schemastery";
 import { defineTool as defineTool2 } from "@deepseek-ai/dsh-tools";
 import { HarnessError as HarnessError2 } from "@deepseek-ai/dsh-llm";
-import { delegationDepthOf as delegationDepthOf4 } from "@deepseek-ai/dsh-subagent";
+import { delegationDepthOf as delegationDepthOf5 } from "@deepseek-ai/dsh-subagent";
+
+// src/kernel/worktree.ts
+var WORKTREE_ROOT = "/tmp/dsh/aidos";
+function worktreePathFor(workspaceKey, ticketId) {
+  return `${WORKTREE_ROOT}/${workspaceKey}/${ticketId}`;
+}
+function worktreeAddArgs(path) {
+  return [
+    ["worktree", "prune"],
+    ["worktree", "add", "--detach", path, "HEAD"]
+  ];
+}
+function worktreeRemoveArgs(path) {
+  return [
+    ["worktree", "remove", "--force", path],
+    ["worktree", "prune"]
+  ];
+}
+
+// src/kernel/slug.ts
+function slugFromTitle(title) {
+  return title.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function workspaceKeyFromPath(cwd) {
+  let readable = "";
+  let previousWasSeparator = false;
+  for (const character of cwd) {
+    if (character === "/" || character === "\\" || character === ":") {
+      if (!previousWasSeparator) {
+        readable += "-";
+      }
+      previousWasSeparator = true;
+      continue;
+    }
+    previousWasSeparator = false;
+    if (character !== "~" && /[A-Za-z0-9._-]/.test(character)) {
+      readable += character;
+      continue;
+    }
+    readable += "~" + character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
+  }
+  readable = readable.replace(/^-+/, "");
+  if (readable === "") {
+    readable = "root";
+  }
+  return "--" + readable + "--";
+}
+function normalizeTicketSnapshot(snapshot) {
+  const slug = snapshot.slug;
+  const workspaceKey = snapshot.workspaceKey;
+  const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
+  const allowlist = Array.isArray(snapshot.allowlist) ? snapshot.allowlist : [];
+  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist };
+}
 
 // src/kernel/types.ts
 var STATE_ORDER = [
@@ -25583,8 +25637,8 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { existsSync, readFileSync } from "node:fs";
-import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "node:path";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync, symlinkSync } from "node:fs";
+import { basename, dirname, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve2 } from "node:path";
 import { execFile } from "node:child_process";
 
 // src/kernel/constants.ts
@@ -25797,42 +25851,6 @@ function checkGate(config2, ticket, evidence, toState, actor) {
       actor
     });
   }
-}
-
-// src/kernel/slug.ts
-function slugFromTitle(title) {
-  return title.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-}
-function workspaceKeyFromPath(cwd) {
-  let readable = "";
-  let previousWasSeparator = false;
-  for (const character of cwd) {
-    if (character === "/" || character === "\\" || character === ":") {
-      if (!previousWasSeparator) {
-        readable += "-";
-      }
-      previousWasSeparator = true;
-      continue;
-    }
-    previousWasSeparator = false;
-    if (character !== "~" && /[A-Za-z0-9._-]/.test(character)) {
-      readable += character;
-      continue;
-    }
-    readable += "~" + character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0");
-  }
-  readable = readable.replace(/^-+/, "");
-  if (readable === "") {
-    readable = "root";
-  }
-  return "--" + readable + "--";
-}
-function normalizeTicketSnapshot(snapshot) {
-  const slug = snapshot.slug;
-  const workspaceKey = snapshot.workspaceKey;
-  const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
-  const allowlist = Array.isArray(snapshot.allowlist) ? snapshot.allowlist : [];
-  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist };
 }
 
 // src/kernel/invariants.ts
@@ -27460,6 +27478,7 @@ function aidosSessionEventTypesRegistered() {
 }
 
 // src/host/aidos-core.ts
+var WORKTREE_TIMEOUT_MS = 12e4;
 var BadPayloadError = class extends Error {
   constructor(message) {
     super(message);
@@ -29089,17 +29108,26 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return { ticketId, removed: 1 };
   }
   /**
-   * #78: run one read-only git command in the workspace root. execFile (no
+   * #78: run one git command in the workspace root. execFile (no
    * shell), a bounded timeout, and a fixed argument list — the hash a caller
    * passes never reaches a shell and never splits into new arguments.
+   *
+   * #101 widened this from READ-ONLY: `worktree add` and `worktree remove`
+   * write. Called out because "read-only" was load-bearing in the original
+   * reasoning about safety, and it is no longer true. What still holds is
+   * the part that mattered: no shell, and a fixed argument list, so nothing
+   * a caller supplies can become a new argument.
+   *
+   * The timeout is a parameter because a worktree checkout is not a 5-second
+   * operation on a large repository.
    */
-  _gitInWorkspace(agent, args) {
+  _gitInWorkspace(agent, args, timeoutMs = 5e3) {
     const workspace = this._workspacePath(agent);
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         "git",
         args,
-        { cwd: workspace, timeout: 5e3 },
+        { cwd: workspace, timeout: timeoutMs },
         (error51, stdout) => {
           if (error51) {
             rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error51.message).split("\n")[0]));
@@ -29296,7 +29324,54 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`
       );
     }
+    if (toState === "in_progress") {
+      void this._ensureWorktree(agent, ticketId);
+    } else if (toState === "done") {
+      void this._removeWorktree(agent, ticketId);
+    }
     return { ticketId, fromState, toState };
+  }
+  /**
+   * #101: create the ticket's worktree, best effort.
+   *
+   * Every failure is logged and swallowed. This is called from a move that
+   * has already been committed, so throwing here would report a failed move
+   * that in fact succeeded -- strictly worse than no worktree.
+   */
+  async _ensureWorktree(agent, ticketId) {
+    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const path = worktreePathFor(workspaceKey, ticketId);
+    try {
+      mkdirSync2(dirname(path), { recursive: true });
+      for (const args of worktreeAddArgs(path)) {
+        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+      }
+      const source = join(this._workspacePath(agent), "node_modules");
+      if (existsSync(source) && !existsSync(join(path, "node_modules"))) {
+        symlinkSync(source, join(path, "node_modules"), "dir");
+      }
+      this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: could not create the worktree for ticket ${ticketId} at ${path}; subagents will fall back to the shared tree: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
+  }
+  /** #101: remove the ticket's worktree, best effort. */
+  async _removeWorktree(agent, ticketId) {
+    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const path = worktreePathFor(workspaceKey, ticketId);
+    if (!existsSync(path)) return;
+    try {
+      for (const args of worktreeRemoveArgs(path)) {
+        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+      }
+      this.ctx.logger?.info?.(`aidos: worktree removed for ticket ${ticketId}`);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: could not remove the worktree for ticket ${ticketId}: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
   }
   /**
    * One comment appended to one ticket, with the actor pinned at the entry
@@ -29888,7 +29963,8 @@ function installAidosMask(ctx) {
 }
 
 // src/tools/allowlist.ts
-import { isAbsolute as isAbsolute3, join, relative as relative3, resolve as resolve3 } from "path";
+import { delegationDepthOf as delegationDepthOf4 } from "@deepseek-ai/dsh-subagent";
+import { isAbsolute as isAbsolute3, join as join2, relative as relative3, resolve as resolve3 } from "path";
 var WRITE_INTENT = "fs/write-intent";
 var EDIT_INTENT = "fs/edit-intent";
 function isUnder(root, candidate) {
@@ -29921,6 +29997,10 @@ function writeBoundaryReason(ctx, agent, path) {
     ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
   const cwd = agent.session?.header?.cwd;
+  if (delegationDepthOf4(agent) !== 0 && cwd !== void 0 && isUnder(cwd, path)) {
+    const workspaceKey = workspaceKeyFromPath(cwd);
+    return `a subagent may not write to the shared working tree (#101): mutating it races the orchestrator's commits, which has already put a regression into this repository once. Work in this ticket's worktree under ${WORKTREE_ROOT}/${workspaceKey}/<ticketId>, or in the scratch root; put larger artifacts in /tmp/dsh and report the path.`;
+  }
   const aidosSvc = ctx.aidos ?? ctx.get?.("aidos");
   const union2 = aidosSvc ? aidosSvc.allowlistUnion(agent) : [];
   ctx.logger?.debug?.(
@@ -30160,7 +30240,7 @@ function orchestratorAgent(exec) {
       "AIDOS_AGENT_REQUIRED"
     );
   }
-  if (delegationDepthOf4(agent) !== 0) {
+  if (delegationDepthOf5(agent) !== 0) {
     throw new HarnessError2(
       JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
       "AIDOS_ORCHESTRATOR_ONLY"
@@ -31000,6 +31080,12 @@ function aidosGuidanceText(ctx) {
     } catch (error51) {
       ctx.logger?.warn?.(`aidos: scratch root unavailable for the guidance note: ${error51 instanceof Error ? error51.message : String(error51)}`);
       note = "";
+    }
+    const cwd = agent.session?.header?.cwd;
+    if (cwd !== void 0 && cwd !== "") {
+      const workspaceKey = workspaceKeyFromPath(cwd);
+      note += ` This workspace's key is ${workspaceKey}. Each in-progress ticket has its own git worktree at ${WORKTREE_ROOT}/${workspaceKey}/<ticketId>, created when the ticket enters in_progress and removed when it is marked done. A SUBAGENT MUST WORK THERE, never in the shared working tree: mutating the shared tree races the orchestrator's commits, which has already put a regression into this repository once (#101), and the write guard now refuses it.
+`;
     }
   }
   return AIDOS_GUIDANCE + note;

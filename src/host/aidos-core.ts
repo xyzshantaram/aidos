@@ -26,9 +26,17 @@ import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
-import { existsSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
+import {
+  worktreeAddArgs,
+  worktreePathFor,
+  worktreeRemoveArgs,
+} from "../kernel/worktree";
+
+/** #101: a worktree checkout is not a 5-second operation on a big repo. */
+const WORKTREE_TIMEOUT_MS = 120000;
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
@@ -2886,20 +2894,30 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
-   * #78: run one read-only git command in the workspace root. execFile (no
+   * #78: run one git command in the workspace root. execFile (no
    * shell), a bounded timeout, and a fixed argument list — the hash a caller
    * passes never reaches a shell and never splits into new arguments.
+   *
+   * #101 widened this from READ-ONLY: `worktree add` and `worktree remove`
+   * write. Called out because "read-only" was load-bearing in the original
+   * reasoning about safety, and it is no longer true. What still holds is
+   * the part that mattered: no shell, and a fixed argument list, so nothing
+   * a caller supplies can become a new argument.
+   *
+   * The timeout is a parameter because a worktree checkout is not a 5-second
+   * operation on a large repository.
    */
   private _gitInWorkspace(
     agent: Agent,
     args: string[],
+    timeoutMs = 5000,
   ): Promise<string> {
     const workspace = this._workspacePath(agent);
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         "git",
         args,
-        { cwd: workspace, timeout: 5000 },
+        { cwd: workspace, timeout: timeoutMs },
         (error, stdout) => {
           if (error) {
             rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error.message).split("\n")[0]));
@@ -3158,7 +3176,81 @@ registerAidosSessionEventTypes(ctx);
         `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`,
       );
     }
+    /*
+     * #101: the ticket's worktree follows its state.
+     *
+     * DELIBERATELY NOT AWAITED. A worktree is an affordance for reviewers,
+     * not part of the gate, so a git failure -- a full disk, a /tmp that is
+     * read-only, a repository mid-rebase -- must never refuse a legitimate
+     * state change. The move has already been committed above; this either
+     * succeeds quietly or logs.
+     *
+     * A worktree checkout is also not instant, and blocking every signoff on
+     * one would make the board feel broken for a benefit the human moving
+     * the ticket does not need.
+     */
+    if (toState === "in_progress") {
+      void this._ensureWorktree(agent, ticketId);
+    } else if (toState === "done") {
+      // Torn down at DONE, not on leaving in_progress (user, 2026-09-04): a
+      // review still running when the ticket reaches awaiting_verification
+      // must not have its checkout pulled out from under it.
+      void this._removeWorktree(agent, ticketId);
+    }
     return { ticketId, fromState, toState };
+  }
+
+  /**
+   * #101: create the ticket's worktree, best effort.
+   *
+   * Every failure is logged and swallowed. This is called from a move that
+   * has already been committed, so throwing here would report a failed move
+   * that in fact succeeded -- strictly worse than no worktree.
+   */
+  private async _ensureWorktree(agent: Agent, ticketId: number): Promise<void> {
+    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const path = worktreePathFor(workspaceKey, ticketId);
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      for (const args of worktreeAddArgs(path)) {
+        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+      }
+      /*
+       * node_modules is gitignored, so a fresh worktree CANNOT RUN THE
+       * SUITE. Every reviewer was already working around this by hand --
+       * which is the tell that creation should do it.
+       *
+       * A symlink rather than an install: an install per ticket would cost
+       * minutes and gigabytes, and the dependencies are identical by
+       * construction because the worktree is a checkout of the same commit.
+       */
+      const source = join(this._workspacePath(agent), "node_modules");
+      if (existsSync(source) && !existsSync(join(path, "node_modules"))) {
+        symlinkSync(source, join(path, "node_modules"), "dir");
+      }
+      this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: could not create the worktree for ticket ${ticketId} at ${path}; subagents will fall back to the shared tree: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** #101: remove the ticket's worktree, best effort. */
+  private async _removeWorktree(agent: Agent, ticketId: number): Promise<void> {
+    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const path = worktreePathFor(workspaceKey, ticketId);
+    if (!existsSync(path)) return;
+    try {
+      for (const args of worktreeRemoveArgs(path)) {
+        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+      }
+      this.ctx.logger?.info?.(`aidos: worktree removed for ticket ${ticketId}`);
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: could not remove the worktree for ticket ${ticketId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

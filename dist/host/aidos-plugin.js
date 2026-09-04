@@ -25433,9 +25433,27 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { existsSync, readFileSync } from "node:fs";
-import { basename, isAbsolute as isAbsolute2, relative as relative2, resolve as resolve2 } from "node:path";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync, symlinkSync } from "node:fs";
+import { basename, dirname, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve2 } from "node:path";
 import { execFile } from "node:child_process";
+
+// src/kernel/worktree.ts
+var WORKTREE_ROOT = "/tmp/dsh/aidos";
+function worktreePathFor(workspaceKey, ticketId) {
+  return `${WORKTREE_ROOT}/${workspaceKey}/${ticketId}`;
+}
+function worktreeAddArgs(path) {
+  return [
+    ["worktree", "prune"],
+    ["worktree", "add", "--detach", path, "HEAD"]
+  ];
+}
+function worktreeRemoveArgs(path) {
+  return [
+    ["worktree", "remove", "--force", path],
+    ["worktree", "prune"]
+  ];
+}
 
 // src/kernel/types.ts
 var STATE_ORDER = [
@@ -27014,6 +27032,7 @@ function aidosSessionEventTypesRegistered() {
 }
 
 // src/host/aidos-core.ts
+var WORKTREE_TIMEOUT_MS = 12e4;
 var BadPayloadError = class extends Error {
   constructor(message) {
     super(message);
@@ -28643,17 +28662,26 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return { ticketId, removed: 1 };
   }
   /**
-   * #78: run one read-only git command in the workspace root. execFile (no
+   * #78: run one git command in the workspace root. execFile (no
    * shell), a bounded timeout, and a fixed argument list — the hash a caller
    * passes never reaches a shell and never splits into new arguments.
+   *
+   * #101 widened this from READ-ONLY: `worktree add` and `worktree remove`
+   * write. Called out because "read-only" was load-bearing in the original
+   * reasoning about safety, and it is no longer true. What still holds is
+   * the part that mattered: no shell, and a fixed argument list, so nothing
+   * a caller supplies can become a new argument.
+   *
+   * The timeout is a parameter because a worktree checkout is not a 5-second
+   * operation on a large repository.
    */
-  _gitInWorkspace(agent, args) {
+  _gitInWorkspace(agent, args, timeoutMs = 5e3) {
     const workspace = this._workspacePath(agent);
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         "git",
         args,
-        { cwd: workspace, timeout: 5e3 },
+        { cwd: workspace, timeout: timeoutMs },
         (error51, stdout) => {
           if (error51) {
             rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error51.message).split("\n")[0]));
@@ -28850,7 +28878,54 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`
       );
     }
+    if (toState === "in_progress") {
+      void this._ensureWorktree(agent, ticketId);
+    } else if (toState === "done") {
+      void this._removeWorktree(agent, ticketId);
+    }
     return { ticketId, fromState, toState };
+  }
+  /**
+   * #101: create the ticket's worktree, best effort.
+   *
+   * Every failure is logged and swallowed. This is called from a move that
+   * has already been committed, so throwing here would report a failed move
+   * that in fact succeeded -- strictly worse than no worktree.
+   */
+  async _ensureWorktree(agent, ticketId) {
+    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const path = worktreePathFor(workspaceKey, ticketId);
+    try {
+      mkdirSync2(dirname(path), { recursive: true });
+      for (const args of worktreeAddArgs(path)) {
+        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+      }
+      const source = join(this._workspacePath(agent), "node_modules");
+      if (existsSync(source) && !existsSync(join(path, "node_modules"))) {
+        symlinkSync(source, join(path, "node_modules"), "dir");
+      }
+      this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: could not create the worktree for ticket ${ticketId} at ${path}; subagents will fall back to the shared tree: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
+  }
+  /** #101: remove the ticket's worktree, best effort. */
+  async _removeWorktree(agent, ticketId) {
+    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const path = worktreePathFor(workspaceKey, ticketId);
+    if (!existsSync(path)) return;
+    try {
+      for (const args of worktreeRemoveArgs(path)) {
+        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+      }
+      this.ctx.logger?.info?.(`aidos: worktree removed for ticket ${ticketId}`);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: could not remove the worktree for ticket ${ticketId}: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
   }
   /**
    * One comment appended to one ticket, with the actor pinned at the entry
