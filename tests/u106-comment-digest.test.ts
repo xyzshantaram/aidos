@@ -519,6 +519,86 @@ describe("#106 nothing interpolated can inject Markdown", () => {
     expect(listLine).toContain("> \\-");
   });
 
+  it("sweeps EVERY punctuation-first note through the real renderer", () => {
+    /*
+     * The escape lists in _mdQuote/_mdInline are hand-picked, and hand-picked
+     * lists rot by enumeration: round 2 missed `+` and `~~~`, round 3 missed
+     * `1)`. Each was found by a human re-reading, which is not a control.
+     *
+     * So the correctness claim is not carried by the lists at all. Every
+     * ASCII punctuation character, plus every multi-character block form
+     * (`~~~`, backtick fences, `N.`/`N)` ordered lists, emphasis runs), is
+     * placed FIRST in a real comment, and the digest is rendered by the same
+     * library that renders conversations. The note's leading character and
+     * its sentinel words must survive LITERALLY: a renderer that turned the
+     * character into structure (a list marker, a fence, a heading) erases or
+     * consumes it, so literal survival is the discriminating assertion --
+     * "the text is present" alone still passes inside an <h1>.
+     *
+     * A future CommonMark construct or a new marker slips into this test as
+     * a red failure, not as a silently eaten note. markdown-escapes was
+     * considered as a dependency and declined: it is a data table of escape
+     * VALIDITY, not of meaning, and this sweep replaces enumeration with the
+     * renderer's own verdict either way.
+     */
+    const { svc, agent, flush } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const punctuation = Array.from({ length: 94 }, (_, i) =>
+      String.fromCharCode(0x21 + i),
+    ).filter((c) => /[^\w\s]/.test(c)); // ASCII punctuation: ! through ~
+    const forms = [
+      ...punctuation,
+      "~~~",
+      "```",
+      "1.",
+      "1)",
+      "42.",
+      "42)",
+      "**",
+      "__",
+      "--",
+      "##",
+    ];
+    // The digest caps at 40 lines per flush by design (#106 flood control),
+    // so the sweep flushes in chunks and renders every chunk.
+    let html = "";
+    for (const [i, form] of forms.entries()) {
+      svc.userAddComment(agent, {
+        ticketId: ticket.id,
+        text: `${form} sentinel${i} stays`,
+      });
+      if ((i + 1) % 30 === 0) html += marked.parse(flush()) as string;
+    }
+    html += marked.parse(flush()) as string;
+    // Strip tags and decode the entities marked emits, so the assertion sees
+    // the text a reader sees.
+    const text = html
+      .replace(/<[^>]*>/g, "")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&amp;/g, "&");
+    for (const [i, form] of forms.entries()) {
+      expect(text, `note beginning "${form}" was restructured`).toContain(
+        `${form} sentinel${i} stays`,
+      );
+    }
+  });
+
+  it("escapes paired tildes MID-LINE (strikethrough would eat text)", () => {
+    // `~` is only in the inline class because the renderer treats ~~x~~ as
+    // strikethrough -- and mid-line is where escaped text always lands.
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAddComment(agent, {
+      ticketId: ticket.id,
+      text: "value ~~is wrong~~ per review",
+    });
+    const line = lines().find((l) => l.includes("per review")) as string;
+    expect(line).toContain("\\~\\~is wrong\\~\\~");
+  });
+
   it("never MISREPORTS a path that contains a backtick", () => {
     /*
      * _mdCode deleted backticks, so an allowlist path containing one was

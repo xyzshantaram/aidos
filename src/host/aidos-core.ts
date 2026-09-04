@@ -711,17 +711,29 @@ export interface TicketSearchResult {
  *  2. INLINE MARKUP. A title containing *, _, `, [ or ] renders as emphasis,
  *     code or a link fragment. "automated_check + review_pass" is a real
  *     example from this project, and a stray backtick swallows the rest of
- *     the line into a code span.
+ *     the line into a code span. `~` joined the class because the renderer
+ *     treats ~~paired~~ tildes as strikethrough mid-line -- and mid-line is
+ *     where escaped text always lands.
  *
  * Whitespace is collapsed first, then the inline specials are escaped. `#`
  * and `-` are NOT escaped: they are only structural at the START of a line,
  * and after the collapse nothing interpolated can be at the start of one.
+ *
+ * This class is hand-picked ON PURPOSE, not for lack of a library: the only
+ * npm candidate (markdown-escapes) is a data table of every ASCII
+ * punctuation character a backslash escape is VALID for -- escaping all 32
+ * renders identically but litters ordinary prose ("first\, do this") in the
+ * raw digest, which is a channel a human reads. What no library provides is
+ * the decision of which characters CHANGE MEANING, and the cost of getting
+ * that decision wrong is not carried by review: the u106 sweep test renders
+ * every punctuation character through `marked` and fails if any of them can
+ * erase or restructure a human's words.
  */
 function _mdInline(text: string): string {
   return text
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/([\\`*_[\]<>])/g, "\\$1");
+    .replace(/([\\`*_[\]<>~])/g, "\\$1");
 }
 
 /**
@@ -823,10 +835,15 @@ function _isUserAction(actor: Actor): boolean {
  * because CommonMark decides block structure before it processes inline
  * escapes: the block parser sees `\` and reads a paragraph.
  *
- * An ordered list escapes its DOT rather than its digit. `\1.` put a VISIBLE
- * backslash in the digest, because `\` before a digit is not a valid escape
- * -- a character the human never typed. `1\.` suppresses the list and
+ * An ordered list escapes its DELIMITER rather than its digit. `\1.` put a
+ * VISIBLE backslash in the digest, because `\` before a digit is not a valid
+ * escape -- a character the human never typed. `1\.` suppresses the list and
  * renders as `1.`.
+ *
+ * ROUND 3: the delimiter arm matched only `\.`, but CommonMark accepts BOTH
+ * `.` and `)` as ordered-list delimiters -- so a note beginning "1) first"
+ * rendered as a list and the `1)` was erased, the same defect `+` got round
+ * 2. `1\)` is a valid escape just like `1\.`; verified through `marked`.
  *
  * Verified by rendering the real digest through `marked`, not by reasoning:
  * the first probe I wrote re-implemented this escaping instead of calling
@@ -834,7 +851,7 @@ function _isUserAction(actor: Actor): boolean {
  */
 function _mdQuote(text: string): string {
   const escaped = _mdInline(text)
-    .replace(/^(\s*)(\d+)\./, "$1$2\\.")
+    .replace(/^(\s*)(\d+)([.)])/, "$1$2\\$3")
     .replace(/^(\s*)([#>+*-]|~{3,})/, "$1\\$2");
   return `\n  > ${escaped}`;
 }
