@@ -664,3 +664,37 @@ describe("#93 the state reads as text, and badges are one size", () => {
     expect(sized.slice(0, sized.indexOf("}"))).toContain("height: 20px");
   });
 });
+
+describe("#93 the gate chip matches the board", () => {
+  const strip = readFileSync(
+    new URL("../src/client/ticket-strip.tsx", import.meta.url),
+    "utf8",
+  );
+  /*
+   * User-reported: "Gate badge should use the new styling from the ticket
+   * board." #21 replaced the literal word "Gate" with a KEY icon on the
+   * tile -- the value is the information, the word was furniture repeated
+   * on every row -- but the queue kept the old chip, so the same fact wore
+   * two faces depending on the surface.
+   */
+  it("uses the key icon, not the word", () => {
+    expect(strip).toContain("<KeyIcon />");
+    expect(strip).not.toContain('<span className="aidos-chip-key">Gate</span>');
+  });
+
+  it("carries the chip classes the tile uses, so one rule styles both", () => {
+    expect(strip).toContain("aidos-chip aidos-chip-metric aidos-chip-gate");
+  });
+
+  it("keeps the sentence on BOTH aria-label and title", () => {
+    /*
+     * #21's review, finding 4: `title` alone never reaches the accessible
+     * name when the element has text content, so a screen reader heard a
+     * bare "3/4" -- strictly worse than the word it replaced. An icon may
+     * replace a label only when the label survives for everyone.
+     */
+    expect(strip).toContain("aria-label={sentence}");
+    expect(strip).toContain("title={sentence}");
+    expect(strip).toContain("of the required evidence is attached");
+  });
+});

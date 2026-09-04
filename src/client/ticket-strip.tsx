@@ -27,7 +27,7 @@ import {
   stateLabel,
   ticketChipLabel,
 } from "./board-logic";
-import { PopOutIcon } from "./icons";
+import { KeyIcon, PopOutIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 
@@ -144,16 +144,43 @@ export function TicketStrip(props: TicketStripProps) {
           {/* The state chip moved under the id (see above), so it is not
               repeated here. */}
           {showGate ? (
-            <span className="aidos-chip aidos-chip-metric" title="Gate progress">
-              <span className="aidos-chip-key">Gate</span>
-              <span className="aidos-chip-value">
-                {formatGateFraction(
-                  ticket.gatePresent ?? null,
-                  ticket.gateTotal ?? null,
-                  hasCriteria(ticket as TicketView),
-                )}
-              </span>
-            </span>
+            /*
+             * #21's chip, not a second design (user: "Gate badge should use
+             * the new styling from the ticket board").
+             *
+             * The board replaced the literal word "Gate" with a KEY icon --
+             * the value is the information, the word was four characters of
+             * furniture repeated on every row. The queue kept the old chip,
+             * so the same fact wore two different faces depending on which
+             * surface you were looking at.
+             *
+             * The sentence rides BOTH aria-label and title, exactly as the
+             * tile does. #21's review found that `title` alone never reaches
+             * the accessible name when the element has text content, so a
+             * screen reader heard a bare "3/4" -- strictly worse than the
+             * word it replaced. An icon may replace a label only when the
+             * label survives for everyone.
+             */
+            (() => {
+              const fraction = formatGateFraction(
+                ticket.gatePresent ?? null,
+                ticket.gateTotal ?? null,
+                hasCriteria(ticket as TicketView),
+              );
+              const sentence = `Gate: ${fraction} of the required evidence is attached`;
+              return (
+                <span
+                  className="aidos-chip aidos-chip-metric aidos-chip-gate"
+                  aria-label={sentence}
+                  title={sentence}
+                >
+                  <span className="aidos-chip-key">
+                    <KeyIcon />
+                  </span>
+                  <span className="aidos-chip-value">{fraction}</span>
+                </span>
+              );
+            })()
           ) : null}
         </span>
         <span className="aidos-ticket-strip-actions">
