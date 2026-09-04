@@ -76,6 +76,7 @@ export function TicketTile(props: TicketTileProps) {
           className="aidos-chip aidos-chip-id"
           style={{ background: idColor(fullTicketId(ticket)) }}
           title={fullTicketId(ticket)}
+          data-dsh-tip=""
         >
           {ticketChipLabel(ticket, props.ownWorkspaceKey)}
         </span>
@@ -98,6 +99,7 @@ export function TicketTile(props: TicketTileProps) {
                 .map((copy) => `${copy.sessionId} (updated ${new Date(copy.updatedAt * 1000).toLocaleString()})`)
                 .join("\n")
             }
+            data-dsh-tip=""
           >
             {"+" + superseded.length}
           </span>
@@ -107,6 +109,7 @@ export function TicketTile(props: TicketTileProps) {
             className="aidos-chip aidos-chip-approval-flag"
             aria-label="This ticket has a request waiting for your approval"
             title="This ticket has a request waiting for your approval"
+            data-dsh-tip=""
           >
             <AlertCircleIcon />
           </span>
@@ -144,6 +147,7 @@ export function TicketTile(props: TicketTileProps) {
             formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket)) +
             " of the required evidence is attached"
           }
+          data-dsh-tip=""
         >
           <span className="aidos-chip-key">
             <KeyIcon />
@@ -159,6 +163,7 @@ export function TicketTile(props: TicketTileProps) {
             className="aidos-chip aidos-chip-dep"
             aria-label={"Depends on " + ref}
             title={"Depends on " + ref}
+            data-dsh-tip=""
           >
             <span className="aidos-chip-dep-icon">
               <ForkIcon />
@@ -189,6 +194,7 @@ export function TicketTile(props: TicketTileProps) {
             ringPercent(ticket.confidenceScore) +
             "%. Advisory only — it never unlocks anything."
           }
+          data-dsh-tip=""
         >
           <span className="aidos-chip-key">
             <CompassIcon />

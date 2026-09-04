@@ -107,6 +107,7 @@ export function TicketView(props: TicketViewProps) {
               className="aidos-btn"
               onClick={props.onQueue}
               title="What is waiting on you"
+              data-dsh-tip=""
             >
               {"Waiting on you"}
               {props.queueCount !== undefined && props.queueCount > 0 ? (

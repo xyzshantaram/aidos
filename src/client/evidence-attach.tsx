@@ -349,6 +349,7 @@ function EvalCriteriaForm(props: {
           className="aidos-btn aidos-btn-primary"
           disabled={working || !parsed.ok}
           title={parsed.ok ? undefined : parsed.error}
+          data-dsh-tip=""
           onClick={() => void attach()}
         >
           {working ? "Working…" : "Attach"}
@@ -607,6 +608,7 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
             className="aidos-btn aidos-btn-primary"
             disabled={working || !parsed.ok}
             title={parsed.ok ? undefined : parsed.error}
+            data-dsh-tip=""
             onClick={() => {
               if (parsed.ok) void attachWith(props.kind, { paths: parsed.lines });
             }}

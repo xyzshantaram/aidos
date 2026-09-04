@@ -104,6 +104,7 @@ export function TicketStrip(props: TicketStripProps) {
             className="aidos-chip aidos-chip-id"
             style={{ background: idColor(full) }}
             title={full}
+            data-dsh-tip=""
           >
             {ticketChipLabel(ticket as TicketView)}
           </span>
@@ -120,12 +121,13 @@ export function TicketStrip(props: TicketStripProps) {
           <span
             className={"aidos-ticket-strip-state " + badgeClass(ticket.state)}
             title={stateLabel(ticket.state)}
+            data-dsh-tip=""
           >
             ({stateLabel(ticket.state)})
           </span>
         </span>
         <span className="aidos-ticket-strip-body">
-          <span className="aidos-ticket-strip-title" title={ticket.title}>
+          <span className="aidos-ticket-strip-title" title={ticket.title} data-dsh-tip="">
             {ticket.title}
           </span>
           {props.meta !== undefined ? (
@@ -137,6 +139,7 @@ export function TicketStrip(props: TicketStripProps) {
             <span
               className="aidos-chip aidos-chip-awaiting-approval"
               title="This ticket has a request waiting for your approval"
+              data-dsh-tip=""
             >
               Needs approval
             </span>
@@ -173,6 +176,7 @@ export function TicketStrip(props: TicketStripProps) {
                   className="aidos-chip aidos-chip-metric aidos-chip-gate"
                   aria-label={sentence}
                   title={sentence}
+                  data-dsh-tip=""
                 >
                   <span className="aidos-chip-key">
                     <KeyIcon />
@@ -188,6 +192,7 @@ export function TicketStrip(props: TicketStripProps) {
             <button
               className="aidos-icon-btn"
               title={"Open " + full}
+              data-dsh-tip=""
               aria-label={"Open " + full}
               disabled={props.working === true}
               onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
@@ -221,6 +226,7 @@ export function TicketStrip(props: TicketStripProps) {
                 "aidos-strip-action-toggle" + (props.expanded === true ? " is-open" : "")
               }
               title={props.actionHint ?? "Show actions"}
+              data-dsh-tip=""
               aria-label={props.actionHint ?? "Show actions"}
               aria-expanded={props.expanded === true}
               disabled={props.working === true}

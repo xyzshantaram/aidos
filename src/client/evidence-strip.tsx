@@ -59,6 +59,7 @@ export function EvidenceStrip(props: EvidenceStripProps) {
           className="aidos-chip aidos-chip-kind"
           style={{ background: kindColor(row.kind) }}
           title={kindDescription(row.kind)}
+          data-dsh-tip=""
         >
           <span className="aidos-chip-key">{kindKeyword(row.kind)}</span>
         </span>
@@ -81,6 +82,7 @@ export function EvidenceStrip(props: EvidenceStripProps) {
             <button
               className="aidos-icon-btn"
               title="View evidence"
+              data-dsh-tip=""
               aria-label="View evidence"
               onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
                 event.stopPropagation();
@@ -94,6 +96,7 @@ export function EvidenceStrip(props: EvidenceStripProps) {
             <button
               className="aidos-evidence-unlink"
               title="Unlink from criterion"
+              data-dsh-tip=""
               aria-label="Unlink from criterion"
               disabled={props.deleting === true}
               onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
@@ -108,6 +111,7 @@ export function EvidenceStrip(props: EvidenceStripProps) {
           <button
             className="aidos-evidence-delete"
             title="Delete this evidence row"
+            data-dsh-tip=""
             aria-label="Delete this evidence row"
             disabled={props.deleting === true}
             onClick={(event: react.MouseEvent<HTMLButtonElement>) => {

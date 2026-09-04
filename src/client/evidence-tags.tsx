@@ -60,6 +60,7 @@ export function EvidenceTags({ evidence, state }: EvidenceTagsProps) {
              */
             style={{ ["--chip-hue"]: count.color } as react.CSSProperties}
             title={kindDescription(count.kind)}
+            data-dsh-tip=""
           >
             <span className="aidos-chip-key">{kindKeyword(count.kind)}</span>
             {value !== null ? (

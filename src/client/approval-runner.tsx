@@ -202,6 +202,7 @@ export function ApprovalRunner(props: ApprovalRunnerProps) {
           className="aidos-btn aidos-btn-danger"
           disabled={working}
           title="Answer no. The agent is told and the request is resolved."
+          data-dsh-tip=""
           onClick={() => {
             props.onResolve({ status: "rejected" });
           }}

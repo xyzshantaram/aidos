@@ -166,6 +166,7 @@ function AidosRow(props: RowProps) {
             role="link"
             tabIndex={0}
             title={"Select " + shown + " on the board"}
+            data-dsh-tip=""
             onClick={select}
             onKeyDown={(event: react.KeyboardEvent) => {
               if (event.key === "Enter" || event.key === " ") {
@@ -202,7 +203,7 @@ function Facts({ facts }: { facts: Fact[] }) {
       {facts.map((fact) => (
         <react.Fragment key={fact.label}>
           <dt>{fact.label}</dt>
-          <dd title={fact.value}>{fact.value}</dd>
+          <dd title={fact.value} data-dsh-tip="">{fact.value}</dd>
         </react.Fragment>
       ))}
     </dl>
@@ -474,7 +475,7 @@ export function GetTicketsRow(props: AidosViewProps) {
                   {line.state === "" ? null : (
                     <span className="aidos-tool-list-tag">{line.state}</span>
                   )}
-                  <span className="aidos-tool-list-text" title={line.title}>
+                  <span className="aidos-tool-list-text" title={line.title} data-dsh-tip="">
                     {line.title}
                   </span>
                 </li>
@@ -529,7 +530,7 @@ export function RequestAllowlistRow(props: AidosViewProps) {
                 <li key={entry.path}>
                   <span className="aidos-tool-list-text">{entry.path}</span>
                   {entry.created ? (
-                    <span className="aidos-tool-list-tag" title="Does not exist yet; approving creates it">
+                    <span className="aidos-tool-list-tag" title="Does not exist yet; approving creates it" data-dsh-tip="">
                       will be created
                     </span>
                   ) : null}
@@ -576,7 +577,7 @@ export function SuggestActionsRow(props: AidosViewProps) {
                 <li key={line.ticketId + ":" + line.actionId}>
                   <span className="aidos-tool-list-key">#{line.ticketId}</span>
                   <span className="aidos-tool-list-tag">{line.actionId}</span>
-                  <span className="aidos-tool-list-text" title={line.reason}>
+                  <span className="aidos-tool-list-text" title={line.reason} data-dsh-tip="">
                     {line.reason}
                   </span>
                 </li>

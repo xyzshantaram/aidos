@@ -23,6 +23,7 @@ export function Chip(props: {
       className={"aidos-chip" + (props.emphasis ? " aidos-chip-emphasis" : "")}
       style={props.background === undefined ? undefined : { background: props.background }}
       title={props.title}
+      data-dsh-tip=""
     >
       {props.label}
     </span>
@@ -45,7 +46,7 @@ export function FieldRow(props: {
 /** A compact key/value line for fact tables. */
 export function KeyVal(props: { k: string; v: react.ReactNode; title?: string }) {
   return (
-    <div className="aidos-facts-row" title={props.title}>
+    <div className="aidos-facts-row" title={props.title} data-dsh-tip="">
       <dt className="aidos-facts-label">{props.k}</dt>
       <dd className="aidos-facts-value">{props.v}</dd>
     </div>

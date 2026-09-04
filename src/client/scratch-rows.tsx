@@ -124,6 +124,7 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
           className="tool-render-summary"
           tool-render-error={showsError ? true : undefined}
           title={shown}
+          data-dsh-tip=""
         >
           {shown}
         </span>

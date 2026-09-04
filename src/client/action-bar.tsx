@@ -52,6 +52,7 @@ export function ActionBar(props: ActionBarProps) {
         key={action.id}
         disabled={disabled}
         title={action.unavailableReason ?? action.label}
+        data-dsh-tip=""
         onClick={() => {
           if (!disabled) opener();
         }}

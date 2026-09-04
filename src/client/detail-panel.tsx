@@ -210,6 +210,7 @@ function DescriptionPanel(props: {
         <button
           className="aidos-icon-btn"
           title="Edit"
+          data-dsh-tip=""
           aria-label="Edit description"
           onClick={(event) => {
             event.preventDefault();
@@ -373,6 +374,7 @@ function CriteriaPanel(props: {
                       <span
                         className="aidos-criterion-warn"
                         title="No evidence covers this criterion yet"
+                        data-dsh-tip=""
                         aria-label="Uncovered criterion"
                       >
                         <WarningIcon />
@@ -383,6 +385,7 @@ function CriteriaPanel(props: {
                       <button
                         className="aidos-icon-btn"
                         title="Edit"
+                        data-dsh-tip=""
                         aria-label={"Edit criterion " + (index + 1)}
                         onClick={() => {
                           setEditingIndex(index);
@@ -393,6 +396,7 @@ function CriteriaPanel(props: {
                       <button
                         className="aidos-icon-btn"
                         title="Delete"
+                        data-dsh-tip=""
                         aria-label={"Delete criterion " + (index + 1)}
                         disabled={saving}
                         onClick={() => {
@@ -517,7 +521,7 @@ function DependencyCard(props: {
     return (
       <li className="aidos-ticket-strip">
         <div className="aidos-ticket-strip-main">
-          <span className="aidos-chip aidos-chip-dep" title={ref}>
+          <span className="aidos-chip aidos-chip-dep" title={ref} data-dsh-tip="">
             {displayDep(ref)}
           </span>
           <span className="aidos-ticket-strip-body">
@@ -671,6 +675,7 @@ function DependencySection(props: {
                     void add(refOf(hit));
                   }}
                   title={refOf(hit)}
+                  data-dsh-tip=""
                 >
                   <span className="aidos-suggestion-title">{hit.title}</span>
                   <span className="aidos-chip aidos-chip-id">
@@ -801,6 +806,7 @@ export function DetailPanel(props: DetailPanelBodyProps) {
           className="aidos-chip aidos-chip-id"
           style={{ background: idColor(fullTicketId(ticket)) }}
           title={fullTicketId(ticket)}
+          data-dsh-tip=""
         >
           {ticketChipLabel(ticket)}
         </span>
@@ -824,6 +830,7 @@ export function DetailPanel(props: DetailPanelBodyProps) {
             <span
               className="aidos-facts-asterisk"
               title="Advisory score. It never unlocks anything."
+              data-dsh-tip=""
             >
               {"*"}
             </span>

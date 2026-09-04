@@ -205,6 +205,7 @@ export function FilterPanel(props: FilterPanelProps) {
         <button
           className="aidos-btn aidos-toggle-btn"
           title={staged.descending ? "Sort ascending" : "Sort descending"}
+          data-dsh-tip=""
           aria-label={staged.descending ? "Sort ascending" : "Sort descending"}
           onClick={() => {
             updateStaged({ ...staged, descending: !staged.descending });
@@ -256,6 +257,7 @@ export function FilterPanel(props: FilterPanelProps) {
                   className="aidos-chip aidos-chip-id"
                   style={{ background: idColor(fullTicketId(ticket)) }}
                   title={fullTicketId(ticket)}
+                  data-dsh-tip=""
                 >
                   {ticketChipLabel(ticket)}
                 </span>
@@ -358,6 +360,7 @@ export function FilterPanel(props: FilterPanelProps) {
           <button
             className="aidos-btn aidos-toggle-btn"
             title={staged.descending ? "Sort ascending" : "Sort descending"}
+            data-dsh-tip=""
             aria-label={staged.descending ? "Sort ascending" : "Sort descending"}
             onClick={() => {
               updateStaged({ ...staged, descending: !staged.descending });
@@ -401,6 +404,7 @@ export function FilterPanel(props: FilterPanelProps) {
                     className="aidos-chip aidos-chip-id"
                     style={{ background: idColor(fullTicketId(ticket)) }}
                     title={fullTicketId(ticket)}
+                    data-dsh-tip=""
                   >
                     {ticketChipLabel(ticket)}
                   </span>

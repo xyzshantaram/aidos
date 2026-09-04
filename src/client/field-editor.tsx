@@ -118,6 +118,7 @@ export function FieldEditor(props: FieldEditorProps) {
         <button
           className="aidos-icon-btn"
           title="Edit"
+          data-dsh-tip=""
           aria-label={"Edit " + props.field}
           onClick={beginEdit}
         >

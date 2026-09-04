@@ -308,6 +308,7 @@ export function QueuePanel(props: QueuePanelProps) {
                   <button
                     className="aidos-btn"
                     title="Drop this suggestion without acting on it"
+                    data-dsh-tip=""
                     onClick={() => {
                       props.onDismiss?.(entry.nominationId as string);
                     }}
