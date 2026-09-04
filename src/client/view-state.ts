@@ -142,6 +142,36 @@ export function setSelection(sessionId: string, key: string | null): void {
   else selections.set(sessionId, key);
 }
 
+// ---- the ticket title index (#73) ----
+
+/**
+ * Ticket id -> title, so a TOOL CARD can name the ticket it acted on.
+ *
+ * #73 requires a ticket-bearing call to show "the ticket ID and title, not
+ * just a bare number" -- but a tool call carries only an id. attach_evidence
+ * names `ticketId` in both its arguments and its result, and neither carries
+ * a title. The board already knows, so the board publishes what it knows.
+ *
+ * A plain module Map, for the same reason the selection is one: a tool card
+ * renders OUTSIDE the board's React tree and cannot reach its state.
+ *
+ * Deliberately BEST-EFFORT. A card must never DEPEND on the board having
+ * been opened, or it degrades exactly where it is most useful -- a fresh
+ * session reading back what an agent did earlier. A missing title yields a
+ * bare id: a worse card, not a broken one.
+ */
+const ticketTitles = new Map<string, string>();
+
+/** Publish the titles of the rows the board just rendered. */
+export function publishTicketTitles(rows: ReadonlyArray<{ id: number; title: string }>): void {
+  for (const row of rows) ticketTitles.set(String(row.id), row.title);
+}
+
+/** The known title of one ticket id, or null when the board has not loaded. */
+export function ticketTitle(ticketId: number | string): string | null {
+  return ticketTitles.get(String(ticketId)) ?? null;
+}
+
 // ---- the workspace merge store ----
 
 import type { TicketView } from "../kernel/projections";

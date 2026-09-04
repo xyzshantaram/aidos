@@ -40,7 +40,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getMerge, getPulledVersion, getSelection, isMergePulling, setMerge, setMergePulling, setPulledVersion, setSelection } from "./view-state";
+import { getMerge, getPulledVersion, getSelection, isMergePulling, publishTicketTitles, setMerge, setMergePulling, setPulledVersion, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -360,6 +360,19 @@ function ProjectionReader(props: ProjectionReaderProps) {
     ...foreignRows,
   ];
   const rawTickets = boardTickets;
+  /*
+   * #73: publish id -> title so a TOOL CARD can name the ticket it acted on.
+   *
+   * A tool call carries only an id -- attach_evidence names `ticketId` in
+   * both its arguments and its result, and neither carries a title. The
+   * board knows, and a card renders outside this tree, so the board pushes
+   * what it knows into the module store the card can read.
+   *
+   * During render on purpose: it is an idempotent write to a plain Map with
+   * no React state involved, and an effect would leave the first card render
+   * after a board load showing bare ids for one frame.
+   */
+  publishTicketTitles(rawTickets);
   const ownEvidence = (evidenceProjection as Record<string, EvidenceRow[]> | undefined) ?? {};
   const ownComments = (commentsProjection as Record<string, CommentRecord[]> | undefined) ?? {};
   const foreignEvidence: Record<string, EvidenceRow[]> = {};

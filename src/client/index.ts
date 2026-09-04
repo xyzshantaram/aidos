@@ -43,6 +43,7 @@ import toolRenderCss from "./vendor/tool-render/tool-render.css";
 import { badgeLabel, setCountCallback } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
 import { SCRATCH_ROWS } from "./scratch-rows";
+import { AIDOS_ROWS } from "./aidos-rows";
 
 /** Stable plugin identity, also the loader entry id in build.mjs. */
 export const name = "aidos";
@@ -87,7 +88,15 @@ function injectStyles(): void {
  */
 function registerScratchRows(slots: SlotRegistry): () => void {
   const disposers: Array<() => void> = [];
-  for (const [key, Row] of SCRATCH_ROWS) {
+  /*
+   * #73: the aidos tools' own rows register through the same seam. Priority
+   * -100 shadows BELOW the rows dsh ships, so a client update that adds a
+   * shipped row for one of these names wins rather than colliding -- which
+   * is #73's "survives a dsh client update" criterion.
+   */
+  for (const [key, Row] of [...SCRATCH_ROWS, ...AIDOS_ROWS] as ReadonlyArray<
+    [string, (props: never) => unknown]
+  >) {
     disposers.push(
       slots.register(
         { name: "tool.call.toolview", key, priority: -100 } as never,
