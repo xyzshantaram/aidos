@@ -2615,3 +2615,98 @@
   font-size: 12px;
   line-height: 1.4;
 }
+
+/* ── #82: the scratch tools' conversation rows ─────────────────────────────
+   Ported in SHAPE from tool-render (leading indicator, tool name, path
+   summary, collapsible body, error on the row) but built on aidos's own
+   tokens, because #72 requires aidos to depend on nothing external and
+   tool-render is a separate plugin that may not be mounted.
+
+   Before this the scratch tools rendered a raw JSON envelope, so a scratch
+   read looked like a data dump beside a builtin read's clean row. */
+.aidos-toolrow {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.aidos-toolrow-is-error {
+  border-color: color-mix(in srgb, var(--verdict-fail) 45%, transparent);
+}
+
+.aidos-toolrow-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+
+/* A row with nothing to expand is not a button: no pointer, no hover, so the
+   affordance never lies about what clicking will do. */
+.aidos-toolrow-head:disabled {
+  cursor: default;
+}
+
+.aidos-toolrow-head:not(:disabled):hover {
+  background: var(--surface-hover);
+}
+
+.aidos-toolrow-mark {
+  flex: none;
+  width: 12px;
+  text-align: center;
+  opacity: 0.75;
+}
+
+.aidos-toolrow-title {
+  flex: none;
+  font-weight: 600;
+}
+
+/* The summary is the part that differs between rows, so it takes the space
+   and truncates rather than wrapping -- a wrapped path makes the column
+   ragged and hides the next row's title. */
+.aidos-toolrow-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.aidos-toolrow-error {
+  color: color-mix(in srgb, var(--verdict-fail) 38%, #ffffff);
+}
+
+.aidos-toolrow-stopped {
+  color: var(--state-awaiting);
+}
+
+.aidos-toolrow-body {
+  border-top: 1px solid var(--border-subtle);
+  max-height: 320px;
+  overflow: auto;
+}
+
+.aidos-toolrow-pre {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}

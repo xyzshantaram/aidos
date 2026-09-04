@@ -25,6 +25,7 @@ import boardCss from "./board.css";
 import planMetaCss from "./plan-meta.css";
 import { badgeLabel, setCountCallback } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
+import { SCRATCH_ROWS } from "./scratch-rows";
 
 /** Stable plugin identity, also the loader entry id in build.mjs. */
 export const name = "aidos";
@@ -51,6 +52,34 @@ function injectStyles(): void {
     tag.textContent = sheet.text;
     document.head.appendChild(tag);
   }
+}
+
+/**
+ * #82: register a rendered row for each scratch tool.
+ *
+ * They rendered a raw JSON envelope, so a scratch read appeared as a data
+ * dump beside a builtin read's clean row. Keyed by TOOL NAME on the
+ * `tool.call.toolview` slot, the same seam tool-render uses -- so a scratch
+ * call now reads the way an fs call does.
+ *
+ * Registered ONCE at apply, not reconciled with the Tickets tab: a toolview
+ * is keyed by tool name and is inert unless that tool is actually called, so
+ * there is nothing to hide when the session is not an aidos one. That also
+ * keeps it clear of the dispose/re-register cycle that caused #100.
+ */
+function registerScratchRows(slots: SlotRegistry): () => void {
+  const disposers: Array<() => void> = [];
+  for (const [key, Row] of SCRATCH_ROWS) {
+    disposers.push(
+      slots.register(
+        { name: "tool.call.toolview", key, priority: -100 } as never,
+        Row as never,
+      ),
+    );
+  }
+  return function () {
+    for (const dispose of disposers) dispose();
+  };
 }
 
 /** Register the Tickets tab. Returns the registration disposer. */
@@ -82,6 +111,14 @@ function registerTicketsTab(slots: SlotRegistry): () => void {
  */
 export function apply(ctx: Context): void {
   injectStyles();
+
+  // #82: the scratch tools' rows. Independent of the Tickets tab's
+  // visibility reconciliation -- a toolview is inert unless its tool runs.
+  ctx.effect(() => {
+    const slots = ctx.get("slots") as SlotRegistry | undefined;
+    if (slots === undefined) return () => {};
+    return registerScratchRows(slots);
+  }, "aidos: scratch tool rows");
 
   // Owned by the visibility effect below; read by the badge callback.
   let registration: (() => void) | null = null;
