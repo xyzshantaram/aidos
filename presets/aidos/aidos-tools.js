@@ -29955,6 +29955,13 @@ function present(title, kind, rawInput, chips = []) {
 function renderJson2(_args, value) {
   return [{ type: "text", text: JSON.stringify(value) }];
 }
+function pageSummary(total, returned, nextOffset) {
+  if (total === 0) return "No tickets match these filters.";
+  const plural = total === 1 ? "" : "s";
+  if (nextOffset === null) return `${total} ticket${plural} matching, all shown.`;
+  const remaining = Math.max(0, total - returned);
+  return `Showing ${returned} of ${total} matching ticket${plural} \u2014 ${remaining} more not shown. Call get_tickets again with offset ${nextOffset} for the next page.`;
+}
 function parseContextSectionsArg(raw) {
   if (raw === void 0) return void 0;
   let parsed;
@@ -30151,7 +30158,10 @@ function registerGetTickets(ctx) {
             total: { type: "integer", required: true },
             returned: { type: "integer", required: true },
             hasMore: { type: "boolean", required: true },
-            nextOffset: { oneOf: [{ type: "integer" }, { type: "null" }], required: true }
+            nextOffset: { oneOf: [{ type: "integer" }, { type: "null" }], required: true },
+            /* #71: the counts in words, so a truncated read cannot read as a
+               complete one. See pageSummary. */
+            summary: { type: "string", required: true }
           }
         },
         render: renderJson2
@@ -30186,7 +30196,8 @@ function registerGetTickets(ctx) {
             total,
             returned: page.length,
             hasMore,
-            nextOffset: hasMore ? end : null
+            nextOffset: hasMore ? end : null,
+            summary: pageSummary(total, page.length, hasMore ? end : null)
           };
         } catch (error51) {
           refusal(error51);

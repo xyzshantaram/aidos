@@ -266,6 +266,37 @@ function renderJson(_args: unknown, value: JsonValue) {
 }
 
 /**
+ * The one-line summary of a paginated board read (#71, user's ask: "tool
+ * calls with limits should show how many more results are available matching
+ * the filters").
+ *
+ * #92 made board reads cheap by returning a PAGE, and the envelope already
+ * carried total/returned/hasMore/nextOffset -- but only as numbers a reader
+ * had to assemble. A truncated read therefore looked exactly like a complete
+ * one. This states it.
+ *
+ * A FIELD in the envelope rather than prose wrapped around it. The result
+ * text is parsed as JSON by callers and tests, so prepending a sentence
+ * breaks them -- and a payload that must be de-prefixed before parsing is a
+ * worse contract than a self-describing one.
+ *
+ * `total` counts MATCHES, not the board: filters apply before the page is
+ * cut (#92), so the wording says "matching" rather than implying the board
+ * holds only that many.
+ */
+function pageSummary(total: number, returned: number, nextOffset: number | null): string {
+  if (total === 0) return "No tickets match these filters.";
+  const plural = total === 1 ? "" : "s";
+  if (nextOffset === null) return `${total} ticket${plural} matching, all shown.`;
+  const remaining = Math.max(0, total - returned);
+  // Name the exact next call, so continuing never requires guesswork.
+  return (
+    `Showing ${returned} of ${total} matching ticket${plural} — ${remaining} more not shown. ` +
+    `Call get_tickets again with offset ${nextOffset} for the next page.`
+  );
+}
+
+/**
  * Parse the plan_meta_set contextSections argument: one JSON array of
  * {heading, text, index} objects. The tool layer owns the JSON decode so the
  * service keeps its typed argument; a malformed payload is a refusal, not a
@@ -507,6 +538,9 @@ function registerGetTickets(ctx: Context): void {
             returned: { type: "integer", required: true },
             hasMore: { type: "boolean", required: true },
             nextOffset: { oneOf: [{ type: "integer" }, { type: "null" }], required: true },
+            /* #71: the counts in words, so a truncated read cannot read as a
+               complete one. See pageSummary. */
+            summary: { type: "string", required: true },
           },
         },
         render: renderJson,
@@ -546,6 +580,7 @@ function registerGetTickets(ctx: Context): void {
             returned: page.length,
             hasMore,
             nextOffset: hasMore ? end : null,
+            summary: pageSummary(total, page.length, hasMore ? end : null),
           };
         } catch (error) {
           refusal(error);

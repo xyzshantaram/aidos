@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { createHarness, asContext } from "./b1-harness";
+import { createHarness, asContext, successJson } from "./b1-harness";
 import { apply } from "../src/tools/aidos-tools";
 
 function setup() {
@@ -240,5 +240,83 @@ describe("#92 write results are compact", () => {
     // The gate closing is the ACTUAL reason to attach evidence, and it is a
     // fact the agent cannot compute for itself.
     expect(second.gateSatisfied).toBe(true);
+  });
+});
+
+describe("#71 a paginated read says how many more there are", () => {
+  /*
+   * User ask: "tool calls with limits should show how many more results are
+   * available matching the filters."
+   *
+   * #92 made board reads cheap by returning a PAGE, and the envelope already
+   * carried total/returned/hasMore/nextOffset -- but only as numbers a
+   * reader had to assemble, so a TRUNCATED read looked exactly like a
+   * complete one. That is the failure mode: not missing data, but data whose
+   * incompleteness is invisible.
+   */
+  async function board(n: number) {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    for (let i = 0; i < n; i++) await harness.runTool("set_ticket", { title: "T" + i });
+    return harness;
+  }
+
+  it("states the page, the total, and how many are hidden", async () => {
+    const harness = await board(7);
+    const page = successJson(await harness.runTool("get_tickets", { limit: 3 }));
+    expect(page.summary).toContain("Showing 3 of 7");
+    expect(page.summary).toContain("4 more not shown");
+  });
+
+  it("names the EXACT next call, so continuing needs no guesswork", async () => {
+    const harness = await board(7);
+    const page = successJson(await harness.runTool("get_tickets", { limit: 3 }));
+    expect(page.summary).toContain("offset 3");
+    // And that offset actually works.
+    const next = successJson(await harness.runTool("get_tickets", { limit: 3, offset: 3 }));
+    expect(next.returned).toBe(3);
+  });
+
+  it("says so plainly when nothing is hidden", async () => {
+    // A complete read must not imply there is more, or the reader learns to
+    // ignore the line.
+    const harness = await board(2);
+    const all = successJson(await harness.runTool("get_tickets", {}));
+    expect(all.summary).toContain("all shown");
+    expect(all.summary).not.toContain("more not shown");
+  });
+
+  it("counts MATCHES, not the board", async () => {
+    /*
+     * Filters apply before the page is cut (#92), so the total must describe
+     * the filtered set. Saying "of 7" when a filter matched 2 would be worse
+     * than saying nothing.
+     */
+    const harness = await board(7);
+    const filtered = successJson(await harness.runTool("get_tickets", { search: "T3" }));
+    expect(filtered.total).toBe(1);
+    expect(filtered.summary).toContain("1 ticket matching");
+  });
+
+  it("handles an empty result without pluralising nonsense", async () => {
+    const harness = await board(3);
+    const none = successJson(await harness.runTool("get_tickets", { search: "zzzz-no-match" }));
+    expect(none.summary).toBe("No tickets match these filters.");
+  });
+
+  it("the result text stays valid JSON", async () => {
+    /*
+     * The summary is a FIELD, not prose wrapped around the payload. An
+     * earlier attempt prepended a sentence to the rendered text and broke
+     * every caller that parses the result -- four tests caught it. A payload
+     * that must be de-prefixed before parsing is a worse contract than a
+     * self-describing one.
+     */
+    const harness = await board(4);
+    const raw = await harness.runTool("get_tickets", { limit: 2 });
+    const text = (raw.content?.[0] as { text?: string } | undefined)?.text ?? "";
+    expect(() => JSON.parse(text)).not.toThrow();
+    expect(JSON.parse(text).summary).toContain("Showing 2 of 4");
   });
 });
