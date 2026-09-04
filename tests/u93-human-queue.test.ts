@@ -471,41 +471,36 @@ describe("#93 the queue's action buttons are a grid, not ragged", () => {
     expect(strip).toContain("aidos-ticket-strip-action-group");
   });
 
-  it("puts the grid on the ACTION GROUP, not on the mixed container", () => {
-    const group = rule(".aidos-queue .aidos-ticket-strip-action-group {");
-    expect(group).toContain("display: grid");
-    expect(group).toContain("grid-template-columns");
-  });
-
-  it("leaves the container's flex alignment alone", () => {
+  it("does NOT override the container's flex layout", () => {
     /*
-     * The regression both earlier attempts caused. The container's
-     * right-alignment worked before the grid was introduced and must not be
-     * overridden again.
+     * THE lesson from four failed attempts. The container's `margin-left:
+     * auto` inside a flex strip is what right-aligns the actions, and it
+     * always worked. Every failure -- "lost the right alignment", "still
+     * broken", "all different sizes and collapse to the left" -- came from
+     * replacing that layout with a grid rather than adding to it.
      */
     expect(css).not.toContain(".aidos-queue .aidos-ticket-strip-actions {");
+    const group = rule(".aidos-queue .aidos-ticket-strip-action-group {");
+    expect(group).not.toContain("display: grid");
+    expect(group).toContain("display: flex");
   });
 
-  it("sizes the primary column once on the container, not per row", () => {
-    const vars = rule(".aidos-queue {");
-    expect(vars).toContain("--queue-action-w");
+  it("gives the primary button ONE fixed width, which is the whole ask", () => {
+    // "All the same size", expressed as the smallest possible change from a
+    // known-good layout: a width on one button, nothing else.
+    const primary = rule(".aidos-queue .aidos-btn-primary {");
+    expect(primary).toContain("width: 7.5rem");
+    expect(primary).toContain("flex: none");
   });
 
-  it("does NOT reserve a Dismiss column, which rendered as an empty gap", () => {
+  it("reserves NO empty column, which rendered as a gap beside Sign off", () => {
     /*
      * User-reported from a screenshot: "sign off and verify has a big gap
-     * next to it". The template reserved a fixed Dismiss column on every row
-     * so the primary button stayed aligned -- and on the many rows without a
-     * Dismiss that column was simply empty space, while the ticket
-     * description next to it was squeezed into a narrow ribbon.
-     *
-     * Dismiss now renders FIRST in an `auto` column that collapses to
-     * nothing when absent, so the primary is flush right at a constant
-     * position with no hole.
+     * next to it". A reserved Dismiss column kept the primary aligned and
+     * showed as dead space on every row without a Dismiss -- while the
+     * ticket description beside it was squeezed into a ribbon.
      */
-    const group = rule(".aidos-queue .aidos-ticket-strip-action-group {");
-    expect(group).toContain("grid-template-columns: auto var(--queue-action-w)");
-    expect(group).not.toContain("--queue-dismiss-w");
+    expect(css).not.toContain("--queue-dismiss-w");
   });
 
   it("renders Dismiss before the primary button", () => {
@@ -525,9 +520,12 @@ describe("#93 the queue's action buttons are a grid, not ragged", () => {
     expect(meta).toContain("line-clamp: 2");
   });
 
-  it("gives every action button the same width and height", () => {
+  it("every action button has a consistent height", () => {
+    // Height is uniform for all of them; only the PRIMARY takes a fixed
+    // width, because Dismiss is a secondary action and forcing it to the
+    // same width is what created the dead space.
     const body = rule(".aidos-queue .aidos-ticket-strip-action-group .aidos-btn {");
-    expect(body).toContain("width: 100%");
     expect(body).toContain("min-height");
+    expect(body).toContain("flex: none");
   });
 });

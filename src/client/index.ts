@@ -222,10 +222,36 @@ export function apply(ctx: Context): void {
     if (registration === null) return;
     const next = badgeLabel();
     if (next === lastLabel) return;
-    lastLabel = next;
     const slots = ctx.get("slots") as SlotRegistry | undefined;
     if (slots === undefined) return;
-    registration();
-    registration = registerTicketsTab(slots);
+    /*
+     * DEFENSIVE, and the comment at the top of this file explains why:
+     * "Registering twice without disposing throws ... which crashes the slot
+     * entry and blanks the pane."
+     *
+     * User-reported: "opening the queue modal makes the board disappear."
+     * Opening the queue changes the count, which lands here -- and if the
+     * re-register throws, the old registration is already disposed and
+     * `registration` is left holding a dead handle, so the tab is gone and
+     * the pane is blank with no way back short of a reload.
+     *
+     * A label refresh is COSMETIC. It must never be able to take the board
+     * down with it: on failure, drop the stale handle and leave the label
+     * stale rather than leaving the user with no board. `lastLabel` is only
+     * advanced on success, so the next count change retries.
+     */
+    try {
+      registration();
+      registration = registerTicketsTab(slots);
+      lastLabel = next;
+    } catch (error) {
+      registration = null;
+      // eslint-disable-next-line no-console
+      console.error(
+        "aidos: the Tickets tab failed to re-register after a badge change; " +
+          "the tab may show a stale count until the next visibility change",
+        error,
+      );
+    }
   });
 }
