@@ -128,6 +128,28 @@ export const DEFAULT_GATES: readonly GateDef[] = [
     toState: "awaiting_verification" as const,
     requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
     allowedActors: ["user", "agent"],
+    /*
+     * #107: an accepted review excuses the machine check.
+     *
+     * automated_check is the CHEAP evidence -- the agent attaches it from
+     * its own claim that it ran something, and nothing verifies the claim.
+     * review_pass is the EXPENSIVE one: an independent reviewer, or the
+     * human. Requiring the cheap artefact alongside the expensive one adds
+     * ceremony, not safety, and worse, teaches the agent to attach a check
+     * as a formality -- which is precisely how automated_check becomes a
+     * rubber stamp.
+     *
+     * The motivating case was a human writing "this flow works fine, we've
+     * been using it extensively" on a ticket that then sat blocked waiting
+     * for a machine check. That review IS empirical evidence the thing
+     * runs, arguably stronger than a test run, and a design that cannot
+     * record it without also demanding a check is failing the human.
+     *
+     * DIRECTIONAL, and that is the safety property: review_pass excuses
+     * automated_check and never the reverse. The expensive evidence stays
+     * mandatory, so the gate still stops the agent marking its own homework.
+     */
+    excusedBy: { "builtin:automated_check": "builtin:review_pass" },
   },
   {
     fromState: "awaiting_verification" as const,

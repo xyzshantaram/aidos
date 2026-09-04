@@ -162,6 +162,8 @@ export interface AidosSettingsGate {
   toState: TicketState;
   requiredKinds: string[];
   allowedActors: Actor[];
+  /** #107: kind id -> the kind whose presence excuses it. */
+  excusedBy: Record<string, string>;
 }
 
 /** The resolved value of the `aidos` settings namespace. */
@@ -196,6 +198,10 @@ export const AIDOS_SETTINGS_SCHEMA = z.object({
         toState: z.union([...STATE_ORDER]).required(),
         requiredKinds: z.array(z.string()).default([]),
         allowedActors: z.array(ACTOR_UNION).default([]),
+        // #107: kind id -> the kind that excuses it. Without this the schema
+        // would silently DROP the field from a custom config, so a workspace
+        // that configured an excuse would quietly not get one.
+        excusedBy: z.dict(z.string()).default({}),
       }),
     )
     .default([]),
@@ -221,9 +227,28 @@ function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
     toState: gate.toState,
     requiredKinds: [...gate.requiredKinds],
     allowedActors: [...gate.allowedActors],
+    excusedBy: { ...gate.excusedBy },
   }));
   const known = new Set(kinds.map((kind) => kind.id));
   for (const gate of gates) {
+    /*
+     * #107: an excuse naming an unregistered kind would never fire, so the
+     * gate would silently keep demanding what the config meant to excuse --
+     * a misconfiguration that looks like working software. Refused loudly,
+     * exactly as an unregistered requiredKind already is.
+     */
+    for (const [required, excuse] of Object.entries(gate.excusedBy)) {
+      if (typeof excuse !== "string" || !known.has(excuse)) {
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required} with an unregistered kind ${excuse}`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
+      }
+      if (!gate.requiredKinds.includes(required)) {
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required}, which it does not require`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
+      }
+    }
     for (const kind of gate.requiredKinds) {
       if (!known.has(kind)) {
         const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`;
@@ -781,7 +806,27 @@ registerAidosSessionEventTypes(ctx);
       const scope = settingsCtx.settings.register(
         settingsNamespace("aidos"),
         AIDOS_SETTINGS_SCHEMA,
-        { base: DEFAULT_CONFIG },
+        /*
+         * #107: gates are normalised so every one carries an excusedBy.
+         *
+         * GateDef leaves the field OPTIONAL, because most gates excuse
+         * nothing and an author should not have to write an empty object.
+         * The settings schema defaults it, so its parsed shape has the field
+         * present. Filling it here reconciles the two at the single point
+         * where they meet, instead of casting (which would hide the
+         * mismatch) or forcing every gate literal and its verbatim mirror to
+         * carry `excusedBy: {}` (which would be noise in the table that is
+         * meant to be the readable statement of the rules).
+         */
+        {
+          base: {
+            ...DEFAULT_CONFIG,
+            gates: DEFAULT_CONFIG.gates.map((gate) => ({
+              ...gate,
+              excusedBy: gate.excusedBy ?? {},
+            })),
+          },
+        },
       );
       this._resolvedConfig = resolveConfig(scope.get(), ctx);
       scope.watch((next) => {

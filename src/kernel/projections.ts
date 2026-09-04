@@ -6,6 +6,7 @@
  */
 
 import type { AidosState } from "./fold";
+import { isMissing } from "./gates";
 import { STATE_ORDER } from "./types";
 import type {
   AidosConfig,
@@ -112,9 +113,16 @@ export function gateProgressOf(
   for (const row of evidence) {
     attached.add(row.kind);
   }
+  /*
+   * #107: counts a kind as present when it is attached OR EXCUSED, using the
+   * same isMissing rule the gate itself applies. Without this the board
+   * would show a ticket as blocked that the gate would happily let through
+   * -- the fraction disagreeing with the button, which is the exact class of
+   * inconsistency this project keeps paying for.
+   */
   let present = 0;
   for (const kind of gate.requiredKinds) {
-    if (attached.has(kind)) {
+    if (!isMissing(gate, attached, kind)) {
       present += 1;
     }
   }

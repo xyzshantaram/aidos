@@ -65,14 +65,20 @@ describe("review pass is its own kind at the tool layer", () => {
     expect(await state()).toBe("in_progress");
   });
 
-  it("a review without a check is refused", async () => {
+  it("a review WITHOUT a check now passes: it excuses the check (#107)", async () => {
+    /*
+     * CONTRACT CHANGE, at the tool layer this time. automated_check is the
+     * cheap evidence the agent attaches from its own claim; review_pass
+     * needs an independent reviewer. Demanding both taught the agent to
+     * attach a check as a formality, which is how automated_check becomes a
+     * rubber stamp.
+     *
+     * The gate is NOT weakened: the sibling test still proves a check alone
+     * is refused and still names review_pass as missing.
+     */
     await attach(REVIEW_PASS);
-    const refusal = failureJson(
-      await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }),
-    );
-    expect(refusal.error).toBe("gate_refused");
-    expect(refusal.missingKinds).toEqual([AUTOMATED_CHECK]);
-    expect(await state()).toBe("in_progress");
+    successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
+    expect(await state()).toBe("awaiting_verification");
   });
 
   it("the same ticket moves once the review row exists", async () => {

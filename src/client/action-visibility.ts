@@ -34,7 +34,21 @@ function signoffReason(ticket: TicketView): string | undefined {
   return undefined;
 }
 
-/** Submit for review needs automated_check + review_pass rows attached. */
+/**
+ * Submit for review needs a review_pass, and an automated_check UNLESS the
+ * review_pass already covers it (#107).
+ *
+ * This is the THIRD place the gate rule appears, and the one most likely to
+ * be forgotten: the kernel refuses, the projection computes the fraction,
+ * and this writes the sentence the human reads. Left unchanged it would keep
+ * naming automated_check as required after the gate stopped requiring it --
+ * telling the user to do something the button no longer needs.
+ *
+ * review_pass stays mandatory. It is the expensive evidence: an independent
+ * reviewer, or the human. automated_check is the cheap one the agent
+ * attaches from its own claim, so excusing it removes ceremony rather than
+ * safety. The asymmetry is deliberate and must not be flipped.
+ */
 function submitReason(
   ticket: TicketView,
   kinds: EvidenceKinds,
@@ -43,12 +57,12 @@ function submitReason(
     return "the ticket must be in progress";
   }
   const present = new Set(kinds);
-  const missing: string[] = [];
-  if (!present.has("builtin:automated_check")) missing.push("automated_check");
   if (!present.has("builtin:review_pass")) {
-    missing.push("review_pass (a reviewer subagent or the human reviews first)");
+    const missing = ["review_pass (a reviewer subagent or the human reviews first)"];
+    if (!present.has("builtin:automated_check")) missing.unshift("automated_check");
+    return "requires " + missing.join(", ");
   }
-  return missing.length === 0 ? undefined : "requires " + missing.join(", ");
+  return undefined;
 }
 
 /** Send back is the user-only send-back edge from awaiting_verification. */

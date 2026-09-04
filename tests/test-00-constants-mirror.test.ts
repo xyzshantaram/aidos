@@ -138,6 +138,10 @@ const MIRROR_DEFAULT_GATES: GateDef[] = [
     toState: "awaiting_verification",
     requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
     allowedActors: ["user", "agent"],
+    // #107: an accepted review excuses the machine check. Directional --
+    // review_pass excuses automated_check and never the reverse, so the
+    // expensive evidence stays mandatory.
+    excusedBy: { "builtin:automated_check": "builtin:review_pass" },
   },
   {
     fromState: "awaiting_verification",

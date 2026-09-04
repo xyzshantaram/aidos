@@ -92,7 +92,7 @@ describe("lifecycle with the human half blocked", () => {
     expect(stateOf(harness, ticketId)).toBe("awaiting_verification");
   });
 
-  it("the automated check is needed for the second move", () => {
+  it("a review alone now makes the second move: it excuses the check (#107)", () => {
     const { harness, ticketId } = freshHarness();
     const agent = harness.asAgent();
     harness.service.userAttachEvidence(agent, {
@@ -103,11 +103,14 @@ describe("lifecycle with the human half blocked", () => {
     harness.service.agentMoveTicket(agent, { ticketId, to: "in_progress" });
     harness.service.agentAttachEvidence(agent, { ticketId, kind: "builtin:review_pass" });
 
-    const refusal = expectGateRefused(() =>
-      harness.service.agentMoveTicket(agent, { ticketId, to: "awaiting_verification" }),
-    );
-    expect(refusal.missingKinds).toEqual(["builtin:automated_check"]);
-    expect(stateOf(harness, ticketId)).toBe("in_progress");
+    /*
+     * #107 CONTRACT CHANGE: a review_pass now EXCUSES the machine check, so
+     * this no longer refuses. The property that matters is preserved and
+     * asserted below -- a check alone is still refused, because review_pass
+     * is the expensive evidence and stays mandatory in both directions.
+     */
+    harness.service.agentMoveTicket(agent, { ticketId, to: "awaiting_verification" });
+    expect(stateOf(harness, ticketId)).toBe("awaiting_verification");
   });
 
   it("done stays blocked", () => {

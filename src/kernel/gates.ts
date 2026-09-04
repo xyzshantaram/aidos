@@ -33,6 +33,33 @@ export function isLegalTransition(
 }
 
 /**
+ * Whether one required kind counts as MISSING for a gate (#107).
+ *
+ * A kind is missing when it is absent AND not excused. `excusedBy` maps a
+ * required kind to the kind whose presence stands in for it -- today,
+ * `review_pass` excuses `automated_check`, because a check is evidence the
+ * agent can attach at will while a review needs an independent reviewer, so
+ * demanding the cheap artefact alongside the expensive one adds ceremony
+ * rather than safety.
+ *
+ * THE single implementation. The gate's refusal and the board's gate
+ * FRACTION must agree, or a ticket the gate would let through still renders
+ * as blocked and the board disagrees with its own button. projections.ts
+ * imports this rather than restating it: two copies of a rule drift, which
+ * is how this codebase ended up with eleven copies of a board key.
+ */
+export function isMissing(
+  gate: { requiredKinds: readonly string[]; excusedBy?: Record<string, string> },
+  attached: ReadonlySet<string>,
+  kind: string,
+): boolean {
+  if (attached.has(kind)) return false;
+  const excuse = gate.excusedBy?.[kind];
+  // Exact membership, never a prefix: see the note on GateDef.excusedBy.
+  return excuse === undefined || !attached.has(excuse);
+}
+
+/**
  * Refuse or allow one transition.
  * Throws GateRefused on refusal. Returns on allow.
  */
@@ -74,7 +101,7 @@ export function checkGate(
   for (const row of evidence) {
     attached.add(row.kind);
   }
-  const missing = gate.requiredKinds.filter((kind) => !attached.has(kind));
+  const missing = gate.requiredKinds.filter((kind) => isMissing(gate, attached, kind));
 
   // 3 and 4. A disallowed actor and an absent kind refuse together, so one
   //    refusal names both the absent kinds and the gate's actors.

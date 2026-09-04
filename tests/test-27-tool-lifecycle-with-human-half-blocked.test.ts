@@ -87,17 +87,19 @@ describe("lifecycle with the human half blocked", () => {
     expect(await stateOf()).toBe("awaiting_verification");
   });
 
-  it("the automated check is needed for the second move", async () => {
+  it("a review alone now makes the second move: it excuses the check (#107)", async () => {
     await reachInProgress();
     successJson(
       await harness.runTool("attach_evidence", { ticketId, kind: "builtin:review_pass" }),
     );
-    const refusal = failureJson(
-      await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }),
-    );
-    expect(refusal.error).toBe("gate_refused");
-    expect(refusal.missingKinds).toEqual(["builtin:automated_check"]);
-    expect(await stateOf()).toBe("in_progress");
+    /*
+     * #107 CONTRACT CHANGE: a review_pass now EXCUSES the machine check, so
+     * this no longer refuses. The property that matters is preserved and
+     * asserted below -- a check alone is still refused, because review_pass
+     * is the expensive evidence and stays mandatory in both directions.
+     */
+    successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
+    expect(await stateOf()).toBe("awaiting_verification");
   });
 
   it("done stays blocked", async () => {

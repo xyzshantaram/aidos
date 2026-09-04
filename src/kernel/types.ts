@@ -117,6 +117,25 @@ export interface GateDef {
   toState: TicketState;
   requiredKinds: string[];
   allowedActors: Actor[];
+  /**
+   * #107: kind id -> the kind id whose presence EXCUSES it. A required kind
+   * that is absent but excused does not count as missing.
+   *
+   * Deliberately DIRECTIONAL rather than an "either of these" set. The
+   * motivating case is that `review_pass` excuses `automated_check`, and the
+   * reverse must never hold: a check is evidence the agent can attach at
+   * will from its own claim, while a review needs an independent reviewer.
+   * Excusing the expensive evidence with the cheap one would hollow out the
+   * only thing that stops the agent marking its own homework, so the
+   * asymmetry is the safety property, not an implementation detail.
+   *
+   * The excuse names an EXACT kind id and matching stays exact Set
+   * membership. #96 rejected prefix matching precisely because
+   * `review_pass:fail` would then satisfy a gate wanting `review_pass`;
+   * nothing here reintroduces that, and `builtin:review_fail` can neither
+   * satisfy nor excuse anything.
+   */
+  excusedBy?: Record<string, string>;
 }
 
 /** The full kind and gate config. Injected, never part of the log. */

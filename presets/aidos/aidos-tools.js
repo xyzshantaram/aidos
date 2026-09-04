@@ -25699,7 +25699,29 @@ var DEFAULT_GATES = [
     fromState: "in_progress",
     toState: "awaiting_verification",
     requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
-    allowedActors: ["user", "agent"]
+    allowedActors: ["user", "agent"],
+    /*
+     * #107: an accepted review excuses the machine check.
+     *
+     * automated_check is the CHEAP evidence -- the agent attaches it from
+     * its own claim that it ran something, and nothing verifies the claim.
+     * review_pass is the EXPENSIVE one: an independent reviewer, or the
+     * human. Requiring the cheap artefact alongside the expensive one adds
+     * ceremony, not safety, and worse, teaches the agent to attach a check
+     * as a formality -- which is precisely how automated_check becomes a
+     * rubber stamp.
+     *
+     * The motivating case was a human writing "this flow works fine, we've
+     * been using it extensively" on a ticket that then sat blocked waiting
+     * for a machine check. That review IS empirical evidence the thing
+     * runs, arguably stronger than a test run, and a design that cannot
+     * record it without also demanding a check is failing the human.
+     *
+     * DIRECTIONAL, and that is the safety property: review_pass excuses
+     * automated_check and never the reverse. The expensive evidence stays
+     * mandatory, so the gate still stops the agent marking its own homework.
+     */
+    excusedBy: { "builtin:automated_check": "builtin:review_pass" }
   },
   {
     fromState: "awaiting_verification",
@@ -25735,6 +25757,11 @@ function isLegalTransition(fromState, toState) {
   }
   return fromState === "awaiting_verification" && toState === "in_progress";
 }
+function isMissing(gate, attached, kind) {
+  if (attached.has(kind)) return false;
+  const excuse = gate.excusedBy?.[kind];
+  return excuse === void 0 || !attached.has(excuse);
+}
 function checkGate(config2, ticket, evidence, toState, actor) {
   const fromState = ticket.state;
   if (!isLegalTransition(fromState, toState)) {
@@ -25760,7 +25787,7 @@ function checkGate(config2, ticket, evidence, toState, actor) {
   for (const row of evidence) {
     attached.add(row.kind);
   }
-  const missing = gate.requiredKinds.filter((kind) => !attached.has(kind));
+  const missing = gate.requiredKinds.filter((kind) => isMissing(gate, attached, kind));
   if (missing.length > 0 || !gate.allowedActors.includes(actor)) {
     throw new GateRefused({
       missingKinds: missing,
@@ -26467,7 +26494,7 @@ function gateProgressOf(config2, snapshot, evidence) {
   }
   let present2 = 0;
   for (const kind of gate.requiredKinds) {
-    if (attached.has(kind)) {
+    if (!isMissing(gate, attached, kind)) {
       present2 += 1;
     }
   }
@@ -27280,7 +27307,11 @@ var AIDOS_SETTINGS_SCHEMA = z2.object({
       fromState: z2.union([...STATE_ORDER]).required(),
       toState: z2.union([...STATE_ORDER]).required(),
       requiredKinds: z2.array(z2.string()).default([]),
-      allowedActors: z2.array(ACTOR_UNION).default([])
+      allowedActors: z2.array(ACTOR_UNION).default([]),
+      // #107: kind id -> the kind that excuses it. Without this the schema
+      // would silently DROP the field from a custom config, so a workspace
+      // that configured an excuse would quietly not get one.
+      excusedBy: z2.dict(z2.string()).default({})
     })
   ).default([])
 });
@@ -27298,10 +27329,23 @@ function resolveConfig(settings, ctx) {
     fromState: gate.fromState,
     toState: gate.toState,
     requiredKinds: [...gate.requiredKinds],
-    allowedActors: [...gate.allowedActors]
+    allowedActors: [...gate.allowedActors],
+    excusedBy: { ...gate.excusedBy }
   }));
   const known = new Set(kinds.map((kind) => kind.id));
   for (const gate of gates) {
+    for (const [required2, excuse] of Object.entries(gate.excusedBy)) {
+      if (typeof excuse !== "string" || !known.has(excuse)) {
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required2} with an unregistered kind ${excuse}`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
+      }
+      if (!gate.requiredKinds.includes(required2)) {
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required2}, which it does not require`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
+      }
+    }
     for (const kind of gate.requiredKinds) {
       if (!known.has(kind)) {
         const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} requires an unregistered kind ${kind}`;
@@ -27604,7 +27648,27 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const scope = settingsCtx.settings.register(
         settingsNamespace("aidos"),
         AIDOS_SETTINGS_SCHEMA,
-        { base: DEFAULT_CONFIG }
+        /*
+         * #107: gates are normalised so every one carries an excusedBy.
+         *
+         * GateDef leaves the field OPTIONAL, because most gates excuse
+         * nothing and an author should not have to write an empty object.
+         * The settings schema defaults it, so its parsed shape has the field
+         * present. Filling it here reconciles the two at the single point
+         * where they meet, instead of casting (which would hide the
+         * mismatch) or forcing every gate literal and its verbatim mirror to
+         * carry `excusedBy: {}` (which would be noise in the table that is
+         * meant to be the readable statement of the rules).
+         */
+        {
+          base: {
+            ...DEFAULT_CONFIG,
+            gates: DEFAULT_CONFIG.gates.map((gate) => ({
+              ...gate,
+              excusedBy: gate.excusedBy ?? {}
+            }))
+          }
+        }
       );
       this._resolvedConfig = resolveConfig(scope.get(), ctx);
       scope.watch((next) => {
