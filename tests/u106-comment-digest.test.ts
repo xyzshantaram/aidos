@@ -73,7 +73,10 @@ describe("#106 a human comment reaches the agent", () => {
     svc.userAddComment(agent, { ticketId: ticket.id, text: overCap });
     const long = lines().find((l) => l.includes("yyy"));
     expect(long).toBeDefined();
-    expect((long as string).endsWith('…"')).toBe(true);
+    // A comment is now an indented BLOCKQUOTE continuation, so it ends at
+    // the ellipsis rather than a closing quote. The property is unchanged:
+    // the text is MARKED as truncated, not silently cut.
+    expect((long as string).endsWith("…")).toBe(true);
     // And it is genuinely shortened, not merely marked.
     expect((long as string).length).toBeLessThan(overCap.length);
   });
@@ -151,7 +154,7 @@ describe("#106 EVERY user action reaches the agent", () => {
   it("a ticket the human CREATES is announced", () => {
     const { svc, agent, lines } = setup();
     svc.userSetTicket(agent, { title: "Filed by the human" });
-    const line = lines().find((l) => l.includes("CREATED by user"));
+    const line = lines().find((l) => l.includes("**created** by user"));
     expect(line).toBeDefined();
     expect(line as string).toContain("Filed by the human");
   });
@@ -182,7 +185,7 @@ describe("#106 EVERY user action reaches the agent", () => {
       at: row.at,
       rowKind: row.kind,
     });
-    const line = lines().find((l) => l.includes("DETACHED"));
+    const line = lines().find((l) => l.includes("**detached** by user"));
     expect(line).toBeDefined();
     expect(line as string).toContain("builtin:review_note");
   });
@@ -197,7 +200,7 @@ describe("#106 EVERY user action reaches the agent", () => {
     const { svc, agent, lines } = setup();
     svc.setTicket(agent, { title: "Anchor" });
     svc.userSetPlanMeta(agent, { projectId: 1, preamble: "new standing direction" });
-    const line = lines().find((l) => l.includes("Plan edited by user"));
+    const line = lines().find((l) => l.includes("**Plan** — edited by user"));
     expect(line).toBeDefined();
     expect(line as string).toContain("preamble");
   });
@@ -228,7 +231,22 @@ describe("#106 the digest is valid Markdown", () => {
     });
     const line = lines().find((l) => l.includes("first line"));
     expect(line).toBeDefined();
-    expect(line as string).not.toContain("\n");
+    /*
+     * The comment now renders as an indented BLOCKQUOTE continuation, so the
+     * line legitimately contains ONE newline. The property this test exists
+     * for is unchanged and is asserted more precisely than before: the
+     * human's TEXT is collapsed to a single line, so it cannot break out of
+     * the quote and restructure the digest.
+     *
+     * Exactly one newline, and it introduces the indented quote.
+     */
+    const parts = (line as string).split("\n");
+    expect(parts).toHaveLength(2);
+    expect(parts[1].startsWith("  > ")).toBe(true);
+    // The quoted text itself carries no further newlines, so a "- " or "#"
+    // in the comment cannot start a new list item or a heading.
+    expect(parts[1]).toContain("second looks like a list item");
+    expect(parts[1]).toContain("and this like a heading");
   });
 
   it("escapes inline markup in a TITLE", () => {
@@ -265,8 +283,11 @@ describe("#106 the digest is valid Markdown", () => {
     const ticket = svc.setTicket(agent, { title: "Plain title" });
     svc.userAddComment(agent, { ticketId: ticket.id, text: "plain note" });
     const line = lines().find((l) => l.includes("plain note"));
-    expect(line as string).toContain("#" + ticket.id);
-    expect(line as string).toContain("(Plain title)");
+    // The id is BOLD and the title ITALIC now. Both are the digest's own
+    // markup, applied around interpolated text rather than to it, so they
+    // must survive the escaping that protects the text itself.
+    expect(line as string).toContain("**#" + ticket.id + "**");
+    expect(line as string).toContain("*Plain title*");
   });
 
   it("a multi-change digest separates its header from the list", () => {

@@ -27610,6 +27610,14 @@ var OwnerUnavailable = class extends Error {
 function _mdInline(text) {
   return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
 }
+function _mdCode(text) {
+  const clean = text.replace(/\s+/g, " ").replace(/`/g, "").trim();
+  return clean === "" ? "" : "`" + clean + "`";
+}
+function _mdTicketHead(ticketId, title) {
+  const name2 = _mdInline(title);
+  return `**#${ticketId}** *${name2}*`;
+}
 var DIGEST_TEXT_CAP = 1e3;
 function _ellipsize(text) {
   return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}\u2026` : text;
@@ -27617,26 +27625,28 @@ function _ellipsize(text) {
 function _evidenceDigestSuffix(kind, payload) {
   const ellipsize = (text) => _mdInline(_ellipsize(text));
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
-    return ` \u2014 "${ellipsize(payload.note.trim())}"`;
+    return `
+  > ${ellipsize(payload.note.trim())}`;
   }
   if (Array.isArray(payload.paths)) {
     const paths = payload.paths.filter((p) => typeof p === "string");
     if (paths.length > 0) {
-      return ` \u2014 ${paths.length} path(s): ${ellipsize(paths.join(", "))}`;
+      return ` \u2014 ${paths.map(_mdCode).join(" ")}`;
     }
   }
   if (typeof payload.commit === "string" && payload.commit.trim() !== "") {
     const hash2 = payload.commit.trim().slice(0, 12);
     const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
-    return ` \u2014 commit ${hash2}${ellipsize(subject)}`;
+    return ` \u2014 commit ${_mdCode(hash2)}${subject === "" ? "" : " *" + ellipsize(subject) + "*"}`;
   }
   if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
-    return ` \u2014 claimed ${payload.claimed_state}`;
+    return ` \u2014 claimed ${_mdCode(payload.claimed_state)}`;
   }
   if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
     for (const value of Object.values(payload)) {
       if (typeof value === "string" && value.trim() !== "") {
-        return ` \u2014 "${ellipsize(value.trim())}"`;
+        return `
+  > ${ellipsize(value.trim())}`;
       }
     }
   }
@@ -28553,7 +28563,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (blocks.length > 0) {
         this._queueInjection(
           agent.session,
-          `Plan edited by ${actor} for project ${projectId}: ${blocks.join(", ")}`
+          `**Plan** \u2014 edited by ${actor} (project ${projectId}): ${blocks.map(_mdCode).join(" ")}`
         );
       }
     }
@@ -28609,18 +28619,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     try {
       const live = this.ctx.agents?.get?.(session.id);
       if (live === void 0) return;
-      const text = lines.length === 1 ? `aidos board update: ${lines[0]}` : (
-        /*
-         * A BLANK LINE between the header and the list. A bullet list
-         * may interrupt a paragraph in CommonMark, so this mostly
-         * rendered -- but "mostly" depends on the renderer, and a lazy
-         * continuation can fold the first item back into the paragraph.
-         * One blank line makes it unambiguous everywhere.
-         */
-        `aidos board update (${lines.length} changes):
+      const header = `**aidos board update** \u2014 ${lines.length} change${lines.length === 1 ? "" : "s"}`;
+      const text = `${header}
 
-- ${lines.join("\n- ")}`
-      );
+- ${lines.join("\n- ")}`;
       const message = createUserMessage({
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" }
@@ -28798,7 +28800,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) CREATED by ${actor}`
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 **created** by ${actor}`
       );
     }
     return rowOf(snapshot);
@@ -28860,14 +28862,14 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
-          `Ticket #${ticketId} (${_mdInline(snapshot.title)}) edited by ${actor}: ${changed.join(", ")}`
+          `${_mdTicketHead(ticketId, snapshot.title)} \u2014 edited by ${actor}: ${changed.map(_mdCode).join(" ")}`
         );
       }
     }
     if (actor !== "agent" && allowlist !== void 0) {
       this._queueInjection(
         agent.session,
-        `Allowlist updated for #${ticketId} (${_mdInline(snapshot.title)}): ${allowlist.length} path(s)`
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 allowlist: ${allowlist.map(_mdCode).join(" ")}`
       );
     }
     return rowOf(snapshot);
@@ -28931,7 +28933,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
     this._queueInjection(
       agent.session,
-      `Ticket #${ticketId} (${_mdInline(title)}) evidence DETACHED by user: ${args.rowKind}`
+      `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(args.rowKind)} **detached** by user`
     );
     return { ticketId, removed: 1 };
   }
@@ -29077,7 +29079,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(title)}) evidence ${args.rowKind} ${what} by user`
+        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(args.rowKind)} ${what} by user`
       );
     }
     return { ticketId, linked: true };
@@ -29130,7 +29132,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(ticket.title)}) moved ${fromState} -> ${toState} by ${actor}`
+        `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`
       );
     }
     return { ticketId, fromState, toState };
@@ -29161,7 +29163,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) comment by ${actor}: "${_mdInline(_ellipsize(args.text.trim()))}"`
+        /*
+         * A comment becomes a BLOCKQUOTE on its own continuation line, so
+         * the human's words read as speech rather than as another field in
+         * a status line. The two-space indent keeps the quote INSIDE the
+         * list item -- an unindented ">" would end the list and restructure
+         * everything after it.
+         *
+         * The text is still collapsed to one line first, so a multi-line
+         * comment cannot break out of the quote.
+         */
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 comment by ${actor}
+  > ${_mdInline(_ellipsize(args.text.trim()))}`
       );
     }
     return { ticketId, text: args.text, author: actor, at };
@@ -29270,7 +29283,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(title)}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload)
+        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(kind)} by ${actor}` + _evidenceDigestSuffix(kind, payload)
       );
     }
     return row.payload;

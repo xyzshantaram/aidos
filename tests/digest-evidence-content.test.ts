@@ -41,7 +41,11 @@ describe("the board-update digest carries evidence content", () => {
     const lines2 = [...pending.values()].flat();
     const long = lines2.find((line) => line.includes("xxx"));
     expect(long).toBeDefined();
-    expect((long as string).endsWith("…\"")).toBe(true);
+    // The note is now an indented BLOCKQUOTE continuation rather than a
+    // quoted field, so it ends at the ellipsis. What is asserted is
+    // unchanged: the text is marked as truncated, not silently cut.
+    expect((long as string).endsWith("…")).toBe(true);
+    expect(long as string).toContain("\n  > ");
   });
 
   it("an allowlist attach lists its paths in the line", async () => {
@@ -58,7 +62,12 @@ describe("the board-update digest carries evidence content", () => {
     });
     const pending = (svc as any)._pendingInjections as Map<string, string[]>;
     const lines = [...pending.values()].flat();
-    expect(lines.some((line) => line.includes("2 path(s)") && line.includes("src/client/"))).toBe(true);
+    // Paths are CODE SPANS now, one per path, instead of a count plus a
+    // comma-joined blob. The property is the same: every approved path is
+    // named in the line the agent reads.
+    expect(
+      lines.some((line) => line.includes("`src/client/`") && line.includes("`src/host/aidos-core.ts`")),
+    ).toBe(true);
   });
 
   it("an imported_state attach names the claimed state", async () => {
@@ -78,7 +87,7 @@ describe("the board-update digest carries evidence content", () => {
     }, "system");
     const pending = (svc as any)._pendingInjections as Map<string, string[]>;
     const lines = [...pending.values()].flat();
-    expect(lines.some((line) => line.includes("claimed in_progress"))).toBe(true);
+    expect(lines.some((line) => line.includes("claimed `in_progress`"))).toBe(true);
   });
 
   it("a commit-carrying row names the commit and subject in the line", async () => {
@@ -100,7 +109,15 @@ describe("the board-update digest carries evidence content", () => {
     });
     const pending = (svc as any)._pendingInjections as Map<string, string[]>;
     const lines = [...pending.values()].flat();
-    expect(lines.some((line) => line.includes("commit abc123def456") && line.includes("kind-tailored evidence attach"))).toBe(true);
+    // The hash is a code span and the subject is emphasised; both are still
+    // present, which is what this test exists to prove.
+    expect(
+      lines.some(
+        (line) =>
+          line.includes("commit `abc123def456`") &&
+          line.includes("kind-tailored evidence attach"),
+      ),
+    ).toBe(true);
   });
 
   it("a verdict row with no note still surfaces its first string field", async () => {

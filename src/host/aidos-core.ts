@@ -717,6 +717,32 @@ function _mdInline(text: string): string {
 }
 
 /**
+ * One inline CODE span, for a path, a kind id or a state.
+ *
+ * Deliberately NOT _mdInline: inside a code span a backslash is literal, so
+ * escaping would SHOW the backslashes -- `src\_host` instead of `src_host`.
+ * A code span makes its content literal already, so the only real hazards
+ * are a backtick (which would close the span early) and a newline (which
+ * would end the list item). Both are removed.
+ */
+function _mdCode(text: string): string {
+  const clean = text.replace(/\s+/g, " ").replace(/`/g, "").trim();
+  return clean === "" ? "" : "`" + clean + "`";
+}
+
+/**
+ * The head of every digest line: the ticket reference and its title.
+ *
+ * One shape for every line so the digest reads as a table rather than as a
+ * paragraph -- the id is what a reader scans for, so it leads and is bold;
+ * the title is emphasised so it reads as a name rather than as prose.
+ */
+function _mdTicketHead(ticketId: number | string, title: string): string {
+  const name = _mdInline(title);
+  return `**#${ticketId}** *${name}*`;
+}
+
+/**
  * The digest suffix for one evidence row (#63 follow-up): surface the
  * payload's HUMAN-READABLE content in the injection line, not just the kind.
  * Review notes and verification notes ride a `note`; allowlists list their
@@ -763,12 +789,14 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
   // newline collapse the rest of the line gets.
   const ellipsize = (text: string): string => _mdInline(_ellipsize(text));
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
-    return ` — "${ellipsize(payload.note.trim())}"`;
+    // A note is the human's own words: quoted on its own indented line,
+    // like the comment digest, so it reads as speech rather than a field.
+    return `\n  > ${ellipsize(payload.note.trim())}`;
   }
   if (Array.isArray(payload.paths)) {
     const paths = payload.paths.filter((p): p is string => typeof p === "string");
     if (paths.length > 0) {
-      return ` — ${paths.length} path(s): ${ellipsize(paths.join(", "))}`;
+      return ` — ${paths.map(_mdCode).join(" ")}`;
     }
   }
   // #68: a commit-carrying row names the commit and subject so the digest
@@ -776,17 +804,17 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
   if (typeof payload.commit === "string" && payload.commit.trim() !== "") {
     const hash = payload.commit.trim().slice(0, 12);
     const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
-    return ` — commit ${hash}${ellipsize(subject)}`;
+    return ` — commit ${_mdCode(hash)}${subject === "" ? "" : " *" + ellipsize(subject) + "*"}`;
   }
   if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
-    return ` — claimed ${payload.claimed_state}`;
+    return ` — claimed ${_mdCode(payload.claimed_state)}`;
   }
   if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
     // A verdict row with no note still says what was asserted, from the
     // payload's first string field when there is one.
     for (const value of Object.values(payload)) {
       if (typeof value === "string" && value.trim() !== "") {
-        return ` — "${ellipsize(value.trim())}"`;
+        return `\n  > ${ellipsize(value.trim())}`;
       }
     }
   }
@@ -2198,7 +2226,7 @@ registerAidosSessionEventTypes(ctx);
       if (blocks.length > 0) {
         this._queueInjection(
           agent.session,
-          `Plan edited by ${actor} for project ${projectId}: ${blocks.join(", ")}`,
+          `**Plan** \u2014 edited by ${actor} (project ${projectId}): ${blocks.map(_mdCode).join(" ")}`,
         );
       }
     }
@@ -2275,17 +2303,26 @@ registerAidosSessionEventTypes(ctx);
     try {
       const live = this.ctx.agents?.get?.(session.id);
       if (live === undefined) return;
-      const text =
-        lines.length === 1
-          ? `aidos board update: ${lines[0]}`
-          : /*
-             * A BLANK LINE between the header and the list. A bullet list
-             * may interrupt a paragraph in CommonMark, so this mostly
-             * rendered -- but "mostly" depends on the renderer, and a lazy
-             * continuation can fold the first item back into the paragraph.
-             * One blank line makes it unambiguous everywhere.
-             */
-            `aidos board update (${lines.length} changes):\n\n- ${lines.join("\n- ")}`;
+      /*
+       * The digest is structured Markdown (#106 follow-up, user's ask): a
+       * bold header, then one bullet per change. Each line leads with the
+       * bold ticket id because that is what a reader scans for, names the
+       * ticket in italics, and puts kinds, states and paths in code spans.
+       * A human's own words -- a comment, a review note -- become an
+       * indented blockquote so they read as speech rather than as another
+       * field in a status line.
+       *
+       * A BLANK LINE separates the header from the list. A bullet list may
+       * interrupt a paragraph in CommonMark, so the unseparated form mostly
+       * rendered -- but "mostly" depends on the renderer, and a lazy
+       * continuation can fold the first item back into the header.
+       *
+       * A single change keeps the same bullet shape rather than collapsing
+       * to a sentence: one format means a reader learns it once, and the
+       * blockquote continuation would have no list item to attach to.
+       */
+      const header = `**aidos board update** — ${lines.length} change${lines.length === 1 ? "" : "s"}`;
+      const text = `${header}\n\n- ${lines.join("\n- ")}`;
       const message = createUserMessage({
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" },
@@ -2504,7 +2541,7 @@ registerAidosSessionEventTypes(ctx);
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) CREATED by ${actor}`,
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 **created** by ${actor}`,
       );
     }
     return rowOf(snapshot);
@@ -2577,14 +2614,14 @@ registerAidosSessionEventTypes(ctx);
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
-          `Ticket #${ticketId} (${_mdInline(snapshot.title)}) edited by ${actor}: ${changed.join(", ")}`,
+          `${_mdTicketHead(ticketId, snapshot.title)} \u2014 edited by ${actor}: ${changed.map(_mdCode).join(" ")}`,
         );
       }
     }
     if (actor !== "agent" && allowlist !== undefined) {
       this._queueInjection(
         agent.session,
-        `Allowlist updated for #${ticketId} (${_mdInline(snapshot.title)}): ${allowlist.length} path(s)`,
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 allowlist: ${allowlist.map(_mdCode).join(" ")}`,
       );
     }
     return rowOf(snapshot);
@@ -2668,7 +2705,7 @@ registerAidosSessionEventTypes(ctx);
     const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
     this._queueInjection(
       agent.session,
-      `Ticket #${ticketId} (${_mdInline(title)}) evidence DETACHED by user: ${args.rowKind}`,
+      `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(args.rowKind)} **detached** by user`,
     );
     return { ticketId, removed: 1 };
   }
@@ -2849,7 +2886,7 @@ registerAidosSessionEventTypes(ctx);
       const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(title)}) evidence ${args.rowKind} ${what} by user`,
+        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(args.rowKind)} ${what} by user`,
       );
     }
     return { ticketId, linked: true };
@@ -2914,7 +2951,7 @@ registerAidosSessionEventTypes(ctx);
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(ticket.title)}) moved ${fromState} -> ${toState} by ${actor}`,
+        `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`,
       );
     }
     return { ticketId, fromState, toState };
@@ -2963,7 +3000,17 @@ registerAidosSessionEventTypes(ctx);
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) comment by ${actor}: "${_mdInline(_ellipsize(args.text.trim()))}"`,
+        /*
+         * A comment becomes a BLOCKQUOTE on its own continuation line, so
+         * the human's words read as speech rather than as another field in
+         * a status line. The two-space indent keeps the quote INSIDE the
+         * list item -- an unindented ">" would end the list and restructure
+         * everything after it.
+         *
+         * The text is still collapsed to one line first, so a multi-line
+         * comment cannot break out of the quote.
+         */
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 comment by ${actor}\n  > ${_mdInline(_ellipsize(args.text.trim()))}`,
       );
     }
     return { ticketId, text: args.text, author: actor, at };
@@ -3094,7 +3141,7 @@ registerAidosSessionEventTypes(ctx);
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${_mdInline(title)}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload),
+        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(kind)} by ${actor}` + _evidenceDigestSuffix(kind, payload),
       );
     }
     return row.payload;

@@ -54,7 +54,7 @@ describe("injection seam", () => {
     expect(injected[0]).toContain("user_signoff");
     expect(injected[1]).toContain("#" + String(ticketId));
     expect(injected[1]).toContain("Injection probe");
-    expect(injected[1]).toContain("open -> in_progress");
+    expect(injected[1]).toContain("`open` \u2192 `in_progress`");
     expect(injected[1]).toContain("by user");
   });
 
