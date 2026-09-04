@@ -136,6 +136,26 @@ const ACTION_ICONS: Record<string, { icon: react.ReactElement; hint: string; ton
 };
 
 
+/**
+ * The identity of one ask, everywhere the queue needs one: the answered set,
+ * the React key, and the one-row-open state.
+ *
+ * It was boardKey + actionId, and that collided. A ticket can carry MORE
+ * THAN ONE pending approval -- two request_allowlist proposals, say -- and
+ * every approval derives actionId "allowlist", so both entries shared one
+ * key. Answering one approval then hid ALL of them (the answered set is a
+ * Set of this key), React saw duplicate keys, and the one-row-open toggle
+ * opened both. The approval id, unique per proposal, breaks the tie.
+ */
+export function entryKey(entry: QueueEntry): string {
+  return (
+    entry.boardKey +
+    "\u0000" +
+    entry.actionId +
+    (entry.approvalId !== undefined ? "\u0000" + entry.approvalId : "")
+  );
+}
+
 export function QueuePanel(props: QueuePanelProps) {
   const [openRow, setOpenRow] = react.useState<string | null>(null);
   const [running, setRunning] = react.useState<QueueEntry | null>(null);
@@ -155,13 +175,13 @@ export function QueuePanel(props: QueuePanelProps) {
    * losing your place in it: the rows you have dealt with look identical to
    * the ones you have not.
    *
-   * Keyed by boardKey + actionId, so answering one ask on a ticket does not
-   * hide the OTHER asks that ticket may still have. Only a SUCCESSFUL action
-   * records an answer -- a refused write must leave the ask standing, or the
-   * queue would quietly lose work that never happened.
+   * Keyed by entryKey -- board, action, and for approvals the SPECIFIC
+   * proposal -- so answering one ask does not hide the OTHER asks that
+   * ticket may still have. Only a SUCCESSFUL action records an answer -- a
+   * refused write must leave the ask standing, or the queue would quietly
+   * lose work that never happened.
    */
   const [answered, setAnswered] = react.useState<ReadonlySet<string>>(new Set());
-  const answerKey = (entry: QueueEntry): string => entry.boardKey + "\u0000" + entry.actionId;
 
   const entries = humanQueue(
     props.tickets,
@@ -179,7 +199,7 @@ export function QueuePanel(props: QueuePanelProps) {
    * pure function of the board -- this hides a row, it does not change what
    * the board thinks is outstanding.
    */
-  const visible = entries.filter((entry) => !answered.has(answerKey(entry)));
+  const visible = entries.filter((entry) => !answered.has(entryKey(entry)));
 
   const suggested = visible.filter((e) => e.nominationReason !== undefined).length;
   // Only ASKS THAT NEED ATTENTION are surfaced. A fulfilled nomination means
@@ -259,14 +279,14 @@ export function QueuePanel(props: QueuePanelProps) {
       <ul className="aidos-ticket-strips">
         {visible.map((entry) => (
           <TicketStrip
-            key={entry.boardKey + ":" + entry.actionId}
+            key={entryKey(entry)}
             actionIcon={ACTION_ICONS[entry.actionId]?.icon}
             actionHint={ACTION_ICONS[entry.actionId]?.hint}
-            expanded={openRow === entry.boardKey + ":" + entry.actionId}
+            expanded={openRow === entryKey(entry)}
             onToggleActions={() => {
               // One row open at a time: the queue is a list to work through,
               // not a dashboard to leave sprawled open.
-              const id = entry.boardKey + ":" + entry.actionId;
+              const id = entryKey(entry);
               setOpenRow(openRow === id ? null : id);
             }}
             ticket={entry.ticket}
@@ -359,7 +379,7 @@ export function QueuePanel(props: QueuePanelProps) {
                 setWorking(false);
                 setAnswered(function (previous) {
                   const next = new Set(previous);
-                  next.add(answerKey(running));
+                  next.add(entryKey(running));
                   return next;
                 });
                 setRunning(null);

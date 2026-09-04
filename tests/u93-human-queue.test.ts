@@ -20,7 +20,7 @@ import {
 } from "../src/client/human-queue";
 import type { Nomination } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
-import { queueEntriesFor } from "../src/client/queue-panel";
+import { queueEntriesFor, entryKey } from "../src/client/queue-panel";
 import type { EvidenceRow } from "../src/kernel/types";
 
 const noEvidence = () => [] as string[];
@@ -353,6 +353,28 @@ describe("u93 human-queue: pending approvals are asks", () => {
     ]);
     expect(rows.filter((r) => r.approvalId === "req-2")).toEqual([]);
   });
+
+  it("TWO approvals on one ticket have DISTINCT keys (#93 review blocker)", () => {
+    /*
+     * The queue keys were boardKey + actionId, and every approval derives
+     * actionId "allowlist" -- so two pending proposals on the SAME ticket
+     * collapsed onto one key. Answering one hid both (the answered set is a
+     * Set of the key) and React saw duplicate list keys. The discriminator
+     * is the approval id, which is unique per proposal; this test fails
+     * under the old key with two identical Set members.
+     */
+    const second = { ...approval, id: "req-2", prompt: "Approve the second batch" };
+    const rows = humanQueue([ticket], () => [], [], "suggested", [approval, second]);
+    expect(rows).toHaveLength(2);
+    const keys = rows.map(entryKey);
+    expect(new Set(keys).size).toBe(2);
+    // And the keys differ exactly by the proposal, not by anything else.
+    expect(keys[0]).toContain("req-1");
+    expect(keys[1]).toContain("req-2");
+    // An answered set holding one approval's key does not match the other.
+    const answered = new Set([keys[0]]);
+    expect(keys.some((k) => answered.has(k) && k !== keys[0])).toBe(false);
+  });
 });
 
 /**
@@ -545,7 +567,7 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
      * is the difference between working down a list and losing your place.
      */
     expect(panel).toContain("const visible = entries.filter");
-    expect(panel).toContain("!answered.has(answerKey(entry))");
+    expect(panel).toContain("!answered.has(entryKey(entry))");
     // Every consumer reads the FILTERED list: a count that still includes
     // answered asks contradicts the rows beneath it.
     expect(panel).toContain("if (visible.length === 0)");
@@ -557,9 +579,11 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
     // Answering one ask must not hide the OTHER asks the same ticket has,
     // and a refused write must leave its ask standing -- otherwise the queue
     // quietly loses work that never happened.
-    // Joined on NUL: a separator that cannot occur inside a board key or an
-    // action id, so two different asks can never collide on one key.
-    expect(panel).toContain('entry.boardKey + "\\u0000" + entry.actionId');
+    // entryKey joins on NUL: a separator that cannot occur inside a board
+    // key or an action id, so two different asks can never collide. The
+    // approval id is part of the key -- the discriminating case is tested
+    // for real in "TWO approvals on one ticket have DISTINCT keys".
+    expect(panel).toContain("entry.boardKey +");
     const success = panel.slice(panel.indexOf(".then(() => {"), panel.indexOf(".catch("));
     expect(success).toContain("setAnswered");
     const failure = panel.slice(panel.indexOf(".catch("));
