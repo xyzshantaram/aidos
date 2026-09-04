@@ -23,7 +23,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_GATES } from "../src/kernel/constants";
+import { BUILTIN_KINDS, DEFAULT_GATES } from "../src/kernel/constants";
+import { resolveConfig } from "../src/host/aidos-core";
 import { isMissing } from "../src/kernel/gates";
 import { gateProgressOf } from "../src/kernel/projections";
 
@@ -145,5 +146,61 @@ describe("#107 the board's gate FRACTION agrees with the gate", () => {
 
   it("a failed review does not raise the fraction", () => {
     expect(fractionFor([CHECK, FAIL]).present).toBe(1);
+  });
+});
+
+describe("#107 review finding 3: a non-contributing kind may never excuse", () => {
+  /*
+   * builtin:review_fail is REGISTERED, so the "is this a known kind?" check
+   * passed it -- meaning a hand-written config could name a FAILED review as
+   * the thing that excuses a machine check. #96's invariant ("review_fail
+   * satisfies nothing") was enforced on requiredKinds and not on this new
+   * axis, so the guarantee held on one side and not the other.
+   *
+   * Keyed on WEIGHT 0 rather than on the id, so it covers the CLASS: any
+   * kind declared as contributing nothing cannot be made to contribute
+   * through the back door.
+   */
+  function resolveConfigDirect(excusedBy: Record<string, string>) {
+    const settings = {
+      kinds: BUILTIN_KINDS.map((k) => ({ ...k })),
+      gates: [
+        {
+          fromState: "in_progress",
+          toState: "awaiting_verification",
+          requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
+          allowedActors: ["user", "agent"],
+          excusedBy,
+        },
+      ],
+      injectEnabled: true,
+      injectDebounceMs: 0,
+    };
+    return resolveConfig(settings as never, undefined);
+  }
+
+  it("refuses review_fail as an excuse", () => {
+    expect(() =>
+      resolveConfigDirect({ "builtin:automated_check": "builtin:review_fail" }),
+    ).toThrow(/weight 0/);
+  });
+
+  it("still accepts review_pass as an excuse", () => {
+    // The guard must discriminate by weight, not refuse excuses wholesale.
+    expect(() =>
+      resolveConfigDirect({ "builtin:automated_check": "builtin:review_pass" }),
+    ).not.toThrow();
+  });
+
+  it("refuses an unregistered excuse kind", () => {
+    expect(() =>
+      resolveConfigDirect({ "builtin:automated_check": "builtin:nope" }),
+    ).toThrow(/unregistered/);
+  });
+
+  it("refuses excusing a kind the gate does not require", () => {
+    expect(() =>
+      resolveConfigDirect({ "builtin:after_shot": "builtin:review_pass" }),
+    ).toThrow(/does not require/);
   });
 });

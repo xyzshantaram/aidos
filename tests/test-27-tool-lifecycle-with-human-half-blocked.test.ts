@@ -94,9 +94,21 @@ describe("lifecycle with the human half blocked", () => {
     );
     /*
      * #107 CONTRACT CHANGE: a review_pass now EXCUSES the machine check, so
-     * this no longer refuses. The property that matters is preserved and
-     * asserted below -- a check alone is still refused, because review_pass
-     * is the expensive evidence and stays mandatory in both directions.
+     * this no longer refuses.
+     *
+     * An earlier version of this comment said the converse property was
+     * "asserted below". IT WAS NOT -- there is no such assertion in this
+     * file, and the #107 review caught the claim (finding 2). A comment
+     * asserting coverage that does not exist is worse than no comment,
+     * because it stops the next reader looking.
+     *
+     * Where it IS asserted: tests/test-30-review-pass-is-its-own-kind.test.ts
+     * and its tool twin both keep "a passing check without a review is
+     * refused", and tests/u107-check-excused-by-review.test.ts asserts
+     * missingFor([CHECK]) === [PASS]. So the excuse is directional and the
+     * expensive evidence stays mandatory -- just not in THIS file, which is
+     * a net coverage reduction here rather than the like-for-like swap the
+     * old comment implied.
      */
     successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
     expect(await stateOf()).toBe("awaiting_verification");

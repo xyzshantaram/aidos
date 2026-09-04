@@ -212,7 +212,15 @@ export const AIDOS_SETTINGS_SCHEMA = z.object({
  * A gate referencing an unregistered kind fails here, at config load, not at
  * gate time (SPEC-B1 decision 14).
  */
-function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
+/**
+ * Resolve the settings into the runtime config, validating as it goes.
+ *
+ * Exported so its VALIDATION is testable (#107 review, finding 3). The rules
+ * it enforces -- an excuse naming an unregistered kind, an excuse for a kind
+ * the gate does not require, a zero-weight kind used as an excuse -- are
+ * exactly the kind of guard that silently rots when nothing can reach it.
+ */
+export function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
   const kinds = settings.kinds.map((kind) => ({
     id: kind.id,
     label: kind.label,
@@ -238,6 +246,30 @@ function resolveConfig(settings: AidosSettings, ctx?: Context): AidosConfig {
      * exactly as an unregistered requiredKind already is.
      */
     for (const [required, excuse] of Object.entries(gate.excusedBy)) {
+      /*
+       * #107 review, finding 3: a NON-CONTRIBUTING kind may never excuse.
+       *
+       * `builtin:review_fail` is registered, so the known-kind check below
+       * passed it -- meaning a hand-written config could name a FAILED
+       * review as the thing that excuses a machine check. #96's invariant
+       * ("review_fail satisfies nothing") was enforced on requiredKinds and
+       * not on this new axis.
+       *
+       * Keyed on WEIGHT 0 rather than on the id, so the rule covers the
+       * class rather than one name: any kind declared as contributing
+       * nothing cannot be made to contribute by the back door.
+       *
+       * Severity is genuinely low and worth stating plainly: this needs a
+       * hand-written workspace config, and anyone who can add a perverse
+       * excuse can already delete requiredKinds outright. This is
+       * defence-in-depth and an asymmetry fix, not an escalation path.
+       */
+      const excuseDef = kinds.find((kind) => kind.id === excuse);
+      if (excuseDef !== undefined && excuseDef.weight === 0) {
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required} with ${excuse}, which has weight 0 and may never satisfy or excuse anything`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
+      }
       if (typeof excuse !== "string" || !known.has(excuse)) {
         const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required} with an unregistered kind ${excuse}`;
         ctx?.logger?.warn?.(message);

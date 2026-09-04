@@ -27335,6 +27335,12 @@ function resolveConfig(settings, ctx) {
   const known = new Set(kinds.map((kind) => kind.id));
   for (const gate of gates) {
     for (const [required2, excuse] of Object.entries(gate.excusedBy)) {
+      const excuseDef = kinds.find((kind) => kind.id === excuse);
+      if (excuseDef !== void 0 && excuseDef.weight === 0) {
+        const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required2} with ${excuse}, which has weight 0 and may never satisfy or excuse anything`;
+        ctx?.logger?.warn?.(message);
+        throw new Error(message);
+      }
       if (typeof excuse !== "string" || !known.has(excuse)) {
         const message = `aidos config: gate ${gate.fromState} -> ${gate.toState} excuses ${required2} with an unregistered kind ${excuse}`;
         ctx?.logger?.warn?.(message);
