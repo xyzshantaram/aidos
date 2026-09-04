@@ -486,10 +486,43 @@ describe("#93 the queue's action buttons are a grid, not ragged", () => {
     expect(css).not.toContain(".aidos-queue .aidos-ticket-strip-actions {");
   });
 
-  it("sizes the columns once on the container, not per row", () => {
+  it("sizes the primary column once on the container, not per row", () => {
     const vars = rule(".aidos-queue {");
     expect(vars).toContain("--queue-action-w");
-    expect(vars).toContain("--queue-dismiss-w");
+  });
+
+  it("does NOT reserve a Dismiss column, which rendered as an empty gap", () => {
+    /*
+     * User-reported from a screenshot: "sign off and verify has a big gap
+     * next to it". The template reserved a fixed Dismiss column on every row
+     * so the primary button stayed aligned -- and on the many rows without a
+     * Dismiss that column was simply empty space, while the ticket
+     * description next to it was squeezed into a narrow ribbon.
+     *
+     * Dismiss now renders FIRST in an `auto` column that collapses to
+     * nothing when absent, so the primary is flush right at a constant
+     * position with no hole.
+     */
+    const group = rule(".aidos-queue .aidos-ticket-strip-action-group {");
+    expect(group).toContain("grid-template-columns: auto var(--queue-action-w)");
+    expect(group).not.toContain("--queue-dismiss-w");
+  });
+
+  it("renders Dismiss before the primary button", () => {
+    const panel = readFileSync(
+      new URL("../src/client/queue-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    const actions = panel.slice(panel.indexOf("actions={"));
+    const body = actions.slice(0, actions.indexOf("/>"));
+    expect(body.indexOf("Dismiss")).toBeLessThan(body.indexOf("aidos-btn-primary"));
+  });
+
+  it("gives the nomination reason room to be read", () => {
+    // The reason is the agent explaining WHY it is asking; squeezed into a
+    // narrow column it reads as noise. Two lines, then ellipsis.
+    const meta = rule(".aidos-queue .aidos-ticket-strip-meta {");
+    expect(meta).toContain("line-clamp: 2");
   });
 
   it("gives every action button the same width and height", () => {

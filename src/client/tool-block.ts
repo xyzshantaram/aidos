@@ -124,10 +124,55 @@ const ERROR_TOKEN = /\[(?:E_|exit code:|sandbox:)|FS_[A-Z_]+|AIDOS_[A-Z_]+/;
 
 export function firstLineOfError(text: string): string {
   if (text === "") return text;
+  /*
+   * The scratch tools throw a JSON ENVELOPE, so the whole error is a single
+   * line and the token scan below returned the ENTIRE BLOB -- which rendered
+   * as raw JSON on the row, exactly what #71's "no raw JSON as a card body"
+   * rule forbids. Observed in a transcript:
+   *
+   *   Error: {"ok":false,"error":"edit_delegation_failed",
+   *            "code":"FS_AMBIGUOUS_EDIT","message":"old_string matched 5..."}
+   *
+   * Unwrapped to `CODE — message`, which is the part a reader needs. The
+   * full envelope stays in the expanded body, so nothing is lost.
+   */
+  const unwrapped = unwrapErrorEnvelope(text);
+  if (unwrapped !== null) return unwrapped;
   for (const line of text.split("\n")) {
     if (ERROR_TOKEN.test(line)) return line;
   }
   return firstLine(text);
+}
+
+/**
+ * `CODE — message` from a JSON error envelope, or null when the text is not
+ * one.
+ *
+ * Tolerates a prefix before the JSON (the harness wraps thrown errors as
+ * "Error: {...}"), and falls back to whichever of code/message is present
+ * rather than returning nothing when the envelope is partial.
+ */
+export function unwrapErrorEnvelope(text: string): string | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const value = parsed as Record<string, unknown>;
+  const message = typeof value.message === "string" ? value.message : null;
+  const code =
+    typeof value.code === "string"
+      ? value.code
+      : typeof value.error === "string"
+        ? value.error
+        : null;
+  if (message === null) return code;
+  return code === null ? message : `${code} — ${message}`;
 }
 
 /**

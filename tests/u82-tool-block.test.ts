@@ -27,6 +27,7 @@ import {
   relativize,
   resultTextOf,
   rowStateOf,
+  unwrapErrorEnvelope,
   unwrapScratchResult,
 } from "../src/client/tool-block";
 import {
@@ -332,5 +333,90 @@ describe("#82 syntax highlighting", () => {
     expect(gutterWidth([1, 2, 9])).toBe("3ch");
     expect(gutterWidth([1, 250])).toBe("5ch");
     expect(gutterWidth([null, null])).toBe("3ch");
+  });
+});
+
+describe("#82 fixes from the rendered screenshots", () => {
+  const rows = readFileSync(
+    new URL("../src/client/scratch-rows.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("the row is a DIV with role=button, not a <button> element", () => {
+    /*
+     * User-reported: "odd highlight shadow artifact". A real <button>
+     * carries the browser's default chrome -- a grey rounded background --
+     * which rendered as a PILL behind every row header, and fought the
+     * vendored stylesheet's sizing so long error text overflowed the card.
+     *
+     * tool-render uses a div with role/tabIndex, and its CSS is written for
+     * that element. Matching the element is part of matching the design.
+     */
+    expect(rows).toContain('className="tool-render-row"');
+    expect(rows).toContain('role={expandable ? "button" : undefined}');
+    expect(rows).not.toContain('<button\n        type="button"\n        className="tool-render-row"');
+  });
+
+  it("keeps the row keyboard-operable without the button element", () => {
+    // Dropping <button> removes Enter/Space for free, so they are restored
+    // explicitly. An expandable row nobody can open from the keyboard is a
+    // regression, not a style fix.
+    expect(rows).toContain("tabIndex={expandable ? 0 : undefined}");
+    expect(rows).toContain('event.key === "Enter"');
+  });
+
+  it("names the SCRATCH family in every title", () => {
+    // "Write" beside a builtin write is ambiguous: these operate on the
+    // scratch root, not the workspace.
+    for (const title of ["Scratch read", "Scratch write", "Scratch edit", "Scratch mkdir"]) {
+      expect(rows, title).toContain(`title="${title}"`);
+    }
+  });
+});
+
+describe("#82 an error envelope never renders as raw JSON", () => {
+  /*
+   * User-reported from a screenshot: the row read
+   *
+   *   Error: {"ok":false,"error":"edit_delegation_failed",
+   *            "code":"FS_AMBIGUOUS_EDIT","message":"old_string matched 5..."}
+   *
+   * The scratch tools throw a JSON envelope, so the whole error is ONE line
+   * and the token scan returned the entire blob -- raw JSON as the card
+   * body, which is exactly what #71 forbids.
+   */
+  it("unwraps code and message from a thrown envelope", () => {
+    const text =
+      'Error: {"ok":false,"error":"edit_delegation_failed","code":"FS_AMBIGUOUS_EDIT",' +
+      '"message":"old_string matched 5 times"}';
+    const line = firstLineOfError(text);
+    expect(line).toBe("FS_AMBIGUOUS_EDIT — old_string matched 5 times");
+    expect(line).not.toContain("{");
+  });
+
+  it("falls back to the error field when there is no code", () => {
+    expect(unwrapErrorEnvelope('{"error":"path_escape","message":"must stay under root"}')).toBe(
+      "path_escape — must stay under root",
+    );
+  });
+
+  it("returns whichever half is present", () => {
+    expect(unwrapErrorEnvelope('{"message":"just a message"}')).toBe("just a message");
+    expect(unwrapErrorEnvelope('{"code":"E_ONLY"}')).toBe("E_ONLY");
+  });
+
+  it("leaves NON-envelope errors to the existing token scan", () => {
+    // Plain text errors must keep their old behaviour: this unwrap is an
+    // addition, not a replacement.
+    expect(unwrapErrorEnvelope("cannot read /x: not found")).toBeNull();
+    expect(firstLineOfError("Error: wrapper\nFS_NOT_OBSERVED: read it first")).toContain(
+      "FS_NOT_OBSERVED",
+    );
+  });
+
+  it("survives malformed JSON without crashing the row", () => {
+    expect(unwrapErrorEnvelope("{not json")).toBeNull();
+    expect(unwrapErrorEnvelope('{"a":1}')).toBeNull();
+    expect(unwrapErrorEnvelope("[1,2]")).toBeNull();
   });
 });

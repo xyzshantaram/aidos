@@ -215,14 +215,22 @@ export function QueuePanel(props: QueuePanelProps) {
             }}
             actions={
               <>
-                <button
-                  className="aidos-btn aidos-btn-primary"
-                  onClick={() => {
-                    setRunning(entry);
-                  }}
-                >
-                  {entry.label}
-                </button>
+                {/*
+                  * DISMISS COMES FIRST, and that ordering is the fix for the
+                  * gap the user reported.
+                  *
+                  * With the primary button first, the grid had to RESERVE a
+                  * Dismiss column on every row so the primary stayed
+                  * aligned -- and on the many rows with no Dismiss that
+                  * reserved column rendered as a wide empty space beside
+                  * "Sign off".
+                  *
+                  * Put first, Dismiss occupies an auto-width column that
+                  * collapses to nothing when absent, so the primary button
+                  * sits flush right at the SAME position on every row with
+                  * no hole -- and the space it was wasting goes back to the
+                  * ticket's description, which the user also asked for.
+                  */}
                 {entry.nominationId !== undefined && props.onDismiss !== undefined ? (
                   <button
                     className="aidos-btn"
@@ -234,6 +242,14 @@ export function QueuePanel(props: QueuePanelProps) {
                     Dismiss
                   </button>
                 ) : null}
+                <button
+                  className="aidos-btn aidos-btn-primary"
+                  onClick={() => {
+                    setRunning(entry);
+                  }}
+                >
+                  {entry.label}
+                </button>
               </>
             }
           />

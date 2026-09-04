@@ -82,16 +82,37 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
   const shown = showsError ? errorSummary : summary;
   return (
     <div className="tool-render-card" data-error={state === "error" || undefined}>
-      <button
-        type="button"
+      {/*
+        * A DIV with role="button", not a <button> element.
+        *
+        * A real button carries the browser's default chrome -- a grey
+        * rounded background -- which rendered as a PILL behind every row
+        * header (user-reported: "odd highlight shadow artifact"). It also
+        * fought the vendored stylesheet's sizing, which is why long error
+        * text overflowed the card's right edge.
+        *
+        * tool-render uses a div with role/tabIndex for exactly this reason,
+        * and its CSS is written for that element. Matching the element is
+        * part of matching the design.
+        */}
+      <div
         className="tool-render-row"
         data-state={state}
         data-expandable={expandable ? true : undefined}
-        disabled={!expandable}
+        role={expandable ? "button" : undefined}
+        tabIndex={expandable ? 0 : undefined}
         aria-expanded={expandable ? open : undefined}
-        onClick={() => {
-          if (expandable) setExpanded(!expanded);
-        }}
+        onClick={expandable ? () => setExpanded(!expanded) : undefined}
+        onKeyDown={
+          expandable
+            ? (event: react.KeyboardEvent<HTMLDivElement>) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setExpanded(!expanded);
+                }
+              }
+            : undefined
+        }
       >
         <span className="tool-render-leading" aria-hidden="true">
           <Leading state={state} open={open} />
@@ -106,7 +127,7 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
         >
           {shown}
         </span>
-      </button>
+      </div>
       {open ? <div className="tool-render-body">{body}</div> : null}
     </div>
   );
@@ -184,7 +205,7 @@ export function ScratchReadRow(props: ToolViewProps) {
       ? bodyOf(text, state === "error")
       : readBody(text, path);
   return (
-    <ScratchRow title="Read" summary={summary} state={state} body={body} errorSummary={errorSummary} />
+    <ScratchRow title="Scratch read" summary={summary} state={state} body={body} errorSummary={errorSummary} />
   );
 }
 
@@ -195,7 +216,7 @@ export function ScratchWriteRow(props: ToolViewProps) {
   const written = state === "error" ? errorText : pickString(args, ["content"]) ?? null;
   return (
     <ScratchRow
-      title="Write"
+      title="Scratch write"
       summary={summary}
       state={state}
       body={bodyOf(written, state === "error")}
@@ -224,7 +245,7 @@ export function ScratchEditRow(props: ToolViewProps) {
   }
   return (
     <ScratchRow
-      title="Edit"
+      title="Scratch edit"
       summary={summary}
       state={state}
       body={bodyOf(text, state === "error")}
@@ -237,7 +258,7 @@ export function ScratchMkdirRow(props: ToolViewProps) {
   const { state, summary, errorText, errorSummary } = useRow(props, "Mkdir");
   return (
     <ScratchRow
-      title="Mkdir"
+      title="Scratch mkdir"
       summary={summary}
       state={state}
       body={bodyOf(state === "error" ? errorText : null, state === "error")}

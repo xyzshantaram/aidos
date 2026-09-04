@@ -2440,33 +2440,64 @@
  *
  * Split by concern: flex here, grid on the action group only.
  */
+/*
+ * #93: the caller's action buttons.
+ *
+ * DISMISS FIRST, PRIMARY LAST -- see queue-panel.tsx. The Dismiss column is
+ * `auto`, so it collapses to nothing on the many rows that have no Dismiss,
+ * while the primary column is fixed so every row's main button is the same
+ * size and lands at the same place.
+ *
+ * The previous template reserved the Dismiss column on every row to keep
+ * that alignment, which is what the user saw as "a big gap next to Sign off"
+ * -- and it stole ~5rem from the ticket description, which they also asked
+ * for more of.
+ *
+ * The container itself stays FLEX (its own rule, untouched) so the group
+ * keeps the right alignment it has always had.
+ */
 .aidos-queue .aidos-ticket-strip-action-group {
   display: grid;
-  grid-template-columns: var(--queue-action-w) var(--queue-dismiss-w);
+  grid-template-columns: auto var(--queue-action-w);
   gap: 6px;
   align-items: center;
 }
 
 .aidos-queue {
   /* Sized once to the longest label ("Review request"), on the CONTAINER, so
-     the columns do not resize per row -- that resizing is the raggedness
-     being removed. */
-  --queue-action-w: 8.5rem;
-  --queue-dismiss-w: 5rem;
+     the column does not resize per row -- that resizing is the raggedness
+     this removes. Trimmed from 8.5rem: the label fits, and the difference
+     goes to the description. */
+  --queue-action-w: 7.5rem;
 }
 
 .aidos-queue .aidos-ticket-strip-action-group .aidos-btn {
-  /* Full width WITHIN its column: the column decides the size, not the label. */
+  /* Full width WITHIN its column: the column decides the size, not the
+     label. Dismiss sits in the auto column and keeps its natural width. */
   width: 100%;
   justify-content: center;
   min-height: 28px;
+  white-space: nowrap;
+}
+
+/*
+ * The nomination reason needs room to be read -- it is the agent explaining
+ * WHY it is asking, and a reason squeezed into a narrow column reads as
+ * noise. Two lines, then ellipsis, rather than a tall thin ribbon.
+ */
+.aidos-queue .aidos-ticket-strip-meta {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
 }
 
 @media (max-width: 640px) {
-  /* Share the space rather than holding fixed widths: on a narrow screen
-     fixed columns squeeze the labels instead of aligning them. */
+  /* Share the space rather than holding a fixed width: on a narrow screen a
+     fixed column squeezes the label instead of aligning it. */
   .aidos-queue .aidos-ticket-strip-action-group {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: auto 1fr;
   }
 }
 
