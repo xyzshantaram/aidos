@@ -2349,9 +2349,22 @@
 }
 
 .aidos-ticket-strip {
+  /*
+   * A COLUMN, so the revealed action row can sit BELOW the strip (#93).
+   *
+   * This was `flex` with the default row direction, which is why clicking
+   * the action icon appeared to do nothing: the action row rendered as a
+   * second COLUMN beside the strip content, squeezed to nothing by the
+   * main row's `flex: 1`. The state was updating correctly the whole time
+   * and the element was in the DOM -- it simply had no width.
+   *
+   * A strip with no action row is unaffected: a column with one child lays
+   * out identically to a row with one child.
+   */
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
   padding: 6px var(--space-1);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -2367,6 +2380,7 @@
   opacity: 0.6;
 }
 
+/* The strip's own content stays a ROW; only the wrapper became a column. */
 .aidos-ticket-strip-main {
   display: flex;
   align-items: center;
@@ -2422,35 +2436,54 @@
    opened, and an opened row is alone. */
 
 .aidos-strip-action-toggle {
+  /*
+   * An ICON, not a button (user: "these should be icons not buttons -
+   * buttons should move into the expanded row").
+   *
+   * No border, no filled box: the collapsed row should read as a marker
+   * saying what is being asked, and a button box makes it look like the
+   * action itself -- which is the thing that now lives on the revealed row.
+   */
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  border: 0;
+  background: none;
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--tone) 16%, transparent);
-  color: color-mix(in srgb, var(--tone) 38%, #ffffff);
+  color: var(--tone);
   cursor: pointer;
   /* Default tone; each action overrides it below. */
   --tone: var(--text-secondary);
 }
 
 .aidos-strip-action-toggle:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--tone) 28%, transparent);
+  background: color-mix(in srgb, var(--tone) 20%, transparent);
 }
 
-/* Open reads as SELECTED, not merely hovered: the row below belongs to it. */
+/*
+ * Open reads as SELECTED. A faint tint rather than a filled button, so the
+ * icon stays an icon -- it marks which row owns the revealed buttons below
+ * without competing with them.
+ */
+/*
+ * Open reads as SELECTED, not merely hovered: the revealed row belongs to
+ * this icon, so it must say which one opened it even while the pointer has
+ * moved on to the buttons below.
+ *
+ * The old design filled the box white; a bare icon has no box to fill, so
+ * selection is a tone-coloured RING plus a deeper tint than hover carries.
+ * Both differ from :hover, which is the property that actually matters --
+ * a selected state indistinguishable from hover is not a state.
+ */
 .aidos-strip-action-toggle.is-open {
-  background: color-mix(in srgb, var(--tone) 40%, transparent);
-  border-color: color-mix(in srgb, var(--tone) 75%, transparent);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--tone) 30%, transparent);
+  box-shadow: inset 0 0 0 1px var(--tone);
 }
 
-/* The colour is the state the action leads TO, so the queue reads as a
-   column of intents rather than of identical buttons. */
 .aidos-queue li:has([aria-label^="Sign off"]) .aidos-strip-action-toggle {
   --tone: var(--state-in-progress);
 }

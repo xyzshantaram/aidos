@@ -501,10 +501,28 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
   });
 
   it("an open toggle reads as SELECTED, not merely hovered", () => {
-    // The revealed row belongs to that icon; hover styling alone would not
-    // say which one opened it.
+    /*
+     * The revealed row belongs to that icon, so the icon must keep saying so
+     * once the pointer moves down to the buttons. The old design filled the
+     * button box white; the toggle is a bare ICON now (user: "these should
+     * be icons not buttons"), so selection is a tone ring instead.
+     *
+     * The property that matters is that open DIFFERS from hover -- a
+     * selected state that looks like a hover is not a state.
+     */
     const open = rule(".aidos-strip-action-toggle.is-open {");
-    expect(open).toContain("color: #ffffff");
+    const hover = rule(".aidos-strip-action-toggle:hover:not(:disabled) {");
+    expect(open).toContain("box-shadow: inset 0 0 0 1px var(--tone)");
+    expect(hover).not.toContain("box-shadow");
+    expect(open).not.toEqual(hover);
+  });
+
+  it("the toggle is an icon, not a button box", () => {
+    // A filled box makes the collapsed marker look like the action itself,
+    // which is the thing that now lives on the revealed row.
+    const toggle = rule(".aidos-strip-action-toggle {");
+    expect(toggle).toContain("border: 0");
+    expect(toggle).toContain("background: none");
   });
 
   it("opens ONE row at a time", () => {
@@ -516,6 +534,22 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
     expect(strip).toContain("aidos-ticket-strip-actionrow");
     const row = rule(".aidos-ticket-strip-actionrow {");
     expect(row).toContain("justify-content: flex-end");
+  });
+
+  it("the strip is a COLUMN, so the revealed row lands below and not beside", () => {
+    /*
+     * The reported bug: clicking the icon appeared to do nothing. The state
+     * was updating and the element was in the DOM the whole time -- the
+     * strip was a flex ROW, so the action row rendered as a second COLUMN
+     * beside the content and was squeezed to nothing by `-main`'s `flex: 1`.
+     *
+     * The two rules must agree: wrapper column, content row.
+     */
+    const wrapper = rule(".aidos-ticket-strip {");
+    expect(wrapper).toContain("flex-direction: column");
+    const main = rule(".aidos-ticket-strip-main {");
+    expect(main).toContain("display: flex");
+    expect(main).not.toContain("flex-direction: column");
   });
 });
 

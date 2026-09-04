@@ -164,13 +164,21 @@ export function AlertCircleIcon() {
  * TO, so the queue reads as a column of intents.
  */
 
-/** Sign off: a clipboard with a pen stroke. */
+/**
+ * Sign off: a page with a SIGNATURE stroke across it.
+ *
+ * The first attempt drew a clipboard, a clip AND a check inside 12 square
+ * pixels; the user could not read it ("the sign off icon is not clear
+ * enough"), and they were right -- three shapes at that size is a smudge.
+ * A page outline plus one sweeping signature line is two shapes, and the
+ * signature is what the action actually is.
+ */
 export function SignoffIcon() {
   return (
     <svg {...iconProps()}>
-      <path d="M8.5 2h1a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h1" />
-      <path d="M4.5 1.5h3v1.5h-3z" />
-      <path d="M4 7.5l1.5 1.5L8.5 6" />
+      <path d="M2.6 1.6h4.3l2.5 2.5v6.3H2.6z" />
+      <path d="M6.8 1.7v2.4h2.4" />
+      <path d="M4.2 8.4c1-1.4 1.7-1.4 2.2-.5s1 .6 1.6-.6" />
     </svg>
   );
 }
