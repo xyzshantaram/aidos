@@ -39,13 +39,19 @@ export interface ToolViewProps {
   cwd?: string;
 }
 
-/** The state indicator. A stopped call is not a failure and is not tinted as one. */
-function StateMark({ state, open }: { state: RowState; open: boolean }) {
-  if (open) return <span className="aidos-toolrow-mark">▾</span>;
-  if (state === "error") return <span className="aidos-toolrow-mark aidos-toolrow-error">●</span>;
-  if (state === "stopped") return <span className="aidos-toolrow-mark aidos-toolrow-stopped">●</span>;
-  if (state === "running") return <span className="aidos-toolrow-mark">◌</span>;
-  return <span className="aidos-toolrow-mark">▸</span>;
+/**
+ * The leading slot, matching tool-render's: a chevron when open, a state dot
+ * when the call failed or was stopped, and the tool's own icon otherwise.
+ *
+ * A STOPPED call gets the warning dot rather than the error dot. The user
+ * stopped it; tinting a deliberate stop as a failure teaches people to
+ * ignore the tint.
+ */
+function Leading({ state, open }: { state: RowState; open: boolean }) {
+  if (open) return <>▾</>;
+  if (state === "error" || state === "stopped") return <>●</>;
+  if (state === "running") return <>◌</>;
+  return <>▸</>;
 }
 
 interface RowOptions {
@@ -69,25 +75,30 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
    * already useless information at that point -- what the reader needs is
    * why it failed -- and it is recoverable by expanding.
    */
-  const shown = state === "error" && errorSummary !== undefined ? errorSummary : summary;
+  const showsError = state === "error" && errorSummary !== undefined;
+  const shown = showsError ? errorSummary : summary;
   return (
-    <div className={"aidos-toolrow" + (state === "error" ? " aidos-toolrow-is-error" : "")}>
+    <div className="aidos-toolrow">
       <button
         type="button"
-        className="aidos-toolrow-head"
+        className="aidos-toolrow-line"
+        data-state={state}
+        data-expandable={expandable ? true : undefined}
         disabled={!expandable}
-        aria-expanded={open}
+        aria-expanded={expandable ? open : undefined}
         onClick={() => {
           if (expandable) setExpanded(!expanded);
         }}
       >
-        <StateMark state={state} open={open} />
+        <span className="aidos-toolrow-leading" aria-hidden="true">
+          <Leading state={state} open={open} />
+        </span>
         <span className="aidos-toolrow-title">{title}</span>
+        {/* The dot between the tool name and its argument, as tool-render has. */}
+        <span className="aidos-toolrow-sep" aria-hidden="true" />
         <span
-          className={
-            "aidos-toolrow-summary" +
-            (state === "error" && errorSummary !== undefined ? " aidos-toolrow-error" : "")
-          }
+          className="aidos-toolrow-summary"
+          data-error={showsError ? true : undefined}
           title={shown}
         >
           {shown}
@@ -113,8 +124,11 @@ function useRow(props: ToolViewProps, label: string) {
 /** A body block, or null when there is nothing worth expanding. */
 function bodyOf(text: string | null, isError: boolean): react.ReactNode | null {
   if (text === null || text === "") return null;
+  // The rounded code block tool-render uses, on the same token.
   return (
-    <pre className={"aidos-toolrow-pre" + (isError ? " aidos-toolrow-error" : "")}>{text}</pre>
+    <pre className="aidos-toolrow-code" data-error={isError ? true : undefined}>
+      {text}
+    </pre>
   );
 }
 
