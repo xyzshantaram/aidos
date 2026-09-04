@@ -142,6 +142,27 @@ export function QueuePanel(props: QueuePanelProps) {
   const [working, setWorking] = react.useState(false);
   const [sortKey, setSortKey] = react.useState<QueueSortKey>("suggested");
 
+  /*
+   * ANSWERED ASKS ARE HIDDEN AT ONCE (user ask).
+   *
+   * An ask disappears when the action it offers stops being available --
+   * signing off moves the ticket to in_progress, so the "sign off" ask is no
+   * longer derived. But that only happens once `props.tickets` refreshes
+   * from the workspace merge, and until it does the row you just answered is
+   * still sitting there offering the same button.
+   *
+   * In a 76-ask queue that is the difference between working down a list and
+   * losing your place in it: the rows you have dealt with look identical to
+   * the ones you have not.
+   *
+   * Keyed by boardKey + actionId, so answering one ask on a ticket does not
+   * hide the OTHER asks that ticket may still have. Only a SUCCESSFUL action
+   * records an answer -- a refused write must leave the ask standing, or the
+   * queue would quietly lose work that never happened.
+   */
+  const [answered, setAnswered] = react.useState<ReadonlySet<string>>(new Set());
+  const answerKey = (entry: QueueEntry): string => entry.boardKey + "\u0000" + entry.actionId;
+
   const entries = humanQueue(
     props.tickets,
     // The BOARD key, not the bare id: a foreign ticket's evidence is filed
@@ -153,7 +174,14 @@ export function QueuePanel(props: QueuePanelProps) {
     props.approvals ?? [],
   );
 
-  const suggested = entries.filter((e) => e.nominationReason !== undefined).length;
+  /*
+   * The filter itself. Applied AFTER humanQueue so the derivation stays a
+   * pure function of the board -- this hides a row, it does not change what
+   * the board thinks is outstanding.
+   */
+  const visible = entries.filter((entry) => !answered.has(answerKey(entry)));
+
+  const suggested = visible.filter((e) => e.nominationReason !== undefined).length;
   // Only ASKS THAT NEED ATTENTION are surfaced. A fulfilled nomination means
   // the human did the thing; saying so would be nagging about success.
   const unmatched = unmatchedNominations(
@@ -182,7 +210,7 @@ export function QueuePanel(props: QueuePanelProps) {
     );
   }
 
-  if (entries.length === 0) {
+  if (visible.length === 0) {
     return (
       <div className="aidos-queue">
         <p className="aidos-queue-empty">
@@ -196,7 +224,7 @@ export function QueuePanel(props: QueuePanelProps) {
     <div className="aidos-queue">
       <div className="aidos-queue-head">
         <span className="aidos-queue-count">
-          {entries.length + (entries.length === 1 ? " ask" : " asks")}
+          {visible.length + (visible.length === 1 ? " ask" : " asks")}
           {suggested > 0 ? " \u00b7 " + suggested + " suggested by the agent" : ""}
         </span>
         <label className="aidos-queue-sort">
@@ -229,7 +257,7 @@ export function QueuePanel(props: QueuePanelProps) {
         </ul>
       ) : null}
       <ul className="aidos-ticket-strips">
-        {entries.map((entry) => (
+        {visible.map((entry) => (
           <TicketStrip
             key={entry.boardKey + ":" + entry.actionId}
             actionIcon={ACTION_ICONS[entry.actionId]?.icon}
@@ -325,8 +353,14 @@ export function QueuePanel(props: QueuePanelProps) {
             void props
               .onAct(running, outcome)
               .then(() => {
-                // Only a SUCCESSFUL action closes the modal.
+                // Only a SUCCESSFUL action closes the modal -- and only a
+                // successful one counts the ask as answered.
                 setWorking(false);
+                setAnswered(function (previous) {
+                  const next = new Set(previous);
+                  next.add(answerKey(running));
+                  return next;
+                });
                 setRunning(null);
               })
               .catch(() => {

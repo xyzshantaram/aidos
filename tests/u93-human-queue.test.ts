@@ -536,6 +536,56 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
     expect(row).toContain("justify-content: flex-end");
   });
 
+  it("hides an ask the moment it is answered", () => {
+    /*
+     * An ask stops being derived once its action is unavailable -- signing
+     * off moves the ticket to in_progress -- but only after props.tickets
+     * refreshes from the workspace merge. Until then the row you just
+     * answered sits there offering the same button. In a 76-ask queue that
+     * is the difference between working down a list and losing your place.
+     */
+    expect(panel).toContain("const visible = entries.filter");
+    expect(panel).toContain("!answered.has(answerKey(entry))");
+    // Every consumer reads the FILTERED list: a count that still includes
+    // answered asks contradicts the rows beneath it.
+    expect(panel).toContain("if (visible.length === 0)");
+    expect(panel).toContain("{visible.map((entry)");
+    expect(panel).not.toContain("{entries.map((entry)");
+  });
+
+  it("keys an answer by ticket AND action, and only on success", () => {
+    // Answering one ask must not hide the OTHER asks the same ticket has,
+    // and a refused write must leave its ask standing -- otherwise the queue
+    // quietly loses work that never happened.
+    // Joined on NUL: a separator that cannot occur inside a board key or an
+    // action id, so two different asks can never collide on one key.
+    expect(panel).toContain('entry.boardKey + "\\u0000" + entry.actionId');
+    const success = panel.slice(panel.indexOf(".then(() => {"), panel.indexOf(".catch("));
+    expect(success).toContain("setAnswered");
+    const failure = panel.slice(panel.indexOf(".catch("));
+    expect(failure).not.toContain("setAnswered");
+  });
+
+  it("the revealed row has no separator rule above it", () => {
+    // The row already sits inside the strip's own card and its toggle is
+    // ringed; a rule across the card splits one thing into two.
+    const row = rule(".aidos-ticket-strip-actionrow {");
+    expect(row).not.toContain("border-top");
+  });
+
+  it("sizes every action button the same, and to the surrounding UI", () => {
+    /*
+     * Only the primary was width-pinned, so Dismiss sat beside it at its own
+     * text width -- the last place the "different sizes" report survived
+     * after the container was fixed. And at 28px in a modal whose chips are
+     * 20px the buttons dominated the rows they are subordinate to.
+     */
+    const button = rule(".aidos-ticket-strip-actionrow .aidos-btn {");
+    expect(button).toContain("min-width: 5.5rem");
+    expect(button).toContain("height: 22px");
+    expect(css).not.toContain(".aidos-ticket-strip-actionrow .aidos-btn-primary {");
+  });
+
   it("shows the state CENTERED under the id chip and in parens", () => {
     /*
      * The user's design. Two separate problems with the plain coloured

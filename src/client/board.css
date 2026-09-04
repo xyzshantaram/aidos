@@ -2504,22 +2504,41 @@
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  padding: 6px var(--space-1) 2px;
-  border-top: 1px solid var(--border-subtle);
-  margin-top: 6px;
+  /*
+   * NO separator rule above the buttons.
+   *
+   * The revealed row already belongs to the strip that opened it -- it is
+   * inside the same bordered card, and the open toggle is ringed. A rule
+   * across the card divides one thing into two and makes the row read as a
+   * second, unrelated strip.
+   */
+  padding: 2px var(--space-1) 4px;
+  margin-top: 2px;
 }
 
 .aidos-ticket-strip-actionrow .aidos-btn {
-  min-height: 28px;
+  /*
+   * Sized to the surrounding UI, not to a dialog. These were 28px tall in a
+   * modal whose chips are 20px, so the buttons dominated rows they are
+   * subordinate to: the ASK is the row, the buttons are how you answer it.
+   *
+   * Every button on the row gets the SAME width. Only the primary was fixed
+   * before, so Dismiss sat beside it at its own text width -- which is the
+   * "still different sizes" report, and the last place that inconsistency
+   * survived after the container itself was fixed.
+   */
+  min-height: 22px;
+  height: 22px;
+  min-width: 5.5rem;
+  padding: 0 8px;
+  font-size: 11px;
+  justify-content: center;
   white-space: nowrap;
 }
 
-/* The primary keeps one width so two open rows agree, but nothing depends
-   on it any more -- only one row is open at a time. */
-.aidos-ticket-strip-actionrow .aidos-btn-primary {
-  min-width: 7.5rem;
-  justify-content: center;
-}
+/* No primary-only width. It was the reason Dismiss and the primary read as
+   different sizes: one was pinned at 7.5rem and the other took its text
+   width. The shared rule above sizes every button on the row. */
 
 /* ── #93: the state as coloured TEXT under the id ────────────────────────
    A state is a property of the ticket, not an ask. As a badge it carried the
