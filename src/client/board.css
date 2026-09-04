@@ -2413,45 +2413,118 @@
   align-self: center;
 }
 
-/*
- * #93: the queue's action buttons, same size, right-aligned.
- *
- * FOUR attempts used a GRID and each broke the alignment in a new way --
- * "lost the right alignment", "still broken", then "all different sizes and
- * collapse to the left". The container's `margin-left: auto` inside a flex
- * strip was the thing that always worked; every failure came from replacing
- * that layout rather than adding to it.
- *
- * So: no grid, no display override. The container keeps its flex layout
- * untouched, and the ONLY addition is a fixed width on the primary button.
- * That is the whole requirement -- "all the same size" -- expressed as the
- * smallest change from a known-good baseline.
- *
- * Dismiss keeps its natural width and renders FIRST (see queue-panel.tsx),
- * so the primary button lands at the same place on every row without
- * reserving an empty column, which is what produced the gap beside "Sign
- * off" in the previous attempt.
- */
-.aidos-queue .aidos-ticket-strip-action-group {
+/* ── #93: the queue's collapsed action icons and revealed action row ──────
+   User's design, and it DISSOLVES the alignment problem rather than solving
+   it. Five attempts failed to align an inline button row because a row's
+   action set varies -- one action or two, a Dismiss or none -- so any fixed
+   layout either reserved dead space (the gap beside "Sign off") or went
+   ragged. With nothing inline there is nothing to align until a row is
+   opened, and an opened row is alone. */
+
+.aidos-strip-action-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--tone) 16%, transparent);
+  color: color-mix(in srgb, var(--tone) 38%, #ffffff);
+  cursor: pointer;
+  /* Default tone; each action overrides it below. */
+  --tone: var(--text-secondary);
+}
+
+.aidos-strip-action-toggle:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--tone) 28%, transparent);
+}
+
+/* Open reads as SELECTED, not merely hovered: the row below belongs to it. */
+.aidos-strip-action-toggle.is-open {
+  background: color-mix(in srgb, var(--tone) 40%, transparent);
+  border-color: color-mix(in srgb, var(--tone) 75%, transparent);
+  color: #ffffff;
+}
+
+/* The colour is the state the action leads TO, so the queue reads as a
+   column of intents rather than of identical buttons. */
+.aidos-queue li:has([aria-label^="Sign off"]) .aidos-strip-action-toggle {
+  --tone: var(--state-in-progress);
+}
+.aidos-queue li:has([aria-label^="Verify"]) .aidos-strip-action-toggle {
+  --tone: var(--state-awaiting);
+}
+.aidos-queue li:has([aria-label^="Mark done"]) .aidos-strip-action-toggle {
+  --tone: var(--state-done);
+}
+.aidos-queue li:has([aria-label^="Review a write"]) .aidos-strip-action-toggle {
+  --tone: var(--badge-hue-2);
+}
+
+/* The revealed row. Right-aligned under the strip, so the buttons appear
+   beneath the icon that summoned them. */
+.aidos-ticket-strip-actionrow {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
+  padding: 6px var(--space-1) 2px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 6px;
 }
 
-.aidos-queue .aidos-btn-primary {
-  /* Sized to the longest label ("Review request"). Fixed, not min-width, so
-     a short label like "Verify" cannot shrink and leave the column ragged. */
-  width: 7.5rem;
-  flex: none;
+.aidos-ticket-strip-actionrow .aidos-btn {
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+/* The primary keeps one width so two open rows agree, but nothing depends
+   on it any more -- only one row is open at a time. */
+.aidos-ticket-strip-actionrow .aidos-btn-primary {
+  min-width: 7.5rem;
   justify-content: center;
-  min-height: 28px;
-  white-space: nowrap;
 }
 
-.aidos-queue .aidos-ticket-strip-action-group .aidos-btn {
+/* ── #93: the state as coloured TEXT under the id ────────────────────────
+   A state is a property of the ticket, not an ask. As a badge it carried the
+   same weight as the things that need attention; as text it still reads
+   instantly by colour while giving back the width the title and the agent's
+   reason were squeezed out of. */
+.aidos-ticket-strip-idcol {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   flex: none;
-  min-height: 28px;
-  white-space: nowrap;
+}
+
+.aidos-ticket-strip-state {
+  /* Deliberately overrides the chip look the badgeClass would apply: the
+     class is kept only for its per-state COLOUR. */
+  background: none !important;
+  border: 0 !important;
+  padding: 0 !important;
+  height: auto !important;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--state-open);
+}
+
+.aidos-ticket-strip-state.aidos-chip-state-open { color: var(--state-open); }
+.aidos-ticket-strip-state.aidos-chip-state-in-progress { color: var(--state-in-progress); }
+.aidos-ticket-strip-state.aidos-chip-state-awaiting-verification { color: var(--state-awaiting); }
+.aidos-ticket-strip-state.aidos-chip-state-done { color: var(--state-done); }
+
+/* ── #93: one badge size inside the modal ────────────────────────────────
+   Chips were inheriting slightly different heights from their variants, so a
+   row read as ragged even when it was aligned. */
+.aidos-queue .aidos-chip {
+  height: 20px;
+  font-size: 11px;
 }
 
 /*
@@ -2465,15 +2538,6 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
   line-height: 1.35;
-}
-
-@media (max-width: 640px) {
-  /* A fixed width would squeeze the label on a narrow screen rather than
-     aligning it, so the primary button goes back to its content size. */
-  .aidos-queue .aidos-btn-primary {
-    width: auto;
-    min-width: 5rem;
-  }
 }
 
 /* The queue itself. */

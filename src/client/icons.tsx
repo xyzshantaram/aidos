@@ -148,3 +148,61 @@ export function AlertCircleIcon() {
     </svg>
   );
 }
+
+/**
+ * The QUEUE ACTION icons (#93, user's design).
+ *
+ * The queue's rows previously carried their buttons inline, which is what
+ * made them so hard to align: a row's action set varies, so the column
+ * either reserved dead space or went ragged. Collapsing each row to a single
+ * coloured ICON removes the problem at its source -- there is nothing to
+ * align until the row is expanded.
+ *
+ * Each one is a picture of the ask, not a decoration: a clipboard for a
+ * signature, a round check for verification, a square check for completion,
+ * a checklist for a list of paths. The colour is the state the action leads
+ * TO, so the queue reads as a column of intents.
+ */
+
+/** Sign off: a clipboard with a pen stroke. */
+export function SignoffIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M8.5 2h1a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h1" />
+      <path d="M4.5 1.5h3v1.5h-3z" />
+      <path d="M4 7.5l1.5 1.5L8.5 6" />
+    </svg>
+  );
+}
+
+/** Verify: a round check. */
+export function VerifyIcon() {
+  return (
+    <svg {...iconProps()}>
+      <circle cx="6" cy="6" r="4.6" />
+      <path d="M3.9 6.1l1.5 1.5L8.2 4.8" />
+    </svg>
+  );
+}
+
+/** Mark done: a square check. */
+export function MarkDoneIcon() {
+  return (
+    <svg {...iconProps()}>
+      <rect x="1.6" y="1.6" width="8.8" height="8.8" rx="1.6" />
+      <path d="M3.9 6.1l1.5 1.5L8.2 4.8" />
+    </svg>
+  );
+}
+
+/** Allowlist: a checklist of paths. */
+export function AllowlistIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M1.8 3.2l1 1 1.6-1.8" />
+      <path d="M1.8 7.4l1 1 1.6-1.8" />
+      <path d="M6.4 3.4h3.8" />
+      <path d="M6.4 7.6h3.8" />
+    </svg>
+  );
+}

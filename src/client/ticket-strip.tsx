@@ -47,8 +47,23 @@ export interface TicketStripProps {
   meta?: react.ReactNode;
   /** Opens the ticket in the detail panel. Renders the pop-out affordance. */
   onOpen?: () => void;
-  /** Caller-supplied action buttons, rendered after the open affordance. */
+  /**
+   * Caller-supplied action buttons. Rendered on a SECOND ROW, revealed by
+   * the action icon -- see the note at the toggle below for why they are no
+   * longer inline.
+   */
   actions?: react.ReactNode;
+  /**
+   * The coloured icon that stands for this row's action while it is
+   * collapsed. Absent means the row has no actions and shows no toggle.
+   */
+  actionIcon?: react.ReactNode;
+  /** What the icon means, for its tooltip and its accessible name. */
+  actionHint?: string;
+  /** Whether the action row is revealed. Owned by the caller, so only one
+   *  row need be open at a time. */
+  expanded?: boolean;
+  onToggleActions?: () => void;
   /** Dims the row while one of its actions is in flight. */
   working?: boolean;
   /** Marks the row as the one the agent is pointing at. */
@@ -74,12 +89,30 @@ export function TicketStrip(props: TicketStripProps) {
   return (
     <li className={className}>
       <div className="aidos-ticket-strip-main">
-        <span
-          className="aidos-chip aidos-chip-id"
-          style={{ background: idColor(full) }}
-          title={full}
-        >
-          {ticketChipLabel(ticket as TicketView)}
+        {/*
+          * #93 (user's design): the STATE moves under the id as coloured
+          * TEXT rather than sitting in the chip row as another badge.
+          *
+          * A state is a property of the ticket, not an ask, and rendering it
+          * as a badge gave it the same visual weight as the things that
+          * actually need attention. As coloured text under the id it still
+          * reads instantly, while surrendering the horizontal space the
+          * title and the agent's reason were being squeezed out of.
+          */}
+        <span className="aidos-ticket-strip-idcol">
+          <span
+            className="aidos-chip aidos-chip-id"
+            style={{ background: idColor(full) }}
+            title={full}
+          >
+            {ticketChipLabel(ticket as TicketView)}
+          </span>
+          <span
+            className={"aidos-ticket-strip-state " + badgeClass(ticket.state)}
+            title={stateLabel(ticket.state)}
+          >
+            {stateLabel(ticket.state)}
+          </span>
         </span>
         <span className="aidos-ticket-strip-body">
           <span className="aidos-ticket-strip-title" title={ticket.title}>
@@ -98,7 +131,8 @@ export function TicketStrip(props: TicketStripProps) {
               Needs approval
             </span>
           ) : null}
-          <span className={badgeClass(ticket.state)}>{stateLabel(ticket.state)}</span>
+          {/* The state chip moved under the id (see above), so it is not
+              repeated here. */}
           {showGate ? (
             <span className="aidos-chip aidos-chip-metric" title="Gate progress">
               <span className="aidos-chip-key">Gate</span>
@@ -128,25 +162,48 @@ export function TicketStrip(props: TicketStripProps) {
             </button>
           ) : null}
           {/*
-            * The caller's actions get their OWN wrapper (#93, user-reported
-            * twice: "lost the right alignment", then "still broken").
+            * #93 (user's design): the row COLLAPSES to a single coloured
+            * action icon, and clicking it reveals the buttons on a second
+            * row below.
             *
-            * They used to be siblings of the pop-out button in this span,
-            * which mixes two concerns -- the strip's own affordance and the
-            * caller's buttons -- in one box. Making that box a grid could
-            * never align reliably, because its child COUNT varies: the icon
-            * may be absent, and a Dismiss may or may not follow. A fixed
-            * column template misaligns the moment either changes.
+            * This dissolves the alignment problem rather than solving it.
+            * Five attempts failed to align an inline button row because a
+            * row's action set VARIES -- one action or two, a Dismiss or
+            * none -- so any fixed layout either reserved dead space (the gap
+            * beside "Sign off") or went ragged. With nothing inline, there
+            * is nothing to align until a row is opened, and an opened row is
+            * alone.
             *
-            * Split, each layout does one job: this span stays flex and keeps
-            * the right alignment it always had, and the group below is the
-            * grid that makes every caller button the same size.
+            * It also gives the title and the agent's reason back the width
+            * the buttons were taking, which was the other half of the
+            * report.
             */}
-          {props.actions !== undefined ? (
-            <span className="aidos-ticket-strip-action-group">{props.actions}</span>
+          {props.actionIcon !== undefined ? (
+            <button
+              className={
+                "aidos-strip-action-toggle" + (props.expanded === true ? " is-open" : "")
+              }
+              title={props.actionHint ?? "Show actions"}
+              aria-label={props.actionHint ?? "Show actions"}
+              aria-expanded={props.expanded === true}
+              disabled={props.working === true}
+              onClick={(event: react.MouseEvent<HTMLButtonElement>) => {
+                event.stopPropagation();
+                props.onToggleActions?.();
+              }}
+            >
+              {props.actionIcon}
+            </button>
           ) : null}
         </span>
       </div>
+      {/*
+        * The revealed action row. Rendered only when open, so a collapsed
+        * queue is a clean column of one-line rows.
+        */}
+      {props.expanded === true && props.actions !== undefined ? (
+        <div className="aidos-ticket-strip-actionrow">{props.actions}</div>
+      ) : null}
     </li>
   );
 }

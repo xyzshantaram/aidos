@@ -13,6 +13,8 @@
  */
 import react from "react";
 
+import { AllowlistIcon, MarkDoneIcon, SignoffIcon, VerifyIcon } from "./icons";
+
 import { humanQueue, unmatchedNominations, QUEUE_SORT_LABELS } from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
@@ -101,7 +103,41 @@ function stepsFor(entry: QueueEntry): Step[] {
   ];
 }
 
+/**
+ * The coloured icon that stands for each ask while its row is collapsed
+ * (#93, user's design).
+ *
+ * A picture of the ask rather than a decoration: a clipboard for a
+ * signature, a round check for verification, a square check for completion,
+ * a checklist for a list of paths. Colour carries the same meaning as the
+ * state chips, so the queue reads as a column of intents.
+ */
+const ACTION_ICONS: Record<string, { icon: react.ReactElement; hint: string; tone: string }> = {
+  signoff: {
+    icon: <SignoffIcon />,
+    hint: "Sign off — let the agent start work on this ticket",
+    tone: "signoff",
+  },
+  verify: {
+    icon: <VerifyIcon />,
+    hint: "Verify — check the work and attach your row",
+    tone: "verify",
+  },
+  "mark-done": {
+    icon: <MarkDoneIcon />,
+    hint: "Mark done — close this ticket",
+    tone: "done",
+  },
+  allowlist: {
+    icon: <AllowlistIcon />,
+    hint: "Review a write-access request",
+    tone: "allowlist",
+  },
+};
+
+
 export function QueuePanel(props: QueuePanelProps) {
+  const [openRow, setOpenRow] = react.useState<string | null>(null);
   const [running, setRunning] = react.useState<QueueEntry | null>(null);
   const [working, setWorking] = react.useState(false);
   const [sortKey, setSortKey] = react.useState<QueueSortKey>("suggested");
@@ -196,6 +232,15 @@ export function QueuePanel(props: QueuePanelProps) {
         {entries.map((entry) => (
           <TicketStrip
             key={entry.boardKey + ":" + entry.actionId}
+            actionIcon={ACTION_ICONS[entry.actionId]?.icon}
+            actionHint={ACTION_ICONS[entry.actionId]?.hint}
+            expanded={openRow === entry.boardKey + ":" + entry.actionId}
+            onToggleActions={() => {
+              // One row open at a time: the queue is a list to work through,
+              // not a dashboard to leave sprawled open.
+              const id = entry.boardKey + ":" + entry.actionId;
+              setOpenRow(openRow === id ? null : id);
+            }}
             ticket={entry.ticket}
             highlighted={
               entry.nominationReason !== undefined || entry.approvalId !== undefined

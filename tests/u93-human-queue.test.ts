@@ -440,92 +440,127 @@ describe("u93 human-queue: a fulfilled ask is not a complaint", () => {
   });
 });
 
-describe("#93 the queue's action buttons are a grid, not ragged", () => {
+describe("#93 the queue collapses each row to a coloured action icon", () => {
   /*
-   * User (2026-09-03): "make the buttons in the waiting on you modal all the
-   * same size and follow a grid system" -- then twice more, because the
-   * first two attempts broke the alignment.
+   * The user's design, and it DISSOLVES the alignment problem rather than
+   * solving it. Five attempts failed to align an inline button row because a
+   * row's action set VARIES -- one action or two, a Dismiss or none -- so
+   * any fixed layout either reserved dead space (the gap beside "Sign off")
+   * or went ragged.
    *
-   * The failure both times was putting the grid on the CONTAINER, which
-   * mixes the strip's own pop-out affordance with the caller's buttons. Its
-   * child count varies -- the icon may be absent, a Dismiss may or may not
-   * follow -- so a fixed column template misaligns the moment either
-   * changes. Split by concern instead: the container stays flex and keeps
-   * the alignment it always had; the grid governs only the action group.
+   * With nothing inline there is nothing to align until a row is opened, and
+   * an opened row is alone. It also gives the title and the agent's reason
+   * back the width the buttons were taking, which was the other half of the
+   * report.
    */
   const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
   const strip = readFileSync(
     new URL("../src/client/ticket-strip.tsx", import.meta.url),
     "utf8",
   );
+  const panel = readFileSync(
+    new URL("../src/client/queue-panel.tsx", import.meta.url),
+    "utf8",
+  );
 
   function rule(selector: string): string {
     const at = css.indexOf(selector);
-    expect(at).toBeGreaterThan(-1);
+    expect(at, selector).toBeGreaterThan(-1);
     return css.slice(at, css.indexOf("}", at));
   }
 
-  it("wraps the caller's actions in their own element", () => {
-    // Without the wrapper there is nothing to lay out that is not also
-    // holding the strip's own button.
-    expect(strip).toContain("aidos-ticket-strip-action-group");
+  it("renders no inline action buttons while collapsed", () => {
+    // The actions render ONLY on the revealed row, so a collapsed queue is a
+    // clean column of one-line rows with nothing to misalign.
+    expect(strip).toContain("props.expanded === true && props.actions !== undefined");
+    expect(strip).not.toContain("aidos-ticket-strip-action-group");
   });
 
-  it("does NOT override the container's flex layout", () => {
+  it("shows a toggle icon that says what the ask is", () => {
+    expect(strip).toContain("aidos-strip-action-toggle");
+    expect(strip).toContain("props.actionHint");
+    // The hint is both the tooltip AND the accessible name: an icon that
+    // only explains itself on hover excludes anyone who cannot hover.
+    expect(strip).toContain("aria-label={props.actionHint");
+  });
+
+  it("gives each action its own icon and meaning", () => {
+    for (const key of ["signoff", "verify", "mark-done", "allowlist"]) {
+      expect(panel, key).toContain(`${key.includes("-") ? '"' + key + '"' : key}:`);
+    }
+    expect(panel).toContain("SignoffIcon");
+    expect(panel).toContain("VerifyIcon");
+    expect(panel).toContain("MarkDoneIcon");
+    expect(panel).toContain("AllowlistIcon");
+  });
+
+  it("colours the icon by the state the action leads TO", () => {
+    expect(css).toContain("--tone: var(--state-in-progress)");
+    expect(css).toContain("--tone: var(--state-awaiting)");
+    expect(css).toContain("--tone: var(--state-done)");
+  });
+
+  it("an open toggle reads as SELECTED, not merely hovered", () => {
+    // The revealed row belongs to that icon; hover styling alone would not
+    // say which one opened it.
+    const open = rule(".aidos-strip-action-toggle.is-open {");
+    expect(open).toContain("color: #ffffff");
+  });
+
+  it("opens ONE row at a time", () => {
+    // The queue is a list to work through, not a dashboard to leave sprawled.
+    expect(panel).toContain("setOpenRow(openRow === id ? null : id)");
+  });
+
+  it("reveals the actions on a second row beneath", () => {
+    expect(strip).toContain("aidos-ticket-strip-actionrow");
+    const row = rule(".aidos-ticket-strip-actionrow {");
+    expect(row).toContain("justify-content: flex-end");
+  });
+});
+
+describe("#93 the state reads as text, and badges are one size", () => {
+  const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+  const strip = readFileSync(
+    new URL("../src/client/ticket-strip.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("puts the state under the id as coloured text", () => {
     /*
-     * THE lesson from four failed attempts. The container's `margin-left:
-     * auto` inside a flex strip is what right-aligns the actions, and it
-     * always worked. Every failure -- "lost the right alignment", "still
-     * broken", "all different sizes and collapse to the left" -- came from
-     * replacing that layout with a grid rather than adding to it.
+     * A state is a PROPERTY of the ticket, not an ask. As a badge it carried
+     * the same weight as the things needing attention; as text it still
+     * reads instantly by colour while giving back horizontal space.
      */
-    expect(css).not.toContain(".aidos-queue .aidos-ticket-strip-actions {");
-    const group = rule(".aidos-queue .aidos-ticket-strip-action-group {");
-    expect(group).not.toContain("display: grid");
-    expect(group).toContain("display: flex");
+    expect(strip).toContain("aidos-ticket-strip-idcol");
+    expect(strip).toContain("aidos-ticket-strip-state");
+    const state = css.slice(css.indexOf(".aidos-ticket-strip-state {"));
+    expect(state.slice(0, state.indexOf("}"))).toContain("background: none");
   });
 
-  it("gives the primary button ONE fixed width, which is the whole ask", () => {
-    // "All the same size", expressed as the smallest possible change from a
-    // known-good layout: a width on one button, nothing else.
-    const primary = rule(".aidos-queue .aidos-btn-primary {");
-    expect(primary).toContain("width: 7.5rem");
-    expect(primary).toContain("flex: none");
+  it("keeps a distinct colour per state", () => {
+    for (const cls of [
+      ".aidos-ticket-strip-state.aidos-chip-state-open",
+      ".aidos-ticket-strip-state.aidos-chip-state-in-progress",
+      ".aidos-ticket-strip-state.aidos-chip-state-awaiting-verification",
+      ".aidos-ticket-strip-state.aidos-chip-state-done",
+    ]) {
+      expect(css, cls).toContain(cls);
+    }
   });
 
-  it("reserves NO empty column, which rendered as a gap beside Sign off", () => {
-    /*
-     * User-reported from a screenshot: "sign off and verify has a big gap
-     * next to it". A reserved Dismiss column kept the primary aligned and
-     * showed as dead space on every row without a Dismiss -- while the
-     * ticket description beside it was squeezed into a ribbon.
-     */
-    expect(css).not.toContain("--queue-dismiss-w");
-  });
-
-  it("renders Dismiss before the primary button", () => {
-    const panel = readFileSync(
-      new URL("../src/client/queue-panel.tsx", import.meta.url),
-      "utf8",
+  it("does NOT render the state twice", () => {
+    // It moved out of the chip row; leaving both would be worse than either.
+    const chips = strip.slice(strip.indexOf("aidos-ticket-strip-chips"));
+    expect(chips.slice(0, chips.indexOf("aidos-ticket-strip-actions"))).not.toContain(
+      "badgeClass(ticket.state)",
     );
-    const actions = panel.slice(panel.indexOf("actions={"));
-    const body = actions.slice(0, actions.indexOf("/>"));
-    expect(body.indexOf("Dismiss")).toBeLessThan(body.indexOf("aidos-btn-primary"));
   });
 
-  it("gives the nomination reason room to be read", () => {
-    // The reason is the agent explaining WHY it is asking; squeezed into a
-    // narrow column it reads as noise. Two lines, then ellipsis.
-    const meta = rule(".aidos-queue .aidos-ticket-strip-meta {");
-    expect(meta).toContain("line-clamp: 2");
-  });
-
-  it("every action button has a consistent height", () => {
-    // Height is uniform for all of them; only the PRIMARY takes a fixed
-    // width, because Dismiss is a secondary action and forcing it to the
-    // same width is what created the dead space.
-    const body = rule(".aidos-queue .aidos-ticket-strip-action-group .aidos-btn {");
-    expect(body).toContain("min-height");
-    expect(body).toContain("flex: none");
+  it("sizes every chip in the modal consistently", () => {
+    // Chips inherited slightly different heights from their variants, so a
+    // row read as ragged even when it was aligned.
+    const sized = css.slice(css.indexOf(".aidos-queue .aidos-chip {"));
+    expect(sized.slice(0, sized.indexOf("}"))).toContain("height: 20px");
   });
 });
