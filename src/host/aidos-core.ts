@@ -557,6 +557,104 @@ export interface BoardTicketView extends TicketView {
   sourceSessionId: string;
   /** Whether the owning log is a different session than the reader's. */
   foreign: boolean;
+  /**
+   * #83: the copies of this same ticket that LOST the dedupe, newest first.
+   *
+   * A forked session's log contains the same tickets as its parent, so the
+   * merge used to show one row per copy. Only the winner is rendered now,
+   * but the losers ride along here rather than vanishing: the board can say
+   * "3 other copies" and a reader can still reach them. Absent when the
+   * ticket had exactly one copy, which is the common case.
+   */
+  supersededCopies?: Array<{ sessionId: string; updatedAt: number }>;
+}
+
+/** One superseded copy, for the dedupe's report. */
+export interface SupersededCopy {
+  sessionId: string;
+  updatedAt: number;
+}
+
+/** What the dedupe did, so the caller can log it without recomputing it. */
+export interface DedupeReport {
+  identity: string;
+  winner: SupersededCopy;
+  losers: SupersededCopy[];
+}
+
+/**
+ * #83: collapse the workspace merge to ONE row per ticket identity.
+ *
+ * `workspaceTickets` assembles three groups with no dedupe between them --
+ * the caller's own rows, every live workspace session's rows, and every
+ * closed session's rows. A forked session's log holds the same tickets as
+ * its parent, so every fork multiplied the board. Measured live: own=110,
+ * foreign=164 on a 274-row board, i.e. ~60% duplicates.
+ *
+ * IDENTITY is `workspaceKey:slug` -- the durable global id from #35, stable
+ * across a fork because a copy keeps both parts. Deliberately NOT the
+ * numeric id, which collides across sessions and is the confusion behind
+ * eleven bugs in this file.
+ *
+ * WINNER is the most recently updated copy (user's decision, 2026-09-03): a
+ * fork's copy is a snapshot that stopped moving, so the newest updatedAt is
+ * the live one. Ties break deterministically -- the caller's OWN row first
+ * (it is the log they can actually write to), then the lowest session id --
+ * so two reads of an unchanged board agree.
+ *
+ * NOTHING VANISHES. Losers ride on the winner's `supersededCopies`, and the
+ * returned report lets the caller log every override. A silent dedupe would
+ * swap one visible problem (duplicates) for a worse invisible one (a stale
+ * row presented as authoritative).
+ *
+ * Pure, and separate from the Remote, so it is testable: logic trapped
+ * inside a Remote is logic no test can reach, which is how the allowlist
+ * union and the backward-gate guard both shipped unverified.
+ */
+export function dedupeBoardRows(rows: readonly BoardTicketView[]): {
+  rows: BoardTicketView[];
+  reports: DedupeReport[];
+} {
+  const groups = new Map<string, BoardTicketView[]>();
+  const order: string[] = [];
+  for (const row of rows) {
+    const identity = row.workspaceKey + ":" + row.slug;
+    let group = groups.get(identity);
+    if (group === undefined) {
+      group = [];
+      groups.set(identity, group);
+      order.push(identity);
+    }
+    group.push(row);
+  }
+
+  const out: BoardTicketView[] = [];
+  const reports: DedupeReport[] = [];
+  for (const identity of order) {
+    const group = groups.get(identity) as BoardTicketView[];
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    const ranked = [...group].sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      // Own beats foreign: it is the log the caller can write to directly.
+      if (a.foreign !== b.foreign) return a.foreign ? 1 : -1;
+      return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
+    });
+    const [winner, ...losers] = ranked;
+    const copies = losers.map((row) => ({
+      sessionId: row.sourceSessionId,
+      updatedAt: row.updatedAt,
+    }));
+    out.push({ ...winner, supersededCopies: copies });
+    reports.push({
+      identity,
+      winner: { sessionId: winner.sourceSessionId, updatedAt: winner.updatedAt },
+      losers: copies,
+    });
+  }
+  return { rows: out, reports };
 }
 
 /** Routing target for a foreign write is not a live session. */
@@ -1400,6 +1498,44 @@ registerAidosSessionEventTypes(ctx);
         evidence[key] = [...(state.evidence.get(view.id) ?? [])];
         comments[key] = [...(state.comments.get(view.id) ?? [])];
       }
+    }
+
+    /*
+     * #83: collapse copies of the same ticket to one row.
+     *
+     * Everything above pushes three groups with no dedupe between them, so a
+     * forked session's log multiplied the board -- measured live at 110 own
+     * and 164 foreign rows on a 274-row board.
+     *
+     * Evidence and comments are keyed by BOARD KEY in the same payload, so
+     * they must be rewritten with the winners or the result is worse than
+     * the duplication: a losing row's keys would be orphaned, and a winner
+     * could show another copy's evidence. All three move together or the
+     * dedupe is not done.
+     */
+    const deduped = dedupeBoardRows(tickets);
+    if (deduped.reports.length > 0) {
+      const keyOf = (row: BoardTicketView): string =>
+        row.foreign ? row.sourceSessionId + ":" + row.id : String(row.id);
+      const keptEvidence: Record<string, EvidenceRow[]> = {};
+      const keptComments: Record<string, CommentRecord[]> = {};
+      for (const row of deduped.rows) {
+        const key = keyOf(row);
+        if (evidence[key] !== undefined) keptEvidence[key] = evidence[key];
+        if (comments[key] !== undefined) keptComments[key] = comments[key];
+      }
+      for (const report of deduped.reports) {
+        this.ctx.logger?.info?.(
+          `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` +
+            report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", "),
+        );
+      }
+      this.ctx.logger?.info?.(
+        `aidos: #83 workspace merge ${tickets.length} rows -> ${deduped.rows.length} after dedupe`,
+      );
+      const out = deduped.rows;
+      out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+      return { tickets: out, evidence: keptEvidence, comments: keptComments };
     }
 
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);

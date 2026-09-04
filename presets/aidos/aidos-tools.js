@@ -27560,6 +27560,46 @@ function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var DEFAULT_PHASE_TITLE = "Untitled phase";
+function dedupeBoardRows(rows) {
+  const groups = /* @__PURE__ */ new Map();
+  const order = [];
+  for (const row of rows) {
+    const identity = row.workspaceKey + ":" + row.slug;
+    let group = groups.get(identity);
+    if (group === void 0) {
+      group = [];
+      groups.set(identity, group);
+      order.push(identity);
+    }
+    group.push(row);
+  }
+  const out = [];
+  const reports = [];
+  for (const identity of order) {
+    const group = groups.get(identity);
+    if (group.length === 1) {
+      out.push(group[0]);
+      continue;
+    }
+    const ranked = [...group].sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      if (a.foreign !== b.foreign) return a.foreign ? 1 : -1;
+      return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
+    });
+    const [winner, ...losers] = ranked;
+    const copies = losers.map((row) => ({
+      sessionId: row.sourceSessionId,
+      updatedAt: row.updatedAt
+    }));
+    out.push({ ...winner, supersededCopies: copies });
+    reports.push({
+      identity,
+      winner: { sessionId: winner.sourceSessionId, updatedAt: winner.updatedAt },
+      losers: copies
+    });
+  }
+  return { rows: out, reports };
+}
 var OwnerUnavailable = class extends Error {
   sessionId;
   constructor(sessionId) {
@@ -28113,6 +28153,28 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         evidence[key] = [...state.evidence.get(view.id) ?? []];
         comments[key] = [...state.comments.get(view.id) ?? []];
       }
+    }
+    const deduped = dedupeBoardRows(tickets);
+    if (deduped.reports.length > 0) {
+      const keyOf = (row) => row.foreign ? row.sourceSessionId + ":" + row.id : String(row.id);
+      const keptEvidence = {};
+      const keptComments = {};
+      for (const row of deduped.rows) {
+        const key = keyOf(row);
+        if (evidence[key] !== void 0) keptEvidence[key] = evidence[key];
+        if (comments[key] !== void 0) keptComments[key] = comments[key];
+      }
+      for (const report of deduped.reports) {
+        this.ctx.logger?.info?.(
+          `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` + report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ")
+        );
+      }
+      this.ctx.logger?.info?.(
+        `aidos: #83 workspace merge ${tickets.length} rows -> ${deduped.rows.length} after dedupe`
+      );
+      const out = deduped.rows;
+      out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+      return { tickets: out, evidence: keptEvidence, comments: keptComments };
     }
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
     return { tickets, evidence, comments };
