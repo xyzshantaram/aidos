@@ -723,11 +723,20 @@ function _mdInline(text: string): string {
  * escaping would SHOW the backslashes -- `src\_host` instead of `src_host`.
  * A code span makes its content literal already, so the only real hazards
  * are a backtick (which would close the span early) and a newline (which
- * would end the list item). Both are removed.
+ * would end the list item).
+ *
+ * A newline collapses to a space, which loses nothing a reader needs. A
+ * BACKTICK is not simply deleted: this renders allowlist paths, and stripping
+ * one would REPORT A DIFFERENT PATH from the one being approved. Misstating a
+ * security-relevant value is worse than rendering an ugly one. Such a value
+ * falls back to an escaped inline run, which shows the real characters, and
+ * says why -- so the difference is visible rather than silent.
  */
 function _mdCode(text: string): string {
-  const clean = text.replace(/\s+/g, " ").replace(/`/g, "").trim();
-  return clean === "" ? "" : "`" + clean + "`";
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean === "") return "";
+  if (clean.includes("`")) return `${_mdInline(clean)} (contains a backtick)`;
+  return "`" + clean + "`";
 }
 
 /**
@@ -740,6 +749,44 @@ function _mdCode(text: string): string {
 function _mdTicketHead(ticketId: number | string, title: string): string {
   const name = _mdInline(title);
   return `**#${ticketId}** *${name}*`;
+}
+
+/**
+ * Whether one write should be reported to the agent (#106).
+ *
+ * DENY BY DEFAULT: only a `user` action is reported. Every site tested
+ * `actor !== "agent"`, which reads as the same rule and is not -- `Actor` has
+ * a third member, `system`, and plan import attaches with it. The result was
+ * the feedback loop the guard exists to prevent: an agent importing its OWN
+ * plan was told about it, one digest line per imported ticket.
+ *
+ * Named rather than inlined because the rule was restated at seven sites and
+ * was wrong at all seven. One predicate cannot be wrong at only some of them.
+ */
+function _isUserAction(actor: Actor): boolean {
+  return actor === "user";
+}
+
+/**
+ * One human's words as an indented blockquote continuation of a list item.
+ *
+ * `#` and `-` ARE structural here, and the comment on `_mdInline` claimed
+ * they could not be: it argued they are only structural at the start of a
+ * line and that nothing interpolated can be at the start of one. True for
+ * every other site; false for this one, where the text lands immediately
+ * after `\n  > ` -- the start of the blockquote's content line. A comment
+ * beginning "# heading" rendered as an H1 inside the quote.
+ *
+ * Contained rather than catastrophic (the quote does not break the list
+ * item), but the stated reasoning was wrong, and the test only exercised
+ * `#`/`-` MID-LINE -- the one position where they are not structural.
+ *
+ * Escaping the leading marker only. Escaping every `#` would put backslashes
+ * in front of ordinary text like "ticket #42".
+ */
+function _mdQuote(text: string): string {
+  const escaped = _mdInline(text).replace(/^(\s*)([#>-]|\d+\.)/, "$1\\$2");
+  return `\n  > ${escaped}`;
 }
 
 /**
@@ -779,8 +826,36 @@ function _mdTicketHead(ticketId: number | string, title: string): string {
  */
 export const DIGEST_TEXT_CAP = 1000;
 
+/**
+ * The most bullets one digest carries, and the longest one bullet may be.
+ *
+ * These bound the digest as a WHOLE, which `DIGEST_TEXT_CAP` never did: it
+ * caps one interpolated note, while a line may interpolate an unbounded path
+ * array and a flush may carry unbounded lines. A reviewer measured 11KB in a
+ * single allowlist line and 20KB across twenty capped comments.
+ *
+ * Line cap sits well above a realistic burst (the largest real digest so far
+ * was 24 changes) so it truncates a runaway rather than ordinary work.
+ */
+export const DIGEST_LINE_CAP = 40;
+export const DIGEST_LINE_LENGTH_CAP = 2000;
+
 function _ellipsize(text: string): string {
   return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}…` : text;
+}
+
+/**
+ * Bound one assembled digest line.
+ *
+ * Truncation happens at the very end, after every escape, so it can never
+ * split a Markdown construct in a way that changes the rest of the document
+ * -- cutting inside `**` would otherwise leave an unbalanced emphasis run
+ * that swallows the following bullets.
+ */
+function _capDigestLine(line: string): string {
+  return line.length > DIGEST_LINE_LENGTH_CAP
+    ? `${line.slice(0, DIGEST_LINE_LENGTH_CAP)}… (truncated)`
+    : line;
 }
 
 function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): string {
@@ -791,7 +866,7 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
     // A note is the human's own words: quoted on its own indented line,
     // like the comment digest, so it reads as speech rather than a field.
-    return `\n  > ${ellipsize(payload.note.trim())}`;
+    return _mdQuote(_ellipsize(payload.note.trim()));
   }
   if (Array.isArray(payload.paths)) {
     const paths = payload.paths.filter((p): p is string => typeof p === "string");
@@ -814,7 +889,7 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
     // payload's first string field when there is one.
     for (const value of Object.values(payload)) {
       if (typeof value === "string" && value.trim() !== "") {
-        return `\n  > ${ellipsize(value.trim())}`;
+        return _mdQuote(_ellipsize(value.trim()));
       }
     }
   }
@@ -1775,9 +1850,25 @@ registerAidosSessionEventTypes(ctx);
     const revalidated = validateAllowlistPaths(cwd, rawPaths);
     if (!revalidated.ok) {
       const detail = revalidated.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
+      /*
+       * #106: the ELEVENTH interpolation site, and the one that was missed.
+       *
+       * `b.path` is verbatim textarea content from the approval card, so an
+       * unescaped path here injects live Markdown into the digest -- a
+       * reviewer confirmed `[click](http://evil.example)` rendering as a real
+       * hyperlink in the agent's own context.
+       *
+       * The earlier commit claimed "applied at all ten interpolation sites";
+       * that was a count of the sites it CHANGED, not of the sites that
+       * exist. The path is code-spanned and the reason escaped, so each is
+       * treated as what it is.
+       */
+      const safeDetail = revalidated.bad
+        .map((b) => `${_mdCode(b.path)} (${_mdInline(b.reason)})`)
+        .join("; ");
       this._queueInjection(
         agent.session,
-        `Allowlist approval for #${pending.ticketId} was refused: ${detail} — the agent should re-propose`,
+        `Allowlist approval for #${pending.ticketId} was refused: ${safeDetail} — the agent should re-propose`,
       );
       return { resolved: `refused: ${detail}` };
     }
@@ -2220,7 +2311,7 @@ registerAidosSessionEventTypes(ctx);
      * longer says what it thinks it says. Names the blocks that changed, not
      * their text: the context cap alone is 2000 lines.
      */
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       const blocks = (["frontmatter", "preamble", "contextSections"] as const)
         .filter((field) => args[field] !== undefined);
       if (blocks.length > 0) {
@@ -2321,8 +2412,28 @@ registerAidosSessionEventTypes(ctx);
        * to a sentence: one format means a reader learns it once, and the
        * blockquote continuation would have no list item to attach to.
        */
+      /*
+       * TOTAL bounds, not just a per-note cap.
+       *
+       * `DIGEST_TEXT_CAP` bounds one interpolated NOTE. It never bounded a
+       * line -- an allowlist row maps over an unbounded path array, so one
+       * line reached 11KB in a reviewer's probe -- and nothing bounded the
+       * digest as a whole: twenty capped comments assembled to 20KB. Raising
+       * the note cap from 160 to 1000 (so a human's question was not cut
+       * mid-sentence) removed the accident that had kept this safe.
+       *
+       * The digest is a NOTICE. Its job is to say what changed and let the
+       * agent read the board for detail, so a bound that truncates is
+       * correct here in a way it would not be for the board itself. Both
+       * bounds name what they dropped rather than trailing off, because a
+       * silent truncation is indistinguishable from nothing having happened.
+       */
       const header = `**aidos board update** — ${lines.length} change${lines.length === 1 ? "" : "s"}`;
-      const text = `${header}\n\n- ${lines.join("\n- ")}`;
+      const shown = lines.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
+      if (lines.length > DIGEST_LINE_CAP) {
+        shown.push(`…and ${lines.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);
+      }
+      const text = `${header}\n\n- ${shown.join("\n- ")}`;
       const message = createUserMessage({
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" },
@@ -2538,7 +2649,7 @@ registerAidosSessionEventTypes(ctx);
     // #106: every user action reaches the agent. A ticket the human files is
     // work the agent may be expected to pick up; hearing about it only on the
     // next board read is exactly the prose-hunting this digest removes.
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, snapshot.title)} \u2014 **created** by ${actor}`,
@@ -2608,9 +2719,21 @@ registerAidosSessionEventTypes(ctx);
      * moved, not their full text: descriptions here run to kilobytes, and
      * #92 exists because flooding the agent's context is a real cost.
      */
-    if (actor !== "agent") {
-      const changed = (["title", "description", "criteria", "body", "dependsOn"] as const)
-        .filter((field) => args[field] !== undefined);
+    if (_isUserAction(actor)) {
+      /*
+       * `phase`, `order` and `slug` were missing from this list, so
+       * re-phasing, re-ordering or re-slugging a ticket was completely
+       * silent -- and each of those changes the board the agent works from.
+       * A slug is worse still: it is half of the durable id (#35), so the
+       * agent's own reference to the ticket stops resolving.
+       *
+       * The list is now every field _editTicket accepts. `allowlist` has its
+       * own line below because it grants write access, which deserves to be
+       * named rather than folded into "edited".
+       */
+      const changed = (
+        ["title", "description", "criteria", "body", "dependsOn", "phase", "order", "slug"] as const
+      ).filter((field) => args[field] !== undefined);
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
@@ -2618,7 +2741,7 @@ registerAidosSessionEventTypes(ctx);
         );
       }
     }
-    if (actor !== "agent" && allowlist !== undefined) {
+    if (_isUserAction(actor) && allowlist !== undefined) {
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, snapshot.title)} \u2014 allowlist: ${allowlist.map(_mdCode).join(" ")}`,
@@ -2855,6 +2978,19 @@ registerAidosSessionEventTypes(ctx);
         rowKind: args.rowKind,
         criterion: "",
       });
+      /*
+       * #106: UNLINKING is reported too.
+       *
+       * This branch committed and returned here, before the injection below
+       * -- the exact shape of the bug this ticket exists to fix. The message
+       * further down even had an "unlinked from its criterion" case, which
+       * could never run: the only path that reaches it had already returned.
+       *
+       * Unlinking REMOVES the criterion a row was said to keep, so the
+       * agent's own coverage silently changes. That is more worth reporting
+       * than the link, not less.
+       */
+      this._queueLinkDigest(agent, ticketId, cache, args.rowKind, false);
       return { ticketId, linked: false };
     }
     if (criterion === "") {
@@ -2881,15 +3017,31 @@ registerAidosSessionEventTypes(ctx);
      * Linking evidence to a criterion is how the human says WHICH promise a
      * row keeps, and the agent is judged against exactly those criteria.
      */
-    {
-      const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
-      const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
-      this._queueInjection(
-        agent.session,
-        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(args.rowKind)} ${what} by user`,
-      );
-    }
+    this._queueLinkDigest(agent, ticketId, cache, args.rowKind, true);
     return { ticketId, linked: true };
+  }
+
+  /**
+   * One digest line for a criterion link or unlink.
+   *
+   * Extracted because the two callers are the link branch and the unlink
+   * branch, and the unlink branch previously returned before reaching the
+   * shared line -- so its message was dead code that read as covered. One
+   * function with two callers cannot drift that way.
+   */
+  private _queueLinkDigest(
+    agent: Agent,
+    ticketId: number,
+    cache: { state: { tickets: Map<number, { title: string }> } },
+    rowKind: string,
+    linked: boolean,
+  ): void {
+    const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+    const what = linked ? "linked to a criterion" : "unlinked from its criterion";
+    this._queueInjection(
+      agent.session,
+      `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(rowKind)} ${what} by user`,
+    );
   }
 
   /**
@@ -2948,7 +3100,7 @@ registerAidosSessionEventTypes(ctx);
       ticket: snapshot,
       at,
     });
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`,
@@ -2997,7 +3149,7 @@ registerAidosSessionEventTypes(ctx);
      * to read the ticket, which is the prose-hunting problem #93 exists to
      * remove.
      */
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
         /*
@@ -3010,7 +3162,7 @@ registerAidosSessionEventTypes(ctx);
          * The text is still collapsed to one line first, so a multi-line
          * comment cannot break out of the quote.
          */
-        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 comment by ${actor}\n  > ${_mdInline(_ellipsize(args.text.trim()))}`,
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 comment by ${actor}${_mdQuote(_ellipsize(args.text.trim()))}`,
       );
     }
     return { ticketId, text: args.text, author: actor, at };
@@ -3137,7 +3289,7 @@ registerAidosSessionEventTypes(ctx);
       ticketId,
       row,
     });
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,

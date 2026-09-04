@@ -14,9 +14,15 @@
 
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+
 import { createHarness, asContext } from "./b1-harness";
 import { apply } from "../src/tools/aidos-tools";
-import { DIGEST_TEXT_CAP } from "../src/host/aidos-core";
+import {
+  DIGEST_LINE_CAP,
+  DIGEST_LINE_LENGTH_CAP,
+  DIGEST_TEXT_CAP,
+} from "../src/host/aidos-core";
 
 function setup() {
   const harness = createHarness();
@@ -26,7 +32,21 @@ function setup() {
   const agent = (harness as any).asAgent();
   const lines = () =>
     [...((svc as any)._pendingInjections as Map<string, string[]>).values()].flat();
-  return { svc, agent, lines };
+  /**
+   * Drive the REAL `_flushInjection` and return the message text it steered.
+   *
+   * The flush had zero coverage: the one test that looked like it covered
+   * the assembly re-built the string itself. Capturing the steer is the only
+   * way to assert what the agent actually receives.
+   */
+  const flush = (): string => {
+    const captured: unknown[] = [];
+    (agent as { steer?: unknown }).steer = (message: unknown) => captured.push(message);
+    (svc as any)._flushInjection(agent.session);
+    const content = (captured[0] as { content?: Array<{ text?: string }> } | undefined)?.content;
+    return content?.[0]?.text ?? "";
+  };
+  return { svc, agent, lines, flush };
 }
 
 describe("#106 a human comment reaches the agent", () => {
@@ -297,18 +317,202 @@ describe("#106 the digest is valid Markdown", () => {
      * renderer, and a lazy continuation can fold the first item back into
      * the header paragraph.
      */
-    const { svc, agent } = setup();
+    /*
+     * This asserts the REAL flush output. It previously re-implemented the
+     * assembly locally -- still using the OLD prose header -- so it asserted
+     * `toContain("changes):")` against a string it had just built itself. It
+     * passed for the wrong reason and covered nothing: a reviewer removed
+     * the blank line from the real code and no test noticed.
+     */
+    const { svc, agent, flush } = setup();
     const ticket = svc.setTicket(agent, { title: "Probe" });
     svc.userAddComment(agent, { ticketId: ticket.id, text: "one" });
     svc.userAddComment(agent, { ticketId: ticket.id, text: "two" });
-    const flushed = (svc as any)._pendingInjections as Map<string, string[]>;
-    const queued = [...flushed.values()].flat();
-    expect(queued.length).toBeGreaterThanOrEqual(2);
-    // Reproduce the assembly the flush performs.
-    const text = `aidos board update (${queued.length} changes):\n\n- ${queued.join("\n- ")}`;
-    expect(text).toContain("changes):\n\n- ");
-    // Every list item is exactly one line.
-    const items = text.split("\n").filter((l) => l.startsWith("- "));
-    expect(items.length).toBe(queued.length);
+    const text = flush();
+    expect(text).toContain("**aidos board update** — 2 changes\n\n- ");
+    // Every top-level list item is one line; a quote continues indented.
+    const items = text.split("\n").filter((line) => line.startsWith("- "));
+    expect(items.length).toBe(2);
+  });
+});
+
+describe("#106 the digest is bounded as a whole", () => {
+  /*
+   * DIGEST_TEXT_CAP bounds one interpolated NOTE. It never bounded a LINE --
+   * an allowlist line maps over an unbounded path array -- and nothing
+   * bounded the digest as a whole. A reviewer measured 11KB in one line and
+   * 20KB across twenty capped comments. Raising the note cap 160 -> 1000
+   * removed the accident that had kept this survivable.
+   */
+
+  it("caps the number of bullets and says how many it dropped", () => {
+    const { svc, agent, flush } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    for (let i = 0; i < DIGEST_LINE_CAP + 7; i += 1) {
+      svc.userAddComment(agent, { ticketId: ticket.id, text: `comment ${i}` });
+    }
+    const text = flush();
+    const items = text.split("\n").filter((line) => line.startsWith("- "));
+    // The cap, plus the one line reporting the truncation.
+    expect(items.length).toBe(DIGEST_LINE_CAP + 1);
+    expect(text).toContain("7 more change(s)");
+    // The header reports the TRUE count, not the shown count: the agent must
+    // know the digest is partial.
+    expect(text).toContain(`${DIGEST_LINE_CAP + 7} changes`);
+  });
+
+  it("caps one line, so an unbounded path array cannot flood it", () => {
+    const { svc, agent, flush } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const many = Array.from({ length: 400 }, (_unused, i) => `src/path-number-${i}`);
+    // The allowlist edit refuses paths no file_allowlist row covers, so the
+    // covering evidence comes first -- as it does in the real flow.
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:file_allowlist",
+      payload: { paths: many },
+    });
+    svc.userSetTicket(agent, { ticketId: ticket.id, allowlist: many });
+    const text = flush();
+    for (const line of text.split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(DIGEST_LINE_LENGTH_CAP + 32);
+    }
+    expect(text).toContain("(truncated)");
+  });
+});
+
+describe("#106 every user action is reported, and ONLY a user action", () => {
+  it("reports UNLINKING a criterion, not only linking", () => {
+    /*
+     * The unlink branch committed and returned before the injection -- the
+     * exact shape of the bug this ticket exists to fix. The shared message
+     * even carried an "unlinked from its criterion" case that could never
+     * run, because the only path reaching it had already returned.
+     *
+     * Unlinking REMOVES the criterion a row was said to keep, so the agent's
+     * coverage silently changes. More worth reporting than the link, not
+     * less.
+     */
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe", criteria: "the one criterion" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:review_note",
+      payload: { note: "a note" },
+    });
+    const row = svc
+      .getTicket(agent, { ticketId: ticket.id })
+      .evidence.find((r: { kind: string }) => r.kind === "builtin:review_note");
+    svc.userLinkEvidence(agent, {
+      ticketId: ticket.id,
+      at: row.at,
+      rowKind: "builtin:review_note",
+      criterion: "the one criterion",
+    });
+    expect(lines().some((line) => line.includes("linked to a criterion"))).toBe(true);
+    svc.userLinkEvidence(agent, {
+      ticketId: ticket.id,
+      at: row.at,
+      rowKind: "builtin:review_note",
+      criterion: null,
+    });
+    expect(lines().some((line) => line.includes("unlinked from its criterion"))).toBe(true);
+  });
+
+  it("reports a re-phase, a re-order and a re-slug", () => {
+    /*
+     * These were missing from the reported-field list, so each was entirely
+     * silent -- and a slug is half of the durable id (#35), so the agent's
+     * own reference to the ticket stops resolving.
+     */
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userSetTicket(agent, { ticketId: ticket.id, phase: 2, order: 99, slug: "renamed-slug" });
+    const line = lines().find((l) => l.includes("edited by user"));
+    expect(line).toBeDefined();
+    for (const field of ["phase", "order", "slug"]) {
+      expect(line as string, field).toContain(field);
+    }
+  });
+
+  it("does NOT report a system write back to the agent", () => {
+    /*
+     * The guard was `actor !== "agent"`, which reads as "only a user" and is
+     * not: Actor has a third member. Plan import attaches with `system`, so
+     * an agent importing its OWN plan was told about it, one line per
+     * imported ticket -- the very feedback loop the guard exists to prevent.
+     */
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Agent's own ticket" });
+    const before = lines().length;
+    (svc as any)._attachEvidence(
+      agent,
+      {
+        ticketId: ticket.id,
+        kind: "builtin:imported_state",
+        payload: { claimed_state: "open" },
+      },
+      "system",
+    );
+    expect(lines().length, "a system write must not reach the agent").toBe(before);
+  });
+});
+
+describe("#106 nothing interpolated can inject Markdown", () => {
+  it("escapes the allowlist REFUSAL detail, which was the missed site", () => {
+    /*
+     * `b.path` is verbatim textarea content from the approval card. A
+     * reviewer confirmed `[click](http://evil.example)` rendering as a live
+     * hyperlink in the agent's own context. The earlier claim of "all ten
+     * interpolation sites" was a count of the sites that were CHANGED, not
+     * of the sites that exist.
+     */
+    const src = readFileSync(new URL("../src/host/aidos-core.ts", import.meta.url), "utf8");
+    const at = src.indexOf("was refused: ${safeDetail}");
+    expect(at, "the refusal injection site moved; update this test").toBeGreaterThan(0);
+    const region = src.slice(Math.max(0, at - 900), at + 300);
+    expect(region).toContain("_mdCode(b.path)");
+    expect(region).toContain("_mdInline(b.reason)");
+    // The raw interpolation must be GONE, not merely joined by a safe one.
+    expect(region).not.toContain("${detail} — the agent should re-propose");
+  });
+
+  it("escapes a leading # or - inside the blockquote", () => {
+    /*
+     * The claim was that `#` and `-` are only structural at the start of a
+     * line and that nothing interpolated can be there. True everywhere
+     * except the blockquote, where the text lands immediately after
+     * "\n  > " -- the start of the quote's content line. The old test only
+     * exercised them MID-line, the one position where they are harmless.
+     */
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAddComment(agent, { ticketId: ticket.id, text: "# THIS IS A HEADING" });
+    const line = lines().find((l) => l.includes("THIS IS A HEADING")) as string;
+    expect(line).toContain("> \\#");
+
+    svc.userAddComment(agent, { ticketId: ticket.id, text: "- a list item" });
+    const listLine = lines().find((l) => l.includes("a list item")) as string;
+    expect(listLine).toContain("> \\-");
+  });
+
+  it("never MISREPORTS a path that contains a backtick", () => {
+    /*
+     * _mdCode deleted backticks, so an allowlist path containing one was
+     * reported as a DIFFERENT path from the one being approved. Misstating a
+     * security-relevant value is worse than rendering an ugly one.
+     */
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:file_allowlist",
+      payload: { paths: ["src/we`ird"] },
+    });
+    svc.userSetTicket(agent, { ticketId: ticket.id, allowlist: ["src/we`ird"] });
+    const line = lines().find((l) => l.includes("allowlist")) as string;
+    // The characters survive, and the reader is told why it reads oddly.
+    expect(line).toContain("contains a backtick");
+    expect(line).not.toContain("`src/weird`");
   });
 });

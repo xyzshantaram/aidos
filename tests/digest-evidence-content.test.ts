@@ -70,24 +70,37 @@ describe("the board-update digest carries evidence content", () => {
     ).toBe(true);
   });
 
-  it("an imported_state attach names the claimed state", async () => {
+  it("an imported_state attach does NOT report back to the agent", async () => {
+    /*
+     * This asserted the opposite, and it was wrong -- it encoded a feedback
+     * loop as a feature.
+     *
+     * `imported_state` is stamped by the plan importer with the `system`
+     * actor, and `planImport` has NO Remote: it is reachable only from the
+     * agent's own `plan_import` tool. So every row of this kind describes
+     * something the agent just did, and reporting it back told the agent
+     * about its own import -- one digest line per imported ticket.
+     *
+     * The old guard was `actor !== "agent"`, which reads as "only a user"
+     * and is not: Actor has a third member. The rule is deny-by-default now
+     * (`actor === "user"`), and this is the case that proves it.
+     */
     const harness = createHarness();
     harness.installService();
     apply(asContext(harness.ctx), {});
     const svc = (harness as any).service;
     const agent = (harness as any).asAgent();
     const ticket = svc.setTicket(agent, { title: "Probe" });
-    // imported_state is system-authored by design (the plan importer stamps
-    // it), so the user path refuses; drive the internal attach with the
-    // system actor exactly as planImport does.
+    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
+    const before = [...pending.values()].flat().length;
     (svc as any)._attachEvidence(agent, {
       ticketId: ticket.id,
       kind: "builtin:imported_state",
       payload: { claimed_state: "in_progress" },
     }, "system");
-    const pending = (svc as any)._pendingInjections as Map<string, string[]>;
     const lines = [...pending.values()].flat();
-    expect(lines.some((line) => line.includes("claimed `in_progress`"))).toBe(true);
+    expect(lines.length).toBe(before);
+    expect(lines.some((line) => line.includes("claimed `in_progress`"))).toBe(false);
   });
 
   it("a commit-carrying row names the commit and subject in the line", async () => {

@@ -27632,22 +27632,36 @@ function _mdInline(text) {
   return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
 }
 function _mdCode(text) {
-  const clean = text.replace(/\s+/g, " ").replace(/`/g, "").trim();
-  return clean === "" ? "" : "`" + clean + "`";
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean === "") return "";
+  if (clean.includes("`")) return `${_mdInline(clean)} (contains a backtick)`;
+  return "`" + clean + "`";
 }
 function _mdTicketHead(ticketId, title) {
   const name2 = _mdInline(title);
   return `**#${ticketId}** *${name2}*`;
 }
+function _isUserAction(actor) {
+  return actor === "user";
+}
+function _mdQuote(text) {
+  const escaped = _mdInline(text).replace(/^(\s*)([#>-]|\d+\.)/, "$1\\$2");
+  return `
+  > ${escaped}`;
+}
 var DIGEST_TEXT_CAP = 1e3;
+var DIGEST_LINE_CAP = 40;
+var DIGEST_LINE_LENGTH_CAP = 2e3;
 function _ellipsize(text) {
   return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}\u2026` : text;
+}
+function _capDigestLine(line) {
+  return line.length > DIGEST_LINE_LENGTH_CAP ? `${line.slice(0, DIGEST_LINE_LENGTH_CAP)}\u2026 (truncated)` : line;
 }
 function _evidenceDigestSuffix(kind, payload) {
   const ellipsize = (text) => _mdInline(_ellipsize(text));
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
-    return `
-  > ${ellipsize(payload.note.trim())}`;
+    return _mdQuote(_ellipsize(payload.note.trim()));
   }
   if (Array.isArray(payload.paths)) {
     const paths = payload.paths.filter((p) => typeof p === "string");
@@ -27666,8 +27680,7 @@ function _evidenceDigestSuffix(kind, payload) {
   if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
     for (const value of Object.values(payload)) {
       if (typeof value === "string" && value.trim() !== "") {
-        return `
-  > ${ellipsize(value.trim())}`;
+        return _mdQuote(_ellipsize(value.trim()));
       }
     }
   }
@@ -28332,9 +28345,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const revalidated = validateAllowlistPaths(cwd, rawPaths);
     if (!revalidated.ok) {
       const detail = revalidated.bad.map((b) => `${b.path} (${b.reason})`).join("; ");
+      const safeDetail = revalidated.bad.map((b) => `${_mdCode(b.path)} (${_mdInline(b.reason)})`).join("; ");
       this._queueInjection(
         agent.session,
-        `Allowlist approval for #${pending.ticketId} was refused: ${detail} \u2014 the agent should re-propose`
+        `Allowlist approval for #${pending.ticketId} was refused: ${safeDetail} \u2014 the agent should re-propose`
       );
       return { resolved: `refused: ${detail}` };
     }
@@ -28579,7 +28593,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       at: this._now()
     });
     this.ctx.logger?.info?.(`aidos: plan meta set by ${actor} for project ${projectId} in session ${agent.session.id}`);
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       const blocks = ["frontmatter", "preamble", "contextSections"].filter((field) => args[field] !== void 0);
       if (blocks.length > 0) {
         this._queueInjection(
@@ -28641,9 +28655,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const live = this.ctx.agents?.get?.(session.id);
       if (live === void 0) return;
       const header = `**aidos board update** \u2014 ${lines.length} change${lines.length === 1 ? "" : "s"}`;
+      const shown = lines.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
+      if (lines.length > DIGEST_LINE_CAP) {
+        shown.push(`\u2026and ${lines.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);
+      }
       const text = `${header}
 
-- ${lines.join("\n- ")}`;
+- ${shown.join("\n- ")}`;
       const message = createUserMessage({
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" }
@@ -28818,7 +28836,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (!snapshot) {
       throw new Error("a created ticket is missing from the folded state");
     }
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, snapshot.title)} \u2014 **created** by ${actor}`
@@ -28878,8 +28896,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticket: snapshot,
       at
     });
-    if (actor !== "agent") {
-      const changed = ["title", "description", "criteria", "body", "dependsOn"].filter((field) => args[field] !== void 0);
+    if (_isUserAction(actor)) {
+      const changed = ["title", "description", "criteria", "body", "dependsOn", "phase", "order", "slug"].filter((field) => args[field] !== void 0);
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
@@ -28887,7 +28905,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         );
       }
     }
-    if (actor !== "agent" && allowlist !== void 0) {
+    if (_isUserAction(actor) && allowlist !== void 0) {
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, snapshot.title)} \u2014 allowlist: ${allowlist.map(_mdCode).join(" ")}`
@@ -29078,6 +29096,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         rowKind: args.rowKind,
         criterion: ""
       });
+      this._queueLinkDigest(agent, ticketId, cache, args.rowKind, false);
       return { ticketId, linked: false };
     }
     if (criterion === "") {
@@ -29095,15 +29114,24 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       rowKind: args.rowKind,
       criterion
     });
-    {
-      const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
-      const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
-      this._queueInjection(
-        agent.session,
-        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(args.rowKind)} ${what} by user`
-      );
-    }
+    this._queueLinkDigest(agent, ticketId, cache, args.rowKind, true);
     return { ticketId, linked: true };
+  }
+  /**
+   * One digest line for a criterion link or unlink.
+   *
+   * Extracted because the two callers are the link branch and the unlink
+   * branch, and the unlink branch previously returned before reaching the
+   * shared line -- so its message was dead code that read as covered. One
+   * function with two callers cannot drift that way.
+   */
+  _queueLinkDigest(agent, ticketId, cache, rowKind, linked) {
+    const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+    const what = linked ? "linked to a criterion" : "unlinked from its criterion";
+    this._queueInjection(
+      agent.session,
+      `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(rowKind)} ${what} by user`
+    );
   }
   /**
    * One gate-checked move with the actor pinned at the entry point. The
@@ -29150,7 +29178,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticket: snapshot,
       at
     });
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`
@@ -29181,7 +29209,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       author: actor,
       at
     });
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
         /*
@@ -29194,8 +29222,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
          * The text is still collapsed to one line first, so a multi-line
          * comment cannot break out of the quote.
          */
-        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 comment by ${actor}
-  > ${_mdInline(_ellipsize(args.text.trim()))}`
+        `${_mdTicketHead(ticketId, snapshot.title)} \u2014 comment by ${actor}${_mdQuote(_ellipsize(args.text.trim()))}`
       );
     }
     return { ticketId, text: args.text, author: actor, at };
@@ -29300,7 +29327,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticketId,
       row
     });
-    if (actor !== "agent") {
+    if (_isUserAction(actor)) {
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
