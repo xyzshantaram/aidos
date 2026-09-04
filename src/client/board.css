@@ -2413,6 +2413,61 @@
   align-self: center;
 }
 
+/*
+ * #93 (user, 2026-09-03): "make the buttons in the waiting on you modal all
+ * the same size and follow a grid system".
+ *
+ * The queue's rows carried buttons of whatever width their label happened to
+ * be -- "Verify", "Mark done", "Review request" -- and only SOME rows have a
+ * Dismiss, so nothing lined up down the column and the eye had to re-find
+ * the primary action on every row.
+ *
+ * A fixed two-column grid, right-aligned, fixes both: column one is always
+ * the primary action and column two is always Dismiss, so a row without a
+ * Dismiss leaves a hole rather than sliding its primary button sideways.
+ * The columns are sized to the WIDEST label, not to each row's own.
+ */
+.aidos-queue .aidos-ticket-strip-actions {
+  display: grid;
+  /*
+   * THREE columns, not two: the strip's own pop-out button renders inside
+   * this container (ticket-strip.tsx), so a two-column grid would wrap it
+   * onto its own row and make every entry taller. It gets a column of its
+   * own, sized to its content.
+   */
+  grid-template-columns: auto var(--queue-action-w) var(--queue-dismiss-w);
+  gap: 6px;
+  align-items: center;
+}
+
+.aidos-queue {
+  /* Sized to the longest action label ("Review request") so every row's
+     primary button is identical, and the grid never reflows per row. */
+  --queue-action-w: 8.5rem;
+  --queue-dismiss-w: 5rem;
+}
+
+.aidos-queue .aidos-ticket-strip-actions .aidos-btn {
+  width: 100%;
+  justify-content: center;
+  /* One height for every button, so the column reads as a column. */
+  min-height: 28px;
+}
+
+/* The pop-out affordance keeps its intrinsic size in column one. */
+.aidos-queue .aidos-ticket-strip-actions .aidos-icon-btn {
+  width: auto;
+  justify-self: start;
+}
+
+@media (max-width: 640px) {
+  /* One column on a narrow screen: two fixed columns would squeeze the
+     labels rather than aligning them, which defeats the point. */
+  .aidos-queue .aidos-ticket-strip-actions {
+    grid-template-columns: auto 1fr 1fr;
+  }
+}
+
 /* The queue itself. */
 .aidos-queue {
   display: flex;

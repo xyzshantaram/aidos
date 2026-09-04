@@ -7,6 +7,8 @@
  * already exists, never a new button.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -435,5 +437,56 @@ describe("u93 human-queue: a fulfilled ask is not a complaint", () => {
       [nom({ actionId: "verify" })],
     );
     expect(rows[0].kind).toBe("fulfilled");
+  });
+});
+
+describe("#93 the queue's action buttons are a grid, not ragged", () => {
+  /*
+   * User (2026-09-03): "make the buttons in the waiting on you modal all the
+   * same size and follow a grid system".
+   *
+   * The rows carried buttons sized to whatever their label happened to be --
+   * "Verify", "Mark done", "Review request" -- and only SOME rows have a
+   * Dismiss, so nothing lined up down the column and the eye had to re-find
+   * the primary action on every row.
+   */
+  const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+
+  function rule(selector: string): string {
+    const at = css.indexOf(selector);
+    expect(at).toBeGreaterThan(-1);
+    return css.slice(at, css.indexOf("}", at));
+  }
+
+  it("lays the queue's actions out on an explicit grid", () => {
+    const body = rule(".aidos-queue .aidos-ticket-strip-actions {");
+    expect(body).toContain("display: grid");
+    expect(body).toContain("grid-template-columns");
+  });
+
+  it("uses THREE columns, because the pop-out button shares the container", () => {
+    /*
+     * The strip's own pop-out button renders inside this same container, so
+     * a two-column grid wraps it onto its own row and makes every entry
+     * taller. It needs a column of its own.
+     */
+    const body = rule(".aidos-queue .aidos-ticket-strip-actions {");
+    const columns = /grid-template-columns:([^;]*);/.exec(body);
+    expect(columns).not.toBeNull();
+    expect((columns as RegExpExecArray)[1].trim().split(/\s+/).length).toBe(3);
+  });
+
+  it("sizes the columns once, not per row", () => {
+    // Fixed widths on the CONTAINER are what make every row's primary button
+    // identical; sizing per row is the raggedness being removed.
+    const vars = rule(".aidos-queue {");
+    expect(vars).toContain("--queue-action-w");
+    expect(vars).toContain("--queue-dismiss-w");
+  });
+
+  it("gives every action button the same width and height", () => {
+    const body = rule(".aidos-queue .aidos-ticket-strip-actions .aidos-btn {");
+    expect(body).toContain("width: 100%");
+    expect(body).toContain("min-height");
   });
 });
