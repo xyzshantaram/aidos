@@ -2739,3 +2739,101 @@
   color: color-mix(in srgb, var(--chip-hue) 38%, #ffffff);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── #73: the aidos cards' EXPANDED bodies ────────────────────────────────
+   User-reported: "the expanded view doesn't work". Only attach_evidence
+   supplied a body, so every other aidos row had nothing to expand -- no
+   chevron, and a click that did nothing visible.
+
+   Two body shapes cover every tool: a FACTS table (label -> value) and a
+   LIST (a key, an optional tag, and text). They deliberately borrow
+   tool-render's own box -- the same --dsw-alias tokens, radius, margins and
+   type scale as .tool-render-output -- so an expanded aidos card sits in the
+   same visual family as an expanded fs card rather than looking like an
+   aidos widget dropped into the transcript. That distinction is what #82
+   settled: the --dsw-alias-* tokens are the HARNESS's design system and are
+   global to the page, so using them is matching the app, not depending on
+   another plugin. Every one carries a fallback, because a var() to an
+   undeclared token renders as nothing at all. */
+
+.aidos-tool-facts,
+.aidos-tool-list {
+  box-sizing: border-box;
+  margin: 0.25rem 0 0.25rem 0.25rem;
+  padding: 0.625rem 0.8125rem;
+  border-radius: 0.625rem;
+  background: var(--dsw-alias-markdown-code-block, var(--surface-raised));
+  color: var(--dsw-alias-label-primary, var(--text-primary));
+  font-size: 0.8125rem;
+  line-height: 1.375rem;
+  max-height: 17.5rem;
+  overflow-y: auto;
+}
+
+.aidos-tool-facts {
+  display: grid;
+  /* The label column sizes to its content and stops: a fixed width either
+     truncates "contextSections" or wastes the row on "State". */
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 0.8125rem;
+}
+
+.aidos-tool-facts dt {
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+  font-family: var(--ds-font-family-code, monospace);
+  white-space: nowrap;
+}
+
+.aidos-tool-facts dd {
+  margin: 0;
+  min-width: 0;
+  /* One line per fact, ellipsised: a description pasted whole would bury
+     every fact beside it, and the value is always reachable in the ticket. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidos-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+}
+
+.aidos-tool-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.aidos-tool-list-key {
+  flex: none;
+  font-family: var(--ds-font-family-code, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+}
+
+.aidos-tool-list-tag {
+  flex: none;
+  padding: 0 0.375rem;
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+  font-size: 0.75rem;
+}
+
+.aidos-tool-list-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An evidence strip inside a card body keeps the strip's own look; it only
+   needs the surrounding box the other two body shapes carry. */
+.tool-render-body > .aidos-evidence-strips {
+  margin: 0.25rem 0 0.25rem 0.25rem;
+}

@@ -26903,6 +26903,15 @@ function scratchRootForAgent(agent) {
   const workspaceKey = workspaceKeyFromPath(cwd);
   return dshHomePath("aidos", "scratch", workspaceKey);
 }
+function declaredParameters(definition) {
+  const parameters = definition?.parameters;
+  if (parameters === null || typeof parameters !== "object") return {};
+  const properties = parameters.properties;
+  if (properties !== null && typeof properties === "object" && !Array.isArray(properties)) {
+    return properties;
+  }
+  return parameters;
+}
 function resolveScratchPath(root, path) {
   if (path.length === 0) {
     throw new HarnessError(
@@ -27034,12 +27043,19 @@ function registerScratchTools(ctx) {
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
+        const readDef = ctx.tools.get("read", agent);
         let existed = false;
-        try {
-          await fs.readText(target, exec.signal);
-          existed = true;
-        } catch {
-          existed = false;
+        if (readDef) {
+          const probe = await ctx.tools.execute({
+            callId: exec.callId,
+            rootCallId: exec.rootCallId,
+            name: "read",
+            arguments: { file_path: absPath },
+            agent: exec.agent,
+            parent: exec.token,
+            signal: exec.signal
+          });
+          existed = !probe.isError;
         }
         const writeDef = ctx.tools.get("write", agent);
         if (writeDef) {
@@ -27053,12 +27069,17 @@ function registerScratchTools(ctx) {
             signal: exec.signal
           });
           if (!delegated.isError) {
-            const operation = existed ? "update" : "create";
+            const reported = delegated.value?.operation;
+            const operation = reported === "create" || reported === "update" ? reported : existed ? "update" : "create";
             ctx.logger?.info?.(`aidos: scratch_write ${operation} ${absPath} (delegated)`);
             return { ok: true, path: absPath, scratch_root: root, operation };
           }
           ctx.logger?.warn?.(
-            `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs`
+            `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs -- the file will NOT be registered as observed, so a following scratch_edit may refuse it`
+          );
+        } else {
+          ctx.logger?.warn?.(
+            `aidos: scratch_write has no \`write\` tool in this scope (expected outside in_progress); writing through raw fs -- the file will NOT be registered as observed, so a following scratch_edit may refuse it`
           );
         }
         const outcome = await fs.writeText(target, args.content, void 0, exec.signal);
@@ -27104,7 +27125,7 @@ function registerScratchTools(ctx) {
             "AIDOS_EDIT_TOOL_UNAVAILABLE"
           );
         }
-        const editParams = editDef.parameters ?? {};
+        const editParams = declaredParameters(editDef);
         const accepts = (key) => Object.hasOwn(editParams, key);
         const wantsAnchors = Array.isArray(args.edits);
         const pathKey = accepts("file_path") ? "file_path" : "path";

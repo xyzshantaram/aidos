@@ -28,6 +28,16 @@ import { EvidenceStrip } from "./evidence-strip";
 import { asBoardKey } from "./board-logic";
 import { setSelection, ticketTitle } from "./view-state";
 import {
+  allowlistPaths,
+  planBlocksWritten,
+  suggestionLines,
+  ticketEvidence,
+  ticketFacts,
+  ticketLines,
+  writtenFields,
+  type Fact,
+} from "./aidos-row-data";
+import {
   argsRawOf,
   errorTextOf,
   firstLineOfError,
@@ -175,6 +185,48 @@ function AidosRow(props: RowProps) {
   );
 }
 
+/**
+ * A facts table: the shape every aidos card body uses for `label: value`
+ * data, so a body reads the same whichever tool produced it.
+ *
+ * A `<dl>` rather than a table because that is what this is -- terms and
+ * their definitions -- and it reads correctly to a screen reader without any
+ * ARIA bolted on.
+ */
+function Facts({ facts }: { facts: Fact[] }) {
+  if (facts.length === 0) return null;
+  return (
+    <dl className="aidos-tool-facts">
+      {facts.map((fact) => (
+        <react.Fragment key={fact.label}>
+          <dt>{fact.label}</dt>
+          <dd title={fact.value}>{fact.value}</dd>
+        </react.Fragment>
+      ))}
+    </dl>
+  );
+}
+
+/** The plain text body tool-render uses, for a result that IS text. */
+function TextBody({ text, isError }: { text: string; isError?: boolean }) {
+  return (
+    <pre className="tool-render-output" tool-render-error={isError === true ? true : undefined}>
+      {text}
+    </pre>
+  );
+}
+
+/**
+ * An error body. Every row gets one, which is the point: a failed call was
+ * previously a dead end -- the row showed one line and there was nowhere to
+ * see the rest.
+ */
+function errorBody(errorText: string | null): react.ReactNode | null {
+  return errorText === null || errorText === "" ? null : (
+    <TextBody text={errorText} isError={true} />
+  );
+}
+
 /** Everything the rows share: parse once, decide once. */
 function useAidosRow(props: AidosViewProps) {
   const args = parseArgs(argsRawOf(props.block));
@@ -184,11 +236,11 @@ function useAidosRow(props: AidosViewProps) {
   const errorText = state === "error" ? errorTextOf(props.block) : null;
   const errorSummary =
     errorText !== null && errorText !== "" ? firstLineOfError(errorText) : undefined;
-  return { args, state, result, ticketId, errorSummary };
+  return { args, state, result, ticketId, errorText, errorSummary };
 }
 
 export function AttachEvidenceRow(props: AidosViewProps) {
-  const { args, state, result, ticketId, errorSummary } = useAidosRow(props);
+  const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
   const kind = typeof args?.kind === "string" ? args.kind : undefined;
   /*
    * The EVIDENCE STRIP, and the criterion's whole point: this is literally
@@ -198,18 +250,22 @@ export function AttachEvidenceRow(props: AidosViewProps) {
    * proved when three hand-written approximations of tool-render all failed.
    */
   const body =
-    state !== "error" && kind !== undefined ? (
-      <ul className="aidos-evidence-strips">
-        <EvidenceStrip
-          row={{
-            kind: kind.startsWith("builtin:") ? kind : "builtin:" + kind,
-            payload: (args?.payload as Record<string, unknown>) ?? {},
-            author: "agent",
-            at: typeof result?.updatedAt === "number" ? result.updatedAt : undefined,
-          }}
-        />
-      </ul>
-    ) : null;
+    state === "error"
+      ? errorBody(errorText)
+      : kind !== undefined
+        ? (
+            <ul className="aidos-evidence-strips">
+              <EvidenceStrip
+                row={{
+                  kind: kind.startsWith("builtin:") ? kind : "builtin:" + kind,
+                  payload: (args?.payload as Record<string, unknown>) ?? {},
+                  author: "agent",
+                  at: typeof result?.updatedAt === "number" ? result.updatedAt : undefined,
+                }}
+              />
+            </ul>
+          )
+        : null;
   return (
     <AidosRow
       title="Attach evidence"
@@ -224,14 +280,28 @@ export function AttachEvidenceRow(props: AidosViewProps) {
 }
 
 export function MoveTicketRow(props: AidosViewProps) {
-  const { args, state, ticketId, errorSummary } = useAidosRow(props);
+  const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
   const to = typeof args?.to === "string" ? args.to : null;
   const label = ticketLabel(ticketId);
+  /*
+   * A move's body is its GATE. A refused move names the missing evidence
+   * kinds, and that refusal is the most useful thing aidos ever prints --
+   * the whole gate model is "you cannot move because X is missing". It was
+   * previously one truncated line with nothing to expand.
+   */
+  const facts = ticketFacts(result);
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : facts.length > 0
+        ? <Facts facts={facts} />
+        : null;
   return (
     <AidosRow
       title="Move ticket"
       summary={to === null ? (label ?? "move") : `${label ?? ""} → ${to}`.trim()}
       state={state}
+      body={body}
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
@@ -240,16 +310,30 @@ export function MoveTicketRow(props: AidosViewProps) {
 }
 
 export function SetTicketRow(props: AidosViewProps) {
-  const { args, state, result, ticketId, errorSummary } = useAidosRow(props);
+  const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
   const created = result?.created === true;
   // A create names its new title; an edit names the ticket it changed.
   const title = typeof args?.title === "string" ? args.title : null;
   const summary = created && title !== null ? `#${ticketId ?? "?"} — ${title}` : ticketLabel(ticketId);
+  /*
+   * The body is WHAT WAS WRITTEN -- the fields the call actually set. A
+   * ticket edit is otherwise invisible: the row says a ticket changed and
+   * nothing says how, which is exactly the review problem this project keeps
+   * paying for.
+   */
+  const fields = writtenFields(args);
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : fields.length > 0
+        ? <Facts facts={fields} />
+        : null;
   return (
     <AidosRow
       title={created ? "Create ticket" : "Edit ticket"}
       summary={summary ?? "ticket"}
       state={state}
+      body={body}
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
@@ -258,12 +342,45 @@ export function SetTicketRow(props: AidosViewProps) {
 }
 
 export function GetTicketRow(props: AidosViewProps) {
-  const { state, ticketId, errorSummary } = useAidosRow(props);
+  const { state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
+  const facts = ticketFacts(result);
+  const evidence = ticketEvidence(result);
+  /*
+   * A ticket read expands into the ticket: its facts, then its evidence as
+   * real strips. The evidence is the reason to read a ticket at all -- what
+   * is attached, and what the gate is still missing.
+   */
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : facts.length === 0 && evidence.length === 0
+        ? null
+        : (
+            <>
+              <Facts facts={facts} />
+              {evidence.length > 0 ? (
+                <ul className="aidos-evidence-strips">
+                  {evidence.map((row, index) => (
+                    <EvidenceStrip
+                      key={index}
+                      row={{
+                        kind: row.kind,
+                        payload: { note: row.excerpt },
+                        author: row.author as "agent" | "user",
+                        at: row.at,
+                      }}
+                    />
+                  ))}
+                </ul>
+              ) : null}
+            </>
+          );
   return (
     <AidosRow
       title="Read ticket"
       summary={ticketLabel(ticketId) ?? "ticket"}
       state={state}
+      body={body}
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
@@ -272,7 +389,7 @@ export function GetTicketRow(props: AidosViewProps) {
 }
 
 export function GetTicketsRow(props: AidosViewProps) {
-  const { args, state, result, errorSummary } = useAidosRow(props);
+  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
   /*
    * The board read leads with its COUNT, which is the #71 summary field:
    * "Showing 30 of 42 matching tickets". A truncated read used to look
@@ -287,8 +404,258 @@ export function GetTicketsRow(props: AidosViewProps) {
         ]
           .filter((part): part is string => part !== null)
           .join(" · ") || "the board";
+  /*
+   * The body is the ROWS THE READ RETURNED, which is what a reader checking
+   * the agent's work actually wants: not "it read the board" but which
+   * tickets it saw. Each id selects that ticket, the same click-through the
+   * row summary carries.
+   */
+  const lines = ticketLines(result);
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : lines.length === 0
+        ? null
+        : (
+            <ul className="aidos-tool-list">
+              {lines.map((line) => (
+                <li key={line.id}>
+                  <span className="aidos-tool-list-key">#{line.id}</span>
+                  {line.state === "" ? null : (
+                    <span className="aidos-tool-list-tag">{line.state}</span>
+                  )}
+                  <span className="aidos-tool-list-text" title={line.title}>
+                    {line.title}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          );
   return (
-    <AidosRow title="Read the board" summary={summary} state={state} errorSummary={errorSummary} />
+    <AidosRow
+      title="Read the board"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+    />
+  );
+}
+
+/*
+ * ── The tools that had NO row at all ────────────────────────────────────
+ *
+ * User-reported: "I see the tool call card for read_ticket and edit_ticket,
+ * but I don't see request_allowlist." Five of the eleven aidos tools had a
+ * client row; the other six still rendered a raw JSON envelope, which is the
+ * exact gap #82 closed for the scratch family.
+ *
+ * Missed because #71's coverage test enumerates the HOST-side presentCall
+ * declarations, and all eleven have one. The client rows are a second,
+ * separate registration and nothing compared the two lists. There is now a
+ * test that does.
+ */
+
+export function RequestAllowlistRow(props: AidosViewProps) {
+  const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
+  const paths = allowlistPaths(args, result);
+  const label = ticketLabel(ticketId);
+  const summary =
+    (label ?? "allowlist") + " · " + paths.length + (paths.length === 1 ? " path" : " paths");
+  /*
+   * Each path says whether approving it CREATES it (#104). That distinction
+   * is the informed half of informed consent: approving a path that exists
+   * grants write access to what is there, and approving one that does not
+   * also brings it into being.
+   */
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : paths.length === 0
+        ? null
+        : (
+            <ul className="aidos-tool-list">
+              {paths.map((entry) => (
+                <li key={entry.path}>
+                  <span className="aidos-tool-list-text">{entry.path}</span>
+                  {entry.created ? (
+                    <span className="aidos-tool-list-tag" title="Does not exist yet; approving creates it">
+                      will be created
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          );
+  return (
+    <AidosRow
+      title="Request allowlist"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+      ticketId={ticketId}
+      sessionId={props.sessionId}
+    />
+  );
+}
+
+export function SuggestActionsRow(props: AidosViewProps) {
+  const { args, state, errorText, errorSummary } = useAidosRow(props);
+  const lines = suggestionLines(args);
+  const summary =
+    lines.length === 0
+      ? "nothing"
+      : lines.length === 1
+        ? (ticketLabel(lines[0].ticketId) ?? "#" + lines[0].ticketId)
+        : lines.length + " tickets";
+  /*
+   * The REASON is the payload of a nomination -- the whole point of
+   * suggest_actions is that the agent says why it needs each one, rather
+   * than listing them in prose. A card that showed only the count would
+   * throw away the only part worth reading.
+   */
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : lines.length === 0
+        ? null
+        : (
+            <ul className="aidos-tool-list">
+              {lines.map((line) => (
+                <li key={line.ticketId + ":" + line.actionId}>
+                  <span className="aidos-tool-list-key">#{line.ticketId}</span>
+                  <span className="aidos-tool-list-tag">{line.actionId}</span>
+                  <span className="aidos-tool-list-text" title={line.reason}>
+                    {line.reason}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          );
+  return (
+    <AidosRow
+      title="Suggest actions"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+      ticketId={lines.length === 1 ? lines[0].ticketId : null}
+      sessionId={props.sessionId}
+    />
+  );
+}
+
+export function PlanRow(props: AidosViewProps) {
+  const { args, state, errorText, errorSummary } = useAidosRow(props);
+  /*
+   * plan is "the one tool whose result is the plan TEXT, not JSON", so its
+   * body is that text verbatim. resultOf returns null for it, correctly --
+   * the text is read straight off the block instead.
+   */
+  const text = state === "error" ? errorText : resultTextOf(props.block);
+  const summary =
+    args?.projectId === undefined ? "the project plan" : "project " + String(args.projectId);
+  return (
+    <AidosRow
+      title="Export plan"
+      summary={summary}
+      state={state}
+      body={text === null || text === "" ? null : <TextBody text={text} isError={state === "error"} />}
+      errorSummary={errorSummary}
+    />
+  );
+}
+
+export function PlanImportRow(props: AidosViewProps) {
+  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
+  const file = typeof args?.file === "string" ? args.file : "a plan";
+  /*
+   * An import is all-or-nothing and lands every ticket in `open`, so the
+   * count it created is the fact that matters -- and a parse error names the
+   * line, which is why the error body is worth expanding.
+   */
+  const facts: Fact[] = [];
+  const imported = result?.imported ?? result?.count;
+  if (typeof imported === "number") facts.push({ label: "Imported", value: String(imported) });
+  if (typeof result?.projectId === "number") {
+    facts.push({ label: "Project", value: String(result.projectId) });
+  }
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : facts.length > 0
+        ? <Facts facts={facts} />
+        : null;
+  return (
+    <AidosRow
+      title="Import plan"
+      summary={file}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+    />
+  );
+}
+
+export function PlanMetaRow(props: AidosViewProps) {
+  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
+  const summary =
+    args?.projectId === undefined ? "the plan blocks" : "project " + String(args.projectId);
+  const facts: Fact[] = [];
+  for (const block of ["frontmatter", "preamble"]) {
+    const value = result?.[block];
+    if (typeof value === "string") {
+      facts.push({ label: block, value: value === "" ? "(empty)" : value });
+    }
+  }
+  if (Array.isArray(result?.contextSections)) {
+    facts.push({
+      label: "contextSections",
+      value: String((result.contextSections as unknown[]).length),
+    });
+  }
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : facts.length > 0
+        ? <Facts facts={facts} />
+        : null;
+  return (
+    <AidosRow
+      title="Read plan blocks"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+    />
+  );
+}
+
+export function PlanMetaSetRow(props: AidosViewProps) {
+  const { args, state, errorText, errorSummary } = useAidosRow(props);
+  /*
+   * Which BLOCKS were replaced. A present field replaces its stored value
+   * and an absent one keeps it, so the blocks named in the arguments are
+   * exactly the edit -- and "edited the plan" would not say whether the
+   * frontmatter or every context section just moved.
+   */
+  const blocks = planBlocksWritten(args);
+  const written = writtenFields(args).filter((fact) => fact.label !== "projectId");
+  const body =
+    state === "error"
+      ? errorBody(errorText)
+      : written.length > 0
+        ? <Facts facts={written} />
+        : null;
+  return (
+    <AidosRow
+      title="Edit plan blocks"
+      summary={blocks.length === 0 ? "no block" : blocks.join(" · ")}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+    />
   );
 }
 
@@ -299,4 +666,10 @@ export const AIDOS_ROWS: ReadonlyArray<[string, (props: AidosViewProps) => react
   ["set_ticket", SetTicketRow],
   ["attach_evidence", AttachEvidenceRow],
   ["move_ticket", MoveTicketRow],
+  ["request_allowlist", RequestAllowlistRow],
+  ["suggest_actions", SuggestActionsRow],
+  ["plan", PlanRow],
+  ["plan_import", PlanImportRow],
+  ["plan_meta", PlanMetaRow],
+  ["plan_meta_set", PlanMetaSetRow],
 ];

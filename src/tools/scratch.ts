@@ -39,6 +39,36 @@ export function scratchRootForAgent(agent: Agent | undefined): string {
 }
 
 /**
+ * The parameter names a registered tool actually accepts.
+ *
+ * `defineTool` COMPILES the parameter spec into a JSON Schema, so a
+ * registered tool's `parameters` is `{type, properties, required}` and the
+ * per-argument names live one level down under `properties`. Reading the top
+ * level instead yields `["type", "properties", "required"]`, which matches no
+ * argument name at all.
+ *
+ * That was not a near miss, it was total: `scratch_edit` decided every
+ * grammar was unsupported and refused EVERY edit, with its own error message
+ * printing `accepts: ["type","properties","required"]` -- the answer, in the
+ * refusal, unread. The suite stayed green because the tests asserted the
+ * source TEXT of this line rather than calling the tool.
+ *
+ * Uncompiled specs are tolerated too: a definition whose `parameters` has no
+ * `properties` is read at the top level, so a hand-built definition (as a
+ * test harness may register) still resolves. Exported so a test can assert
+ * the reading against a real `defineTool` output rather than a string match.
+ */
+export function declaredParameters(definition: unknown): Record<string, unknown> {
+  const parameters = (definition as { parameters?: unknown } | null)?.parameters;
+  if (parameters === null || typeof parameters !== "object") return {};
+  const properties = (parameters as { properties?: unknown }).properties;
+  if (properties !== null && typeof properties === "object" && !Array.isArray(properties)) {
+    return properties as Record<string, unknown>;
+  }
+  return parameters as Record<string, unknown>;
+}
+
+/**
  * Resolve one user-supplied path against the scratch root. Relative paths land
  * under the root; absolute paths must equal or sit beneath it; escape attempts
  * (`../` climbing out, or an absolute path outside the root) are refused.
@@ -191,18 +221,40 @@ export function registerScratchTools(ctx: Context): void {
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         /*
-         * create vs update, decided BEFORE the write. The narrow fs seam has
-         * no exists(), so a successful read is the probe: a file that reads
-         * is being updated, one that does not is being created. Only used
-         * for the reported operation, never for the write itself, so a
-         * misread degrades the label and nothing more.
+         * OBSERVE an existing file before overwriting it, by delegating to
+         * the `read` tool.
+         *
+         * This probed with the raw `fs.readText`, which emits no
+         * `fs/observed`. That made the observation fix work for a CREATE and
+         * fail for an overwrite: the write's intent for an unseen target is
+         * `createIfAbsent`, which the fs layer refuses when the file already
+         * exists ("cannot overwrite without reading it first"). The write
+         * then fell through to raw fs, which records no observation either,
+         * so the next scratch_edit hit FS_NOT_OBSERVED.
+         *
+         * Reachable in the ordinary case, not a corner: the scratch root
+         * PERSISTS under dshHomePath, so any file left by an earlier session
+         * takes this path. The manual test missed it because it tested a
+         * create.
+         *
+         * The read also answers create-vs-update, so the separate raw probe
+         * is gone: it materialised the whole file to compute a label, and its
+         * bare `catch` reported "create" for an existing file that merely
+         * failed to read (EACCES, EISDIR) -- and swallowed an abort.
          */
+        const readDef = ctx.tools.get("read", agent);
         let existed = false;
-        try {
-          await fs.readText(target, exec.signal);
-          existed = true;
-        } catch {
-          existed = false;
+        if (readDef) {
+          const probe = await ctx.tools.execute({
+            callId: exec.callId,
+            rootCallId: exec.rootCallId,
+            name: "read",
+            arguments: { file_path: absPath },
+            agent: exec.agent,
+            parent: exec.token,
+            signal: exec.signal,
+          });
+          existed = !probe.isError;
         }
 
         /*
@@ -232,12 +284,39 @@ export function registerScratchTools(ctx: Context): void {
             signal: exec.signal,
           });
           if (!delegated.isError) {
-            const operation: "create" | "update" = existed ? "update" : "create";
+            /*
+             * The write's OWN result is authoritative for create-vs-update
+             * (the builtin returns `{path, operation, before, after}`); the
+             * read probe is only the fallback for a backend that does not
+             * report one.
+             */
+            const reported = (delegated.value as { operation?: unknown } | undefined)?.operation;
+            const operation: "create" | "update" =
+              reported === "create" || reported === "update"
+                ? reported
+                : existed
+                  ? "update"
+                  : "create";
             ctx.logger?.info?.(`aidos: scratch_write ${operation} ${absPath} (delegated)`);
             return { ok: true, path: absPath, scratch_root: root, operation };
           }
           ctx.logger?.warn?.(
-            `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs`,
+            `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs -- the file will NOT be registered as observed, so a following scratch_edit may refuse it`,
+          );
+        } else {
+          /*
+           * No `write` tool in scope, which is the DEFAULT in the `open`
+           * state: the mask exposes write/edit only while a ticket is in
+           * progress, and the scratch tools sit outside that universe so they
+           * stay available in every state.
+           *
+           * The raw path below records no observation, so it silently
+           * reintroduces the bug this ticket fixed -- in the very state the
+           * scratch workspace exists for. It must SAY so rather than degrade
+           * quietly; a silent fallback is how the original defect survived.
+           */
+          ctx.logger?.warn?.(
+            `aidos: scratch_write has no \`write\` tool in this scope (expected outside in_progress); writing through raw fs -- the file will NOT be registered as observed, so a following scratch_edit may refuse it`,
           );
         }
 
@@ -307,7 +386,7 @@ export function registerScratchTools(ctx: Context): void {
          * better-edit can be remounted later and this adapts with no code
          * change.
          */
-        const editParams = (editDef as { parameters?: Record<string, unknown> }).parameters ?? {};
+        const editParams = declaredParameters(editDef);
         const accepts = (key: string): boolean => Object.hasOwn(editParams, key);
         const wantsAnchors = Array.isArray(args.edits);
         const pathKey = accepts("file_path") ? "file_path" : "path";

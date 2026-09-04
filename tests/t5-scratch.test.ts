@@ -16,7 +16,8 @@ import { join, isAbsolute } from "node:path";
 import { readFileSync } from "node:fs";
 
 import { childPathScope, writeBoundaryReason } from "../src/tools/allowlist";
-import { resolveScratchPath, scratchRootForAgent } from "../src/tools/scratch";
+import { declaredParameters, resolveScratchPath, scratchRootForAgent } from "../src/tools/scratch";
+import { defineTool } from "@deepseek-ai/dsh-tools";
 import { Store } from "../src/kernel/store";
 import { DEFAULT_CONFIG } from "../src/kernel/constants";
 import { FIXED_NOW } from "./helpers";
@@ -198,74 +199,219 @@ describe("#82 parity with the default dsh edit/write tools", () => {
    * confusing than tools that look different.
    */
 
-  /** A harness whose registry carries a fake edit tool with a chosen grammar. */
-  function harnessWithEdit(params: Record<string, unknown>) {
+  /*
+   * These tests CALL the tools. The previous set read scratch.ts and asserted
+   * substrings of it, which is why a total failure stayed invisible: the
+   * grammar detection read the wrong level of the parameter object, decided
+   * every grammar was unsupported, and refused EVERY edit -- with the suite
+   * green, because the strings it asserted were all still present.
+   *
+   * A source-text assertion proves a line exists. Only a call proves it
+   * works.
+   */
+
+  /**
+   * A harness carrying a real `defineTool`-registered edit backend with a
+   * chosen grammar, and a record of the arguments it was actually handed.
+   *
+   * defineTool is used deliberately rather than a hand-built object: the
+   * COMPILATION it performs -- parameters becoming `{type, properties,
+   * required}` -- is precisely what the detection misread, so a fake that
+   * skips it would reproduce the bug's blind spot.
+   */
+  function harnessWithEdit(parameters: Record<string, never>) {
     const harness = scratchHarness();
     const seen: Record<string, unknown>[] = [];
-    (harness as any).registerTool?.({
-      name: "edit",
-      parameters: params,
-      execute: async (args: Record<string, unknown>) => {
-        seen.push(args);
-        return { ok: true };
-      },
-    });
+    harness.ctx.tools.register(
+      defineTool({
+        name: "edit",
+        description: "a test edit backend",
+        parameters,
+        output: { schema: { type: "object", additionalProperties: true }, render: () => [] },
+        execute: async (args: Record<string, unknown>) => {
+          seen.push(args);
+          return { ok: true, message: "edited" };
+        },
+      }) as never,
+    );
     return { harness, seen };
   }
 
-  it("scratch_write DELEGATES to the write tool, so the file counts as observed", async () => {
+  /** The builtin str-replace grammar. */
+  const LITERAL_GRAMMAR = {
+    file_path: { type: "string", required: true },
+    old_string: { type: "string", required: true },
+    new_string: { type: "string", required: true },
+    replace_all: { type: "boolean" },
+  } as unknown as Record<string, never>;
+
+  /** dsh-better-edit's anchor grammar, on the other path key. */
+  const ANCHOR_GRAMMAR = {
+    path: { type: "string", required: true },
+    edits: { type: "array", items: { type: "array" } },
+  } as unknown as Record<string, never>;
+
+  it("reads the parameter names a REAL defineTool registration declares", () => {
     /*
-     * THE audit finding. scratch_write called fs.writeText directly, which
-     * bypassed the observation policy -- so scratch_edit refused its own
-     * freshly written file with FS_NOT_OBSERVED. write-then-edit worked with
-     * the builtin pair and failed with the scratch pair.
+     * The blocker, at its root. defineTool compiles the spec, so a registered
+     * tool's `parameters` is `{type, properties, required}` and the argument
+     * names live under `properties`. Reading the top level returned exactly
+     * those three words -- matching no argument name at all.
+     */
+    const { harness } = harnessWithEdit(LITERAL_GRAMMAR);
+    const definition = harness.ctx.tools.get("edit");
+    expect(Object.keys(declaredParameters(definition))).toEqual(
+      expect.arrayContaining(["file_path", "old_string", "new_string", "replace_all"]),
+    );
+    // The exact wrong answer, named so a regression is unmistakable.
+    expect(Object.keys(declaredParameters(definition))).not.toEqual([
+      "type",
+      "properties",
+      "required",
+    ]);
+  });
+
+  it("performs a literal edit against the default grammar", async () => {
+    // The end-to-end property: an edit SUCCEEDS. This refused every call.
+    const { harness, seen } = harnessWithEdit(LITERAL_GRAMMAR);
+    await harness.runTool("scratch_write", { path: "e.txt", content: "alpha\nbeta\n" });
+    const outcome = await harness.runTool("scratch_edit", {
+      path: "e.txt",
+      old_string: "beta",
+      new_string: "BETA",
+    });
+    expect(outcome.isError, JSON.stringify(outcome.error)).toBe(false);
+    expect(seen.length).toBe(1);
+    expect(seen[0].old_string).toBe("beta");
+    expect(seen[0].new_string).toBe("BETA");
+    // The path key is CHOSEN from the backend's declaration, not hardcoded.
+    expect(typeof seen[0].file_path).toBe("string");
+    expect(seen[0].path).toBeUndefined();
+  });
+
+  it("performs an anchor edit against a better-edit-shaped grammar", async () => {
+    /*
+     * Criterion 5 in practice, not in shape: remounting dsh-better-edit must
+     * be a config change. This is that claim executed -- same scratch code,
+     * a backend declaring the OTHER grammar and the other path key.
+     */
+    const { harness, seen } = harnessWithEdit(ANCHOR_GRAMMAR);
+    await harness.runTool("scratch_write", { path: "a.txt", content: "alpha\n" });
+    const outcome = await harness.runTool("scratch_edit", {
+      path: "a.txt",
+      edits: [["aaa", "bbb", "replacement"]],
+    });
+    expect(outcome.isError, JSON.stringify(outcome.error)).toBe(false);
+    expect(seen.length).toBe(1);
+    expect(seen[0].edits).toEqual([["aaa", "bbb", "replacement"]]);
+    expect(typeof seen[0].path).toBe("string");
+    expect(seen[0].file_path).toBeUndefined();
+  });
+
+  it("refuses a grammar the resolved backend does not declare, without calling it", async () => {
+    // A clear refusal beats forwarding arguments the backend cannot parse.
+    const { harness, seen } = harnessWithEdit(LITERAL_GRAMMAR);
+    await harness.runTool("scratch_write", { path: "x.txt", content: "alpha\n" });
+    const outcome = await harness.runTool("scratch_edit", {
+      path: "x.txt",
+      edits: [["aaa", "bbb", "c"]],
+    });
+    expect(outcome.isError).toBe(true);
+    expect(outcome.error?.message).toContain("anchor grammar");
+    expect(seen.length, "the backend must not be called with a shape it cannot parse").toBe(0);
+  });
+
+  it("only forwards replace_all when the backend declares it", async () => {
+    const { harness, seen } = harnessWithEdit(LITERAL_GRAMMAR);
+    await harness.runTool("scratch_write", { path: "r.txt", content: "a\n" });
+    await harness.runTool("scratch_edit", {
+      path: "r.txt",
+      old_string: "a",
+      new_string: "b",
+      replace_all: true,
+    });
+    expect(seen[0].replace_all).toBe(true);
+
+    const anchor = harnessWithEdit(ANCHOR_GRAMMAR);
+    await anchor.harness.runTool("scratch_write", { path: "r.txt", content: "a\n" });
+    await anchor.harness.runTool("scratch_edit", {
+      path: "r.txt",
+      edits: [["aaa", "bbb", "c"]],
+    });
+    expect(anchor.seen[0].replace_all).toBeUndefined();
+  });
+
+  it("scratch_write OBSERVES an existing file before overwriting it", async () => {
+    /*
+     * The other blocker. The observation fix worked for a CREATE and failed
+     * for an overwrite: the raw fs.readText probe records no observation, so
+     * the write's intent stayed `createIfAbsent`, which the fs layer refuses
+     * on a file that already exists.
      *
-     * scratch_read already delegated to `read` for exactly this reason; the
-     * write half simply never did.
+     * Reachable in the ordinary case, not a corner -- the scratch root
+     * PERSISTS, so any file from an earlier session takes this path. The
+     * manual test missed it because it tested a create.
      */
-    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
-    const at = src.indexOf('name: "scratch_write"');
-    const body = src.slice(at, src.indexOf('name: "scratch_edit"'));
-    expect(body).toContain('ctx.tools.get("write", agent)');
-    expect(body).toContain('name: "write"');
+    const harness = scratchHarness();
+    const calls: string[] = [];
+    for (const name of ["read", "write"]) {
+      harness.ctx.tools.register(
+        defineTool({
+          name,
+          description: "a test fs backend",
+          parameters: { file_path: { type: "string", required: true } } as never,
+          output: { schema: { type: "object", additionalProperties: true }, render: () => [] },
+          execute: async () => {
+            calls.push(name);
+            return { ok: true, operation: "update" };
+          },
+        }) as never,
+      );
+    }
+    await harness.runTool("scratch_write", { path: "obs.txt", content: "one" });
+    expect(calls, "the read must come FIRST: it is what records the observation").toEqual([
+      "read",
+      "write",
+    ]);
   });
 
-  it("keeps a raw-fs fallback, so a scope with no write tool still works", () => {
-    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
-    const at = src.indexOf('name: "scratch_write"');
-    const body = src.slice(at, src.indexOf('name: "scratch_edit"'));
-    expect(body).toContain("fs.writeText");
-  });
-
-  it("scratch_edit DETECTS the grammar instead of assuming it", () => {
+  it("takes create-vs-update from the write's own result, not from a probe", async () => {
     /*
-     * It hardcoded {path, edits} and {file_path, old_string, new_string},
-     * choosing from what the CALLER passed. That worked only while
-     * better-edit was mounted and accepted both. Now the shape is read from
-     * the resolved tool's own parameter declaration, so the scratch tools
-     * follow whichever edit backend is mounted -- including better-edit if
-     * it is remounted later, with no code change.
+     * The write backend reports its own operation, which is authoritative
+     * and free. The old probe read the WHOLE FILE to compute a label, and
+     * its bare catch reported "create" for an existing file that merely
+     * failed to read.
      */
-    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
-    const at = src.indexOf('name: "scratch_edit"');
-    const body = src.slice(at);
-    expect(body).toContain("editDef as { parameters?");
-    expect(body).toContain("Object.hasOwn(editParams, key)");
-    // The path key is chosen, not hardcoded.
-    expect(body).toContain('accepts("file_path") ? "file_path" : "path"');
+    const harness = scratchHarness();
+    harness.ctx.tools.register(
+      defineTool({
+        name: "write",
+        description: "a test write backend",
+        parameters: { file_path: { type: "string", required: true } } as never,
+        output: { schema: { type: "object", additionalProperties: true }, render: () => [] },
+        execute: async () => ({ ok: true, operation: "update" }),
+      }) as never,
+    );
+    const outcome = await harness.runTool("scratch_write", { path: "new.txt", content: "one" });
+    // No read tool is registered, so the probe would have said "create".
+    expect((outcome.value as { operation?: string }).operation).toBe("update");
   });
 
-  it("refuses the anchor grammar when the resolved tool does not accept it", () => {
-    // A clear refusal here beats forwarding arguments the tool cannot parse
-    // and surfacing a confusing downstream failure.
-    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
-    expect(src).toContain("edit_grammar_unsupported");
-    expect(src).toContain("does not accept the anchor grammar");
-    expect(src).toContain("does not accept the literal grammar");
-  });
-
-  it("only forwards replace_all when the resolved tool declares it", () => {
-    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
-    expect(src).toContain('accepts("replace_all")');
+  it("keeps a raw-fs fallback, and SAYS it is unobserved", async () => {
+    /*
+     * The fallback is reachable in the DEFAULT state: the mask exposes
+     * write/edit only while a ticket is in progress, and the scratch tools
+     * sit outside that universe. A silent degrade there reintroduces the very
+     * bug this ticket fixed, in the state the scratch workspace exists for.
+     */
+    const harness = scratchHarness();
+    const warnings: string[] = [];
+    (harness.ctx as { logger?: { warn?: (m: string) => void } }).logger = {
+      ...(harness.ctx as { logger?: object }).logger,
+      warn: (message: string) => warnings.push(message),
+    } as never;
+    const outcome = await harness.runTool("scratch_write", { path: "raw.txt", content: "one" });
+    expect(outcome.isError).toBe(false);
+    expect(warnings.join("\n")).toContain("NOT be registered as observed");
   });
 });
