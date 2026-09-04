@@ -17,6 +17,8 @@
  * this codebase.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { dedupeBoardRows } from "../src/host/aidos-core";
@@ -180,5 +182,61 @@ describe("#83 a board without duplicates is untouched", () => {
     ];
     const out = dedupeBoardRows(input);
     expect(new Set(out.rows.map((r) => r.slug))).toEqual(new Set(["a", "b"]));
+  });
+});
+
+describe("#83 review finding: the supersede record is actually SURFACED", () => {
+  /*
+   * The #83 review passed the logic and then found the honest gap: the field
+   * was populated by the host, shipped to the client, and read by NOTHING.
+   *
+   * "The board can say '3 other copies' and a reader can still reach them"
+   * was therefore theoretical. Duplicates stopped being shown, and nothing
+   * said they had ever existed -- which is the invisible-stale-row failure
+   * the design was written to avoid, arrived at by a different route.
+   *
+   * A dead field is worse than an absent one: it lets a claim look
+   * implemented in review.
+   */
+  const tile = readFileSync(
+    new URL("../src/client/ticket-tile.tsx", import.meta.url),
+    "utf8",
+  );
+  const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+
+  it("the tile reads supersededCopies", () => {
+    expect(tile).toContain("supersededCopies");
+  });
+
+  it("shows the COUNT, so a merged row is distinguishable at a glance", () => {
+    expect(tile).toContain("aidos-chip-copies");
+    expect(tile).toContain('"+" + superseded.length');
+  });
+
+  it("names the losing sessions and their times on hover", () => {
+    // The count alone says a merge happened; the tooltip is what makes the
+    // copies REACHABLE, which is the part the claim rests on.
+    expect(tile).toContain("copy.sessionId");
+    expect(tile).toContain("copy.updatedAt");
+  });
+
+  it("is announced to assistive tech, not only on hover", () => {
+    expect(tile).toContain("aria-label");
+  });
+
+  it("shows nothing when there was only one copy", () => {
+    // The common case must stay clean, or the marker becomes noise and the
+    // signal is lost -- #21's whole argument.
+    expect(tile).toContain("superseded.length > 0 ?");
+  });
+
+  it("is styled QUIETLY, since a merge is routine context and not an ask", () => {
+    const at = css.indexOf(".aidos-chip-copies {");
+    expect(at).toBeGreaterThan(-1);
+    const body = css.slice(at, css.indexOf("}", at));
+    // Same tinted treatment as the other quiet chips, not the warning tone
+    // reserved for things that block the human.
+    expect(body).toContain("color-mix");
+    expect(body).not.toContain("--state-awaiting");
   });
 });

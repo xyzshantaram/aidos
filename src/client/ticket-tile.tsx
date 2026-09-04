@@ -46,6 +46,23 @@ export interface TicketTileProps {
 
 export function TicketTile(props: TicketTileProps) {
   const ticket = props.ticket;
+  /*
+   * #83: other session copies of this same ticket, which the workspace merge
+   * collapsed into this row.
+   *
+   * The #83 review found this field was DEAD DATA -- populated by the host,
+   * shipped to the client, and read by nothing. The ticket claimed "nothing
+   * becomes invisible" and "a reader can still reach them", which was
+   * therefore theoretical: the duplicates stopped being shown and nothing
+   * said they had existed.
+   *
+   * A chip is the minimum that makes the claim true. It states the count and
+   * names the losing sessions and their timestamps on hover, so a reader who
+   * wonders where a copy went has an answer rather than a silence.
+   */
+  const superseded =
+    (ticket as { supersededCopies?: Array<{ sessionId: string; updatedAt: number }> })
+      .supersededCopies ?? [];
   const className =
     "aidos-tile" +
     (props.selected ? " aidos-tile-selected" : "") +
@@ -62,6 +79,29 @@ export function TicketTile(props: TicketTileProps) {
         >
           {ticketChipLabel(ticket, props.ownWorkspaceKey)}
         </span>
+        {superseded.length > 0 ? (
+          <span
+            className="aidos-chip aidos-chip-copies"
+            aria-label={
+              superseded.length +
+              " other session cop" +
+              (superseded.length === 1 ? "y" : "ies") +
+              " of this ticket were merged into this row"
+            }
+            title={
+              "Merged from " +
+              superseded.length +
+              " other session cop" +
+              (superseded.length === 1 ? "y" : "ies") +
+              ". This row is the most recently updated one.\n" +
+              superseded
+                .map((copy) => `${copy.sessionId} (updated ${new Date(copy.updatedAt * 1000).toLocaleString()})`)
+                .join("\n")
+            }
+          >
+            {"+" + superseded.length}
+          </span>
+        ) : null}
         {props.awaitingApproval === true ? (
           <span
             className="aidos-chip aidos-chip-approval-flag"

@@ -2615,3 +2615,24 @@
    drift is invisible until someone looks at both side by side.
 
    tests/u82-vendor-drift.test.ts fails loudly when upstream changes. */
+
+/*
+ * #83: the "+N" chip marking a row that the workspace merge collapsed from
+ * several session copies.
+ *
+ * The #83 review found supersededCopies was DEAD DATA -- populated, shipped,
+ * and read by nothing -- so the ticket's claim that "nothing becomes
+ * invisible" was theoretical. This chip is the minimum that makes it true.
+ *
+ * Deliberately QUIET: it is context, not an ask. Only the gate, the id, the
+ * state and the pending-approval flag draw attention (#21), and a merge is
+ * normal in a workspace with forked sessions -- a loud marker on a routine
+ * condition is exactly the clutter #21 removed.
+ */
+.aidos-chip-copies {
+  --chip-hue: var(--text-secondary);
+  background: color-mix(in srgb, var(--chip-hue) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--chip-hue) 45%, transparent);
+  color: color-mix(in srgb, var(--chip-hue) 38%, #ffffff);
+  font-variant-numeric: tabular-nums;
+}
