@@ -49,8 +49,18 @@ const IMPLEMENTATION_TOOLS = ["write", "edit"] as const;
 /** The delegation and job tools the in-progress and review tiers add. */
 const DELEGATION_TOOLS = ["subagent", "subagent_fork", "job_output", "job_kill", "job_list"] as const;
 
-/** Every tool the tier table names, concretized. */
-const TOOL_UNIVERSE: ReadonlySet<string> = new Set([
+/**
+ * Every tool the tier table names, concretized.
+ *
+ * Exported so a test can assert membership against the REAL set (#81 review,
+ * finding 2). The test previously string-sliced this declaration and checked
+ * the slice did not contain "todo_write" -- but the slice stops at the first
+ * "]", which is right after the five spread identifiers, so it never held an
+ * expanded tool name at all. Adding todo_write to any of the source arrays
+ * put it in the universe with the assertion still passing. An exported set
+ * makes the check real and unfakeable.
+ */
+export const TOOL_UNIVERSE: ReadonlySet<string> = new Set([
   ...TICKET_TOOLS,
   ...PLAN_TOOLS,
   ...RESEARCH_TOOLS,

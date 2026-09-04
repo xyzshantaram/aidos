@@ -676,6 +676,21 @@ function validateAllowlistPaths(
       bad.push({ path: String(raw), reason: "empty" });
       continue;
     }
+    /*
+     * #104 review, finding A: a NUL byte must be refused EXPLICITLY.
+     *
+     * It used to be caught by accident. existsSync() returns false for a
+     * path containing NUL rather than throwing, so "src/foo\0bar" was
+     * refused as "does not exist" -- and removing that refusal turned an
+     * accidental rejection into an acceptance, writing a NUL path into a
+     * security-relevant allowlist. Not exploitable through Node's fs, which
+     * rejects NUL itself, but a write boundary should refuse it on purpose
+     * rather than rely on a side effect of a check that no longer exists.
+     */
+    if (raw.includes("\0")) {
+      bad.push({ path: raw.replace(/\0/g, "\\0"), reason: "contains a NUL byte" });
+      continue;
+    }
     const p = raw.trim().replace(/\/+$/, "");
     if (p === "") continue;
     if (seen.has(p)) continue;

@@ -20,6 +20,48 @@ interface PendingApproval {
   at: number;
 }
 
+/**
+ * The `created` paths a pending approval carries (#104): the subset that does
+ * not exist on disk yet, computed HOST-side because the browser cannot stat.
+ *
+ * Defensive by design: an approval card queued before this field existed has
+ * no `created` key at all, and a malformed payload must not crash the card
+ * the human needs in order to unblock the agent.
+ *
+ * Extracted from the component so it can be tested (#104 review, finding C
+ * -- nothing imported this card, so its rendering and its payload handling
+ * were entirely unpinned). The same self-inflicted untestability that hid
+ * the allowlist-union bug and left a gate guard unreachable.
+ */
+export function createdFromPayload(payload: unknown): string[] {
+  if (payload === null || typeof payload !== "object") return [];
+  const created = (payload as { created?: unknown }).created;
+  if (!Array.isArray(created)) return [];
+  return created.filter((p): p is string => typeof p === "string");
+}
+
+/**
+ * Which of the proposed-new paths are STILL in the list the human is looking
+ * at (#104 review, finding B).
+ *
+ * The notice used to read straight from the payload, so deleting a path from
+ * the textarea left the card announcing that it "will be created" -- wrong at
+ * exactly the moment the human was exercising control, and informed consent
+ * at approval time is the entire reason the field exists.
+ *
+ * The client cannot stat, so it cannot know that a NEWLY TYPED path is also
+ * new; the host re-validates on approve, which is where that is caught. This
+ * only stops the card claiming things about paths that are no longer there:
+ * the notice may under-report, never over-report.
+ */
+export function stillCreated(
+  proposedCreated: readonly string[],
+  currentPaths: readonly string[],
+): string[] {
+  const current = new Set(currentPaths.map((p) => p.trim()).filter((p) => p !== ""));
+  return proposedCreated.filter((p) => current.has(p));
+}
+
 export function AllowlistRequestCard(props: {
   ticketId: number | string;
   agentId: string;
@@ -91,9 +133,24 @@ export function AllowlistRequestCard(props: {
    * host filesystem, so the host is the only thing that can know which paths
    * are new. Guarded for an older pending card that predates the field.
    */
-  const createdPaths = Array.isArray(request.payload?.created)
-    ? (request.payload.created as unknown[]).filter((p): p is string => typeof p === "string")
-    : [];
+  const proposedCreated = createdFromPayload(request.payload);
+  /*
+   * #104 review, finding B: intersect with what the human is CURRENTLY
+   * looking at.
+   *
+   * This read straight from the request payload, so deleting a path from the
+   * textarea left the card still announcing "1 path does not exist yet and
+   * will be created: screenshots". The notice was wrong at exactly the
+   * moment the human was exercising control -- and informed consent at
+   * approval time is the entire reason the field exists.
+   *
+   * The client cannot stat the host filesystem, so it cannot learn that a
+   * NEWLY typed path is also new; the host re-validates on approve, which is
+   * where that is caught. What it can do is stop claiming things about paths
+   * that are no longer in the list, which is the direction that matters:
+   * the notice may now under-report, never over-report.
+   */
+  const createdPaths = stillCreated(proposedCreated, paths);
 
   return (
     <div className="aidos-approval-card">

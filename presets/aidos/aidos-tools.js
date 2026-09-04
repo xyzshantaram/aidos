@@ -27517,6 +27517,10 @@ function validateAllowlistPaths(cwd, paths) {
       bad.push({ path: String(raw), reason: "empty" });
       continue;
     }
+    if (raw.includes("\0")) {
+      bad.push({ path: raw.replace(/\0/g, "\\0"), reason: "contains a NUL byte" });
+      continue;
+    }
     const p = raw.trim().replace(/\/+$/, "");
     if (p === "") continue;
     if (seen.has(p)) continue;

@@ -29,6 +29,7 @@ import { describe, expect, it } from "vitest";
 
 import { createHarness, asContext } from "./b1-harness";
 import { apply } from "../src/tools/aidos-tools";
+import { createdFromPayload, stillCreated } from "../src/client/allowlist-request-card";
 
 function workspace(): string {
   const root = mkdtempSync(join(tmpdir(), "aidos-104-"));
@@ -157,5 +158,99 @@ describe("#104 containment is still the safety property, and still refuses", () 
     const { svc, agent } = setup(cwd);
     const ticket = svc.setTicket(agent, { title: "Probe" });
     expect(() => svc.requestAllowlist(agent, { ticketId: ticket.id, paths: [] })).toThrow();
+  });
+});
+
+describe("#104 review findings", () => {
+  it("A: refuses a NUL byte EXPLICITLY, not by accident", () => {
+    /*
+     * Review finding A, a real regression this commit introduced. A NUL path
+     * used to be refused as "does not exist", because existsSync() returns
+     * false for it rather than throwing. Removing that refusal turned an
+     * accidental rejection into an ACCEPTANCE, writing a NUL path into a
+     * security-relevant allowlist.
+     *
+     * Not exploitable through Node's fs, which rejects NUL itself. But a
+     * write boundary should refuse it deliberately rather than lean on a
+     * side effect of a check that no longer exists -- and this test is the
+     * difference between the two.
+     */
+    const cwd = workspace();
+    const { svc, agent } = setup(cwd);
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    expect(() =>
+      svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["src/foo\u0000bar"] }),
+    ).toThrow(/NUL/);
+  });
+
+  it("A: a NUL path is refused even alongside valid ones", () => {
+    const cwd = workspace();
+    const { svc, agent } = setup(cwd);
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    expect(() =>
+      svc.requestAllowlist(agent, {
+        ticketId: ticket.id,
+        paths: ["src", "src/ok\u0000evil"],
+      }),
+    ).toThrow(/NUL/);
+  });
+});
+
+describe("#104 review finding B: the notice tracks what the human is editing", () => {
+  it("drops a path the human deleted from the list", () => {
+    /*
+     * THE finding. The notice read straight from the request payload, so
+     * deleting "screenshots" from the textarea left the card still saying
+     * "1 path does not exist yet and will be created: screenshots" -- wrong
+     * at exactly the moment the human is exercising control, which is the
+     * entire justification for showing it.
+     */
+    expect(stillCreated(["screenshots"], ["src", "tests"])).toEqual([]);
+  });
+
+  it("keeps a path that is still in the list", () => {
+    expect(stillCreated(["screenshots"], ["screenshots", "src"])).toEqual(["screenshots"]);
+  });
+
+  it("ignores whitespace and blank lines the textarea produces", () => {
+    // The textarea splits on newlines, so trailing blanks and indentation
+    // are routine rather than exotic.
+    expect(stillCreated(["screenshots"], ["  screenshots  ", "", "   "])).toEqual([
+      "screenshots",
+    ]);
+  });
+
+  it("under-reports rather than over-reports", () => {
+    /*
+     * A newly TYPED path may also be new on disk, but the browser cannot
+     * stat to find out -- the host re-validates on approve, which is where
+     * that is caught. The safe direction is to say less, never more.
+     */
+    expect(stillCreated([], ["a-brand-new-thing"])).toEqual([]);
+  });
+});
+
+describe("#104 review finding C: the card's payload handling is pinned", () => {
+  it("reads created paths from a well-formed payload", () => {
+    expect(createdFromPayload({ paths: ["a"], created: ["a"] })).toEqual(["a"]);
+  });
+
+  it("survives an OLDER pending card that predates the field", () => {
+    // A card queued before this field existed must not crash the surface the
+    // human needs in order to unblock the agent.
+    expect(createdFromPayload({ paths: ["a"] })).toEqual([]);
+  });
+
+  it("survives a malformed or hostile payload", () => {
+    for (const payload of [null, undefined, 42, "nope", [], { created: "nope" }, { created: 7 }]) {
+      expect(createdFromPayload(payload)).toEqual([]);
+    }
+  });
+
+  it("filters non-string entries rather than trusting the array", () => {
+    expect(createdFromPayload({ created: ["ok", 5, null, { x: 1 }, "fine"] })).toEqual([
+      "ok",
+      "fine",
+    ]);
   });
 });
