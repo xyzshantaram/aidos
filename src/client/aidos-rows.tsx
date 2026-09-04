@@ -35,6 +35,7 @@ import {
   ticketFacts,
   ticketLines,
   writtenFields,
+  oneLine,
   type Fact,
 } from "./aidos-row-data";
 import {
@@ -42,6 +43,7 @@ import {
   errorTextOf,
   firstLineOfError,
   parseArgs,
+  parseErrorEnvelope,
   resultTextOf,
   rowStateOf,
   type RowState,
@@ -221,9 +223,43 @@ function TextBody({ text, isError }: { text: string; isError?: boolean }) {
  * previously a dead end -- the row showed one line and there was nowhere to
  * see the rest.
  */
-function errorBody(errorText: string | null): react.ReactNode | null {
-  return errorText === null || errorText === "" ? null : (
-    <TextBody text={errorText} isError={true} />
+export function errorBody(errorText: string | null): react.ReactNode | null {
+  if (errorText === null || errorText === "") return null;
+  /*
+   * The MESSAGE, rendered -- never the envelope.
+   *
+   * User-reported: "no dumping raw JSON when it can be rendered". Expanding
+   * a failed call showed the envelope verbatim:
+   *
+   *   Error: {"ok":false,"error":"tool_error","message":"Gate refused for
+   *            in_progress -> awaiting_verification by actor agent: ..."}
+   *
+   * which merely REPEATED the summary already on the row, and buried it in
+   * punctuation. It also broke the rule #71 exists to enforce, inside the
+   * code that enforces it everywhere else.
+   *
+   * The message is prose, so it renders as prose. Any field beyond
+   * ok/error/code/message is real structure and becomes a fact. The raw text
+   * is kept only when it will not parse -- then it is all we have, and
+   * hiding it would lose the error entirely.
+   */
+  const envelope = parseErrorEnvelope(errorText);
+  if (envelope === null) return <TextBody text={errorText} isError={true} />;
+  const facts: Fact[] = [];
+  if (envelope.code !== null) facts.push({ label: "code", value: envelope.code });
+  for (const [key, value] of Object.entries(envelope.extra)) {
+    facts.push({ label: key, value: oneLine(value) });
+  }
+  if (envelope.message === null && facts.length === 0) {
+    return <TextBody text={errorText} isError={true} />;
+  }
+  return (
+    <>
+      {envelope.message === null ? null : (
+        <p className="aidos-tool-message">{envelope.message}</p>
+      )}
+      <Facts facts={facts} />
+    </>
   );
 }
 
@@ -236,7 +272,21 @@ function useAidosRow(props: AidosViewProps) {
   const errorText = state === "error" ? errorTextOf(props.block) : null;
   const errorSummary =
     errorText !== null && errorText !== "" ? firstLineOfError(errorText) : undefined;
-  return { args, state, result, ticketId, errorText, errorSummary };
+  /*
+   * A REFUSAL is not a failure (user: these are "wrongly being recognized as
+   * errors"). A gate declining a move, an author check declining an attach,
+   * an allowlist declining a path -- in every one of those the call did
+   * exactly what it should and the answer was no.
+   *
+   * Painting that the same red as a crash teaches a reader to ignore the
+   * colour, and on this board a refusal is the single most common
+   * unsuccessful outcome -- the gate model means to refuse. It takes the
+   * warning tint the stopped state already uses, for the same reason.
+   */
+  const envelope = errorText === null ? null : parseErrorEnvelope(errorText);
+  const shownState: RowState =
+    state === "error" && envelope?.refusal === true ? "stopped" : state;
+  return { args, state: shownState, result, ticketId, errorText, errorSummary };
 }
 
 export function AttachEvidenceRow(props: AidosViewProps) {
@@ -254,7 +304,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
       ? errorBody(errorText)
       : kind !== undefined
         ? (
-            <ul className="aidos-evidence-strips">
+            <ul className="aidos-evidence-list">
               <EvidenceStrip
                 row={{
                   kind: kind.startsWith("builtin:") ? kind : "builtin:" + kind,
@@ -359,7 +409,7 @@ export function GetTicketRow(props: AidosViewProps) {
             <>
               <Facts facts={facts} />
               {evidence.length > 0 ? (
-                <ul className="aidos-evidence-strips">
+                <ul className="aidos-evidence-list">
                   {evidence.map((row, index) => (
                     <EvidenceStrip
                       key={index}

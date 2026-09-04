@@ -153,6 +153,52 @@ export function firstLineOfError(text: string): string {
  * rather than returning nothing when the envelope is partial.
  */
 export function unwrapErrorEnvelope(text: string): string | null {
+  const parsed = parseErrorEnvelope(text);
+  if (parsed === null) return null;
+  const { code, message } = parsed;
+  if (message === null) return code;
+  return code === null ? message : `${code} — ${message}`;
+}
+
+/**
+ * A generic wrapper code that says nothing a reader does not already know.
+ *
+ * `tool_error` is on EVERY aidos refusal, so prefixing the message with it
+ * spends the most valuable part of the line on a constant. The specific
+ * codes (`edit_ambiguous`, `FS_NOT_OBSERVED`) do earn their place.
+ */
+const USELESS_ERROR_CODES = new Set(["tool_error", "Error", "error"]);
+
+/** One tool error, read out of its JSON envelope. */
+export interface ErrorEnvelope {
+  /** The specific code, or null when there is none worth showing. */
+  code: string | null;
+  message: string | null;
+  /** Anything beyond ok/error/code/message, for the expanded body. */
+  extra: Record<string, unknown>;
+  /**
+   * A REFUSAL is a rule declining the call -- a gate, an author check, an
+   * allowlist. The call did exactly what it should; the answer was no.
+   *
+   * Worth separating from a failure because a refusal is the system WORKING,
+   * and painting it in the same red as a crash teaches a reader to ignore
+   * the colour. tool-render already draws this distinction for a stopped
+   * call, for the same reason.
+   */
+  refusal: boolean;
+}
+
+const REFUSAL_PATTERNS = [
+  /^gate refused/i,
+  /\brefused\b/i,
+  /is not one of the ticket's criteria/i,
+  /cannot attach kind/i,
+  /outside the allowlist/i,
+  /\bnot permitted\b/i,
+];
+
+/** Read a tool error envelope, or null when the text is not one. */
+export function parseErrorEnvelope(text: string): ErrorEnvelope | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
@@ -165,14 +211,30 @@ export function unwrapErrorEnvelope(text: string): string | null {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const value = parsed as Record<string, unknown>;
   const message = typeof value.message === "string" ? value.message : null;
-  const code =
+  const rawCode =
     typeof value.code === "string"
       ? value.code
       : typeof value.error === "string"
         ? value.error
         : null;
-  if (message === null) return code;
-  return code === null ? message : `${code} — ${message}`;
+  /*
+   * A useless code is dropped ONLY when there is a message to show instead.
+   * Dropping it from a codeless envelope would leave the row blank, which is
+   * worse than a generic word.
+   */
+  const code = rawCode !== null && USELESS_ERROR_CODES.has(rawCode) && message !== null ? null : rawCode;
+  const extra: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "ok" || key === "error" || key === "code" || key === "message") continue;
+    extra[key] = entry;
+  }
+  const probe = message ?? rawCode ?? "";
+  return {
+    code,
+    message,
+    extra,
+    refusal: REFUSAL_PATTERNS.some((pattern) => pattern.test(probe)),
+  };
 }
 
 /**

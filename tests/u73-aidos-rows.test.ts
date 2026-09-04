@@ -17,7 +17,8 @@ import {
   setSelection,
   ticketTitle,
 } from "../src/client/view-state";
-import { AIDOS_ROWS } from "../src/client/aidos-rows";
+import { AIDOS_ROWS, errorBody } from "../src/client/aidos-rows";
+import { parseErrorEnvelope, unwrapErrorEnvelope } from "../src/client/tool-block";
 import { apply } from "../src/tools/aidos-tools";
 import { asContext, createHarness } from "./b1-harness";
 
@@ -335,5 +336,116 @@ describe("#73 a tool row can never take down the transcript", () => {
     expect(index).toContain("function guardRow(");
     expect(index).toContain("guardRow(key, Row)");
     expect(index).toContain("this card could not render");
+  });
+});
+
+describe("#73 a failed call renders, it does not dump JSON", () => {
+  /*
+   * User-reported, with the exact envelopes. Expanding a failed call showed
+   * the raw envelope, which merely REPEATED the summary already on the row
+   * and buried it in punctuation -- breaking the "no raw JSON as a card
+   * body" rule inside the code that enforces it everywhere else.
+   */
+  const GATE_REFUSAL =
+    'Error: {"ok":false,"error":"tool_error","message":"Gate refused for in_progress -> ' +
+    'awaiting_verification by actor agent: missing evidence kinds: builtin:review_pass ' +
+    'allowed actors: user, agent"}';
+  const CRITERION_REFUSAL =
+    'Error: {"ok":false,"error":"tool_error","message":"evidence criterion \\"PLAN.md exists\\" ' +
+    'is not one of the ticket\'s criteria"}';
+  const PLAIN = 'Error: {"ok":false,"error":"tool_error","message":"the payload.criteria must be a string"}';
+
+  it("drops the generic tool_error code, which is on every refusal", () => {
+    // It is a constant, so prefixing the message with it spends the most
+    // valuable part of the line saying nothing.
+    const envelope = parseErrorEnvelope(GATE_REFUSAL);
+    expect(envelope?.code).toBeNull();
+    expect(unwrapErrorEnvelope(GATE_REFUSAL)).toBe(
+      "Gate refused for in_progress -> awaiting_verification by actor agent: " +
+        "missing evidence kinds: builtin:review_pass allowed actors: user, agent",
+    );
+  });
+
+  it("keeps a SPECIFIC code, which earns its place", () => {
+    const specific = 'Error: {"ok":false,"error":"edit_ambiguous","message":"old_string matched 5 times"}';
+    expect(parseErrorEnvelope(specific)?.code).toBe("edit_ambiguous");
+    expect(unwrapErrorEnvelope(specific)).toBe("edit_ambiguous — old_string matched 5 times");
+  });
+
+  it("recognises a REFUSAL as distinct from a failure", () => {
+    /*
+     * A gate declining a move is the system WORKING -- the call did exactly
+     * what it should and the answer was no. Painting it the same red as a
+     * crash teaches a reader to ignore the colour, and on this board a
+     * refusal is the most common unsuccessful outcome.
+     */
+    expect(parseErrorEnvelope(GATE_REFUSAL)?.refusal).toBe(true);
+    expect(parseErrorEnvelope(CRITERION_REFUSAL)?.refusal).toBe(true);
+    // A genuine argument mistake is NOT a refusal: nothing declined it.
+    expect(parseErrorEnvelope(PLAIN)?.refusal).toBe(false);
+    // And the row acts on it.
+    expect(rows).toContain('envelope?.refusal === true ? "stopped" : state');
+  });
+
+  it("renders the message as prose and never the envelope", () => {
+    /*
+     * BEHAVIOURAL, not a source grep. The first version of this test
+     * asserted that the source CONTAINED "parseErrorEnvelope(errorText)",
+     * and a mutation that made the parse always return null kept that string
+     * and survived -- the exact failure mode two earlier reviews caught in
+     * this project. It calls the function now.
+     */
+    const classesIn = (node: unknown, found: string[] = []): string[] => {
+      if (node === null || typeof node !== "object") return found;
+      if (Array.isArray(node)) {
+        for (const child of node) classesIn(child, found);
+        return found;
+      }
+      const element = node as { type?: unknown; props?: Record<string, unknown> };
+      if (typeof element.type === "string") found.push(element.type);
+      // A function component carries its class INSIDE itself, so record the
+      // component by name -- TextBody is the raw-dump path.
+      if (typeof element.type === "function") {
+        found.push((element.type as { name?: string }).name ?? "anonymous");
+      }
+      const className = element.props?.className;
+      if (typeof className === "string") found.push(className);
+      if (element.props?.children !== undefined) classesIn(element.props.children, found);
+      return found;
+    };
+
+    const rendered = classesIn(errorBody(GATE_REFUSAL));
+    expect(rendered, "the message must render as prose").toContain("aidos-tool-message");
+    expect(rendered, "a parseable envelope must NOT fall back to the raw dump").not.toContain(
+      "TextBody",
+    );
+
+    // The raw dump survives ONLY as the unparseable fallback: without it a
+    // malformed error would render as nothing at all.
+    const garbage = classesIn(errorBody("something exploded, not JSON at all"));
+    expect(garbage, "unparseable text must still reach the reader").toContain("TextBody");
+    expect(errorBody(null)).toBeNull();
+  });
+
+  it("promotes structured fields instead of hiding them in the blob", () => {
+    const withExtra =
+      'Error: {"ok":false,"error":"path_escape","message":"stay under the root","root":"/x","given":"/y"}';
+    const envelope = parseErrorEnvelope(withExtra);
+    expect(Object.keys(envelope?.extra ?? {})).toEqual(["root", "given"]);
+    // ok/error/code/message are already shown, so they are not repeated.
+    expect(envelope?.extra.ok).toBeUndefined();
+    expect(envelope?.extra.message).toBeUndefined();
+  });
+
+  it("uses the REAL evidence list class, not an invented one", () => {
+    /*
+     * `aidos-evidence-strips` existed nowhere in the stylesheet -- I invented
+     * the name instead of using `aidos-evidence-list`, so the list fell back
+     * to the browser default padding-left and bullets. User-reported as "a
+     * weird indent beside the strip": a phantom class, not a missing rule.
+     */
+    expect(rows).not.toContain("aidos-evidence-strips");
+    expect(rows).toContain('className="aidos-evidence-list"');
+    expect(css).toContain(".aidos-evidence-list,");
   });
 });

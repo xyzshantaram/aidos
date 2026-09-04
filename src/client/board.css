@@ -2856,6 +2856,30 @@
 
 /* An evidence strip inside a card body keeps the strip's own look; it only
    needs the surrounding box the other two body shapes carry. */
-.tool-render-body > .aidos-evidence-strips {
+/*
+ * An evidence list inside a card body needs only the surrounding box the
+ * other two body shapes carry -- it keeps the strip's own look.
+ *
+ * The class here used to be `aidos-evidence-strips`, which EXISTS NOWHERE
+ * ELSE in this stylesheet: I invented a name rather than using the real
+ * `aidos-evidence-list`, so the list fell back to the browser's default
+ * `padding-left: 40px` and bullets. User-reported as "a weird indent beside
+ * the strip", and it was a phantom class, not a missing rule.
+ */
+/* A rendered error message: prose, in the same box the other bodies use. */
+.aidos-tool-message {
+  box-sizing: border-box;
+  margin: 0.25rem 0 0.25rem 0.25rem;
+  padding: 0.625rem 0.8125rem;
+  border-radius: 0.625rem;
+  background: var(--dsw-alias-markdown-code-block, var(--surface-raised));
+  color: var(--dsw-alias-label-primary, var(--text-primary));
+  font-size: 0.8125rem;
+  line-height: 1.375rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-render-body > .aidos-evidence-list {
   margin: 0.25rem 0 0.25rem 0.25rem;
 }
