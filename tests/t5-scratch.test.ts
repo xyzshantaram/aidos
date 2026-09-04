@@ -191,6 +191,123 @@ describe("the scratch tools", () => {
     expect((after.value as { content: string }).content).toBe("b\nb\nb\n");
   });
 
+  it("writes new_string LITERALLY, never as a replacement pattern", async () => {
+    /*
+     * SILENT FILE CORRUPTION, found in round 3. The fallback used
+     * `before.replace(old, new)` for the single-match case, and
+     * String.replace INTERPRETS `$&`, `$$`, `$\`` and `$'` in the
+     * REPLACEMENT -- so the file was written with content the caller never
+     * asked for. `$$` landed as `$`; `$'` spliced in the whole remainder of
+     * the file.
+     *
+     * Not a corner: `$$` is ordinary in Makefiles and compose files, and
+     * `$'`/`$\`` are bash syntax, so a scratch note ABOUT SHELL was the
+     * likely victim.
+     *
+     * The reviewer proved the buggy line could be REPLACED WITH THE CORRECT
+     * ONE and no test noticed -- it had zero discriminating coverage. These
+     * are that coverage.
+     */
+    const cases: Array<[string, string, string]> = [
+      ["$&", "hello world\n", "hello $&\n"],
+      ["$$", "hello world\n", "hello $$\n"],
+      ["$`", "hello world\n", "hello $`\n"],
+      ["$'", "hello world\n", "hello $'\n"],
+    ];
+    for (const [replacement, content, expected] of cases) {
+      const harness = scratchHarness();
+      await harness.runTool("scratch_write", { path: "pat.txt", content });
+      const out = await harness.runTool("scratch_edit", {
+        path: "pat.txt",
+        old_string: "world",
+        new_string: replacement,
+      });
+      expect(out.isError, JSON.stringify(out.error)).toBe(false);
+      const read = await harness.runTool("scratch_read", { path: "pat.txt" });
+      expect((read.value as { content: string }).content, replacement).toBe(expected);
+    }
+  });
+
+  it("writes the same bytes whether or not replace_all is set", async () => {
+    /*
+     * The self-inconsistency the bug produced: replace_all is documented as
+     * controlling HOW MANY matches change, never WHAT is written. One match
+     * must give one answer.
+     */
+    const single = scratchHarness();
+    await single.runTool("scratch_write", { path: "s.txt", content: "a world b\n" });
+    await single.runTool("scratch_edit", {
+      path: "s.txt",
+      old_string: "world",
+      new_string: "[$&]",
+    });
+    const all = scratchHarness();
+    await all.runTool("scratch_write", { path: "s.txt", content: "a world b\n" });
+    await all.runTool("scratch_edit", {
+      path: "s.txt",
+      old_string: "world",
+      new_string: "[$&]",
+      replace_all: true,
+    });
+    const one = (await single.runTool("scratch_read", { path: "s.txt" })).value as { content: string };
+    const many = (await all.runTool("scratch_read", { path: "s.txt" })).value as { content: string };
+    expect(one.content).toBe("a [$&] b\n");
+    expect(many.content).toBe(one.content);
+  });
+
+  it("refuses an empty old_string rather than mangling every character", async () => {
+    // "abc".split("") counts matches between every character, so without the
+    // guard replace_all would rewrite the whole file.
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "e.txt", content: "abc" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "e.txt",
+      old_string: "",
+      new_string: "X",
+      replace_all: true,
+    });
+    expect(out.isError).toBe(true);
+    expect((out.error as { message: string }).message).toContain("non-empty");
+    const read = await harness.runTool("scratch_read", { path: "e.txt" });
+    expect((read.value as { content: string }).content).toBe("abc");
+  });
+
+  it("refuses a no-op edit, as the builtin does", async () => {
+    // The builtin refuses when old and new are equal. Reporting
+    // "replaced 1 occurrence(s)" for a guaranteed no-op is a false success.
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "noop.txt", content: "alpha\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "noop.txt",
+      old_string: "alpha",
+      new_string: "alpha",
+    });
+    expect(out.isError).toBe(true);
+    expect((out.error as { message: string }).message).toContain("must differ");
+  });
+
+  it("keeps CRLF endings consistent instead of mixing them", async () => {
+    /*
+     * The builtin normalises to LF for matching and restores the file's own
+     * ending. Matching raw meant an old_string spanning lines never matched
+     * in a CRLF file, and an inserted line arrived with a bare LF -- leaving
+     * mixed endings in a file that had been consistent.
+     */
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "crlf.txt", content: "alpha\r\nbeta\r\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "crlf.txt",
+      // Spans a line boundary: this did not match at all before.
+      old_string: "alpha\nbeta",
+      new_string: "alpha\nbeta2\ngamma",
+    });
+    expect(out.isError, JSON.stringify(out.error)).toBe(false);
+    const read = await harness.runTool("scratch_read", { path: "crlf.txt" });
+    const content = (read.value as { content: string }).content;
+    expect(content).toBe("alpha\r\nbeta2\r\ngamma\r\n");
+    expect(/[^\r]\n/.test(content), "no bare LF may survive in a CRLF file").toBe(false);
+  });
+
   it("the no-backend fallback refuses a no-match instead of writing nothing", async () => {
     const harness = scratchHarness();
     await harness.runTool("scratch_write", { path: "nm.md", content: "alpha\n" });

@@ -118,12 +118,47 @@ async function editWithoutBackend(
       "AIDOS_EDIT_ARGUMENTS_INCOMPLETE",
     );
   }
-  const fs = requireFs(ctx);
-  const target = await fs.resolve(absPath, { signal: exec.signal });
-  const before = await fs.readText(target, exec.signal);
   const oldString = args.old_string;
   const newString = args.new_string ?? "";
-  const occurrences = oldString === "" ? 0 : before.split(oldString).length - 1;
+  /*
+   * The builtin refuses an empty old_string and a no-op edit before it reads
+   * anything (dsh-fs-local applyLiteralEdit, dsh-tool-fs parseEditArgs).
+   * Matching it: an edit that provably changes nothing is a mistake worth
+   * naming, not an `ok: true` that reports "replaced 1 occurrence(s)".
+   */
+  if (oldString === "") {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_arguments_incomplete",
+        message: "old_string must be a non-empty string",
+      }),
+      "AIDOS_EDIT_ARGUMENTS_INCOMPLETE",
+    );
+  }
+  if (oldString === newString) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_no_op",
+        message: "old_string and new_string must differ",
+      }),
+      "AIDOS_EDIT_NO_OP",
+    );
+  }
+  const fs = requireFs(ctx);
+  const target = await fs.resolve(absPath, { signal: exec.signal });
+  const raw = await fs.readText(target, exec.signal);
+  /*
+   * LINE ENDINGS, as the builtin handles them: `readForEdit` normalises to
+   * LF for matching and the write restores the file's own ending. Matching
+   * against the raw text instead meant an `old_string` spanning lines never
+   * matched in a CRLF file, and an inserted line arrived with a bare LF --
+   * leaving MIXED endings in a file that had been consistent.
+   */
+  const hadCrlf = raw.includes("\r\n");
+  const before = hadCrlf ? raw.replace(/\r\n/g, "\n") : raw;
+  const occurrences = before.split(oldString).length - 1;
   if (occurrences === 0) {
     throw new HarnessError(
       JSON.stringify({
@@ -144,10 +179,27 @@ async function editWithoutBackend(
       "AIDOS_EDIT_AMBIGUOUS",
     );
   }
-  const after =
-    args.replace_all === true
-      ? before.split(oldString).join(newString)
-      : before.replace(oldString, newString);
+  /*
+   * ALWAYS the literal splice, never String.replace.
+   *
+   * `before.replace(old, new)` INTERPRETS `$&`, `$$`, `` $` `` and `$'` in
+   * the REPLACEMENT, so the file was silently written with content the
+   * caller never asked for: a new_string of `$$` landed as `$`, and `$'`
+   * spliced in the entire remainder of the file. Not a corner -- `$$` is
+   * ordinary in Makefiles and compose files, and `$'`/`` $` `` are bash
+   * syntax, so a scratch note ABOUT SHELL was the likely victim.
+   *
+   * It was also inconsistent with itself: the same new_string produced
+   * different bytes depending on `replace_all`, a flag documented as
+   * controlling HOW MANY matches change, not WHAT is written.
+   *
+   * The builtin uses split().join() on every path and nothing else. The
+   * correct primitive was already on the line above; the branch existed only
+   * to reproduce it badly, so it is gone. The count guard above has already
+   * established that a single-match edit has exactly one match.
+   */
+  const spliced = before.split(oldString).join(newString);
+  const after = hadCrlf ? spliced.replace(/\n/g, "\r\n") : spliced;
   await fs.writeText(target, after, undefined, exec.signal);
   ctx.logger?.info?.(
     `aidos: scratch_edit applied ${occurrences} replacement(s) to ${absPath} with no edit backend in scope`,

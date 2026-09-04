@@ -26933,12 +26933,34 @@ async function editWithoutBackend(ctx, root, absPath, args, exec) {
       "AIDOS_EDIT_ARGUMENTS_INCOMPLETE"
     );
   }
-  const fs = requireFs(ctx);
-  const target = await fs.resolve(absPath, { signal: exec.signal });
-  const before = await fs.readText(target, exec.signal);
   const oldString = args.old_string;
   const newString = args.new_string ?? "";
-  const occurrences = oldString === "" ? 0 : before.split(oldString).length - 1;
+  if (oldString === "") {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_arguments_incomplete",
+        message: "old_string must be a non-empty string"
+      }),
+      "AIDOS_EDIT_ARGUMENTS_INCOMPLETE"
+    );
+  }
+  if (oldString === newString) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_no_op",
+        message: "old_string and new_string must differ"
+      }),
+      "AIDOS_EDIT_NO_OP"
+    );
+  }
+  const fs = requireFs(ctx);
+  const target = await fs.resolve(absPath, { signal: exec.signal });
+  const raw = await fs.readText(target, exec.signal);
+  const hadCrlf = raw.includes("\r\n");
+  const before = hadCrlf ? raw.replace(/\r\n/g, "\n") : raw;
+  const occurrences = before.split(oldString).length - 1;
   if (occurrences === 0) {
     throw new HarnessError(
       JSON.stringify({
@@ -26959,7 +26981,8 @@ async function editWithoutBackend(ctx, root, absPath, args, exec) {
       "AIDOS_EDIT_AMBIGUOUS"
     );
   }
-  const after = args.replace_all === true ? before.split(oldString).join(newString) : before.replace(oldString, newString);
+  const spliced = before.split(oldString).join(newString);
+  const after = hadCrlf ? spliced.replace(/\n/g, "\r\n") : spliced;
   await fs.writeText(target, after, void 0, exec.signal);
   ctx.logger?.info?.(
     `aidos: scratch_edit applied ${occurrences} replacement(s) to ${absPath} with no edit backend in scope`
