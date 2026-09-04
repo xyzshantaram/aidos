@@ -2816,6 +2816,43 @@
   white-space: nowrap;
 }
 
+/*
+ * The ticket-row expand chevron, in the durable-todos todo panel's style
+ * (user ask: same chevron as there). Rules mirror that plugin's
+ * .durable-todos-chevron so the two cannot read as different components:
+ * right-pointing collapsed, rotating to down open, 0.12s transform ease.
+ * The border-radius is from the source too -- it rounds a focus/hover
+ * highlight if one is ever added, and costs nothing now.
+ */
+.aidos-chevron {
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+  border-radius: 0.375rem;
+  transform: rotate(-90deg);
+  transition: transform 0.12s;
+}
+
+.aidos-chevron-open {
+  transform: rotate(0deg);
+}
+
+/* The click-through peek (#73 round 3): the ticket card shown when a tool
+   row's ticket link is clicked. Matches the tool-facts card's chrome, since
+   the two surface the same kind of summary in the same kind of context. */
+.aidos-ticket-peek-excerpt {
+  margin: 0.5rem 0.25rem 0;
+  color: var(--dsw-alias-label-secondary, var(--text-secondary));
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.aidos-ticket-peek-empty {
+  margin: 0.25rem;
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
 .aidos-tool-list {
   display: flex;
   flex-direction: column;

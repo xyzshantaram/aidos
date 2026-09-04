@@ -25,6 +25,9 @@
 import react from "react";
 
 import { EvidenceStrip } from "./evidence-strip";
+import { TicketStrip } from "./ticket-strip";
+import { ModalShell } from "./ui";
+import { ChevronIcon } from "./icons";
 import { asBoardKey } from "./board-logic";
 import { setSelection, ticketTitle } from "./view-state";
 import {
@@ -33,6 +36,7 @@ import {
   suggestionLines,
   ticketEvidence,
   ticketFacts,
+  ticketFromProjection,
   ticketLines,
   writtenFields,
   oneLine,
@@ -52,6 +56,14 @@ import {
 export interface AidosViewProps {
   block: unknown;
   sessionId?: string;
+  /**
+   * A session-scoped Standard Prop the harness supplies to every atomic tool
+   * view for free -- confirmed against the LIVE Slot contract (`Slots`
+   * Inspect Provider, `tool.call.toolview`), not inferred from a bundle.
+   * Absent in a harness version that has not grown it yet, or in a test
+   * double that does not supply one; every reader here tolerates that.
+   */
+  useProjection?: (key: string) => unknown;
 }
 
 /** The ticket id a call names, from its arguments or its result. */
@@ -98,10 +110,12 @@ interface RowProps {
   /** Selecting this ticket on the board when the summary is clicked. */
   ticketId?: string | null;
   sessionId?: string;
+  useProjection?: (key: string) => unknown;
 }
 
 function AidosRow(props: RowProps) {
   const [expanded, setExpanded] = react.useState(false);
+  const [peekOpen, setPeekOpen] = react.useState(false);
   const body = props.body ?? null;
   const expandable = body !== null;
   const open = expanded && expandable;
@@ -109,21 +123,28 @@ function AidosRow(props: RowProps) {
   const shown = showsError ? props.errorSummary : props.summary;
 
   /*
-   * CLICK-THROUGH, and the fallback #73 required be decided explicitly.
+   * CLICK-THROUGH (#73 round 3).
    *
-   * No API in the conversation contract activates a `conversation.view` tab
-   * programmatically -- searched dsh-client-ui-conversation and
-   * dsh-client-runtime for activate/setActive/selectView. So a click SELECTS
-   * the ticket in the board's module-level store and the board opens there
-   * when the user switches tabs.
+   * ROUND 1 concluded there was no API to activate a `conversation.view` tab
+   * and settled for writing a module-level selection the board's Tickets tab
+   * would pick up ONCE the human switched to it by hand -- reported back as
+   * "still doesn't work", correctly: if the Tickets tab is not the active
+   * view, a click visibly does nothing.
    *
-   * That store exists because of #100: the selection had to live outside
-   * React state to survive the slot remount a badge change causes. The same
-   * property makes it writable from here, outside the board's tree.
+   * Confirmed against the LIVE Slot contract this round (the `Slots` Inspect
+   * Provider on `tool.call.toolview`, not a bundle read): `standardProps`
+   * still has no `activate`/`setView`/`selectView`, so that conclusion holds.
+   * But the SAME query also confirmed `useProjection` is a Standard Prop on
+   * this exact Slot -- the identical session-scoped hook the Tickets tab
+   * itself uses to read `aidos.tickets`. That makes a real fix possible
+   * without any tab-activation API at all: show the ticket RIGHT HERE.
    *
-   * One click short of true navigation, and recorded as the accepted shape
-   * rather than discovered later. It becomes real click-through the moment
-   * dsh grows an activation API: only this handler changes.
+   * A click still writes the selection (so opening the Tickets tab still
+   * lands on the right ticket, per #100/#73's existing tests) AND opens a
+   * peek showing the SAME `TicketStrip` every other ticket reference uses,
+   * pulled live from the projection. This works whether or not the Tickets
+   * tab exists, is mounted, or is the active view -- the actual problem,
+   * not a workaround for the missing platform primitive.
    */
   const canSelect =
     props.ticketId !== null && props.ticketId !== undefined && props.sessionId !== undefined;
@@ -131,8 +152,13 @@ function AidosRow(props: RowProps) {
     ? (event: react.MouseEvent | react.KeyboardEvent) => {
         event.stopPropagation();
         setSelection(props.sessionId as string, asBoardKey(props.ticketId as string));
+        setPeekOpen(true);
       }
     : undefined;
+  const peeked =
+    props.useProjection !== undefined
+      ? ticketFromProjection(props.useProjection("aidos.tickets"), props.ticketId)
+      : null;
 
   return (
     <div className="tool-render-card" data-error={props.state === "error" || undefined}>
@@ -156,7 +182,11 @@ function AidosRow(props: RowProps) {
         }
       >
         <span className="tool-render-leading" aria-hidden="true">
-          {open ? "▾" : props.state === "error" || props.state === "stopped" ? "●" : "▸"}
+          {props.state === "error" || props.state === "stopped" ? (
+            "●"
+          ) : (
+            <ChevronIcon open={open} />
+          )}
         </span>
         <span className="tool-render-title">{props.title}</span>
         <span className="tool-render-sep" aria-hidden="true" />
@@ -184,6 +214,24 @@ function AidosRow(props: RowProps) {
         )}
       </div>
       {open ? <div className="tool-render-body">{body}</div> : null}
+      {peekOpen ? (
+        <ModalShell title="Ticket" onClose={() => setPeekOpen(false)}>
+          {peeked !== null ? (
+            <>
+              <TicketStrip ticket={peeked} />
+              {peeked.descriptionExcerpt !== undefined ? (
+                <p className="aidos-ticket-peek-excerpt">{peeked.descriptionExcerpt}</p>
+              ) : null}
+            </>
+          ) : (
+            <p className="aidos-ticket-peek-empty">
+              {"#" +
+                (props.ticketId ?? "?") +
+                " isn't in this session's own board yet, or belongs to another session. Open the Tickets tab to look it up there."}
+            </p>
+          )}
+        </ModalShell>
+      ) : null}
     </div>
   );
 }
@@ -326,6 +374,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
+      useProjection={props.useProjection}
     />
   );
 }
@@ -356,6 +405,7 @@ export function MoveTicketRow(props: AidosViewProps) {
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
+      useProjection={props.useProjection}
     />
   );
 }
@@ -388,6 +438,7 @@ export function SetTicketRow(props: AidosViewProps) {
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
+      useProjection={props.useProjection}
     />
   );
 }
@@ -435,6 +486,7 @@ export function GetTicketRow(props: AidosViewProps) {
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
+      useProjection={props.useProjection}
     />
   );
 }
@@ -547,6 +599,7 @@ export function RequestAllowlistRow(props: AidosViewProps) {
       errorSummary={errorSummary}
       ticketId={ticketId}
       sessionId={props.sessionId}
+      useProjection={props.useProjection}
     />
   );
 }
@@ -593,6 +646,7 @@ export function SuggestActionsRow(props: AidosViewProps) {
       errorSummary={errorSummary}
       ticketId={lines.length === 1 ? lines[0].ticketId : null}
       sessionId={props.sessionId}
+      useProjection={props.useProjection}
     />
   );
 }

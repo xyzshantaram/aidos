@@ -12,6 +12,8 @@
 
 import react from "react";
 
+import { IconChevronDownOutline14 } from "@deepseek-ai/dsh-client-ui-primitives";
+
 /**
  * The shared stroke weight. 1.6 matches the visual weight of the 600-weight
  * chip text at this size: thinner greys out, thicker blots at 12px.
@@ -212,5 +214,29 @@ export function AllowlistIcon() {
       <path d="M6.4 3.4h3.8" />
       <path d="M6.4 7.6h3.8" />
     </svg>
+  );
+}
+
+/**
+ * The EXPAND chevron, in the todo panel's style (user, 2026-09-05: "Ticket
+ * chevrons should be the same style as the new dotfiles-ai chevron").
+ *
+ * This is the real primitive — `IconChevronDownOutline14` from the shell's
+ * own primitives module — not the text glyph `▾`/`▸` it replaces. The
+ * rotation language is copied from durable-todos: pointing right collapsed,
+ * rotating to point down open, a 0.12s transform transition, label-secondary
+ * colour. Same icon, same motion, same hue as a panel the user already
+ * reads, so an expandable ticket row stops announcing itself as a foreign
+ * widget.
+ *
+ * The primitive's sizing comes from its own defaults; the classes live in
+ * board.css beside the rest of the aidos chrome.
+ */
+export function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <IconChevronDownOutline14
+      className={"aidos-chevron" + (open ? " aidos-chevron-open" : "")}
+      aria-hidden={true}
+    />
   );
 }

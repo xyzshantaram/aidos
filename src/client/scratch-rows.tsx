@@ -23,6 +23,7 @@ import react from "react";
 
 import { gutterWidth, highlightCode, languageFor } from "./highlight";
 import { numberedReadRows, readStartLine } from "./vendor/tool-render/text";
+import { ChevronIcon } from "./icons";
 
 import {
   argsRawOf,
@@ -49,12 +50,17 @@ export interface ToolViewProps {
  * A STOPPED call gets the warning dot rather than the error dot. The user
  * stopped it; tinting a deliberate stop as a failure teaches people to
  * ignore the tint.
+ *
+ * The chevron is the shell's own primitive in the todo panel's rotation
+ * style (user, 2026-09-05) -- the text glyphs `▾`/`▸` this replaces were the
+ * F7 rendering-parity gap a review flagged: text glyphs next to every other
+ * row's real icon component. The running state keeps its spinner-ish `◌`
+ * glyph; no primitive matches it and inventing one is out of scope.
  */
 function Leading({ state, open }: { state: RowState; open: boolean }) {
-  if (open) return <>▾</>;
   if (state === "error" || state === "stopped") return <>●</>;
   if (state === "running") return <>◌</>;
-  return <>▸</>;
+  return <ChevronIcon open={open} />;
 }
 
 interface RowOptions {

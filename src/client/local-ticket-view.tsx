@@ -640,6 +640,18 @@ function ProjectionReader(props: ProjectionReaderProps) {
    */
   react.useEffect(function () {
     logDebug("#100 ProjectionReader MOUNTED");
+    /*
+     * The queue-disappearance report: "opening the Waiting-on-you queue
+     * still makes the board disappear for a bit." Code audit found NO
+     * remount trigger on that path, so this logs unconditionally (not
+     * through the gated logDebug) to DISCRIMINATE the two hypotheses: an
+     * UNMOUNT here means something re-registered the slot entry and the
+     * flash is the skeleton of a remount; its ABSENCE means the board never
+     * unmounts and the disappearance is paint/CSS, which the code audit
+     * says nothing should cause.
+     */
+    // eslint-disable-next-line no-console
+    console.info("[aidos] board MOUNT");
     return function () {
       const had = new URL(window.location.href).searchParams.has("ticket");
       logWarn(
@@ -647,6 +659,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
           (had ? " -> STRIPPING IT (the deep link that could restore the selection)" : ""),
       );
       if (had) setTicketParam(null);
+      // eslint-disable-next-line no-console
+      console.info("[aidos] board UNMOUNT <- if you see this when opening the queue, it is a remount");
     };
   }, []);
 

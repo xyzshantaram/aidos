@@ -324,6 +324,10 @@ export function apply(ctx: Context): void {
       registration();
       registration = registerTicketsTab(slots);
       lastLabel = next;
+      // Queue-disappearance probe: a SUCCESSFUL re-register here is a board
+      // remount. Unconditional, so the console names the mechanism.
+      // eslint-disable-next-line no-console
+      console.info(`[aidos] tab re-registered for label "${next}" <- this remounts the board`);
     } catch (error) {
       registration = null;
       // eslint-disable-next-line no-console

@@ -26976,9 +26976,18 @@ async function editWithoutBackend(ctx, root, absPath, args, exec) {
   const fs = requireFs(ctx);
   const target = await fs.resolve(absPath, { signal: exec.signal });
   const raw = await fs.readText(target, exec.signal);
-  const hadCrlf = raw.includes("\r\n");
-  const before = hadCrlf ? raw.replace(/\r\n/g, "\n") : raw;
-  const occurrences = before.split(oldString).length - 1;
+  const normalizeLineEndings = (content) => content.replaceAll("\r\n", "\n");
+  const detectLineEndings = (sample) => {
+    const head = sample.slice(0, 4096);
+    const crlf = head.split("\r\n").length - 1;
+    return crlf > head.split("\n").length - 1 - crlf ? "CRLF" : "LF";
+  };
+  const restoreLineEndings = (content, style) => style === "LF" ? content : normalizeLineEndings(content).split("\n").join("\r\n");
+  const lineEndings = detectLineEndings(raw);
+  const before = normalizeLineEndings(raw);
+  const oldNorm = normalizeLineEndings(oldString);
+  const newNorm = normalizeLineEndings(newString);
+  const occurrences = before.split(oldNorm).length - 1;
   if (occurrences === 0) {
     throw new HarnessError(
       JSON.stringify({
@@ -26999,8 +27008,8 @@ async function editWithoutBackend(ctx, root, absPath, args, exec) {
       "AIDOS_EDIT_AMBIGUOUS"
     );
   }
-  const spliced = before.split(oldString).join(newString);
-  const after = hadCrlf ? spliced.replace(/\n/g, "\r\n") : spliced;
+  const spliced = before.split(oldNorm).join(newNorm);
+  const after = restoreLineEndings(spliced, lineEndings);
   await fs.writeText(target, after, void 0, exec.signal);
   ctx.logger?.info?.(
     `aidos: scratch_edit applied ${occurrences} replacement(s) to ${absPath} with no edit backend in scope`

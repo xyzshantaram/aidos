@@ -15,6 +15,9 @@
  * returns an empty list rather than throwing inside a render.
  */
 
+import { STATE_ORDER } from "../kernel/types";
+import type { TicketState } from "../kernel/types";
+
 /** One `label: value` line in a card body. */
 export interface Fact {
   label: string;
@@ -199,4 +202,71 @@ const PLAN_BLOCKS = ["frontmatter", "preamble", "contextSections"] as const;
 export function planBlocksWritten(args: Record<string, unknown> | null): string[] {
   if (args === null) return [];
   return PLAN_BLOCKS.filter((block) => typeof args[block] === "string");
+}
+
+/** The minimum shape `TicketStrip` needs, checked structurally. */
+export interface ProjectedTicket {
+  id: number;
+  title: string;
+  state: TicketState;
+  slug: string;
+  workspaceKey: string;
+  gatePresent?: number;
+  gateTotal?: number;
+  descriptionExcerpt?: string;
+}
+
+function isTicketState(value: unknown): value is TicketState {
+  return typeof value === "string" && (STATE_ORDER as readonly string[]).includes(value);
+}
+
+/**
+ * A ticket by id out of the LIVE `aidos.tickets` projection, for the
+ * click-through peek (#73 round 3).
+ *
+ * The projection is `useProjection("aidos.tickets")`: a session-scoped
+ * client Standard Prop the harness supplies to every atomic tool view for
+ * free (confirmed against the live Slot contract, not inferred from a
+ * bundle) -- `Record<string, TicketView>`, keyed by the SAME string id the
+ * board itself uses. A row already resolves `useProjection`; this is the
+ * pure lookup, kept out of the component for the same reason every other
+ * reader here is pure: a click handler that inlines its own shape-checking
+ * is a click handler no test can reach without a browser.
+ *
+ * Returns null for every unready or malformed case rather than throwing:
+ * the projection has not loaded yet, the id belongs to a ticket outside
+ * THIS session's own board (a foreign reference the projection never
+ * carries), or a future host build changed the shape. A missing ticket is
+ * an ordinary outcome here, not a defect to surface as an error card.
+ */
+export function ticketFromProjection(
+  projectionValue: unknown,
+  ticketId: string | null | undefined,
+): ProjectedTicket | null {
+  if (ticketId === null || ticketId === undefined || ticketId === "") return null;
+  const record = asRecord(projectionValue);
+  if (record === null) return null;
+  const hit = asRecord(record[ticketId]);
+  if (hit === null) return null;
+  if (
+    typeof hit.id !== "number" ||
+    typeof hit.title !== "string" ||
+    !isTicketState(hit.state) ||
+    typeof hit.slug !== "string" ||
+    typeof hit.workspaceKey !== "string"
+  ) {
+    return null;
+  }
+  const out: ProjectedTicket = {
+    id: hit.id,
+    title: hit.title,
+    state: hit.state,
+    slug: hit.slug,
+    workspaceKey: hit.workspaceKey,
+  };
+  if (typeof hit.gatePresent === "number") out.gatePresent = hit.gatePresent;
+  if (typeof hit.gateTotal === "number") out.gateTotal = hit.gateTotal;
+  const excerpt = asText(hit.description);
+  if (excerpt !== null && excerpt.trim() !== "") out.descriptionExcerpt = oneLine(excerpt, 220);
+  return out;
 }
