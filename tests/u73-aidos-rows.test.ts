@@ -10,7 +10,13 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
-import { publishTicketTitles, ticketTitle, getSelection, setSelection } from "../src/client/view-state";
+import {
+  getSelection,
+  onSelectionChanged,
+  publishTicketTitles,
+  setSelection,
+  ticketTitle,
+} from "../src/client/view-state";
 import { AIDOS_ROWS } from "../src/client/aidos-rows";
 import { apply } from "../src/tools/aidos-tools";
 import { asContext, createHarness } from "./b1-harness";
@@ -247,5 +253,87 @@ describe("#73 the card bodies match the transcript, not the board", () => {
     expect(facts).toContain("border-radius: 0.625rem");
     expect(facts).toContain("padding: 0.625rem 0.8125rem");
     expect(facts).toContain("max-height: 17.5rem");
+  });
+});
+
+describe("#73 click-through reaches a board that is already mounted", () => {
+  /*
+   * User-reported: "clickthrough does not work". The store was written for
+   * #100, where it is read once on MOUNT to restore a selection that a
+   * remount destroyed -- and a read-on-mount store is enough for that. A
+   * tool card writes to a board that is ALREADY mounted and never remounts,
+   * so nothing ever re-read it.
+   *
+   * My own note in aidos-rows.tsx claimed the board "opens there when you
+   * switch tabs". That was wrong on its own terms: switching tabs does not
+   * remount the view either.
+   */
+  it("notifies a subscriber when the selection changes", () => {
+    const seen: string[] = [];
+    const stop = onSelectionChanged((sessionId) => seen.push(sessionId));
+    setSelection("s-click", "aidos#7");
+    expect(seen).toEqual(["s-click"]);
+    expect(getSelection("s-click")).toBe("aidos#7");
+    stop();
+    setSelection("s-click", "aidos#8");
+    expect(seen, "an unsubscribed listener must not be called").toEqual(["s-click"]);
+  });
+
+  it("does not notify when the selection is unchanged", () => {
+    // The board writes the store on every selection, so an unconditional
+    // notify would loop through the board's own subscriber.
+    setSelection("s-same", "aidos#1");
+    const seen: string[] = [];
+    const stop = onSelectionChanged((sessionId) => seen.push(sessionId));
+    setSelection("s-same", "aidos#1");
+    expect(seen).toEqual([]);
+    stop();
+  });
+
+  it("a throwing subscriber cannot break the write or the other subscribers", () => {
+    const seen: string[] = [];
+    const stopBad = onSelectionChanged(() => {
+      throw new Error("subscriber blew up");
+    });
+    const stopGood = onSelectionChanged((sessionId) => seen.push(sessionId));
+    expect(() => setSelection("s-throw", "aidos#3")).not.toThrow();
+    expect(seen).toEqual(["s-throw"]);
+    expect(getSelection("s-throw")).toBe("aidos#3");
+    stopBad();
+    stopGood();
+  });
+
+  it("the board adopts a selection written from outside its tree", () => {
+    expect(view).toContain("onSelectionChanged");
+    // Scoped to this session: another session's selection must not steal it.
+    expect(view).toContain("if (changed !== sessionId) return;");
+  });
+});
+
+describe("#73 a tool row can never take down the transcript", () => {
+  /*
+   * A toolview renders arbitrarily-shaped data off the wire -- truncated
+   * mid-flight, absent while running, or from an older build. An unhandled
+   * throw inside a slot takes the whole surface with it, and the user
+   * reported a transient crash "about frontend toolcall slots".
+   *
+   * This is the invariant, not a claimed diagnosis of that crash: rendering
+   * a card is cosmetic, and cosmetic code must not crash the page.
+   */
+  it("isolates each registration, so one failure cannot cost the others", () => {
+    /*
+     * The loop registers fifteen rows. A throw partway used to abandon every
+     * row after it -- silent, and indistinguishable from "some tool cards
+     * have no UI", with registration ORDER deciding which tools work.
+     */
+    expect(index).toContain("the other rows continue");
+    const loop = index.slice(index.indexOf("for (const [key, Row] of"));
+    expect(loop.slice(0, loop.indexOf("}\n  return"))).toContain("try {");
+  });
+
+  it("degrades a throwing row to a plain line that still names the tool", () => {
+    expect(index).toContain("function guardRow(");
+    expect(index).toContain("guardRow(key, Row)");
+    expect(index).toContain("this card could not render");
   });
 });

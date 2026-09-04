@@ -69,6 +69,98 @@ export function declaredParameters(definition: unknown): Record<string, unknown>
 }
 
 /**
+ * Perform a literal edit WITHOUT an `edit` backend, directly against the fs.
+ *
+ * Reached when the tool mask hides `edit`, which is the DEFAULT state: the
+ * mask exposes write/edit only while a ticket is in_progress, so in a fresh
+ * workspace with no in-progress ticket `scratch_edit` had no backend and
+ * hard-refused. That contradicted the scratch contract -- "the agent writes
+ * freely here: no allowlist, no approval" -- by making the agent's own
+ * workspace read-only in the state it is most used.
+ *
+ * The UNIQUENESS RULE is the builtin's, deliberately: a single match unless
+ * `replace_all`, otherwise a refusal naming the count. A fallback that
+ * quietly replaced the first of several matches would be a DIFFERENT tool
+ * wearing the same name -- worse than no fallback, because the difference
+ * only shows up in the damage.
+ *
+ * The anchor grammar has no fallback: its hashline algorithm lives in the
+ * backend and guessing at it would corrupt files. It refuses clearly.
+ *
+ * Containment is unchanged -- the caller resolved the path under the scratch
+ * root before reaching here.
+ */
+async function editWithoutBackend(
+  ctx: Context,
+  root: string,
+  absPath: string,
+  args: { old_string?: string; new_string?: string; replace_all?: boolean; edits?: unknown },
+  exec: { signal?: AbortSignal },
+): Promise<{ ok: true; path: string; scratch_root: string; message: string }> {
+  if (Array.isArray(args.edits)) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_grammar_unsupported",
+        message:
+          "no edit tool is in scope, and the anchor grammar (`edits`) cannot be applied without one; use old_string/new_string",
+      }),
+      "AIDOS_EDIT_GRAMMAR_UNSUPPORTED",
+    );
+  }
+  if (typeof args.old_string !== "string") {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_arguments_incomplete",
+        message: "a literal edit needs `old_string` (and `new_string`)",
+      }),
+      "AIDOS_EDIT_ARGUMENTS_INCOMPLETE",
+    );
+  }
+  const fs = requireFs(ctx);
+  const target = await fs.resolve(absPath, { signal: exec.signal });
+  const before = await fs.readText(target, exec.signal);
+  const oldString = args.old_string;
+  const newString = args.new_string ?? "";
+  const occurrences = oldString === "" ? 0 : before.split(oldString).length - 1;
+  if (occurrences === 0) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_no_match",
+        message: `old_string did not match in "${absPath}"`,
+      }),
+      "AIDOS_EDIT_NO_MATCH",
+    );
+  }
+  if (occurrences > 1 && args.replace_all !== true) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_ambiguous",
+        message: `old_string matched ${occurrences} times in "${absPath}"; provide a more specific old_string or set replace_all to true`,
+      }),
+      "AIDOS_EDIT_AMBIGUOUS",
+    );
+  }
+  const after =
+    args.replace_all === true
+      ? before.split(oldString).join(newString)
+      : before.replace(oldString, newString);
+  await fs.writeText(target, after, undefined, exec.signal);
+  ctx.logger?.info?.(
+    `aidos: scratch_edit applied ${occurrences} replacement(s) to ${absPath} with no edit backend in scope`,
+  );
+  return {
+    ok: true,
+    path: absPath,
+    scratch_root: root,
+    message: `replaced ${occurrences} occurrence(s) (no edit tool in scope; applied directly)`,
+  };
+}
+
+/**
  * Resolve one user-supplied path against the scratch root. Relative paths land
  * under the root; absolute paths must equal or sit beneath it; escape attempts
  * (`../` climbing out, or an absolute path outside the root) are refused.
@@ -382,10 +474,36 @@ export function registerScratchTools(ctx: Context): void {
         // Delegate to the resolved edit tool through the registry seam.
         const editDef = ctx.tools.get("edit", agent);
         if (!editDef) {
-          throw new HarnessError(
-            JSON.stringify({ ok: false, error: "edit_tool_unavailable", message: "the edit tool is not registered in this scope" }),
-            "AIDOS_EDIT_TOOL_UNAVAILABLE",
-          );
+          /*
+           * NO `edit` TOOL IN SCOPE -- and this is the DEFAULT, not an edge.
+           *
+           * User-reported from a brand-new session in a new workspace:
+           * "edit_tool_unavailable — the edit tool is not registered in this
+           * scope". The tool mask (src/tools/mask.ts) exposes write/edit only
+           * while a ticket is in_progress; the `open` state gets research,
+           * ticket and plan tools only. With no in-progress ticket -- every
+           * fresh workspace -- `edit` is denied, so scratch_edit could not
+           * edit anything at all.
+           *
+           * scratch_write survived this because it has a raw-fs fallback.
+           * scratch_edit had none and hard-refused, which contradicts the
+           * scratch contract: "the agent writes freely here, no allowlist, no
+           * approval". A workspace the agent is promised free use of must not
+           * become read-only in the state it is most used.
+           *
+           * Looking the tool up unscoped would NOT help, and it is worth
+           * recording why: `ctx.tools.get(name)` with no scope does read the
+           * global view, but EXECUTION resolves through `resolveExecution ->
+           * get(name, scope)` with the agent's scope, so a restricted-away
+           * tool is UNKNOWN_TOOL however it was found. The mask cannot be
+           * side-stepped, and should not be -- so the edit is performed here
+           * instead.
+           *
+           * Containment is unchanged: `resolveScratchPath` has already
+           * refused anything outside the scratch root, so this writes only
+           * where the agent may already write freely.
+           */
+          return await editWithoutBackend(ctx, root, absPath, args, exec);
         }
 
         /*

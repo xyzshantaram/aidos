@@ -27295,10 +27295,16 @@ function _mdInline(text) {
   return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
 }
 function _mdCode(text) {
-  const clean = text.replace(/\s+/g, " ").trim();
+  const hadNewline = /[\r\n]/.test(text);
+  const clean = text.replace(/[\r\n]+/g, " ").trim();
   if (clean === "") return "";
-  if (clean.includes("`")) return `${_mdInline(clean)} (contains a backtick)`;
-  return "`" + clean + "`";
+  const note = [
+    clean.includes("`") ? "a backtick" : null,
+    hadNewline ? "a newline" : null
+  ].filter((part) => part !== null);
+  const suffix = note.length === 0 ? "" : ` (contains ${note.join(" and ")})`;
+  if (clean.includes("`")) return `${_mdInline(clean)}${suffix}`;
+  return "`" + clean + "`" + suffix;
 }
 function _mdTicketHead(ticketId, title) {
   const name = _mdInline(title);
@@ -27308,7 +27314,7 @@ function _isUserAction(actor) {
   return actor === "user";
 }
 function _mdQuote(text) {
-  const escaped = _mdInline(text).replace(/^(\s*)([#>-]|\d+\.)/, "$1\\$2");
+  const escaped = _mdInline(text).replace(/^(\s*)(\d+)\./, "$1$2\\.").replace(/^(\s*)([#>+*-]|~{3,})/, "$1\\$2");
   return `
   > ${escaped}`;
 }
@@ -27336,9 +27342,6 @@ function _evidenceDigestSuffix(kind, payload) {
     const hash2 = payload.commit.trim().slice(0, 12);
     const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
     return ` \u2014 commit ${_mdCode(hash2)}${subject === "" ? "" : " *" + ellipsize(subject) + "*"}`;
-  }
-  if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
-    return ` \u2014 claimed ${_mdCode(payload.claimed_state)}`;
   }
   if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
     for (const value of Object.values(payload)) {

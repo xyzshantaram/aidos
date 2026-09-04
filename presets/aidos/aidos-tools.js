@@ -26912,6 +26912,65 @@ function declaredParameters(definition) {
   }
   return parameters;
 }
+async function editWithoutBackend(ctx, root, absPath, args, exec) {
+  if (Array.isArray(args.edits)) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_grammar_unsupported",
+        message: "no edit tool is in scope, and the anchor grammar (`edits`) cannot be applied without one; use old_string/new_string"
+      }),
+      "AIDOS_EDIT_GRAMMAR_UNSUPPORTED"
+    );
+  }
+  if (typeof args.old_string !== "string") {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_arguments_incomplete",
+        message: "a literal edit needs `old_string` (and `new_string`)"
+      }),
+      "AIDOS_EDIT_ARGUMENTS_INCOMPLETE"
+    );
+  }
+  const fs = requireFs(ctx);
+  const target = await fs.resolve(absPath, { signal: exec.signal });
+  const before = await fs.readText(target, exec.signal);
+  const oldString = args.old_string;
+  const newString = args.new_string ?? "";
+  const occurrences = oldString === "" ? 0 : before.split(oldString).length - 1;
+  if (occurrences === 0) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_no_match",
+        message: `old_string did not match in "${absPath}"`
+      }),
+      "AIDOS_EDIT_NO_MATCH"
+    );
+  }
+  if (occurrences > 1 && args.replace_all !== true) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "edit_ambiguous",
+        message: `old_string matched ${occurrences} times in "${absPath}"; provide a more specific old_string or set replace_all to true`
+      }),
+      "AIDOS_EDIT_AMBIGUOUS"
+    );
+  }
+  const after = args.replace_all === true ? before.split(oldString).join(newString) : before.replace(oldString, newString);
+  await fs.writeText(target, after, void 0, exec.signal);
+  ctx.logger?.info?.(
+    `aidos: scratch_edit applied ${occurrences} replacement(s) to ${absPath} with no edit backend in scope`
+  );
+  return {
+    ok: true,
+    path: absPath,
+    scratch_root: root,
+    message: `replaced ${occurrences} occurrence(s) (no edit tool in scope; applied directly)`
+  };
+}
 function resolveScratchPath(root, path) {
   if (path.length === 0) {
     throw new HarnessError(
@@ -27140,10 +27199,7 @@ function registerScratchTools(ctx) {
         const absPath = resolveScratchPath(root, args.path);
         const editDef = ctx.tools.get("edit", agent);
         if (!editDef) {
-          throw new HarnessError(
-            JSON.stringify({ ok: false, error: "edit_tool_unavailable", message: "the edit tool is not registered in this scope" }),
-            "AIDOS_EDIT_TOOL_UNAVAILABLE"
-          );
+          return await editWithoutBackend(ctx, root, absPath, args, exec);
         }
         const editParams = declaredParameters(editDef);
         const accepts = (key) => Object.hasOwn(editParams, key);
@@ -27662,10 +27718,16 @@ function _mdInline(text) {
   return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
 }
 function _mdCode(text) {
-  const clean = text.replace(/\s+/g, " ").trim();
+  const hadNewline = /[\r\n]/.test(text);
+  const clean = text.replace(/[\r\n]+/g, " ").trim();
   if (clean === "") return "";
-  if (clean.includes("`")) return `${_mdInline(clean)} (contains a backtick)`;
-  return "`" + clean + "`";
+  const note = [
+    clean.includes("`") ? "a backtick" : null,
+    hadNewline ? "a newline" : null
+  ].filter((part) => part !== null);
+  const suffix = note.length === 0 ? "" : ` (contains ${note.join(" and ")})`;
+  if (clean.includes("`")) return `${_mdInline(clean)}${suffix}`;
+  return "`" + clean + "`" + suffix;
 }
 function _mdTicketHead(ticketId, title) {
   const name2 = _mdInline(title);
@@ -27675,7 +27737,7 @@ function _isUserAction(actor) {
   return actor === "user";
 }
 function _mdQuote(text) {
-  const escaped = _mdInline(text).replace(/^(\s*)([#>-]|\d+\.)/, "$1\\$2");
+  const escaped = _mdInline(text).replace(/^(\s*)(\d+)\./, "$1$2\\.").replace(/^(\s*)([#>+*-]|~{3,})/, "$1\\$2");
   return `
   > ${escaped}`;
 }
@@ -27703,9 +27765,6 @@ function _evidenceDigestSuffix(kind, payload) {
     const hash2 = payload.commit.trim().slice(0, 12);
     const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
     return ` \u2014 commit ${_mdCode(hash2)}${subject === "" ? "" : " *" + ellipsize(subject) + "*"}`;
-  }
-  if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
-    return ` \u2014 claimed ${_mdCode(payload.claimed_state)}`;
   }
   if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
     for (const value of Object.values(payload)) {

@@ -135,17 +135,85 @@ describe("the scratch tools", () => {
     expect((out.error as { message: string }).message).toMatch(/escape|outside/);
   });
 
-  it("scratch_edit delegates to the resolved edit tool", async () => {
+  it("scratch_edit still edits when NO edit tool is in scope", async () => {
+    /*
+     * This asserted the opposite -- that a missing backend refuses -- which
+     * pinned the bug as if it were the contract.
+     *
+     * User-reported from a brand-new session in a new workspace:
+     * "edit_tool_unavailable — the edit tool is not registered in this
+     * scope". The tool mask exposes write/edit only while a ticket is
+     * in_progress, so in the `open` state (every fresh workspace) there is
+     * no backend and scratch_edit could edit nothing at all. That
+     * contradicts the scratch contract: the agent writes freely here.
+     *
+     * scratch_write already had a raw-fs fallback; the edit half never did.
+     */
     const harness = scratchHarness();
     await harness.runTool("scratch_write", { path: "doc.md", content: "before" });
-    // No edit tool is registered in the plain harness, so delegation refuses.
     const out = await harness.runTool("scratch_edit", {
       path: "doc.md",
       old_string: "before",
       new_string: "after",
     });
+    expect(out.isError, JSON.stringify(out.error)).toBe(false);
+    const read = await harness.runTool("scratch_read", { path: "doc.md" });
+    expect((read.value as { content: string }).content).toBe("after");
+  });
+
+  it("the no-backend fallback keeps the builtin's UNIQUENESS rule", async () => {
+    /*
+     * A fallback that quietly replaced the first of several matches would be
+     * a DIFFERENT tool wearing the same name -- worse than no fallback,
+     * because the difference only shows up in the damage.
+     */
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "dup.md", content: "a\na\na\n" });
+    const ambiguous = await harness.runTool("scratch_edit", {
+      path: "dup.md",
+      old_string: "a",
+      new_string: "b",
+    });
+    expect(ambiguous.isError).toBe(true);
+    expect((ambiguous.error as { message: string }).message).toContain("matched 3 times");
+    // The file is untouched by a refused edit.
+    const unchanged = await harness.runTool("scratch_read", { path: "dup.md" });
+    expect((unchanged.value as { content: string }).content).toBe("a\na\na\n");
+
+    const all = await harness.runTool("scratch_edit", {
+      path: "dup.md",
+      old_string: "a",
+      new_string: "b",
+      replace_all: true,
+    });
+    expect(all.isError, JSON.stringify(all.error)).toBe(false);
+    const after = await harness.runTool("scratch_read", { path: "dup.md" });
+    expect((after.value as { content: string }).content).toBe("b\nb\nb\n");
+  });
+
+  it("the no-backend fallback refuses a no-match instead of writing nothing", async () => {
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "nm.md", content: "alpha\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "nm.md",
+      old_string: "not present",
+      new_string: "x",
+    });
     expect(out.isError).toBe(true);
-    expect((out.error as { message: string }).message).toMatch(/edit/);
+    expect((out.error as { message: string }).message).toContain("did not match");
+  });
+
+  it("the no-backend fallback refuses ANCHORS rather than guessing at them", async () => {
+    // The hashline algorithm lives in the backend; guessing would corrupt
+    // the file.
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "an.md", content: "alpha\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "an.md",
+      edits: [["aaa", "bbb", "c"]],
+    });
+    expect(out.isError).toBe(true);
+    expect((out.error as { message: string }).message).toContain("cannot be applied without one");
   });
 });
 

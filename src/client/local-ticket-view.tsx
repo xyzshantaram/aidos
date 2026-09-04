@@ -40,7 +40,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getMerge, getPulledVersion, getSelection, isMergePulling, publishTicketTitles, setMerge, setMergePulling, setPulledVersion, setSelection } from "./view-state";
+import { getMerge, getPulledVersion, getSelection, isMergePulling, onSelectionChanged, publishTicketTitles, setMerge, setMergePulling, setPulledVersion, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -431,6 +431,28 @@ function ProjectionReader(props: ProjectionReaderProps) {
     function (next: BoardKey | null) {
       setSelection(sessionId, next);
       setSelectedKeyRaw(next);
+    },
+    [sessionId],
+  );
+  /*
+   * #73 click-through: adopt a selection written from OUTSIDE this tree.
+   *
+   * A tool card in the transcript calls setSelection, and the board is
+   * already mounted -- so reading the store on mount, which is all #100
+   * needed, never saw it. User-reported: "clickthrough does not work".
+   *
+   * My own note in aidos-rows.tsx claimed the board "opens there when you
+   * switch tabs", and that was wrong on its own terms: switching tabs does
+   * not remount the view either. The store notifies now, and this adopts the
+   * change for THIS session only.
+   */
+  react.useEffect(
+    function () {
+      return onSelectionChanged(function (changed: string) {
+        if (changed !== sessionId) return;
+        const stored = getSelection(sessionId);
+        setSelectedKeyRaw(stored === null ? null : asBoardKey(stored));
+      });
     },
     [sessionId],
   );

@@ -136,10 +136,46 @@ export function getSelection(sessionId: string): string | null {
   return selections.get(sessionId) ?? null;
 }
 
+/**
+ * Listeners on the selection, so a write from OUTSIDE the board's tree
+ * reaches a board that is already mounted (#73).
+ *
+ * Without this, click-through silently did nothing. The store was written
+ * for #100, where it is read once on MOUNT to restore a selection a remount
+ * destroyed -- a read-on-mount store is enough for that. A tool card in the
+ * transcript writes to a board that is already mounted and never remounts,
+ * so nothing re-read it.
+ *
+ * The "the board opens there when you switch tabs" note in aidos-rows.tsx
+ * was therefore wrong on its own terms: switching tabs does not remount the
+ * view either. A store that is written from two places needs to notify.
+ */
+const selectionListeners = new Set<(sessionId: string) => void>();
+
+/** Subscribe to selection changes. Returns the unsubscribe. */
+export function onSelectionChanged(listener: (sessionId: string) => void): () => void {
+  selectionListeners.add(listener);
+  return function () {
+    selectionListeners.delete(listener);
+  };
+}
+
 /** Remember (or clear) the open ticket of one session. */
 export function setSelection(sessionId: string, key: string | null): void {
+  const previous = selections.get(sessionId) ?? null;
   if (key === null) selections.delete(sessionId);
   else selections.set(sessionId, key);
+  // Only a real change notifies: the board writes here on every selection,
+  // so an unconditional notify would loop through its own subscriber.
+  if (previous === key) return;
+  for (const listener of [...selectionListeners]) {
+    try {
+      listener(sessionId);
+    } catch {
+      // A throwing subscriber must not stop the others, and must never
+      // propagate into the caller's render.
+    }
+  }
 }
 
 // ---- the ticket title index (#73) ----

@@ -42,6 +42,7 @@ import planMetaCss from "./plan-meta.css";
 import toolRenderCss from "./vendor/tool-render/tool-render.css";
 import { badgeLabel, setCountCallback } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
+import react from "react";
 import { SCRATCH_ROWS } from "./scratch-rows";
 import { AIDOS_ROWS } from "./aidos-rows";
 
@@ -86,6 +87,56 @@ function injectStyles(): void {
  * there is nothing to hide when the session is not an aidos one. That also
  * keeps it clear of the dispose/re-register cycle that caused #100.
  */
+/**
+ * Wrap one tool row so a render failure degrades to a plain line instead of
+ * taking down the transcript.
+ *
+ * A toolview renders untrusted, arbitrarily-shaped data: a call's arguments
+ * and result come off the wire, may be truncated mid-flight, may be absent
+ * while the call is still running, and may come from an older build whose
+ * shape differed. A row that assumes any of that is well-formed can throw
+ * during render, and an unhandled throw inside a slot takes the whole
+ * surface with it.
+ *
+ * The user reported exactly that -- a transient crash "about frontend
+ * toolcall slots". I could not reproduce it from the code (my first
+ * hypothesis, that EvidenceStrip would throw on an undefined timestamp, was
+ * WRONG: it guards a non-number), so this does not claim to be that fix. It
+ * is the invariant that should hold regardless of the cause: rendering a
+ * tool card is cosmetic, and cosmetic code must not be able to crash the
+ * page.
+ *
+ * The fallback still names the tool, so a degraded row is visibly a row
+ * rather than a blank gap, and the error reaches the console for diagnosis.
+ */
+function guardRow(
+  key: string,
+  Row: (props: never) => unknown,
+): (props: never) => unknown {
+  return function GuardedRow(props: never) {
+    try {
+      return Row(props);
+    } catch (error) {
+      console.warn(`aidos: the ${key} tool row failed to render`, error);
+      return react.createElement(
+        "div",
+        { className: "tool-render-card" },
+        react.createElement(
+          "div",
+          { className: "tool-render-row", "data-state": "error" },
+          react.createElement("span", { className: "tool-render-title" }, key),
+          react.createElement("span", { className: "tool-render-sep" }),
+          react.createElement(
+            "span",
+            { className: "tool-render-summary" },
+            "this card could not render; the call itself was unaffected",
+          ),
+        ),
+      );
+    }
+  };
+}
+
 function registerScratchRows(slots: SlotRegistry): () => void {
   const disposers: Array<() => void> = [];
   /*
@@ -97,12 +148,32 @@ function registerScratchRows(slots: SlotRegistry): () => void {
   for (const [key, Row] of [...SCRATCH_ROWS, ...AIDOS_ROWS] as ReadonlyArray<
     [string, (props: never) => unknown]
   >) {
-    disposers.push(
-      slots.register(
-        { name: "tool.call.toolview", key, priority: -100 } as never,
-        Row as never,
-      ),
-    );
+    /*
+     * PER-ROW ISOLATION. One failing registration used to take the rest of
+     * the loop with it, and the loop registers fifteen rows.
+     *
+     * That failure mode is silent and looks exactly like the user's report:
+     * the rows registered BEFORE the throw render, every row after it is
+     * simply absent, and the only symptom is "some tool cards have no UI".
+     * Registration order then decides which tools work, which is not a
+     * property anyone would think to check.
+     *
+     * A row is a rendering nicety. It must never cost another row, and it
+     * must never cost the page.
+     */
+    try {
+      disposers.push(
+        slots.register(
+          { name: "tool.call.toolview", key, priority: -100 } as never,
+          guardRow(key, Row) as never,
+        ),
+      );
+    } catch (error) {
+      console.warn(
+        `aidos: the ${key} tool row could not register; the other rows continue`,
+        error,
+      );
+    }
   }
   return function () {
     for (const dispose of disposers) dispose();

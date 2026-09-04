@@ -14,7 +14,11 @@
 
 import { describe, expect, it } from "vitest";
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { marked } from "marked";
 
 import { createHarness, asContext } from "./b1-harness";
 import { apply } from "../src/tools/aidos-tools";
@@ -466,15 +470,34 @@ describe("#106 nothing interpolated can inject Markdown", () => {
      * hyperlink in the agent's own context. The earlier claim of "all ten
      * interpolation sites" was a count of the sites that were CHANGED, not
      * of the sites that exist.
+     *
+     * This DRIVES the real refusal and RENDERS the result. It used to be a
+     * source grep for `_mdCode(b.path)`, which round 2 rightly called out:
+     * it would still pass with _mdCode and _mdInline replaced by identity
+     * functions, and no test anywhere exercised the refusal digest.
      */
-    const src = readFileSync(new URL("../src/host/aidos-core.ts", import.meta.url), "utf8");
-    const at = src.indexOf("was refused: ${safeDetail}");
-    expect(at, "the refusal injection site moved; update this test").toBeGreaterThan(0);
-    const region = src.slice(Math.max(0, at - 900), at + 300);
-    expect(region).toContain("_mdCode(b.path)");
-    expect(region).toContain("_mdInline(b.reason)");
-    // The raw interpolation must be GONE, not merely joined by a safe one.
-    expect(region).not.toContain("${detail} — the agent should re-propose");
+    const { svc, agent, flush } = setup();
+    const ws = mkdtempSync(join(tmpdir(), "ws106-"));
+    mkdirSync(join(ws, "src"), { recursive: true });
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const proposal = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["src"] });
+    // The card's textarea, edited to something hostile before approving.
+    const resolved = svc.resolveApproval(agent, {
+      requestId: proposal.requestId,
+      approved: true,
+      paths: ["../[click](http://evil.example)", "../**bold**", "../<script>x</script>"],
+    });
+    expect(resolved.resolved).toContain("refused");
+
+    const html = marked.parse(flush()) as string;
+    // The deception vector: attacker-chosen anchor text hiding a different
+    // destination. No anchor may carry text the attacker wrote.
+    expect(html).not.toContain(">click<");
+    expect(html).not.toContain("<strong>bold</strong>");
+    expect(html).not.toContain("<script>");
+    // And the true path still reaches the reader.
+    expect(html).toContain("evil.example");
   });
 
   it("escapes a leading # or - inside the blockquote", () => {

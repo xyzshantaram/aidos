@@ -733,10 +733,26 @@ function _mdInline(text: string): string {
  * says why -- so the difference is visible rather than silent.
  */
 function _mdCode(text: string): string {
-  const clean = text.replace(/\s+/g, " ").trim();
+  /*
+   * Only a NEWLINE is collapsed, and it is reported when it happens.
+   *
+   * This collapsed all whitespace, so an approved path `src/a\tb` was
+   * REPORTED as `src/a b` -- a different path, silently. That is the same
+   * defect the backtick rule above exists to prevent, and applying the rule
+   * to one character class and not the other was inconsistent rather than
+   * principled. A newline genuinely must go (it would end the list item);
+   * a tab or a run of spaces is safe inside a span and is part of the value.
+   */
+  const hadNewline = /[\r\n]/.test(text);
+  const clean = text.replace(/[\r\n]+/g, " ").trim();
   if (clean === "") return "";
-  if (clean.includes("`")) return `${_mdInline(clean)} (contains a backtick)`;
-  return "`" + clean + "`";
+  const note = [
+    clean.includes("`") ? "a backtick" : null,
+    hadNewline ? "a newline" : null,
+  ].filter((part): part is string => part !== null);
+  const suffix = note.length === 0 ? "" : ` (contains ${note.join(" and ")})`;
+  if (clean.includes("`")) return `${_mdInline(clean)}${suffix}`;
+  return "`" + clean + "`" + suffix;
 }
 
 /**
@@ -783,9 +799,35 @@ function _isUserAction(actor: Actor): boolean {
  *
  * Escaping the leading marker only. Escaping every `#` would put backslashes
  * in front of ordinary text like "ticket #42".
+ *
+ * ROUND 2 widened this, and the miss was worse than the bug it fixed. The
+ * first version handled `#`, `>`, `-` and `N.` and missed `+` and `~~~`:
+ *
+ *   "+ please update the README"  -> the "+" is DROPPED and it becomes a list
+ *   "~~~ do not ship this ~~~"    -> <pre><code class="language-do"> </code>
+ *                                    and "not ship this" IS SILENTLY LOST
+ *
+ * Losing a human's words at render is exactly the "the surface looks like it
+ * worked" failure #106 exists to remove. Backtick fences need no rule --
+ * `_mdInline` already escapes backticks.
+ *
+ * A block marker is escaped by making the FIRST CHARACTER not a marker,
+ * because CommonMark decides block structure before it processes inline
+ * escapes: the block parser sees `\` and reads a paragraph.
+ *
+ * An ordered list escapes its DOT rather than its digit. `\1.` put a VISIBLE
+ * backslash in the digest, because `\` before a digit is not a valid escape
+ * -- a character the human never typed. `1\.` suppresses the list and
+ * renders as `1.`.
+ *
+ * Verified by rendering the real digest through `marked`, not by reasoning:
+ * the first probe I wrote re-implemented this escaping instead of calling
+ * it, and disagreed with the real path on four of ten cases.
  */
 function _mdQuote(text: string): string {
-  const escaped = _mdInline(text).replace(/^(\s*)([#>-]|\d+\.)/, "$1\\$2");
+  const escaped = _mdInline(text)
+    .replace(/^(\s*)(\d+)\./, "$1$2\\.")
+    .replace(/^(\s*)([#>+*-]|~{3,})/, "$1\\$2");
   return `\n  > ${escaped}`;
 }
 
@@ -881,9 +923,19 @@ function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): 
     const subject = typeof payload.subject === "string" ? " " + payload.subject.trim() : "";
     return ` — commit ${_mdCode(hash)}${subject === "" ? "" : " *" + ellipsize(subject) + "*"}`;
   }
-  if (kind === "builtin:imported_state" && typeof payload.claimed_state === "string") {
-    return ` — claimed ${_mdCode(payload.claimed_state)}`;
-  }
+  /*
+   * There was a `builtin:imported_state` branch here. It is GONE because the
+   * deny-by-default actor guard made it unreachable, and unreachable code
+   * that looks live is what F1 was: a message nobody could ever read, with a
+   * test that appeared to cover it.
+   *
+   * The only caller of this function sits behind `_isUserAction`, and
+   * `imported_state` has `allowedAuthors: ["system"]` -- a user attach is
+   * refused at runtime -- so no `imported_state` row can reach here. Keeping
+   * the branch would leave the next reader believing an import is reported.
+   * If a user-driven import ever exists, this comes back with a test that
+   * can fail.
+   */
   if (kind === "builtin:review_pass" || kind === "builtin:user_verified" || kind === "builtin:automated_check") {
     // A verdict row with no note still says what was asserted, from the
     // payload's first string field when there is one.
