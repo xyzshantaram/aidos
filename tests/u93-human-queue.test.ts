@@ -536,6 +536,22 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
     expect(row).toContain("justify-content: flex-end");
   });
 
+  it("shows the state CENTERED under the id chip and in parens", () => {
+    /*
+     * The user's design. Two separate problems with the plain coloured
+     * text: left-aligned it sat under the chip's first letter and read as a
+     * caption that had slipped, and with no chip border "thursday#2 Open"
+     * scans as a two-word name. Parens restore a boundary at no visual
+     * weight, which is the point of taking it out of a chip.
+     */
+    expect(strip).toContain("({stateLabel(ticket.state)})");
+    // The tooltip keeps the BARE label: "(Open)" quotes the punctuation
+    // rather than naming the state.
+    expect(strip).toContain("title={stateLabel(ticket.state)}");
+    const idcol = rule(".aidos-ticket-strip-idcol {");
+    expect(idcol).toContain("align-items: center");
+  });
+
   it("the strip is a COLUMN, so the revealed row lands below and not beside", () => {
     /*
      * The reported bug: clicking the icon appeared to do nothing. The state

@@ -107,11 +107,21 @@ export function TicketStrip(props: TicketStripProps) {
           >
             {ticketChipLabel(ticket as TicketView)}
           </span>
+          {/*
+            * PARENTHESISED (user's design). The state lost its chip border
+            * when it became coloured text, and without one it read as part
+            * of the id -- "thursday#2 Open" scans as a two-word name. The
+            * parens give it back a boundary at no visual weight, which is
+            * the whole point of moving it out of a chip.
+            *
+            * The title keeps the bare label: a tooltip reading "(Open)" is
+            * quoting the punctuation rather than naming the state.
+            */}
           <span
             className={"aidos-ticket-strip-state " + badgeClass(ticket.state)}
             title={stateLabel(ticket.state)}
           >
-            {stateLabel(ticket.state)}
+            ({stateLabel(ticket.state)})
           </span>
         </span>
         <span className="aidos-ticket-strip-body">

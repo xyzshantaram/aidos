@@ -2529,7 +2529,10 @@
 .aidos-ticket-strip-idcol {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  /* CENTERED under the id chip (user's design). Left-aligned, the state sat
+     under the chip's first letter and read as a caption that had slipped
+     rather than as a label belonging to the chip above it. */
+  align-items: center;
   gap: 2px;
   flex: none;
 }
