@@ -25,7 +25,39 @@ const PATH_TOOLS = new Set<string>(["read", "write", "edit"]);
 const WRITE_INTENT = "fs/write-intent";
 const EDIT_INTENT = "fs/edit-intent";
 
-/** Whether one path sits under (or equals) a root, after both are normalized. */
+/**
+ * Whether one path sits under (or equals) a root, after both are normalized.
+ *
+ * CONTAINMENT HERE IS LEXICAL, AND ONLY LEXICAL. This compares resolved
+ * STRINGS. It never calls `realpath`, `lstat` or `readlink` — none of the
+ * three appears anywhere in `src/` — so a path that lexically sits inside a
+ * root passes no matter where it actually points. A symlink inside the
+ * workspace whose target is outside it IS NOT DETECTED, and a write through
+ * that link is allowed. Demonstrated end to end during the #104 review:
+ * with `screenshots` allowlisted and then created as a link to a directory
+ * outside the workspace, the write boundary allowed a target whose realpath
+ * was elsewhere.
+ *
+ * This is DELIBERATE (#110), and the threat model is the reason. This
+ * boundary stops MISTAKES — a wrong path, an overbroad entry, a write into
+ * the neighbouring tree. It is not a control against a determined agent,
+ * because the agent it constrains HAS BASH and can create the link itself.
+ * A guard that its own subject can step around is not a security boundary,
+ * and documenting it as one would be the dishonest option.
+ *
+ * Nor is this a regression that arrived with a later checkpoint: approval
+ * time never validated link targets either, because `existsSync` FOLLOWS
+ * symlinks. The same escape reproduces against every historical version of
+ * the validator. All three checkpoints — proposal, approve-time
+ * re-validation, and write time — apply this one lexical rule consistently.
+ *
+ * DO NOT BUILD A SECURITY ARGUMENT ON THIS FUNCTION.
+ *
+ * REVISIT IF EITHER BECOMES TRUE: aidos runs an agent whose output is not
+ * trusted, or a workspace can contain symlinks placed by someone other than
+ * the user. Either moves the answer to resolving the real path at write
+ * time, with the TOCTOU race that implies.
+ */
 function isUnder(root: string, candidate: string): boolean {
   const rel = relative(resolve(root), resolve(candidate));
   // Windows: rel may contain backslash; normalize before checking parent escape.

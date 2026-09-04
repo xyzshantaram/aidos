@@ -75,6 +75,14 @@ A project is keyed by its absolute path. A `move` command repoints a project to 
 aidos is opt-in. The aidos preset sits alongside the standard preset. A quick task uses a standard
 session with zero ticket machinery. The agent's tools follow the ticket state. Before signoff it can read and plan but cannot write files or run commands.
 
+Once a ticket is in progress, writes stay inside the paths you approved for it. That check compares
+paths as text. It does not follow symlinks, so a link inside an approved path that points somewhere
+else is not detected. This is on purpose. The boundary exists to stop mistakes — a wrong path, an
+entry that is too broad, a write into the neighbouring tree — and it does that well. It is not a
+defence against an agent that means harm, because that agent has a shell and can make the link
+itself. Read `isUnder` in `src/tools/allowlist.ts` for the full reasoning and for the two conditions
+that would change this answer.
+
 ## Built on DeepSeek Harness
 
 The implementation builds on DeepSeek Harness (dsh), not the from-scratch stack an earlier draft
