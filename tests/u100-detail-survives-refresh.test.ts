@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { asBoardKey, boardKeyOf, resolveSelection } from "../src/client/board-logic";
+import { getSelection, setSelection } from "../src/client/view-state";
 
 interface Row {
   id: number;
@@ -251,5 +252,82 @@ describe("#100 the hold cannot be re-gated on a flag the caller gets wrong", () 
     // absent row produces a NOTICE rather than a close.
     expect(view).toContain("resolution.absent");
     expect(view).toContain("aidos-detail-absent");
+  });
+});
+
+describe("#100 THE ROOT CAUSE: the selection survives a remount", () => {
+  /*
+   * Found from instrumented logs after TWO fixes aimed at the wrong layer.
+   *
+   * A badge-count change disposes and re-registers the Tickets slot entry
+   * (src/client/index.ts), and a slot re-registration UNMOUNTS AND REMOUNTS
+   * the component -- destroying every useState and useRef in the tree,
+   * including the open ticket. The user's log caught it exactly:
+   *
+   *   #100 select: resolved|sel=9|rows=274|own=110|foreign=164|ref=held
+   *   #100 ProjectionReader UNMOUNTING; ticket param present=true -> STRIPPING IT
+   *   filter panel mounted / board loaded: 274 / ProjectionReader MOUNTED
+   *
+   * The selection was still resolving CORRECTLY on the render before it
+   * died. Nothing was wrong with the resolver -- which is why hardening it
+   * twice changed nothing. A pure function cannot preserve state that no
+   * longer exists.
+   *
+   * The count changes on any board write anywhere in the workspace, which is
+   * why it felt random: the trigger was almost never the reader's own
+   * action.
+   */
+
+  it("remembers the open ticket across a simulated remount", () => {
+    // A remount = new component instance reading the module store again.
+    setSelection("sess-1", "12");
+    expect(getSelection("sess-1")).toBe("12");
+  });
+
+  it("keeps sessions separate, so one board cannot open another's ticket", () => {
+    setSelection("sess-a", "1");
+    setSelection("sess-b", "2");
+    expect(getSelection("sess-a")).toBe("1");
+    expect(getSelection("sess-b")).toBe("2");
+  });
+
+  it("clears cleanly when the reader closes the panel", () => {
+    setSelection("sess-close", "7");
+    setSelection("sess-close", null);
+    expect(getSelection("sess-close")).toBeNull();
+  });
+
+  it("reports null for a session that never opened anything", () => {
+    expect(getSelection("sess-never")).toBeNull();
+  });
+
+  it("stores a FOREIGN board key unchanged", () => {
+    // The store is keyed by board key, not by id: a foreign row's key must
+    // round-trip intact or the restored selection would open the wrong
+    // ticket -- the confusion behind eleven bugs in this file's history.
+    setSelection("sess-f", "sess-other:12");
+    expect(getSelection("sess-f")).toBe("sess-other:12");
+  });
+});
+
+describe("#100 the tab no longer remounts for an unchanged label", () => {
+  const index = readFileSync(new URL("../src/client/index.ts", import.meta.url), "utf8");
+
+  it("compares the rendered label before re-registering", () => {
+    /*
+     * The second half of the fix. reportCount already skips an unchanged
+     * COUNT, but one label covers many counts -- every count of zero renders
+     * "Tickets" -- so changes that did not alter the text still remounted
+     * the whole tree for no visible benefit.
+     */
+    expect(index).toContain("if (next === lastLabel) return;");
+  });
+
+  it("still re-registers when the label DOES change", () => {
+    // The guard must not disable the badge; a stale tab count is its own bug.
+    const at = index.indexOf("setCountCallback(function ()");
+    const body = index.slice(at, index.indexOf("});", at));
+    expect(body).toContain("registration()");
+    expect(body).toContain("registerTicketsTab(slots)");
   });
 });

@@ -108,6 +108,40 @@ export function badgeLabel(): string {
   return count > 0 ? "Tickets (" + count + ")" : "Tickets";
 }
 
+// ---- the selection store (#100) ----
+
+/**
+ * The open ticket, per session, OUTSIDE React state.
+ *
+ * #100's root cause, found from instrumented logs after two fixes aimed at
+ * the wrong layer: a badge-count change disposes and re-registers the
+ * Tickets slot entry, and a slot re-registration UNMOUNTS AND REMOUNTS the
+ * component. Every useState and useRef in the tree dies with it -- so the
+ * selection did not survive a ticket count changing, which happens on any
+ * board write anywhere in the workspace, including other people's.
+ *
+ * That is why it felt random: the trigger was never the reader's own
+ * action. And it is why a resolver that "holds unconditionally" could not
+ * help -- a pure function cannot preserve state that no longer exists.
+ *
+ * This module already keeps the merge cache and the filter here for exactly
+ * this reason: module scope outlives a remount. The selection belongs with
+ * them. That defends against this cause AND any future remount, rather than
+ * against one known trigger.
+ */
+const selections = new Map<string, string | null>();
+
+/** The remembered selection of one session, or null when nothing is open. */
+export function getSelection(sessionId: string): string | null {
+  return selections.get(sessionId) ?? null;
+}
+
+/** Remember (or clear) the open ticket of one session. */
+export function setSelection(sessionId: string, key: string | null): void {
+  if (key === null) selections.delete(sessionId);
+  else selections.set(sessionId, key);
+}
+
 // ---- the workspace merge store ----
 
 import type { TicketView } from "../kernel/projections";

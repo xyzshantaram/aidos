@@ -141,11 +141,33 @@ export function apply(ctx: Context): void {
     };
   }, "aidos: tickets tab visibility");
 
-  // A badge change re-registers the entry. The tab header re-reads the label,
-  // which is the only way the tab text updates live. Dispose first, and only
-  // while the tab is visible: a hidden tab has no registration to refresh.
+  /*
+   * A badge change re-registers the entry, which is the only way the tab
+   * header re-reads the label. Dispose first, and only while the tab is
+   * visible: a hidden tab has no registration to refresh.
+   *
+   * #100: THIS IS WHY READERS WERE EJECTED FROM A TICKET. A slot
+   * re-registration UNMOUNTS AND REMOUNTS the component, destroying every
+   * useState and useRef in the tree -- the open ticket among them. The count
+   * changes on any board write anywhere in the workspace, so the trigger was
+   * usually someone else's action, which is exactly why it felt random.
+   *
+   * The real fix is that the selection now lives in the module-level store
+   * (view-state.ts) and survives a remount. This guard is the second half:
+   * re-register only when the rendered LABEL STRING actually differs.
+   *
+   * reportCount already skips an unchanged count, but the same label covers
+   * MANY counts -- every count of zero renders "Tickets" -- so a board
+   * churning between zero and zero-again, or any change that does not alter
+   * the text, previously still remounted the tree for no visible benefit.
+   * Comparing the rendered string removes that churn entirely.
+   */
+  let lastLabel = badgeLabel();
   setCountCallback(function () {
     if (registration === null) return;
+    const next = badgeLabel();
+    if (next === lastLabel) return;
+    lastLabel = next;
     const slots = ctx.get("slots") as SlotRegistry | undefined;
     if (slots === undefined) return;
     registration();

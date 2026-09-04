@@ -40,7 +40,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getMerge, getPulledVersion, isMergePulling, setMerge, setMergePulling, setPulledVersion } from "./view-state";
+import { getMerge, getPulledVersion, getSelection, isMergePulling, setMerge, setMergePulling, setPulledVersion, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -391,7 +391,36 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [applied, setAppliedStateLocal] = react.useState<AppliedState>(function () {
     return cloneAppliedState(DEFAULT_APPLIED);
   });
-  const [selectedKey, setSelectedKey] = react.useState<BoardKey | null>(null);
+  /*
+   * #100 ROOT-CAUSE FIX. The selection is seeded from the module-level store
+   * and mirrored back to it on every change, so it SURVIVES A REMOUNT.
+   *
+   * A badge-count change disposes and re-registers the Tickets slot entry,
+   * and a slot re-registration unmounts and remounts this whole tree --
+   * taking every useState and useRef with it. The count changes on any board
+   * write anywhere in the workspace, which is why being ejected felt random:
+   * the trigger was never the reader's own action.
+   *
+   * Two earlier fixes hardened the selection RESOLVER, which was correct
+   * both times and irrelevant both times: a pure function cannot preserve
+   * state that no longer exists. This keeps the state somewhere the remount
+   * cannot reach.
+   */
+  const [selectedKeyRaw, setSelectedKeyRaw] = react.useState<BoardKey | null>(function () {
+    const stored = getSelection(sessionId);
+    // asBoardKey is the deliberate escape hatch: what went INTO the store was
+    // already a BoardKey, so this is a round trip through string storage
+    // rather than a key constructed from an id.
+    return stored === null ? null : asBoardKey(stored);
+  });
+  const selectedKey = selectedKeyRaw;
+  const setSelectedKey = react.useCallback(
+    function (next: BoardKey | null) {
+      setSelection(sessionId, next);
+      setSelectedKeyRaw(next);
+    },
+    [sessionId],
+  );
   const [createOpen, setCreateOpen] = react.useState(false);
   const [planOpen, setPlanOpen] = react.useState(false);
   const [queueOpen, setQueueOpen] = react.useState(false);
