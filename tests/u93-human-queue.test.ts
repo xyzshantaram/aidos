@@ -443,14 +443,21 @@ describe("u93 human-queue: a fulfilled ask is not a complaint", () => {
 describe("#93 the queue's action buttons are a grid, not ragged", () => {
   /*
    * User (2026-09-03): "make the buttons in the waiting on you modal all the
-   * same size and follow a grid system".
+   * same size and follow a grid system" -- then twice more, because the
+   * first two attempts broke the alignment.
    *
-   * The rows carried buttons sized to whatever their label happened to be --
-   * "Verify", "Mark done", "Review request" -- and only SOME rows have a
-   * Dismiss, so nothing lined up down the column and the eye had to re-find
-   * the primary action on every row.
+   * The failure both times was putting the grid on the CONTAINER, which
+   * mixes the strip's own pop-out affordance with the caller's buttons. Its
+   * child count varies -- the icon may be absent, a Dismiss may or may not
+   * follow -- so a fixed column template misaligns the moment either
+   * changes. Split by concern instead: the container stays flex and keeps
+   * the alignment it always had; the grid governs only the action group.
    */
   const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+  const strip = readFileSync(
+    new URL("../src/client/ticket-strip.tsx", import.meta.url),
+    "utf8",
+  );
 
   function rule(selector: string): string {
     const at = css.indexOf(selector);
@@ -458,34 +465,35 @@ describe("#93 the queue's action buttons are a grid, not ragged", () => {
     return css.slice(at, css.indexOf("}", at));
   }
 
-  it("lays the queue's actions out on an explicit grid", () => {
-    const body = rule(".aidos-queue .aidos-ticket-strip-actions {");
-    expect(body).toContain("display: grid");
-    expect(body).toContain("grid-template-columns");
+  it("wraps the caller's actions in their own element", () => {
+    // Without the wrapper there is nothing to lay out that is not also
+    // holding the strip's own button.
+    expect(strip).toContain("aidos-ticket-strip-action-group");
   });
 
-  it("uses THREE columns, because the pop-out button shares the container", () => {
+  it("puts the grid on the ACTION GROUP, not on the mixed container", () => {
+    const group = rule(".aidos-queue .aidos-ticket-strip-action-group {");
+    expect(group).toContain("display: grid");
+    expect(group).toContain("grid-template-columns");
+  });
+
+  it("leaves the container's flex alignment alone", () => {
     /*
-     * The strip's own pop-out button renders inside this same container, so
-     * a two-column grid wraps it onto its own row and makes every entry
-     * taller. It needs a column of its own.
+     * The regression both earlier attempts caused. The container's
+     * right-alignment worked before the grid was introduced and must not be
+     * overridden again.
      */
-    const body = rule(".aidos-queue .aidos-ticket-strip-actions {");
-    const columns = /grid-template-columns:([^;]*);/.exec(body);
-    expect(columns).not.toBeNull();
-    expect((columns as RegExpExecArray)[1].trim().split(/\s+/).length).toBe(3);
+    expect(css).not.toContain(".aidos-queue .aidos-ticket-strip-actions {");
   });
 
-  it("sizes the columns once, not per row", () => {
-    // Fixed widths on the CONTAINER are what make every row's primary button
-    // identical; sizing per row is the raggedness being removed.
+  it("sizes the columns once on the container, not per row", () => {
     const vars = rule(".aidos-queue {");
     expect(vars).toContain("--queue-action-w");
     expect(vars).toContain("--queue-dismiss-w");
   });
 
   it("gives every action button the same width and height", () => {
-    const body = rule(".aidos-queue .aidos-ticket-strip-actions .aidos-btn {");
+    const body = rule(".aidos-queue .aidos-ticket-strip-action-group .aidos-btn {");
     expect(body).toContain("width: 100%");
     expect(body).toContain("min-height");
   });

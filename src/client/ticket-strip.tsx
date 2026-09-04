@@ -127,7 +127,24 @@ export function TicketStrip(props: TicketStripProps) {
               <PopOutIcon />
             </button>
           ) : null}
-          {props.actions}
+          {/*
+            * The caller's actions get their OWN wrapper (#93, user-reported
+            * twice: "lost the right alignment", then "still broken").
+            *
+            * They used to be siblings of the pop-out button in this span,
+            * which mixes two concerns -- the strip's own affordance and the
+            * caller's buttons -- in one box. Making that box a grid could
+            * never align reliably, because its child COUNT varies: the icon
+            * may be absent, and a Dismiss may or may not follow. A fixed
+            * column template misaligns the moment either changes.
+            *
+            * Split, each layout does one job: this span stays flex and keeps
+            * the right alignment it always had, and the group below is the
+            * grid that makes every caller button the same size.
+            */}
+          {props.actions !== undefined ? (
+            <span className="aidos-ticket-strip-action-group">{props.actions}</span>
+          ) : null}
         </span>
       </div>
     </li>
