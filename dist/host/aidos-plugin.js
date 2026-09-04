@@ -27247,6 +27247,7 @@ function validateAllowlistPaths(cwd, paths) {
   };
   const seen = /* @__PURE__ */ new Set();
   const clean = [];
+  const created = [];
   const bad = [];
   for (const raw of paths) {
     if (typeof raw !== "string" || raw.trim() === "") {
@@ -27263,14 +27264,13 @@ function validateAllowlistPaths(cwd, paths) {
       continue;
     }
     if (!existsSync(abs)) {
-      bad.push({ path: p, reason: "does not exist" });
-      continue;
+      created.push(p);
     }
     clean.push(p);
   }
   if (bad.length > 0) return { ok: false, bad };
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
-  return { ok: true, paths: clean };
+  return { ok: true, paths: clean, created };
 }
 var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
 var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
@@ -27791,11 +27791,25 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ticketId: args.ticketId,
       kind: "allowlist",
       prompt: `Approve write access for ticket #${args.ticketId}`,
-      payload: { paths: result.paths },
+      /*
+       * #104: `created` names the proposed paths that do not exist yet, so
+       * the card can say "will be created". Approving a path into existence
+       * is a different decision from approving writes to something already
+       * there, and the human should be able to see which one they are
+       * making rather than discovering it afterwards.
+       */
+      payload: { paths: result.paths, created: result.created },
       at: this._now()
     };
     this._pendingApprovals.set(id, pending);
-    return { ok: true, status: "pending", ticketId: args.ticketId, requestId: id, proposed: result.paths };
+    return {
+      ok: true,
+      status: "pending",
+      ticketId: args.ticketId,
+      requestId: id,
+      proposed: result.paths,
+      created: result.created
+    };
   }
   pendingApproval(agent, args) {
     const sessionId = String(agent.session.id);

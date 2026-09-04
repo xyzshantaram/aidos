@@ -23,12 +23,28 @@ describe("#51 the allowlist suggestion flow", () => {
     const svc = (harness as unknown as { service: any }).service;
     const agent = (harness as unknown as { asAgent: () => any }).asAgent();
     const ticket = svc.setTicket(agent, { title: "Probe" });
+    /*
+     * #104 changed this test's inputs, NOT its property.
+     *
+     * It used to prove "names each" by mixing an escaping path with one that
+     * merely did not exist yet -- and "does not exist" is no longer a
+     * refusal reason, because a ticket whose purpose is to CREATE something
+     * could never be authorised to create it. Two genuinely escaping paths
+     * prove the same property without depending on the removed reason, and
+     * the escape refusal itself is unchanged and still enumerated.
+     */
     expect(() =>
       svc.requestAllowlist(agent, {
         ticketId: ticket.id,
-        paths: ["src/", "../../etc", "docs/"],
+        paths: ["src/", "../../etc", "../../var"],
       }),
-    ).toThrow(/escapes the workspace.*does not exist|does not exist.*escapes/);
+    ).toThrow(/\.\.\/\.\.\/etc.*escapes the workspace/);
+    expect(() =>
+      svc.requestAllowlist(agent, {
+        ticketId: ticket.id,
+        paths: ["src/", "../../etc", "../../var"],
+      }),
+    ).toThrow(/\.\.\/\.\.\/var.*escapes the workspace/);
   });
 
   it("a valid proposal queues a pending approval and returns without attaching", () => {

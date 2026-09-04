@@ -644,10 +644,19 @@ export interface ActionNomination {
  * duplicates are collapsed. Returns the bad paths so the refusal can name
  * each one — the agent can fix its proposal without a round trip.
  */
+/**
+ * The result of validating a proposed allowlist. `created` names the subset
+ * of `paths` that does not exist on disk yet (#104) -- valid, and shown to
+ * the human as "will be created" so their approval stays informed.
+ */
+type ValidatedAllowlist =
+  | { ok: true; paths: string[]; created: string[] }
+  | { ok: false; bad: Array<{ path: string; reason: string }> };
+
 function validateAllowlistPaths(
   cwd: string,
   paths: readonly string[],
-): { ok: true; paths: string[] } | { ok: false; bad: Array<{ path: string; reason: string }> } {
+): ValidatedAllowlist {
   // Containment uses relative() + the "../" check, NOT startsWith: the
   // prefix test has the sibling hole ("/ws-evil/x".startsWith("/ws") is
   // true), which the #51 review demonstrated. Same contract as isUnder in
@@ -660,6 +669,7 @@ function validateAllowlistPaths(
   };
   const seen = new Set<string>();
   const clean: string[] = [];
+  const created: string[] = [];
   const bad: Array<{ path: string; reason: string }> = [];
   for (const raw of paths) {
     if (typeof raw !== "string" || raw.trim() === "") {
@@ -675,15 +685,34 @@ function validateAllowlistPaths(
       bad.push({ path: p, reason: "escapes the workspace" });
       continue;
     }
+    /*
+     * #104: a path that does not exist yet is VALID and merely NEW.
+     *
+     * The old refusal made a ticket whose entire purpose is to CREATE
+     * something unable to be authorised to create it -- #102 (add a
+     * screenshots/ gallery) was refused its own directory. Worse, the only
+     * workaround was to request the PARENT directory, which is a strictly
+     * WIDER grant than the one that was refused: a validator that pushes
+     * users toward broader permissions is working against its own purpose.
+     *
+     * Nothing is weakened by this. The containment check above is purely
+     * LEXICAL -- relative() plus a "../" test, never touching the
+     * filesystem -- so it already gives a correct answer for a path that
+     * does not exist, and a path inside the workspace has every ancestor
+     * inside it too. Existence was never the safety property; containment
+     * is, and it still runs first and still refuses.
+     *
+     * The path is flagged so the approval card can say "will be created",
+     * keeping the human's consent informed rather than silent.
+     */
     if (!existsSync(abs)) {
-      bad.push({ path: p, reason: "does not exist" });
-      continue;
+      created.push(p);
     }
     clean.push(p);
   }
   if (bad.length > 0) return { ok: false, bad };
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
-  return { ok: true, paths: clean };
+  return { ok: true, paths: clean, created };
 }
 
 export class AidosService extends TypertRemoteService {
@@ -1308,6 +1337,8 @@ registerAidosSessionEventTypes(ctx);
     ticketId: number;
     requestId: string;
     proposed: string[];
+    /** #104: the subset of `proposed` that does not exist on disk yet. */
+    created: string[];
   } {
     const cwd = agent.session?.header?.cwd ?? "";
     if (cwd === "") {
@@ -1338,11 +1369,25 @@ registerAidosSessionEventTypes(ctx);
       ticketId: args.ticketId,
       kind: "allowlist",
       prompt: `Approve write access for ticket #${args.ticketId}`,
-      payload: { paths: result.paths },
+      /*
+       * #104: `created` names the proposed paths that do not exist yet, so
+       * the card can say "will be created". Approving a path into existence
+       * is a different decision from approving writes to something already
+       * there, and the human should be able to see which one they are
+       * making rather than discovering it afterwards.
+       */
+      payload: { paths: result.paths, created: result.created },
       at: this._now(),
     };
     this._pendingApprovals.set(id, pending);
-    return { ok: true, status: "pending", ticketId: args.ticketId, requestId: id, proposed: result.paths };
+    return {
+      ok: true,
+      status: "pending",
+      ticketId: args.ticketId,
+      requestId: id,
+      proposed: result.paths,
+      created: result.created,
+    };
   }
 
   /**

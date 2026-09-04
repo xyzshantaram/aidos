@@ -86,6 +86,15 @@ export function AllowlistRequestCard(props: {
 
   if (request === null) return null;
 
+  /*
+   * Read from the request, not recomputed here: the CLIENT cannot stat the
+   * host filesystem, so the host is the only thing that can know which paths
+   * are new. Guarded for an older pending card that predates the field.
+   */
+  const createdPaths = Array.isArray(request.payload?.created)
+    ? (request.payload.created as unknown[]).filter((p): p is string => typeof p === "string")
+    : [];
+
   return (
     <div className="aidos-approval-card">
       <div className="aidos-approval-head">
@@ -103,6 +112,22 @@ export function AllowlistRequestCard(props: {
           setPaths(event.target.value.split("\n"));
         }}
       />
+      {createdPaths.length > 0 ? (
+        <p className="aidos-approval-created">
+          {/*
+            * #104: approving a path into EXISTENCE is a different decision
+            * from approving writes to something already there, and the human
+            * should see which one they are making rather than discover it
+            * afterwards. Before this, a non-existent path was refused
+            * outright -- so a ticket whose whole purpose was to create
+            * something could never be authorised to create it.
+            */}
+          {createdPaths.length === 1
+            ? "1 path does not exist yet and will be created: "
+            : createdPaths.length + " paths do not exist yet and will be created: "}
+          {createdPaths.join(", ")}
+        </p>
+      ) : null}
       <p className="aidos-detail-note">
         Edit the list before approving if the proposal needs amending. The agent is told the outcome either way.
       </p>
