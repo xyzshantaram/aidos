@@ -21,6 +21,9 @@
 
 import react from "react";
 
+import { gutterWidth, highlightCode, languageFor } from "./highlight";
+import { numberedReadRows, readStartLine } from "./vendor/tool-render/text";
+
 import {
   argsRawOf,
   errorTextOf,
@@ -78,10 +81,10 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
   const showsError = state === "error" && errorSummary !== undefined;
   const shown = showsError ? errorSummary : summary;
   return (
-    <div className="aidos-toolrow">
+    <div className="tool-render-card" data-error={state === "error" || undefined}>
       <button
         type="button"
-        className="aidos-toolrow-line"
+        className="tool-render-row"
         data-state={state}
         data-expandable={expandable ? true : undefined}
         disabled={!expandable}
@@ -90,21 +93,21 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
           if (expandable) setExpanded(!expanded);
         }}
       >
-        <span className="aidos-toolrow-leading" aria-hidden="true">
+        <span className="tool-render-leading" aria-hidden="true">
           <Leading state={state} open={open} />
         </span>
-        <span className="aidos-toolrow-title">{title}</span>
+        <span className="tool-render-title">{title}</span>
         {/* The dot between the tool name and its argument, as tool-render has. */}
-        <span className="aidos-toolrow-sep" aria-hidden="true" />
+        <span className="tool-render-sep" aria-hidden="true" />
         <span
-          className="aidos-toolrow-summary"
-          data-error={showsError ? true : undefined}
+          className="tool-render-summary"
+          tool-render-error={showsError ? true : undefined}
           title={shown}
         >
           {shown}
         </span>
       </button>
-      {open ? <div className="aidos-toolrow-body">{body}</div> : null}
+      {open ? <div className="tool-render-body">{body}</div> : null}
     </div>
   );
 }
@@ -126,25 +129,62 @@ function bodyOf(text: string | null, isError: boolean): react.ReactNode | null {
   if (text === null || text === "") return null;
   // The rounded code block tool-render uses, on the same token.
   return (
-    <pre className="aidos-toolrow-code" data-error={isError ? true : undefined}>
+    <pre className="tool-render-output" tool-render-error={isError ? true : undefined}>
       {text}
     </pre>
   );
 }
 
+/**
+ * A read body: numbered, syntax-highlighted lines, exactly as tool-render
+ * renders one.
+ *
+ * The numbering and envelope-stripping come from the VENDORED text helpers
+ * rather than a reimplementation, and the highlighting uses the same
+ * extension map and grammars. Three hand-ports failed to match by
+ * resemblance; this matches by using the same code.
+ */
+function readBody(text: string, path: string | undefined): react.ReactNode {
+  const rows = numberedReadRows(text, readStartLine(null, text));
+  const language = languageFor(path ?? "");
+  const width = gutterWidth(rows.map((row) => row.number));
+  return (
+    <div className="tool-render-code">
+      {rows.map((row, index) => (
+        <div className="tool-render-code-row" key={index}>
+          <span className="tool-render-gutter" aria-hidden="true" style={{ width }}>
+            {row.number === null ? "" : String(row.number)}
+          </span>
+          {/*
+            * dangerouslySetInnerHTML is how highlight.js output is rendered,
+            * and it is safe HERE because highlightCode never returns raw
+            * input: an unknown language or a grammar failure falls back to
+            * ESCAPED text. That fallback is the security boundary, not a
+            * convenience.
+            */}
+          <code
+            className="tool-render-line-cell hljs"
+            data-highlighted="yes"
+            dangerouslySetInnerHTML={{ __html: highlightCode(row.text, language) }}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ScratchReadRow(props: ToolViewProps) {
-  const { state, summary, errorText, errorSummary } = useRow(props, "Read");
+  const { args, state, summary, errorText, errorSummary } = useRow(props, "Read");
   // The envelope's own fields are already on the row, so the body shows the
   // FILE CONTENT rather than the JSON wrapper around it.
   const text = state === "error" ? errorText : unwrapScratchResult(resultTextOf(props.block));
+  const path = pickString(args, ["path", "file_path"]);
+  const body =
+    state === "error" || text === null || text === ""
+      ? bodyOf(text, state === "error")
+      : readBody(text, path);
   return (
-    <ScratchRow
-      title="Scratch read"
-      summary={summary}
-      state={state}
-      body={bodyOf(text, state === "error")}
-      errorSummary={errorSummary}
-    />
+    <ScratchRow title="Read" summary={summary} state={state} body={body} errorSummary={errorSummary} />
   );
 }
 
@@ -155,7 +195,7 @@ export function ScratchWriteRow(props: ToolViewProps) {
   const written = state === "error" ? errorText : pickString(args, ["content"]) ?? null;
   return (
     <ScratchRow
-      title="Scratch write"
+      title="Write"
       summary={summary}
       state={state}
       body={bodyOf(written, state === "error")}
@@ -184,7 +224,7 @@ export function ScratchEditRow(props: ToolViewProps) {
   }
   return (
     <ScratchRow
-      title="Scratch edit"
+      title="Edit"
       summary={summary}
       state={state}
       body={bodyOf(text, state === "error")}
@@ -197,7 +237,7 @@ export function ScratchMkdirRow(props: ToolViewProps) {
   const { state, summary, errorText, errorSummary } = useRow(props, "Mkdir");
   return (
     <ScratchRow
-      title="Scratch mkdir"
+      title="Mkdir"
       summary={summary}
       state={state}
       body={bodyOf(state === "error" ? errorText : null, state === "error")}

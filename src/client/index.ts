@@ -23,6 +23,23 @@ import type {} from "@deepseek-ai/dsh-client-ui-conversation/client";
 
 import boardCss from "./board.css";
 import planMetaCss from "./plan-meta.css";
+/*
+ * #82: tool-render's stylesheet, VENDORED verbatim.
+ *
+ * Three hand-ports in a row failed to match it ("not close enough", "the
+ * card looks different"), because approximating a design from memory does
+ * not converge. Using the ACTUAL stylesheet makes the scratch rows identical
+ * by construction rather than by resemblance.
+ *
+ * Vendored, not imported: tool-render is a separate dotfiles-ai plugin that
+ * may not be mounted, and #72 requires aidos to depend on nothing external.
+ * tests/u82-vendor-drift.test.ts fails loudly when upstream changes.
+ *
+ * Injecting it while tool-render is ALSO mounted is harmless: the rules are
+ * byte-identical, and the marker guard in injectStyles already prevents a
+ * second copy of the same sheet.
+ */
+import toolRenderCss from "./vendor/tool-render/tool-render.css";
 import { badgeLabel, setCountCallback } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
 import { SCRATCH_ROWS } from "./scratch-rows";
@@ -42,6 +59,7 @@ function injectStyles(): void {
   for (const sheet of [
     { marker: "aidos/board.css", text: boardCss },
     { marker: "aidos/plan-meta.css", text: planMetaCss },
+    { marker: "aidos/tool-render.css", text: toolRenderCss },
   ] as const) {
     if (document.querySelector(`style[data-plugin-css="${sheet.marker}"]`) !== null) {
       continue;

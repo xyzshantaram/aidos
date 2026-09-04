@@ -29,6 +29,12 @@ import {
   rowStateOf,
   unwrapScratchResult,
 } from "../src/client/tool-block";
+import {
+  escapeHtml,
+  gutterWidth,
+  highlightCode,
+  languageFor,
+} from "../src/client/highlight";
 
 const ROOT = "/home/sid/.dsh/aidos/scratch/--home-sid-repos-aidos--";
 
@@ -193,89 +199,138 @@ describe("#82 the scratch envelope is unwrapped", () => {
   });
 });
 
-describe("#82 the rows MATCH tool-render rather than approximating it", () => {
+describe("#82 the rows USE tool-render, rather than approximating it", () => {
   /*
-   * The first attempt built a bordered card with its own sizing, and the
-   * user's verdict was "not close enough". Two things make it actually
-   * match, and both are pinned here because "looks about right" is exactly
-   * the property that drifts silently.
+   * Three hand-written approximations failed in a row: "not close enough",
+   * then "the card looks different". Approximating a design from memory does
+   * not converge, so the stylesheet is now VENDORED verbatim and the
+   * components use its actual class names.
+   *
+   * These tests pin that arrangement. The visual fidelity itself is
+   * guaranteed by using the same CSS, not by assertions about pixel values --
+   * which is the point: there is no longer a parallel set of rules here that
+   * could drift.
    */
-  const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
   const rows = readFileSync(
     new URL("../src/client/scratch-rows.tsx", import.meta.url),
     "utf8",
   );
+  const board = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+  const index = readFileSync(new URL("../src/client/index.ts", import.meta.url), "utf8");
+  const vendored = readFileSync(
+    new URL("../src/client/vendor/tool-render/tool-render.css", import.meta.url),
+    "utf8",
+  );
 
-  function rule(selector: string): string {
-    const at = css.indexOf(selector);
-    expect(at, selector).toBeGreaterThan(-1);
-    return css.slice(at, css.indexOf("}", at));
-  }
-
-  it("uses the HARNESS's design tokens, not aidos's board tokens", () => {
-    /*
-     * tool-render styles itself from --dsw-alias-*, the app's own design
-     * system. Those tokens are global to the page, so using them is matching
-     * the design system rather than depending on another plugin -- which is
-     * what #72 forbids. Board tokens would look aidos-ish beside an fs row.
-     */
-    expect(rule(".aidos-toolrow-title {")).toContain("--dsw-alias-label-secondary");
-    expect(rule(".aidos-toolrow-summary {")).toContain("--dsw-alias-label-tertiary");
-    expect(rule(".aidos-toolrow-code {")).toContain("--dsw-alias-markdown-code-block");
-  });
-
-  it("keeps a fallback on every token, so a missing one cannot blank a row", () => {
-    // A var() reference to an undeclared token renders as nothing, which is
-    // the silent-failure class this project keeps hitting.
-    for (const selector of [
-      ".aidos-toolrow-title {",
-      ".aidos-toolrow-summary {",
-      ".aidos-toolrow-leading {",
-      ".aidos-toolrow-code {",
+  it("uses tool-render's own class names", () => {
+    for (const cls of [
+      "tool-render-card",
+      "tool-render-row",
+      "tool-render-leading",
+      "tool-render-title",
+      "tool-render-sep",
+      "tool-render-summary",
+      "tool-render-body",
     ]) {
-      const body = rule(selector);
-      const uses = body.match(/var\(--dsw-alias-[a-z-]+/g) ?? [];
-      expect(uses.length, selector).toBeGreaterThan(0);
-      // Each --dsw-alias- reference carries a comma fallback.
-      expect(body.match(/var\(--dsw-alias-[a-z-]+,/g)?.length, selector).toBe(uses.length);
+      expect(rows, cls).toContain(cls);
     }
   });
 
-  it("is a bare row, not a bordered card", () => {
+  it("keeps NO parallel stylesheet of its own", () => {
     /*
-     * THE reason the first attempt read as a different widget. tool-render's
-     * row has no border and no background -- it is a 1.5rem line in the
-     * transcript, not a box sitting in it.
+     * The failure mode being removed. A second set of rules describing the
+     * same design drifts from it, and every drift is invisible until someone
+     * looks at both side by side -- which is exactly how three attempts
+     * shipped looking wrong.
      */
-    const line = rule(".aidos-toolrow-line {");
-    expect(line).toContain("height: 1.5rem");
-    expect(line).toContain("border: 0");
-    expect(line).toContain("background: none");
-    const card = rule(".aidos-toolrow {");
-    expect(card).not.toContain("border:");
-    expect(card).not.toContain("background:");
+    expect(board).not.toContain(".aidos-toolrow");
   });
 
-  it("carries the separator dot between the name and the argument", () => {
-    const sep = rule(".aidos-toolrow-sep {");
-    expect(sep).toContain("0.125rem");
-    expect(rows).toContain("aidos-toolrow-sep");
+  it("injects the vendored stylesheet", () => {
+    expect(index).toContain("vendor/tool-render/tool-render.css");
+    expect(index).toContain("aidos/tool-render.css");
   });
 
-  it("marks its state on the row, so error styling is data-driven", () => {
-    // tool-render keys its error and stopped styling off data-state rather
-    // than off class juggling; matching that keeps the two in step.
-    expect(rows).toContain("data-state={state}");
-    expect(css).toContain('.aidos-toolrow-line[data-state="error"]');
-    expect(css).toContain('.aidos-toolrow-line[data-state="stopped"]');
+  it("the vendored sheet actually defines the classes the rows use", () => {
+    // Guards the arrangement end to end: importing a sheet that does not
+    // style these rows would leave them unstyled and still pass the checks
+    // above.
+    for (const cls of [".tool-render-card", ".tool-render-row", ".tool-render-gutter"]) {
+      expect(vendored, cls).toContain(cls);
+    }
   });
 
-  it("enlarges the error dot and colours the title, as tool-render does", () => {
-    expect(rule('.aidos-toolrow-line[data-state="error"] .aidos-toolrow-leading {')).toContain(
-      "scale(1.3)",
-    );
-    expect(rule('.aidos-toolrow-line[data-state="error"] .aidos-toolrow-title {')).toContain(
-      "font-weight: 500",
-    );
+  it("renders a read as numbered, highlighted lines", () => {
+    // The user's remaining complaint: "it should do syntax highlighting".
+    expect(rows).toContain("tool-render-code-row");
+    expect(rows).toContain("tool-render-gutter");
+    expect(rows).toContain("tool-render-line-cell hljs");
+    expect(rows).toContain("highlightCode");
+  });
+
+  it("takes the line numbering from the VENDORED helpers", () => {
+    // Not a reimplementation: numbering and envelope-stripping are subtle
+    // and are exactly where a copy diverges.
+    expect(rows).toContain("numberedReadRows");
+    expect(rows).toContain("readStartLine");
+    expect(rows).toContain("vendor/tool-render/text");
+  });
+});
+
+describe("#82 syntax highlighting", () => {
+  it("maps extensions to languages exactly as tool-render does", () => {
+    expect(languageFor("a.ts")).toBe("typescript");
+    expect(languageFor("a.tsx")).toBe("typescript");
+    expect(languageFor("a.mjs")).toBe("javascript");
+    expect(languageFor("a.json")).toBe("json");
+    expect(languageFor("a.py")).toBe("python");
+    expect(languageFor("a.sh")).toBe("bash");
+    expect(languageFor("a.yml")).toBe("yaml");
+  });
+
+  it("returns null for an unknown or absent extension", () => {
+    expect(languageFor("a.unknownext")).toBeNull();
+    expect(languageFor("Makefile")).toBeNull();
+    expect(languageFor("")).toBeNull();
+  });
+
+  it("is case-insensitive on the extension", () => {
+    expect(languageFor("A.TS")).toBe("typescript");
+  });
+
+  it("actually highlights a known language", () => {
+    const html = highlightCode("const x = 1;", "typescript");
+    expect(html).toContain("hljs-");
+    expect(html).not.toBe("const x = 1;");
+  });
+
+  it("ESCAPES rather than passing raw text through when it cannot highlight", () => {
+    /*
+     * The security boundary, not a convenience. The result is injected with
+     * dangerouslySetInnerHTML, so returning raw input on failure would put
+     * file contents into the DOM unescaped -- and a scratch file can contain
+     * anything.
+     */
+    const nasty = '<img src=x onerror="alert(1)">';
+    const out = highlightCode(nasty, null);
+    expect(out).not.toContain("<img");
+    expect(out).toContain("&lt;img");
+  });
+
+  it("escapes when the language is unknown to highlight.js too", () => {
+    const out = highlightCode("<b>hi</b>", "not-a-language");
+    expect(out).toContain("&lt;b&gt;");
+  });
+
+  it("escapes every dangerous character", () => {
+    expect(escapeHtml('<>&"')).toBe("&lt;&gt;&amp;&quot;");
+  });
+
+  it("sizes the gutter to the widest line number", () => {
+    // Narrow files must not pay for a four-digit gutter, and a 1000-line
+    // file must not have its numbers clipped.
+    expect(gutterWidth([1, 2, 9])).toBe("3ch");
+    expect(gutterWidth([1, 250])).toBe("5ch");
+    expect(gutterWidth([null, null])).toBe("3ch");
   });
 });
