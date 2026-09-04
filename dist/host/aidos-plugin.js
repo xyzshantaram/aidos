@@ -27251,12 +27251,15 @@ var OwnerUnavailable = class extends Error {
     this.sessionId = sessionId;
   }
 };
+function _mdInline(text) {
+  return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
+}
 var DIGEST_TEXT_CAP = 160;
 function _ellipsize(text) {
   return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}\u2026` : text;
 }
 function _evidenceDigestSuffix(kind, payload) {
-  const ellipsize = _ellipsize;
+  const ellipsize = (text) => _mdInline(_ellipsize(text));
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
     return ` \u2014 "${ellipsize(payload.note.trim())}"`;
   }
@@ -28021,7 +28024,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     );
     this._queueInjection(
       agent.session,
-      `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ("${nomination.reason}") \u2014 do not re-propose it without new grounds`
+      `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ("${_mdInline(nomination.reason)}") \u2014 do not re-propose it without new grounds`
     );
     return { dismissed: args.nominationId };
   }
@@ -28228,8 +28231,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     try {
       const live = this.ctx.agents?.get?.(session.id);
       if (live === void 0) return;
-      const text = lines.length === 1 ? `aidos board update: ${lines[0]}` : `aidos board update (${lines.length} changes):
-- ${lines.join("\n- ")}`;
+      const text = lines.length === 1 ? `aidos board update: ${lines[0]}` : (
+        /*
+         * A BLANK LINE between the header and the list. A bullet list
+         * may interrupt a paragraph in CommonMark, so this mostly
+         * rendered -- but "mostly" depends on the renderer, and a lazy
+         * continuation can fold the first item back into the paragraph.
+         * One blank line makes it unambiguous everywhere.
+         */
+        `aidos board update (${lines.length} changes):
+
+- ${lines.join("\n- ")}`
+      );
       const message = createUserMessage({
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" }
@@ -28407,7 +28420,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${snapshot.title}) CREATED by ${actor}`
+        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) CREATED by ${actor}`
       );
     }
     return rowOf(snapshot);
@@ -28469,14 +28482,14 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
-          `Ticket #${ticketId} (${snapshot.title}) edited by ${actor}: ${changed.join(", ")}`
+          `Ticket #${ticketId} (${_mdInline(snapshot.title)}) edited by ${actor}: ${changed.join(", ")}`
         );
       }
     }
     if (actor !== "agent" && allowlist !== void 0) {
       this._queueInjection(
         agent.session,
-        `Allowlist updated for #${ticketId} (${snapshot.title}): ${allowlist.length} path(s)`
+        `Allowlist updated for #${ticketId} (${_mdInline(snapshot.title)}): ${allowlist.length} path(s)`
       );
     }
     return rowOf(snapshot);
@@ -28540,7 +28553,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
     this._queueInjection(
       agent.session,
-      `Ticket #${ticketId} (${title}) evidence DETACHED by user: ${args.rowKind}`
+      `Ticket #${ticketId} (${_mdInline(title)}) evidence DETACHED by user: ${args.rowKind}`
     );
     return { ticketId, removed: 1 };
   }
@@ -28686,7 +28699,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${title}) evidence ${args.rowKind} ${what} by user`
+        `Ticket #${ticketId} (${_mdInline(title)}) evidence ${args.rowKind} ${what} by user`
       );
     }
     return { ticketId, linked: true };
@@ -28739,7 +28752,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${ticket.title}) moved ${fromState} -> ${toState} by ${actor}`
+        `Ticket #${ticketId} (${_mdInline(ticket.title)}) moved ${fromState} -> ${toState} by ${actor}`
       );
     }
     return { ticketId, fromState, toState };
@@ -28770,7 +28783,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${snapshot.title}) comment by ${actor}: "${_ellipsize(args.text.trim())}"`
+        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) comment by ${actor}: "${_mdInline(_ellipsize(args.text.trim()))}"`
       );
     }
     return { ticketId, text: args.text, author: actor, at };
@@ -28879,7 +28892,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload)
+        `Ticket #${ticketId} (${_mdInline(title)}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload)
       );
     }
     return row.payload;

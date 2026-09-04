@@ -915,6 +915,20 @@ function registerRequestAllowlist(ctx: Context): void {
             ticketId: { type: "integer", required: true },
             requestId: { type: "string", required: true },
             proposed: { type: "array", items: { type: "string" }, required: true },
+            /*
+             * #104 follow-up: the paths that do not exist yet and will be
+             * CREATED. The service started returning this and the schema did
+             * not declare it -- and with additionalProperties: false, that
+             * did not degrade gracefully, it made request_allowlist THROW.
+             * The agent could not request an allowlist at all, which is the
+             * one call it needs to be able to write anything.
+             *
+             * Missed because #104's review checked the Remote and the
+             * approval card; the TOOL's output schema is a third declaration
+             * of the same shape and nobody looked at it. Caught only by
+             * calling the tool live after a restart.
+             */
+            created: { type: "array", items: { type: "string" }, required: true },
           },
         },
         render: renderJson,

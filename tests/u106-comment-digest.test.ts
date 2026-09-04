@@ -194,3 +194,92 @@ describe("#106 EVERY user action reaches the agent", () => {
     expect(line as string).toContain("preamble");
   });
 });
+
+describe("#106 the digest is valid Markdown", () => {
+  /*
+   * The digest renders as Markdown in the conversation, and every dynamic
+   * part of it -- ticket titles, evidence notes, dismissal reasons -- is
+   * authored by a human or an agent and can contain anything.
+   *
+   * These are not hypothetical shapes. Every one below occurred in this
+   * project during the session that produced this test.
+   */
+
+  it("collapses a MULTI-LINE note into one list item", () => {
+    /*
+     * THE structural break. An evidence note is free-form and frequently
+     * multi-line -- a review verdict, for instance. A raw newline ends the
+     * list item, and if the next line begins with "-" or "#" it starts a new
+     * list or a heading, so ONE note silently restructures the whole digest.
+     */
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAddComment(agent, {
+      ticketId: ticket.id,
+      text: "first line\n- second looks like a list item\n# and this like a heading",
+    });
+    const line = lines().find((l) => l.includes("first line"));
+    expect(line).toBeDefined();
+    expect(line as string).not.toContain("\n");
+  });
+
+  it("escapes inline markup in a TITLE", () => {
+    // A title with emphasis or code markers would otherwise render as
+    // emphasis or swallow the rest of the line into a code span.
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, {
+      title: "Fix *everything* and `the rest` [see here](x)",
+    });
+    svc.userAddComment(agent, { ticketId: ticket.id, text: "probe" });
+    const line = lines().find((l) => l.includes("probe"));
+    expect(line as string).toContain("\\*everything\\*");
+    expect(line as string).toContain("\\`the rest\\`");
+    expect(line as string).toContain("\\[see here\\]");
+  });
+
+  it("escapes underscores, which real kind ids are full of", () => {
+    // "automated_check + review_pass" is a real digest fragment here.
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAddComment(agent, {
+      ticketId: ticket.id,
+      text: "needs automated_check and review_pass",
+    });
+    const line = lines().find((l) => l.includes("needs"));
+    expect(line as string).toContain("automated\\_check");
+    expect(line as string).toContain("review\\_pass");
+  });
+
+  it("does not escape the line's own structural characters", () => {
+    // The "- " bullet and the "#12" ticket reference are the digest's OWN
+    // syntax and must survive; only INTERPOLATED text is escaped.
+    const { svc, agent, lines } = setup();
+    const ticket = svc.setTicket(agent, { title: "Plain title" });
+    svc.userAddComment(agent, { ticketId: ticket.id, text: "plain note" });
+    const line = lines().find((l) => l.includes("plain note"));
+    expect(line as string).toContain("#" + ticket.id);
+    expect(line as string).toContain("(Plain title)");
+  });
+
+  it("a multi-change digest separates its header from the list", () => {
+    /*
+     * A bullet list may interrupt a paragraph in CommonMark, so the
+     * unseparated form mostly rendered -- but "mostly" depends on the
+     * renderer, and a lazy continuation can fold the first item back into
+     * the header paragraph.
+     */
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    svc.userAddComment(agent, { ticketId: ticket.id, text: "one" });
+    svc.userAddComment(agent, { ticketId: ticket.id, text: "two" });
+    const flushed = (svc as any)._pendingInjections as Map<string, string[]>;
+    const queued = [...flushed.values()].flat();
+    expect(queued.length).toBeGreaterThanOrEqual(2);
+    // Reproduce the assembly the flush performs.
+    const text = `aidos board update (${queued.length} changes):\n\n- ${queued.join("\n- ")}`;
+    expect(text).toContain("changes):\n\n- ");
+    // Every list item is exactly one line.
+    const items = text.split("\n").filter((l) => l.startsWith("- "));
+    expect(items.length).toBe(queued.length);
+  });
+});

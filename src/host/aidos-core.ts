@@ -592,6 +592,33 @@ export interface TicketSearchResult {
  * layer calls the agent-actor methods directly.
  */
 /**
+ * Make one interpolated fragment safe to drop into a Markdown list item.
+ *
+ * The digest is rendered as Markdown, and every dynamic part of it -- ticket
+ * TITLES, evidence NOTES, path lists -- is authored by a human or by an
+ * agent and can contain anything. Two things actually break:
+ *
+ *  1. NEWLINES. An evidence note is free-form and frequently multi-line (a
+ *     review verdict, for instance). A raw newline ends the list item, and
+ *     if the next line happens to begin with "-" or "#" it starts a new list
+ *     or a heading -- so one note silently restructures the whole digest.
+ *  2. INLINE MARKUP. A title containing *, _, `, [ or ] renders as emphasis,
+ *     code or a link fragment. "automated_check + review_pass" is a real
+ *     example from this project, and a stray backtick swallows the rest of
+ *     the line into a code span.
+ *
+ * Whitespace is collapsed first, then the inline specials are escaped. `#`
+ * and `-` are NOT escaped: they are only structural at the START of a line,
+ * and after the collapse nothing interpolated can be at the start of one.
+ */
+function _mdInline(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/([\\`*_[\]<>])/g, "\\$1");
+}
+
+/**
  * The digest suffix for one evidence row (#63 follow-up): surface the
  * payload's HUMAN-READABLE content in the injection line, not just the kind.
  * Review notes and verification notes ride a `note`; allowlists list their
@@ -614,7 +641,10 @@ function _ellipsize(text: string): string {
 }
 
 function _evidenceDigestSuffix(kind: string, payload: Record<string, unknown>): string {
-  const ellipsize = _ellipsize;
+  // #106 follow-up: the suffix carries free-form note/verdict text straight
+  // into a Markdown list item, so it needs the same inline escaping and
+  // newline collapse the rest of the line gets.
+  const ellipsize = (text: string): string => _mdInline(_ellipsize(text));
   if (typeof payload.note === "string" && payload.note.trim() !== "") {
     return ` — "${ellipsize(payload.note.trim())}"`;
   }
@@ -1746,7 +1776,7 @@ registerAidosSessionEventTypes(ctx);
     this._queueInjection(
       agent.session,
       `The human dismissed your suggestion to ${nomination.actionId} #${nomination.ticketId} ` +
-        `("${nomination.reason}") — do not re-propose it without new grounds`,
+        `("${_mdInline(nomination.reason)}") — do not re-propose it without new grounds`,
     );
     return { dismissed: args.nominationId };
   }
@@ -2093,8 +2123,14 @@ registerAidosSessionEventTypes(ctx);
       const text =
         lines.length === 1
           ? `aidos board update: ${lines[0]}`
-          : `aidos board update (${lines.length} changes):
-- ${lines.join("\n- ")}`;
+          : /*
+             * A BLANK LINE between the header and the list. A bullet list
+             * may interrupt a paragraph in CommonMark, so this mostly
+             * rendered -- but "mostly" depends on the renderer, and a lazy
+             * continuation can fold the first item back into the paragraph.
+             * One blank line makes it unambiguous everywhere.
+             */
+            `aidos board update (${lines.length} changes):\n\n- ${lines.join("\n- ")}`;
       const message = createUserMessage({
         content: [{ type: "text", text }],
         source: { kind: "plugin", plugin: "aidos", form: "notice", summary: "board update digest" },
@@ -2313,7 +2349,7 @@ registerAidosSessionEventTypes(ctx);
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${snapshot.title}) CREATED by ${actor}`,
+        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) CREATED by ${actor}`,
       );
     }
     return rowOf(snapshot);
@@ -2386,14 +2422,14 @@ registerAidosSessionEventTypes(ctx);
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
-          `Ticket #${ticketId} (${snapshot.title}) edited by ${actor}: ${changed.join(", ")}`,
+          `Ticket #${ticketId} (${_mdInline(snapshot.title)}) edited by ${actor}: ${changed.join(", ")}`,
         );
       }
     }
     if (actor !== "agent" && allowlist !== undefined) {
       this._queueInjection(
         agent.session,
-        `Allowlist updated for #${ticketId} (${snapshot.title}): ${allowlist.length} path(s)`,
+        `Allowlist updated for #${ticketId} (${_mdInline(snapshot.title)}): ${allowlist.length} path(s)`,
       );
     }
     return rowOf(snapshot);
@@ -2477,7 +2513,7 @@ registerAidosSessionEventTypes(ctx);
     const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
     this._queueInjection(
       agent.session,
-      `Ticket #${ticketId} (${title}) evidence DETACHED by user: ${args.rowKind}`,
+      `Ticket #${ticketId} (${_mdInline(title)}) evidence DETACHED by user: ${args.rowKind}`,
     );
     return { ticketId, removed: 1 };
   }
@@ -2658,7 +2694,7 @@ registerAidosSessionEventTypes(ctx);
       const what = args.criterion === null ? "unlinked from its criterion" : `linked to a criterion`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${title}) evidence ${args.rowKind} ${what} by user`,
+        `Ticket #${ticketId} (${_mdInline(title)}) evidence ${args.rowKind} ${what} by user`,
       );
     }
     return { ticketId, linked: true };
@@ -2723,7 +2759,7 @@ registerAidosSessionEventTypes(ctx);
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${ticket.title}) moved ${fromState} -> ${toState} by ${actor}`,
+        `Ticket #${ticketId} (${_mdInline(ticket.title)}) moved ${fromState} -> ${toState} by ${actor}`,
       );
     }
     return { ticketId, fromState, toState };
@@ -2772,7 +2808,7 @@ registerAidosSessionEventTypes(ctx);
     if (actor !== "agent") {
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${snapshot.title}) comment by ${actor}: "${_ellipsize(args.text.trim())}"`,
+        `Ticket #${ticketId} (${_mdInline(snapshot.title)}) comment by ${actor}: "${_mdInline(_ellipsize(args.text.trim()))}"`,
       );
     }
     return { ticketId, text: args.text, author: actor, at };
@@ -2903,7 +2939,7 @@ registerAidosSessionEventTypes(ctx);
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `Ticket #${ticketId} (${title}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload),
+        `Ticket #${ticketId} (${_mdInline(title)}) evidence attached: ${kind} by ${actor}` + _evidenceDigestSuffix(kind, payload),
       );
     }
     return row.payload;
