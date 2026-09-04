@@ -678,7 +678,7 @@ describe("#93 the gate chip matches the board", () => {
    * two faces depending on the surface.
    */
   it("uses the key icon, not the word", () => {
-    expect(strip).toContain("<KeyIcon />");
+    expect(strip).toContain("<KeyholeIcon />");
     expect(strip).not.toContain('<span className="aidos-chip-key">Gate</span>');
   });
 

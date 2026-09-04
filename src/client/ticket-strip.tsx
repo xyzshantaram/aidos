@@ -27,7 +27,7 @@ import {
   stateLabel,
   ticketChipLabel,
 } from "./board-logic";
-import { KeyIcon, PopOutIcon } from "./icons";
+import { KeyholeIcon, PopOutIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 
@@ -179,7 +179,7 @@ export function TicketStrip(props: TicketStripProps) {
                   data-dsh-tip=""
                 >
                   <span className="aidos-chip-key">
-                    <KeyIcon />
+                    <KeyholeIcon />
                   </span>
                   <span className="aidos-chip-value">{fraction}</span>
                 </span>

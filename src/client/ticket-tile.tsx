@@ -18,7 +18,7 @@ import {
   ticketChipLabel,
 } from "./board-logic";
 import { EvidenceTags } from "./evidence-tags";
-import { AlertCircleIcon, CompassIcon, ForkIcon, KeyIcon } from "./icons";
+import { AlertCircleIcon, CompassIcon, ForkIcon, KeyholeIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
@@ -150,7 +150,7 @@ export function TicketTile(props: TicketTileProps) {
           data-dsh-tip=""
         >
           <span className="aidos-chip-key">
-            <KeyIcon />
+            <KeyholeIcon />
           </span>
           <span className="aidos-chip-value">
             {formatGateFraction(ticket.gatePresent, ticket.gateTotal, hasCriteria(ticket))}

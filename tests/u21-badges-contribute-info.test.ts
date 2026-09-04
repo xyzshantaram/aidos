@@ -253,7 +253,7 @@ describe("#21 the tile wiring and its tooltips", () => {
   it("uses real icons, not font glyphs", () => {
     // Glyph availability is a gamble (a missing one renders as tofu) and a
     // font decides its stroke weight, which is what made them "kinda thin".
-    expect(tile).toContain("KeyIcon");
+    expect(tile).toContain("KeyholeIcon");
     expect(tile).toContain("ForkIcon");
     expect(tile).toContain("CompassIcon");
     for (const glyph of ["\u25e7", "\u25d1", "\u21b3"]) {
@@ -267,8 +267,8 @@ describe("#21 the tile wiring and its tooltips", () => {
     // the icons alphabetically and would make this assertion meaningless.
     const chips = tile.slice(tile.indexOf('className="aidos-tile-chips"'));
     expect(chips.indexOf("CompassIcon")).toBeGreaterThan(chips.indexOf("ForkIcon"));
-    expect(chips.indexOf("CompassIcon")).toBeGreaterThan(chips.indexOf("KeyIcon"));
-    expect(chips.indexOf("ForkIcon")).toBeGreaterThan(chips.indexOf("KeyIcon"));
+    expect(chips.indexOf("CompassIcon")).toBeGreaterThan(chips.indexOf("KeyholeIcon"));
+    expect(chips.indexOf("ForkIcon")).toBeGreaterThan(chips.indexOf("KeyholeIcon"));
   });
 });
 

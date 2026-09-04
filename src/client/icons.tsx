@@ -78,19 +78,20 @@ export function WarningIcon() {
 }
 
 /**
- * The GATE icon: a key (#21, user's choice).
+ * The GATE icon: a keyhole (#21, user's choice, revised to keyhole).
  *
- * The gate is the lock on a transition and evidence is what opens it, so a
- * key says "how much of what unlocks this is present". It replaces the word
- * "Gate", which was four characters of furniture repeated on every tile.
+ * The gate is the lock on a transition and evidence is what opens it. The
+ * first glyph was a key; the user read the two shapes as different claims --
+ * a key is what you CARRY, a keyhole is the lock itself, and the chip
+ * reports the state of the lock on this ticket, not the state of anyone's
+ * keyring. It replaces the word "Gate", which was four characters of
+ * furniture repeated on every tile.
  */
-export function KeyIcon() {
+export function KeyholeIcon() {
   return (
     <svg {...iconProps()}>
-      <circle cx="4.2" cy="4.2" r="2.5" />
-      <path d="M6 6l4.5 4.5" />
-      <path d="M8.6 8.6l-1 1" />
-      <path d="M9.7 9.7l-1 1" />
+      <circle cx="6" cy="4.1" r="2.4" />
+      <path d="M5.1 6.3L4.3 9.9h3.4L6.9 6.3" />
     </svg>
   );
 }
@@ -120,7 +121,7 @@ export function ForkIcon() {
  *
  * Confidence is ADVISORY — it never unlocks anything — and a compass reads
  * as a bearing rather than a gate, which is exactly the distinction the
- * tooltip then spells out. A key and a compass side by side say "one of
+ * tooltip then spells out. A keyhole and a compass side by side say "one of
  * these controls something and the other does not".
  */
 export function CompassIcon() {
