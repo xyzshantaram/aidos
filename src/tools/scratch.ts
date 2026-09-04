@@ -150,15 +150,44 @@ async function editWithoutBackend(
   const target = await fs.resolve(absPath, { signal: exec.signal });
   const raw = await fs.readText(target, exec.signal);
   /*
-   * LINE ENDINGS, as the builtin handles them: `readForEdit` normalises to
-   * LF for matching and the write restores the file's own ending. Matching
-   * against the raw text instead meant an `old_string` spanning lines never
-   * matched in a CRLF file, and an inserted line arrived with a bare LF --
-   * leaving MIXED endings in a file that had been consistent.
+   * LINE ENDINGS, mirroring the builtin EXACTLY rather than approximately.
+   *
+   * The builtin normalises to LF for matching and restores the file's own
+   * ending on write. A first attempt at this reproduced the shape and got
+   * all three details wrong, each one silently writing bytes the caller
+   * never asked for -- the same defect class as the `$`-pattern bug this
+   * fallback was already fixed for once:
+   *
+   *  1. DETECTION was `raw.includes("\r\n")`, so ONE CRLF line in a
+   *     mostly-LF file rewrote every other line's ending. The builtin takes
+   *     a MAJORITY VOTE over the first 4096 bytes.
+   *  2. RESTORE was `.replace(/\n/g, "\r\n")` on text that could still
+   *     contain CRLF (from `new_string`), doubling it to `\r\r\n`. The
+   *     builtin re-normalises FIRST, and its own source comment says that
+   *     is precisely what the re-normalisation is for.
+   *  3. `old_string` and `new_string` were NOT normalised, so an
+   *     `old_string` spanning lines still failed to match in a CRLF file --
+   *     the very bug the change claimed to fix, left in place for any
+   *     caller passing back bytes it had just read.
+   *
+   * These are the builtin's helpers, transcribed, not paraphrased.
    */
-  const hadCrlf = raw.includes("\r\n");
-  const before = hadCrlf ? raw.replace(/\r\n/g, "\n") : raw;
-  const occurrences = before.split(oldString).length - 1;
+  const normalizeLineEndings = (content: string): string => content.replaceAll("\r\n", "\n");
+  const detectLineEndings = (sample: string): "CRLF" | "LF" => {
+    const head = sample.slice(0, 4096);
+    const crlf = head.split("\r\n").length - 1;
+    return crlf > head.split("\n").length - 1 - crlf ? "CRLF" : "LF";
+  };
+  const restoreLineEndings = (content: string, style: "CRLF" | "LF"): string =>
+    style === "LF" ? content : normalizeLineEndings(content).split("\n").join("\r\n");
+
+  const lineEndings = detectLineEndings(raw);
+  const before = normalizeLineEndings(raw);
+  // Normalised the same way the builtin normalises them, so a caller may
+  // pass back bytes it read from a CRLF file and still match.
+  const oldNorm = normalizeLineEndings(oldString);
+  const newNorm = normalizeLineEndings(newString);
+  const occurrences = before.split(oldNorm).length - 1;
   if (occurrences === 0) {
     throw new HarnessError(
       JSON.stringify({
@@ -198,8 +227,8 @@ async function editWithoutBackend(
    * to reproduce it badly, so it is gone. The count guard above has already
    * established that a single-match edit has exactly one match.
    */
-  const spliced = before.split(oldString).join(newString);
-  const after = hadCrlf ? spliced.replace(/\n/g, "\r\n") : spliced;
+  const spliced = before.split(oldNorm).join(newNorm);
+  const after = restoreLineEndings(spliced, lineEndings);
   await fs.writeText(target, after, undefined, exec.signal);
   ctx.logger?.info?.(
     `aidos: scratch_edit applied ${occurrences} replacement(s) to ${absPath} with no edit backend in scope`,

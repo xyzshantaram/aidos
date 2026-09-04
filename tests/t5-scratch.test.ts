@@ -305,7 +305,84 @@ describe("the scratch tools", () => {
     const read = await harness.runTool("scratch_read", { path: "crlf.txt" });
     const content = (read.value as { content: string }).content;
     expect(content).toBe("alpha\r\nbeta2\r\ngamma\r\n");
-    expect(/[^\r]\n/.test(content), "no bare LF may survive in a CRLF file").toBe(false);
+    /*
+     * NOT `/[^\r]\n/`. That guard was here, and it CANNOT SEE the defect it
+     * was written to catch: inside a doubled `\r\r\n` the `\n` is still
+     * preceded by a `\r`, so it passed on genuinely corrupted output. A
+     * review proved it by handing it the corrupt bytes.
+     */
+    expect(content).not.toContain("\r\r");
+  });
+
+  /*
+   * The three cases below come from a review that measured this fallback
+   * against the BUILTIN and found it diverging in three separate ways, each
+   * writing bytes the caller never asked for. The first CRLF attempt
+   * reproduced the builtin's SHAPE and got every detail wrong, so these
+   * assert against the builtin's actual behaviour rather than the intent.
+   */
+
+  it("a new_string containing CRLF is not doubled to CR CR LF", async () => {
+    // The builtin re-normalises before restoring, and its own source comment
+    // says that is exactly what the re-normalisation is for. Restoring with a
+    // bare `.replace(/\n/g, "\r\n")` doubles anything already CRLF.
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "d.txt", content: "alpha\r\nbeta\r\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "d.txt",
+      old_string: "beta",
+      // The caller passes CRLF back, as it would after reading the file.
+      new_string: "b1\r\nb2",
+    });
+    expect(out.isError, JSON.stringify(out.error)).toBe(false);
+    const read = await harness.runTool("scratch_read", { path: "d.txt" });
+    const content = (read.value as { content: string }).content;
+    expect(content).not.toContain("\r\r");
+    expect(content).toBe("alpha\r\nb1\r\nb2\r\n");
+  });
+
+  it("an old_string containing CRLF still matches", async () => {
+    // The bug the CRLF work claimed to fix, left in place for the caller most
+    // likely to hit it: one passing back bytes it had just read.
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "m.txt", content: "alpha\r\nbeta\r\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "m.txt",
+      old_string: "alpha\r\nbeta",
+      new_string: "one\r\ntwo",
+    });
+    expect(out.isError, JSON.stringify(out.error)).toBe(false);
+    const read = await harness.runTool("scratch_read", { path: "m.txt" });
+    expect((read.value as { content: string }).content).toBe("one\r\ntwo\r\n");
+  });
+
+  it("a MIXED file settles on the MAJORITY ending, not on any-CRLF", async () => {
+    /*
+     * Detection by `raw.includes("\r\n")` made ONE CRLF line rewrite every
+     * other line in a mostly-LF file: this input became
+     * "crlf\r\nlf\r\nMORE\r\n". The builtin takes a majority vote over the
+     * first 4096 bytes instead, and this file is majority LF.
+     *
+     * NOTE what the correct answer is, because I first asserted the wrong
+     * one here and the code was right: the builtin normalises the WHOLE file
+     * to its majority style, so the lone CRLF is converted too. It does not
+     * preserve the odd line. A mixed file is made consistent either way --
+     * the fix is about WHICH way, and picking the majority changes one line
+     * rather than all the others.
+     */
+    const harness = scratchHarness();
+    await harness.runTool("scratch_write", { path: "mixed.txt", content: "crlf\r\nlf\nmore\n" });
+    const out = await harness.runTool("scratch_edit", {
+      path: "mixed.txt",
+      old_string: "more",
+      new_string: "MORE",
+    });
+    expect(out.isError, JSON.stringify(out.error)).toBe(false);
+    const read = await harness.runTool("scratch_read", { path: "mixed.txt" });
+    const content = (read.value as { content: string }).content;
+    expect(content).toBe("crlf\nlf\nMORE\n");
+    // The specific regression: any-CRLF detection produced all-CRLF here.
+    expect(content).not.toContain("\r");
   });
 
   it("the no-backend fallback refuses a no-match instead of writing nothing", async () => {

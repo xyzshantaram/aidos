@@ -16,11 +16,32 @@
  * pin the BEHAVIOUR the comment describes, with a real symlink on a real
  * filesystem.
  *
- * That makes them load-bearing in an unusual direction. They FAIL if someone
- * later makes the boundary resolve real paths. That is deliberate: the
- * failure lands them in this file, which sends them to `isUnder`'s comment
- * and to the two conditions that would justify the change. Changing the
- * behaviour is allowed. Changing it silently is not.
+ * That makes them load-bearing in an unusual direction: they are a TRIPWIRE
+ * for a later change to real-path resolution. The failure lands the reader
+ * in this file, which sends them to `isUnder`'s comment and to the two
+ * conditions that would justify the change. Changing the behaviour is
+ * allowed; changing it silently is not.
+ *
+ * EXACTLY HOW FAR THE TRIPWIRE REACHES, stated precisely because the first
+ * version of this header overclaimed and a review caught it. The original
+ * text said the tests "FAIL if someone later makes the boundary resolve real
+ * paths", and the commit called that mutation-proven. Measured, that is only
+ * true of an ASYMMETRIC change:
+ *
+ *   realpath(root) only          -> 1 failed  (tripwire fires)
+ *   realpath(candidate) only     -> 1 failed  (tripwire fires)
+ *   realpath(BOTH)               -> 3 passed  (tripwire SILENT)
+ *
+ * Both sides resolved is the natural way to write the fix, and containment
+ * survives it because the allowlisted root IS the symlink, so resolving both
+ * ends preserves the relationship. The author's own mutation appeared to
+ * fire only because `realpathSync` throws on the not-yet-existing target
+ * file, silently making a symmetric-looking edit asymmetric.
+ *
+ * So the write-time tests below are a partial tripwire, not a guarantee. The
+ * proposal-time test at the end is what covers the checkpoint where a real
+ * hardening fix would actually land -- a reviewer demonstrated that adding
+ * realpath there leaves every write-time test green.
  */
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, symlinkSync, realpathSync } from "node:fs";
@@ -108,5 +129,42 @@ describe("#110 the write boundary is lexical only", () => {
       join(ws, "escape", "..", "..", "elsewhere.txt"),
     );
     expect(reason).toMatch(/allowlist/);
+  });
+
+  it("ACCEPTS an escaping symlink at PROPOSAL time too, not only at write time", () => {
+    /*
+     * The gap a review found in the first version of this file: every test
+     * above drives the WRITE boundary, seeding the allowlist directly. But
+     * the comment on `isUnder` claims all THREE checkpoints -- proposal,
+     * approve-time re-validation, and write time -- apply the same lexical
+     * rule, and a real hardening fix would most naturally land at proposal
+     * time, where refusing the entry stops the setup from existing at all.
+     *
+     * The reviewer demonstrated that adding realpath there leaves every
+     * write-time test green. So without this case, the "changing it silently
+     * is not allowed" promise had a hole exactly where the change would go.
+     */
+    const { harness, agent, ws } = workspaceWithEscapingLink();
+    const svc = (harness as unknown as { service: any }).service;
+
+    const ticket = svc.setTicket(agent, { title: "#110 proposal probe" });
+    svc.userAttachEvidence(agent, {
+      ticketId: ticket.id,
+      kind: "builtin:user_signoff",
+      payload: {},
+    });
+    svc.userMoveTicket(agent, { ticketId: ticket.id, to: "in_progress" });
+
+    // The link genuinely leaves the workspace, asserted so this cannot
+    // degrade into proposing an ordinary directory.
+    expect(realpathSync(join(ws, "escape")).startsWith(ws)).toBe(false);
+
+    // Proposal accepts it. That is the documented behaviour, and the reason
+    // the write-time boundary is asked to allow it later.
+    const proposed = svc.requestAllowlist(agent, {
+      ticketId: ticket.id,
+      paths: ["escape"],
+    }) as { proposed: string[] };
+    expect(proposed.proposed).toContain("escape");
   });
 });

@@ -14,15 +14,19 @@
 
 declare module "fs" {
   export function readFileSync(path: string, encoding: string): string;
-  export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
+  /** #110: tests resolve tmpdir, which is behind a link on some platforms. */
+  export function realpathSync(path: string): string;
   /** #101: link node_modules into a fresh worktree, which has none. */
   export function symlinkSync(target: string, path: string, type?: string): void;
 }
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
-  export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
+  /** #110: tests resolve tmpdir, which is behind a link on some platforms. */
+  export function realpathSync(path: string): string;
   /** #101: link node_modules into a fresh worktree, which has none. */
   export function symlinkSync(target: string, path: string, type?: string): void;
 }
