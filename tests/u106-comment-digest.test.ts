@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 
 import { createHarness, asContext } from "./b1-harness";
 import { apply } from "../src/tools/aidos-tools";
+import { DIGEST_TEXT_CAP } from "../src/host/aidos-core";
 
 function setup() {
   const harness = createHarness();
@@ -62,12 +63,19 @@ describe("#106 a human comment reaches the agent", () => {
      */
     const { svc, agent, lines } = setup();
     const ticket = svc.setTicket(agent, { title: "Probe" });
-    svc.userAddComment(agent, { ticketId: ticket.id, text: "y".repeat(400) });
+    /*
+     * Derived from the cap rather than hardcoded. This was "y".repeat(400),
+     * which stopped exercising the cap the moment it rose to 1000 -- the
+     * test kept passing for the wrong reason, because its input no longer
+     * reached the branch it exists to test.
+     */
+    const overCap = "y".repeat(DIGEST_TEXT_CAP + 100);
+    svc.userAddComment(agent, { ticketId: ticket.id, text: overCap });
     const long = lines().find((l) => l.includes("yyy"));
     expect(long).toBeDefined();
     expect((long as string).endsWith('…"')).toBe(true);
     // And it is genuinely shortened, not merely marked.
-    expect((long as string).length).toBeLessThan(400);
+    expect((long as string).length).toBeLessThan(overCap.length);
   });
 });
 

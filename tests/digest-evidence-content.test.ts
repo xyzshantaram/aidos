@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { createHarness, asContext } from "./b1-harness";
 import { apply } from "../src/tools/aidos-tools";
+import { DIGEST_TEXT_CAP } from "../src/host/aidos-core";
 
 describe("the board-update digest carries evidence content", () => {
   it("a review note's text rides the injection line, capped", async () => {
@@ -31,7 +32,11 @@ describe("the board-update digest carries evidence content", () => {
     svc.userAttachEvidence(agent, {
       ticketId: ticket.id,
       kind: "builtin:review_note",
-      payload: { note: "x".repeat(400) },
+      // Derived from the cap, not hardcoded: this was "x".repeat(400) and
+      // silently stopped exercising the cap the moment it was raised to
+      // 1000 -- a test passing because its input no longer reaches the
+      // branch it exists to test.
+      payload: { note: "x".repeat(DIGEST_TEXT_CAP + 100) },
     });
     const lines2 = [...pending.values()].flat();
     const long = lines2.find((line) => line.includes("xxx"));

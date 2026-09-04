@@ -2438,6 +2438,19 @@
   grid-template-columns: auto var(--queue-action-w) var(--queue-dismiss-w);
   gap: 6px;
   align-items: center;
+  /*
+   * Right alignment, stated EXPLICITLY rather than inherited.
+   *
+   * The base .aidos-ticket-strip-actions rule sets `margin-left: auto`, and
+   * relying on that survived the flex layout but not the grid one: with
+   * fixed columns the block's width stops tracking its contents, so whether
+   * it still hugs the right edge depends on rules declared elsewhere. The
+   * user reported exactly that -- "on a grid but they have lost the right
+   * alignment". A layout's own alignment belongs in its own rule.
+   */
+  margin-left: auto;
+  justify-content: end;
+  justify-items: end;
 }
 
 .aidos-queue {
@@ -2448,6 +2461,8 @@
 }
 
 .aidos-queue .aidos-ticket-strip-actions .aidos-btn {
+  /* Full-width WITHIN its column, so every row's button is the same size --
+     the column, not the label, decides the width. */
   width: 100%;
   justify-content: center;
   /* One height for every button, so the column reads as a column. */

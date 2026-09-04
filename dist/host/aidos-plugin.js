@@ -27254,7 +27254,7 @@ var OwnerUnavailable = class extends Error {
 function _mdInline(text) {
   return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
 }
-var DIGEST_TEXT_CAP = 160;
+var DIGEST_TEXT_CAP = 1e3;
 function _ellipsize(text) {
   return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}\u2026` : text;
 }

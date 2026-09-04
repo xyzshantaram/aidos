@@ -37,7 +37,7 @@ import { asBoardKey, fullTicketId } from "./board-logic";
 import type { BoardKey } from "./board-logic";
 import type { RunOutcome } from "./approval-runner";
 import { activeTicketRow } from "./active-ticket";
-import { logDebug } from "./log";
+import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
 import { getMerge, getPulledVersion, isMergePulling, setMerge, setMergePulling, setPulledVersion } from "./view-state";
@@ -231,12 +231,34 @@ export function LocalTicketView(props: LocalTicketViewProps) {
     logDebug("board view mounted");
   }, []);
 
+  /*
+   * #100 INSTRUMENTATION. `key={retryNonce}` REMOUNTS ProjectionReader when
+   * the nonce changes -- destroying every useState and useRef inside it,
+   * including `selectedKey` and the held-ticket ref. No amount of care in
+   * the selection resolver survives that: the selection is simply gone.
+   *
+   * This is the leading suspect for the bug persisting after the resolver
+   * was made to hold unconditionally. If a remount is what ejects the
+   * reader, we will see "REMOUNT" in the log at the moment it happens.
+   */
+  react.useEffect(
+    function () {
+      if (retryNonce > 0) {
+        logWarn(
+          `#100 REMOUNT: retryNonce -> ${retryNonce}; ProjectionReader state (selection included) was destroyed`,
+        );
+      }
+    },
+    [retryNonce],
+  );
+
   return (
     <ProjectionReader
       key={retryNonce}
       sessionId={props.sessionId}
       useProjection={props.useProjection}
       onRetry={() => {
+        logWarn("#100 onRetry called -> forcing a remount");
         setRetryNonce((n) => n + 1);
       }}
     />
@@ -538,11 +560,29 @@ function ProjectionReader(props: ProjectionReaderProps) {
     [loaded],
   );
 
-  // Strip a leftover ticket param on unmount so it cannot leak to the next
-  // session or tab.
+  /*
+   * Strip a leftover ticket param on unmount so it cannot leak to the next
+   * session or tab.
+   *
+   * #100 INSTRUMENTATION, and this is a strong suspect in its own right.
+   * ProjectionReader is keyed on retryNonce, so ANY remount unmounts this
+   * component -- and the cleanup then wipes `?ticket=N` from the URL. The
+   * fresh mount's deep-link effect therefore finds nothing to restore, and
+   * the reader lands on the grid with no trace of what they were reading.
+   *
+   * That is the exact shape of the reported bug, and no amount of care in
+   * the selection resolver can survive it: the state is destroyed AND the
+   * only thing that could rebuild it is erased on the way out.
+   */
   react.useEffect(function () {
+    logDebug("#100 ProjectionReader MOUNTED");
     return function () {
-      if (new URL(window.location.href).searchParams.has("ticket")) setTicketParam(null);
+      const had = new URL(window.location.href).searchParams.has("ticket");
+      logWarn(
+        `#100 ProjectionReader UNMOUNTING; ticket param present=${had}` +
+          (had ? " -> STRIPPING IT (the deep link that could restore the selection)" : ""),
+      );
+      if (had) setTicketParam(null);
     };
   }, []);
 
@@ -593,15 +633,32 @@ function ProjectionReader(props: ProjectionReaderProps) {
 
   function selectTicket(key: BoardKey) {
     if (selectedKey === key) {
+      // #100 instrumentation: selecting the OPEN ticket toggles it shut. If
+      // anything re-fires selection with the current key (a re-render that
+      // re-invokes a handler, a duplicate click), this closes the panel and
+      // looks exactly like being "booted out".
+      logWarn(`#100 selectTicket(${key}) matched the open selection -> TOGGLING CLOSED`);
       closeDetail();
       return;
     }
+    logDebug(`#100 selectTicket(${key})`);
     setSelectedKey(key);
     const numeric = Number(key);
     setTicketParam(Number.isInteger(numeric) ? numeric : null);
   }
 
   function closeDetail() {
+    /*
+     * #100 instrumentation: the ONLY path that clears the selection. The
+     * resolver now holds unconditionally, so if the panel still closes,
+     * either this ran or the component remounted. The stack tells us WHO
+     * called it -- a close button, the toggle above, the mobile pane, or an
+     * effect nobody remembered.
+     */
+    logWarn(
+      "#100 closeDetail() called; stack: " +
+        (new Error().stack ?? "unavailable").split("\n").slice(1, 5).join(" <- "),
+    );
     setSelectedKey(null);
     setTicketParam(null);
   }
@@ -642,6 +699,34 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * useless, because it made the hold look covered while it was not.
    */
   const resolution = resolveSelection(rawTickets, selectedKey, lastSelected.current);
+
+  /*
+   * #100 INSTRUMENTATION. Logs every render where a selection EXISTS, so the
+   * transition that ejects the reader is visible rather than inferred.
+   *
+   * What each field tells us:
+   *   reason     - resolved / reanchored / held / gone / none
+   *   sel        - the board key currently selected
+   *   rows       - how many rows the board has this render (0 = empty board)
+   *   own/foreign- where those rows came from, since a merge re-pull drops
+   *                foreign rows first
+   *   ref        - whether the held ticket survived (a REMOUNT wipes it)
+   *
+   * "gone" with a non-null sel and a null ref is the fingerprint of a
+   * REMOUNT: the selection key was restored from somewhere but the held
+   * ticket was destroyed. "none" with rows > 0 means selectedKey itself was
+   * cleared -- something called closeDetail.
+   */
+  const lastLogged = react.useRef<string>("");
+  const shape =
+    `${resolution.reason}|sel=${selectedKey ?? "-"}|rows=${rawTickets.length}` +
+    `|own=${ownRows.length}|foreign=${foreignRows.length}|ref=${lastSelected.current === null ? "null" : "held"}`;
+  if (shape !== lastLogged.current && (selectedKey !== null || lastSelected.current !== null)) {
+    lastLogged.current = shape;
+    const noisy = resolution.reason === "gone" || resolution.reason === "held";
+    (noisy ? logWarn : logDebug)(`#100 select: ${shape}`);
+  }
+
   // The ref is the only state this owns; every DECISION lives in the pure
   // resolver, so there is exactly one implementation of it (the duplicate
   // implementations in this file are what produced eleven wrong-ticket bugs).
@@ -723,6 +808,28 @@ function ProjectionReader(props: ProjectionReaderProps) {
       version that loaded. Close the panel to return to the grid.
     </div>
   ) : null;
+
+  /*
+   * #100 INSTRUMENTATION: log when the panel is about to render as ABSENT,
+   * and when the DetailView's key changes.
+   *
+   * `key={selectedBoardKey}` REMOUNTS DetailView whenever the board key
+   * changes -- which does not eject the reader to the grid, but DOES destroy
+   * any modal open inside it (evidence viewer, allowlist editor, signoff,
+   * mark-done). So a key churn and a panel close look different in the log
+   * and feel similar to a user, and this tells them apart.
+   */
+  const lastPanelKey = react.useRef<string | null>(null);
+  if (selectedBoardKey !== lastPanelKey.current) {
+    if (lastPanelKey.current !== null && selectedBoardKey !== null) {
+      logWarn(
+        `#100 DetailView KEY CHANGED ${lastPanelKey.current} -> ${selectedBoardKey}; it remounts and any open modal is destroyed`,
+      );
+    } else if (lastPanelKey.current !== null && selectedBoardKey === null) {
+      logWarn(`#100 detail panel CLOSING (was ${lastPanelKey.current})`);
+    }
+    lastPanelKey.current = selectedBoardKey;
+  }
 
   const detailPanel =
     selectedTicket === null ? null : (

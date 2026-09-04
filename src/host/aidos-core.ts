@@ -634,7 +634,26 @@ function _mdInline(text: string): string {
  * board key. Hoisted rather than duplicated. The cap exists so one long note
  * cannot flood a digest that may batch many changes.
  */
-const DIGEST_TEXT_CAP = 160;
+/**
+ * Raised from 160 to 1000 (user-reported, 2026-09-03).
+ *
+ * 160 was chosen so one long note could not flood a batched digest. In
+ * practice it truncated the user MID-SENTENCE: a signoff note asking
+ * "...is markdown rendering for board update digest fixed? We should test
+ * if it properly renders md because …" lost the actual question, and the
+ * agent could not act on what it could not read.
+ *
+ * The cap is for FLOOD control, not brevity. A note a human writes TO the
+ * agent is the highest-value text in the digest, and truncating it defeats
+ * the mechanism: the whole point of #106 is that the human should not have
+ * to repeat themselves in chat.
+ *
+ * Exported so tests derive their fixtures from it. Both existing cap tests
+ * hardcoded a 400-character string, which silently stopped exercising the
+ * cap the moment it moved -- a test that passes because its input no longer
+ * reaches the branch it is testing.
+ */
+export const DIGEST_TEXT_CAP = 1000;
 
 function _ellipsize(text: string): string {
   return text.length > DIGEST_TEXT_CAP ? `${text.slice(0, DIGEST_TEXT_CAP)}…` : text;
