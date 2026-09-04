@@ -13,6 +13,8 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, isAbsolute } from "node:path";
 
+import { readFileSync } from "node:fs";
+
 import { childPathScope, writeBoundaryReason } from "../src/tools/allowlist";
 import { resolveScratchPath, scratchRootForAgent } from "../src/tools/scratch";
 import { Store } from "../src/kernel/store";
@@ -184,5 +186,86 @@ describe("the allowlist exemption", () => {
     };
     const refusal = guard(execution as never);
     expect(refusal).toBeUndefined();
+  });
+});
+
+describe("#82 parity with the default dsh edit/write tools", () => {
+  /*
+   * dsh-better-edit was dropped, so the scratch tools' target is now the
+   * DEFAULT edit/str-replace tool. The audit ran the two families in
+   * sequence and found the pair behaved differently, which is the worst
+   * outcome available: tools that look alike and act differently are more
+   * confusing than tools that look different.
+   */
+
+  /** A harness whose registry carries a fake edit tool with a chosen grammar. */
+  function harnessWithEdit(params: Record<string, unknown>) {
+    const harness = scratchHarness();
+    const seen: Record<string, unknown>[] = [];
+    (harness as any).registerTool?.({
+      name: "edit",
+      parameters: params,
+      execute: async (args: Record<string, unknown>) => {
+        seen.push(args);
+        return { ok: true };
+      },
+    });
+    return { harness, seen };
+  }
+
+  it("scratch_write DELEGATES to the write tool, so the file counts as observed", async () => {
+    /*
+     * THE audit finding. scratch_write called fs.writeText directly, which
+     * bypassed the observation policy -- so scratch_edit refused its own
+     * freshly written file with FS_NOT_OBSERVED. write-then-edit worked with
+     * the builtin pair and failed with the scratch pair.
+     *
+     * scratch_read already delegated to `read` for exactly this reason; the
+     * write half simply never did.
+     */
+    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
+    const at = src.indexOf('name: "scratch_write"');
+    const body = src.slice(at, src.indexOf('name: "scratch_edit"'));
+    expect(body).toContain('ctx.tools.get("write", agent)');
+    expect(body).toContain('name: "write"');
+  });
+
+  it("keeps a raw-fs fallback, so a scope with no write tool still works", () => {
+    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
+    const at = src.indexOf('name: "scratch_write"');
+    const body = src.slice(at, src.indexOf('name: "scratch_edit"'));
+    expect(body).toContain("fs.writeText");
+  });
+
+  it("scratch_edit DETECTS the grammar instead of assuming it", () => {
+    /*
+     * It hardcoded {path, edits} and {file_path, old_string, new_string},
+     * choosing from what the CALLER passed. That worked only while
+     * better-edit was mounted and accepted both. Now the shape is read from
+     * the resolved tool's own parameter declaration, so the scratch tools
+     * follow whichever edit backend is mounted -- including better-edit if
+     * it is remounted later, with no code change.
+     */
+    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
+    const at = src.indexOf('name: "scratch_edit"');
+    const body = src.slice(at);
+    expect(body).toContain("editDef as { parameters?");
+    expect(body).toContain("Object.hasOwn(editParams, key)");
+    // The path key is chosen, not hardcoded.
+    expect(body).toContain('accepts("file_path") ? "file_path" : "path"');
+  });
+
+  it("refuses the anchor grammar when the resolved tool does not accept it", () => {
+    // A clear refusal here beats forwarding arguments the tool cannot parse
+    // and surfacing a confusing downstream failure.
+    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
+    expect(src).toContain("edit_grammar_unsupported");
+    expect(src).toContain("does not accept the anchor grammar");
+    expect(src).toContain("does not accept the literal grammar");
+  });
+
+  it("only forwards replace_all when the resolved tool declares it", () => {
+    const src = readFileSync(new URL("../src/tools/scratch.ts", import.meta.url), "utf8");
+    expect(src).toContain('accepts("replace_all")');
   });
 });

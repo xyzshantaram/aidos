@@ -27034,6 +27034,33 @@ function registerScratchTools(ctx) {
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
+        let existed = false;
+        try {
+          await fs.readText(target, exec.signal);
+          existed = true;
+        } catch {
+          existed = false;
+        }
+        const writeDef = ctx.tools.get("write", agent);
+        if (writeDef) {
+          const delegated = await ctx.tools.execute({
+            callId: exec.callId,
+            rootCallId: exec.rootCallId,
+            name: "write",
+            arguments: { file_path: absPath, content: args.content },
+            agent: exec.agent,
+            parent: exec.token,
+            signal: exec.signal
+          });
+          if (!delegated.isError) {
+            const operation = existed ? "update" : "create";
+            ctx.logger?.info?.(`aidos: scratch_write ${operation} ${absPath} (delegated)`);
+            return { ok: true, path: absPath, scratch_root: root, operation };
+          }
+          ctx.logger?.warn?.(
+            `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs`
+          );
+        }
         const outcome = await fs.writeText(target, args.content, void 0, exec.signal);
         ctx.logger?.info?.(`aidos: scratch_write ${outcome.operation} ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation };
@@ -27077,12 +27104,38 @@ function registerScratchTools(ctx) {
             "AIDOS_EDIT_TOOL_UNAVAILABLE"
           );
         }
-        const delegatedArgs = Array.isArray(args.edits) ? { path: absPath, edits: args.edits } : {
-          file_path: absPath,
+        const editParams = editDef.parameters ?? {};
+        const accepts = (key) => Object.hasOwn(editParams, key);
+        const wantsAnchors = Array.isArray(args.edits);
+        const pathKey = accepts("file_path") ? "file_path" : "path";
+        if (wantsAnchors && !accepts("edits")) {
+          throw new HarnessError(
+            JSON.stringify({
+              ok: false,
+              error: "edit_grammar_unsupported",
+              message: "the resolved edit tool does not accept the anchor grammar (`edits`); use old_string/new_string instead",
+              accepts: Object.keys(editParams)
+            }),
+            "AIDOS_EDIT_GRAMMAR_UNSUPPORTED"
+          );
+        }
+        if (!wantsAnchors && !accepts("old_string")) {
+          throw new HarnessError(
+            JSON.stringify({
+              ok: false,
+              error: "edit_grammar_unsupported",
+              message: "the resolved edit tool does not accept the literal grammar (`old_string`); use edits instead",
+              accepts: Object.keys(editParams)
+            }),
+            "AIDOS_EDIT_GRAMMAR_UNSUPPORTED"
+          );
+        }
+        const delegatedArgs = wantsAnchors ? { [pathKey]: absPath, edits: args.edits } : {
+          [pathKey]: absPath,
           old_string: args.old_string,
           new_string: args.new_string
         };
-        if (!Array.isArray(args.edits) && args.replace_all !== void 0) {
+        if (!wantsAnchors && args.replace_all !== void 0 && accepts("replace_all")) {
           delegatedArgs.replace_all = args.replace_all;
         }
         const delegated = await ctx.tools.execute({

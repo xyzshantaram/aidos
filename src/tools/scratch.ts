@@ -190,6 +190,57 @@ export function registerScratchTools(ctx: Context): void {
         const absPath = resolveScratchPath(root, args.path);
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
+        /*
+         * create vs update, decided BEFORE the write. The narrow fs seam has
+         * no exists(), so a successful read is the probe: a file that reads
+         * is being updated, one that does not is being created. Only used
+         * for the reported operation, never for the write itself, so a
+         * misread degrades the label and nothing more.
+         */
+        let existed = false;
+        try {
+          await fs.readText(target, exec.signal);
+          existed = true;
+        } catch {
+          existed = false;
+        }
+
+        /*
+         * #82: DELEGATE to the resolved `write` tool, the way scratch_read
+         * already delegates to `read`.
+         *
+         * This wrote through fs.writeText directly, which bypassed the
+         * OBSERVATION POLICY. The builtin write registers the file as
+         * observed, so write-then-edit works; scratch_write did not, so
+         * scratch_edit refused its own freshly written file with
+         * FS_NOT_OBSERVED. Found by running the two in sequence during the
+         * #82 audit -- the pair worked with the builtins and failed with the
+         * scratch tools, which is exactly the parity this ticket is about.
+         *
+         * Falls back to raw fs when no `write` tool is registered, so the
+         * scratch surface keeps working in a scope that has none.
+         */
+        const writeDef = ctx.tools.get("write", agent);
+        if (writeDef) {
+          const delegated = await ctx.tools.execute({
+            callId: exec.callId,
+            rootCallId: exec.rootCallId,
+            name: "write",
+            arguments: { file_path: absPath, content: args.content },
+            agent: exec.agent,
+            parent: exec.token,
+            signal: exec.signal,
+          });
+          if (!delegated.isError) {
+            const operation: "create" | "update" = existed ? "update" : "create";
+            ctx.logger?.info?.(`aidos: scratch_write ${operation} ${absPath} (delegated)`);
+            return { ok: true, path: absPath, scratch_root: root, operation };
+          }
+          ctx.logger?.warn?.(
+            `aidos: scratch_write delegation failed (${delegated.error.message ?? "unknown"}); falling back to raw fs`,
+          );
+        }
+
         const outcome = await fs.writeText(target, args.content, undefined, exec.signal);
         ctx.logger?.info?.(`aidos: scratch_write ${outcome.operation} ${absPath}`);
         return { ok: true, path: absPath, scratch_root: root, operation: outcome.operation as "create" | "update" };
@@ -238,15 +289,62 @@ export function registerScratchTools(ctx: Context): void {
           );
         }
 
-        const delegatedArgs: Record<string, unknown> =
-          Array.isArray(args.edits)
-            ? { path: absPath, edits: args.edits }
-            : {
-                file_path: absPath,
-                old_string: args.old_string,
-                new_string: args.new_string,
-              };
-        if (!Array.isArray(args.edits) && args.replace_all !== undefined) {
+        /*
+         * #82: pick the grammar the RESOLVED edit tool actually declares,
+         * rather than assuming one.
+         *
+         * This hardcoded two shapes: `{path, edits}` for the anchor grammar
+         * and `{file_path, old_string, new_string}` for the literal one,
+         * chosen purely from what the CALLER passed. That was fine while
+         * dsh-better-edit was mounted and accepted both. It is now dropped,
+         * so a caller passing `edits` would forward arguments the default
+         * edit tool does not understand -- a confusing downstream failure
+         * instead of a clear refusal here.
+         *
+         * The tool definition carries its own parameter declaration, so the
+         * shape is DETECTED. That also means the scratch tools follow
+         * whatever edit backend is mounted, which is the property #82 wants:
+         * better-edit can be remounted later and this adapts with no code
+         * change.
+         */
+        const editParams = (editDef as { parameters?: Record<string, unknown> }).parameters ?? {};
+        const accepts = (key: string): boolean => Object.hasOwn(editParams, key);
+        const wantsAnchors = Array.isArray(args.edits);
+        const pathKey = accepts("file_path") ? "file_path" : "path";
+
+        if (wantsAnchors && !accepts("edits")) {
+          throw new HarnessError(
+            JSON.stringify({
+              ok: false,
+              error: "edit_grammar_unsupported",
+              message:
+                "the resolved edit tool does not accept the anchor grammar (`edits`); use old_string/new_string instead",
+              accepts: Object.keys(editParams),
+            }),
+            "AIDOS_EDIT_GRAMMAR_UNSUPPORTED",
+          );
+        }
+        if (!wantsAnchors && !accepts("old_string")) {
+          throw new HarnessError(
+            JSON.stringify({
+              ok: false,
+              error: "edit_grammar_unsupported",
+              message:
+                "the resolved edit tool does not accept the literal grammar (`old_string`); use edits instead",
+              accepts: Object.keys(editParams),
+            }),
+            "AIDOS_EDIT_GRAMMAR_UNSUPPORTED",
+          );
+        }
+
+        const delegatedArgs: Record<string, unknown> = wantsAnchors
+          ? { [pathKey]: absPath, edits: args.edits }
+          : {
+              [pathKey]: absPath,
+              old_string: args.old_string,
+              new_string: args.new_string,
+            };
+        if (!wantsAnchors && args.replace_all !== undefined && accepts("replace_all")) {
           delegatedArgs.replace_all = args.replace_all;
         }
         const delegated = await ctx.tools.execute({
