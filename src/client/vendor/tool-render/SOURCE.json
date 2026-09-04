@@ -4,7 +4,7 @@
   "files": {
     "client.module.css": {
       "vendoredAs": "tool-render.css",
-      "sha256": "c1759bae3c1cac59bb6ede5e478595a8983f823191148b1c1273f6544d8f797d"
+      "sha256": "4479068e4ba44dd2c2bd5a1024e068caadd85502d9ecadcbdfe0a8c1c63d6f77"
     },
     "text.ts": {
       "vendoredAs": "text.js",
