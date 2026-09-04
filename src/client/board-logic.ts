@@ -735,8 +735,23 @@ export function displayDep(ref: string, ownWorkspaceKey?: string): string {
   if (match === null) return ref;
   const [, workspaceKey, tail] = match;
   if (ownWorkspaceKey !== undefined && workspaceKey === ownWorkspaceKey) {
-    return tail;
+    /*
+     * The "#" stays (user-reported, 2026-09-03: "I want the # back in the
+     * ticket id badge").
+     *
+     * Dropping the workspace prefix was right -- it was identical on every
+     * chip and carried no information. Dropping the HASH with it went too
+     * far: a bare "93" reads as an unlabelled number, while "#93" reads as a
+     * ticket reference in any tracker anyone has used. The prefix was the
+     * furniture; the hash is the meaning.
+     *
+     * A literal "#" rather than an icon, deliberately: a hash already IS the
+     * universal glyph for this, and an icon would need a tooltip to say what
+     * a hash says by itself.
+     */
+    return "#" + tail;
   }
+  // A foreign ref keeps its workspace label AND the hash: `aidos#93`.
   return workspaceLabel(workspaceKey) + "#" + tail;
 }
 

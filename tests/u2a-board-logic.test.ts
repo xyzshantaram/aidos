@@ -376,10 +376,11 @@ describe("ticketChipLabel", () => {
     expect(ticketChipLabel(ticket)).toBe("other#5");
   });
 
-  it("drops the prefix for a ticket in the viewing workspace", () => {
-    // In a LIST the prefix is identical on every row, so it is furniture.
+  it("drops the workspace prefix but KEEPS the hash", () => {
+    // The prefix is identical on every row, so it is furniture. The hash is
+    // not: it is what makes the number read as a ticket reference.
     const ticket = makeTicket({ id: 5, workspaceKey: "--srv-mine--" });
-    expect(ticketChipLabel(ticket, "--srv-mine--")).toBe("5");
+    expect(ticketChipLabel(ticket, "--srv-mine--")).toBe("#5");
   });
 
   it("keeps the prefix for a ticket from another workspace", () => {

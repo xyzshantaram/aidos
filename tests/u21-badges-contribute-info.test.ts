@@ -26,8 +26,14 @@ const OWN = "--home-sid-repos-aidos--";
 const OTHER = "--home-sid-repos-dotfiles-ai--";
 
 describe("#21 dependency chips: local id only, workspace only when foreign", () => {
-  it("drops the workspace prefix from a LOCAL dependency", () => {
-    expect(displayDep(OWN + ":93", OWN)).toBe("93");
+  it("drops the workspace prefix from a LOCAL dependency, keeping the hash", () => {
+    /*
+     * The PREFIX was the furniture -- identical on every chip, carrying no
+     * information. The HASH is the meaning: "#93" reads as a ticket
+     * reference in any tracker, while a bare "93" reads as an unlabelled
+     * number. User-reported after the first version dropped both.
+     */
+    expect(displayDep(OWN + ":93", OWN)).toBe("#93");
   });
 
   it("KEEPS a workspace label on a foreign dependency", () => {
@@ -56,7 +62,7 @@ describe("#21 dependency chips: local id only, workspace only when foreign", () 
   });
 
   it("keeps a slug reference readable", () => {
-    expect(displayDep(OWN + ":some-ticket-slug", OWN)).toBe("some-ticket-slug");
+    expect(displayDep(OWN + ":some-ticket-slug", OWN)).toBe("#some-ticket-slug");
   });
 
   it("workspaceLabel takes the last meaningful segment", () => {
