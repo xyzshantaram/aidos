@@ -194,6 +194,84 @@ describe("#51 the allowlist suggestion flow", () => {
     expect(row.allowlist).toEqual(["src", "tests"]);
   });
 
+  /*
+   * #112 ROUND 2. Found by independent review of the round-1 fix, which
+   * merged the allowlist field WHOLESALE and thereby deadlocked a ticket
+   * permanently the moment a grant row was deleted.
+   *
+   * The sequence is reachable by ordinary use, not a contrivance: the
+   * detail panel renders a delete X on EVERY evidence row with no kind
+   * filter, and `_detachEvidence` removes the row without clearing the
+   * allowlist field. So the field can name a path that nothing grants.
+   *
+   * Round 1 fed that stale path back through the coverage gate, which
+   * refused the entire write -- AFTER the pending card had been deleted and
+   * AFTER the new evidence row was attached. Every later approval threw
+   * identically, so the ticket could never be granted anything again.
+   *
+   * This test drives the whole sequence and asserts the two properties that
+   * matter: the approval SUCCEEDS, and the detached path is dropped rather
+   * than carried forward. It fails loudly on a regression to either the
+   * round-0 replace or the round-1 wholesale merge.
+   */
+  it("#112 a detached grant row does not deadlock the next approval", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    const svc = (harness as unknown as { service: any }).service;
+    const agent = (harness as unknown as { asAgent: () => any }).asAgent();
+    const ws = mkdtempSync(join(tmpdir(), "ws112d-"));
+    mkdirSync(join(ws, "src"), { recursive: true });
+    mkdirSync(join(ws, "tests"), { recursive: true });
+    mkdirSync(join(ws, "config"), { recursive: true });
+    (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+
+    const first = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["src"] });
+    svc.resolveApproval(agent, { requestId: first.requestId, approved: true, paths: ["src"] });
+    const second = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["tests"] });
+    svc.resolveApproval(agent, { requestId: second.requestId, approved: true, paths: ["tests"] });
+    expect(
+      svc.getTickets(agent).find((t: { id: number }) => t.id === ticket.id).allowlist,
+    ).toEqual(["src", "tests"]);
+
+    // The human deletes the FIRST grant row from the evidence panel. The
+    // allowlist field is deliberately left alone by _detachEvidence, so it
+    // now names `src`, which nothing grants any more.
+    const grants = svc
+      .getTicket(agent, { ticketId: ticket.id })
+      .evidence.filter((e: { kind: string }) => e.kind === "builtin:file_allowlist");
+    expect(grants).toHaveLength(2);
+    svc.userDetachEvidence(agent, {
+      ticketId: ticket.id,
+      at: grants[0].at,
+      rowKind: "builtin:file_allowlist",
+    });
+
+    // THE REGRESSION: this threw under round 1, permanently.
+    const third = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["config"] });
+    expect(() =>
+      svc.resolveApproval(agent, {
+        requestId: third.requestId,
+        approved: true,
+        paths: ["config"],
+      }),
+    ).not.toThrow();
+
+    const row = svc.getTickets(agent).find((t: { id: number }) => t.id === ticket.id);
+    // `tests` is still granted so it is carried forward; `src` lost its row
+    // and is dropped rather than jamming the write; `config` is added.
+    expect(row.allowlist).toEqual(["tests", "config"]);
+
+    // And the ticket is not poisoned: a FOURTH approval still works, which
+    // is what proves the round-1 failure was permanent and this is not.
+    const fourth = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["src"] });
+    svc.resolveApproval(agent, { requestId: fourth.requestId, approved: true, paths: ["src"] });
+    expect(
+      svc.getTickets(agent).find((t: { id: number }) => t.id === ticket.id).allowlist,
+    ).toEqual(["tests", "config", "src"]);
+  });
+
   it("#112 the direct set_ticket allowlist edit still REPLACES (the editor may shrink)", () => {
     const harness = createHarness();
     harness.installService();

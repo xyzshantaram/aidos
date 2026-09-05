@@ -1969,8 +1969,40 @@ registerAidosSessionEventTypes(ctx);
      */
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    const previousAllowlist = cache.state.tickets.get(pending.ticketId)?.allowlist ?? [];
-    const merged = [...new Set([...previousAllowlist, ...paths])];
+    /*
+     * ROUND 2 (independent review, 2026-09-05): the merge must keep only
+     * paths that are STILL GRANTED, not every path the field happens to
+     * hold. Round 1 merged the field wholesale and deadlocked the ticket
+     * permanently.
+     *
+     * THE SEQUENCE THAT BROKE IT, reproduced by the reviewer: the detail
+     * panel renders a delete X on EVERY evidence row with no kind filter,
+     * and `_detachEvidence` removes the row WITHOUT clearing the allowlist
+     * field. So after a human deletes a grant row, the field still names a
+     * path that nothing covers. Round 1 then fed that stale path back into
+     * `userSetTicket`, where the coverage gate refused the whole write --
+     * AFTER the pending card had already been deleted and AFTER the new
+     * evidence row had been attached. One click destroyed the card, left a
+     * grant row that granted nothing, and never updated the field; every
+     * later approval threw identically. Permanent, and strictly worse than
+     * the bug round 1 set out to fix.
+     *
+     * Filtering by live coverage is "keep everything still granted" -- the
+     * actual intent -- and it SELF-HEALS: a detached grant simply stops
+     * being carried forward instead of jamming the ticket forever.
+     *
+     * The evidence read happens after `userAttachEvidence` above, so this
+     * ticket's brand-new row is already folded in and its paths are covered.
+     *
+     * No `new Set` here: `_editTicket` already dedupes the field it is
+     * given (round 1 wrapped this in a Set and the review proved it inert --
+     * removing it left the suite green). Dedup has ONE owner.
+     */
+    const covered = this._coveredAllowlistPaths(cache.state.evidence, pending.ticketId as TicketId);
+    const stillGranted = (cache.state.tickets.get(pending.ticketId)?.allowlist ?? []).filter(
+      (path) => covered.has(path),
+    );
+    const merged = [...stillGranted, ...paths];
     this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: merged });
     return { resolved: `approved: ${paths.join(", ")}` };
   }
@@ -3377,6 +3409,25 @@ registerAidosSessionEventTypes(ctx);
     ticketId: TicketId,
     proposed: readonly string[],
   ): string[] {
+    const approved = this._coveredAllowlistPaths(evidence, ticketId);
+    return [...new Set(proposed)].filter((path) => !approved.has(path));
+  }
+
+  /**
+   * Every path that some SURVIVING `builtin:file_allowlist` row on this
+   * ticket still grants.
+   *
+   * Extracted from `_uncoveredAllowlistPaths` for #112's second round, and
+   * the extraction is the point rather than tidiness: the approval path now
+   * needs to ask "is this path still granted?", and a SECOND hand-rolled
+   * copy of that loop is exactly how the first #112 fix went wrong. One
+   * definition of "covered", used by the gate that refuses and by the merge
+   * that decides what to keep, so the two cannot disagree.
+   */
+  private _coveredAllowlistPaths(
+    evidence: ReadonlyMap<TicketId, EvidenceRow[]> | undefined,
+    ticketId: TicketId,
+  ): Set<string> {
     const approved = new Set<string>();
     for (const row of evidence?.get(ticketId) ?? []) {
       if (row.kind !== "builtin:file_allowlist") continue;
@@ -3387,7 +3438,7 @@ registerAidosSessionEventTypes(ctx);
         }
       }
     }
-    return [...new Set(proposed)].filter((path) => !approved.has(path));
+    return approved;
   }
 
   /** The shared create: one whole-value ticket/change create record. */

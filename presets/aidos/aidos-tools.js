@@ -28504,8 +28504,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     });
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    const previousAllowlist = cache.state.tickets.get(pending.ticketId)?.allowlist ?? [];
-    const merged = [.../* @__PURE__ */ new Set([...previousAllowlist, ...paths])];
+    const covered = this._coveredAllowlistPaths(cache.state.evidence, pending.ticketId);
+    const stillGranted = (cache.state.tickets.get(pending.ticketId)?.allowlist ?? []).filter(
+      (path) => covered.has(path)
+    );
+    const merged = [...stillGranted, ...paths];
     this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: merged });
     return { resolved: `approved: ${paths.join(", ")}` };
   }
@@ -29441,6 +29444,21 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * read time.
    */
   _uncoveredAllowlistPaths(evidence, ticketId, proposed) {
+    const approved = this._coveredAllowlistPaths(evidence, ticketId);
+    return [...new Set(proposed)].filter((path) => !approved.has(path));
+  }
+  /**
+   * Every path that some SURVIVING `builtin:file_allowlist` row on this
+   * ticket still grants.
+   *
+   * Extracted from `_uncoveredAllowlistPaths` for #112's second round, and
+   * the extraction is the point rather than tidiness: the approval path now
+   * needs to ask "is this path still granted?", and a SECOND hand-rolled
+   * copy of that loop is exactly how the first #112 fix went wrong. One
+   * definition of "covered", used by the gate that refuses and by the merge
+   * that decides what to keep, so the two cannot disagree.
+   */
+  _coveredAllowlistPaths(evidence, ticketId) {
     const approved = /* @__PURE__ */ new Set();
     for (const row of evidence?.get(ticketId) ?? []) {
       if (row.kind !== "builtin:file_allowlist") continue;
@@ -29451,7 +29469,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         }
       }
     }
-    return [...new Set(proposed)].filter((path) => !approved.has(path));
+    return approved;
   }
   /** The shared create: one whole-value ticket/change create record. */
   _createTicketInternal(agent, projectId, title, description, opts) {
