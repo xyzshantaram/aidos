@@ -40,7 +40,7 @@ import planMetaCss from "./plan-meta.css";
  * second copy of the same sheet.
  */
 import toolRenderCss from "./vendor/tool-render/tool-render.css";
-import { badgeLabel, setCountCallback } from "./view-state";
+import { badgeLabel, setCountCallback, setCurrentSession } from "./view-state";
 import { LocalTicketView } from "./local-ticket-view";
 import react from "react";
 import { SCRATCH_ROWS } from "./scratch-rows";
@@ -255,6 +255,21 @@ export function apply(ctx: Context): void {
     let list: SessionListState = sessions.list.getSnapshot();
 
     const sync = function (): void {
+      /*
+       * THE BADGE'S SESSION COMES FROM HERE, not from a board render.
+       *
+       * User-reported 2026-09-05: "the ticket count in the chat/trajectory/
+       * tickets bar shows the count of the previous workspace you opened the
+       * board in", and then the diagnosis, which was right: "they both
+       * update when the board is opened but it doesn't matter WHICH board".
+       *
+       * `reportCount` fires during LocalTicketView's render, so it named
+       * whatever board was on screen and the tab of workspace A took
+       * workspace B's count. This effect already subscribes to the sessions
+       * store precisely because it needs to know the current session, so
+       * the authoritative answer was one line away the whole time.
+       */
+      setCurrentSession(list.current ?? null);
       const preset = list.current
         ? list.byId[list.current]?.agentPreset
         : undefined;

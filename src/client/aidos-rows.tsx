@@ -105,12 +105,18 @@ function resultOf(block: unknown): Record<string, unknown> | null {
 }
 
 /**
- * `#14 — Some ticket title`, or `#14` when the board has not published a
- * title yet. Never blank: the id is always worth showing.
+ * `#14 — Some ticket title`, or `#14` when THIS SESSION's board has not
+ * published a title yet. Never blank: the id is always worth showing.
+ *
+ * The session id is required, not optional-with-a-global-fallback. A card
+ * naming #39 in an aidos session showed a Thursday ticket's title because
+ * the index was keyed by bare id and the last board to render won
+ * (user-reported 2026-09-05). Falling back to "whatever some board knew" is
+ * the bug, so a card with no session shows the bare id instead.
  */
-function ticketLabel(ticketId: string | null): string | null {
+function ticketLabel(sessionId: string | undefined, ticketId: string | null): string | null {
   if (ticketId === null) return null;
-  const title = ticketTitle(ticketId);
+  const title = ticketTitle(sessionId, ticketId);
   return title === null ? `#${ticketId}` : `#${ticketId} — ${title}`;
 }
 
@@ -498,7 +504,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
     <AidosRow
       icon={<SignoffIcon />}
       title="Attach evidence"
-      summary={ticketLabel(ticketId) ?? "evidence"}
+      summary={ticketLabel(props.sessionId, ticketId) ?? "evidence"}
       state={state}
       body={body}
       errorSummary={errorSummary}
@@ -512,7 +518,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
 export function MoveTicketRow(props: AidosViewProps) {
   const { args, state, result, resultText, ticketId, errorText, errorSummary } = useAidosRow(props);
   const to = typeof args?.to === "string" ? args.to : null;
-  const label = ticketLabel(ticketId);
+  const label = ticketLabel(props.sessionId, ticketId);
   /*
    * A move's body is its GATE. A refused move names the missing evidence
    * kinds, and that refusal is the most useful thing aidos ever prints --
@@ -550,7 +556,7 @@ export function SetTicketRow(props: AidosViewProps) {
   const created = result?.created === true;
   // A create names its new title; an edit names the ticket it changed.
   const title = typeof args?.title === "string" ? args.title : null;
-  const summary = created && title !== null ? `#${ticketId ?? "?"} — ${title}` : ticketLabel(ticketId);
+  const summary = created && title !== null ? `#${ticketId ?? "?"} — ${title}` : ticketLabel(props.sessionId, ticketId);
   /*
    * The body is WHAT WAS WRITTEN -- the fields the call actually set. A
    * ticket edit is otherwise invisible: the row says a ticket changed and
@@ -619,7 +625,7 @@ export function GetTicketRow(props: AidosViewProps) {
     <AidosRow
       icon={<CompassIcon />}
       title="Read ticket"
-      summary={ticketLabel(ticketId) ?? "ticket"}
+      summary={ticketLabel(props.sessionId, ticketId) ?? "ticket"}
       state={state}
       body={body}
       errorSummary={errorSummary}
@@ -710,7 +716,7 @@ export function GetTicketsRow(props: AidosViewProps) {
 export function RequestAllowlistRow(props: AidosViewProps) {
   const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
   const paths = allowlistPaths(args, result);
-  const label = ticketLabel(ticketId);
+  const label = ticketLabel(props.sessionId, ticketId);
   const summary =
     (label ?? "allowlist") + " · " + paths.length + (paths.length === 1 ? " path" : " paths");
   /*
@@ -760,7 +766,7 @@ export function SuggestActionsRow(props: AidosViewProps) {
     lines.length === 0
       ? "nothing"
       : lines.length === 1
-        ? (ticketLabel(lines[0].ticketId) ?? "#" + lines[0].ticketId)
+        ? (ticketLabel(props.sessionId, lines[0].ticketId) ?? "#" + lines[0].ticketId)
         : lines.length + " tickets";
   /*
    * The REASON is the payload of a nomination -- the whole point of

@@ -11,9 +11,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  badgeLabel,
   getSelection,
   onSelectionChanged,
   publishTicketTitles,
+  reportCount,
+  setCurrentSession,
   setSelection,
   ticketTitle,
 } from "../src/client/view-state";
@@ -60,9 +63,9 @@ const view = readFileSync(
 
 describe("#73 a ticket-bearing call names the ticket", () => {
   it("resolves an id to its title once the board has published", () => {
-    publishTicketTitles([{ id: 14, title: "A real ticket title" }]);
-    expect(ticketTitle(14)).toBe("A real ticket title");
-    expect(ticketTitle("14")).toBe("A real ticket title");
+    publishTicketTitles("sess-a", [{ id: 14, title: "A real ticket title" }]);
+    expect(ticketTitle("sess-a", 14)).toBe("A real ticket title");
+    expect(ticketTitle("sess-a", "14")).toBe("A real ticket title");
   });
 
   it("returns null for an unknown id rather than inventing one", () => {
@@ -72,7 +75,38 @@ describe("#73 a ticket-bearing call names the ticket", () => {
      * back what an agent did earlier. A bare id is a worse card, not a
      * broken one.
      */
-    expect(ticketTitle(999999)).toBeNull();
+    expect(ticketTitle("sess-a", 999999)).toBeNull();
+  });
+
+  /*
+   * THE CROSS-BOARD CONTAMINATION REGRESSION (user-reported 2026-09-05).
+   *
+   * "It just showed me a Thursday ticket in the tool call summary for #39,
+   * even though the tool call body had the correct details. When i switched
+   * to the aidos board, it showed me the correct, aidos tickets."
+   *
+   * The index was one `Map<ticketId, title>` written by whichever board
+   * rendered last, so two workspaces sharing an id number shared a title.
+   * The second publish below is exactly that: another board, same id. It
+   * must not be visible from the first session.
+   */
+  it("a second board's #39 never leaks into the first board's card", () => {
+    publishTicketTitles("sess-aidos", [{ id: 39, title: "Workspace-unique ids from the database" }]);
+    publishTicketTitles("sess-thursday", [{ id: 39, title: "Something else entirely" }]);
+    expect(ticketTitle("sess-aidos", 39)).toBe("Workspace-unique ids from the database");
+    expect(ticketTitle("sess-thursday", 39)).toBe("Something else entirely");
+  });
+
+  it("a session that never published shows nothing, rather than borrowing", () => {
+    // The FALLBACK IS THE BUG. A card in a session with no board loaded must
+    // degrade to a bare id, never to another workspace's title.
+    publishTicketTitles("sess-loaded", [{ id: 77, title: "Only this board knows" }]);
+    expect(ticketTitle("sess-never-loaded", 77)).toBeNull();
+  });
+
+  it("a card with no session id resolves nothing rather than guessing", () => {
+    publishTicketTitles("sess-somewhere", [{ id: 88, title: "Some title" }]);
+    expect(ticketTitle(undefined, 88)).toBeNull();
   });
 
   it("falls back to the bare id in the card, never to blank", () => {
@@ -80,8 +114,53 @@ describe("#73 a ticket-bearing call names the ticket", () => {
     expect(rows).toContain("`#${ticketId} — ${title}`");
   });
 
-  it("the board publishes the titles it renders", () => {
-    expect(view).toContain("publishTicketTitles(rawTickets)");
+  it("the board publishes the titles it renders, under its own session", () => {
+    expect(view).toContain("publishTicketTitles(sessionId, rawTickets)");
+  });
+
+  it("every card lookup passes its own session id", () => {
+    // A single un-threaded call site reintroduces the contamination for that
+    // one row, which is exactly how it would come back.
+    const calls = rows.match(/ticketLabel\(/g) ?? [];
+    const threaded = rows.match(/ticketLabel\(props\.sessionId,/g) ?? [];
+    // One extra match is the function DECLARATION itself.
+    expect(threaded.length).toBe(calls.length - 1);
+  });
+});
+
+describe("#114 the tab badge follows the CURRENT session, not the last board rendered", () => {
+  it("the plugin entry names the current session from the sessions store", () => {
+    /*
+     * User: "they both update when the board is opened but it doesn't matter
+     * WHICH board". `reportCount` fires during LocalTicketView's render, so
+     * it can only ever name the board on screen. `list.current` is the
+     * store's own answer and the effect already subscribes to it.
+     */
+    expect(index).toContain("setCurrentSession(list.current ?? null)");
+  });
+
+  it("reportCount no longer decides which session the badge speaks for", () => {
+    const state = readFileSync(new URL("../src/client/view-state.ts", import.meta.url), "utf8");
+    // The old line was `currentSessionId = sessionId;` inside reportCount.
+    expect(state).not.toContain("currentSessionId = sessionId");
+    expect(state).toContain("lastRenderedSessionId = sessionId");
+  });
+
+  it("the authoritative session wins over the last board rendered", () => {
+    reportCount("sess-other-workspace", 42);
+    setCurrentSession("sess-mine");
+    reportCount("sess-mine", 3);
+    // Another workspace's board rendering last must not relabel this tab.
+    reportCount("sess-other-workspace", 99);
+    expect(badgeLabel()).toBe("Tickets (3)");
+  });
+
+  it("falls back to the last rendered board when no store answer exists", () => {
+    // The harness (and any runtime with no sessions store) has no other
+    // source; dropping the fallback would silently zero the badge there.
+    setCurrentSession(null);
+    reportCount("sess-harness", 7);
+    expect(badgeLabel()).toBe("Tickets (7)");
   });
 });
 

@@ -371,8 +371,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * During render on purpose: it is an idempotent write to a plain Map with
    * no React state involved, and an effect would leave the first card render
    * after a board load showing bare ids for one frame.
+   *
+   * PUBLISHED UNDER THIS SESSION'S ID. Without it the index was one global
+   * `Map<ticketId, title>` and the last board to render owned every id, so a
+   * card in an aidos session showed a Thursday ticket's title for #39
+   * (user-reported 2026-09-05).
    */
-  publishTicketTitles(rawTickets);
+  publishTicketTitles(sessionId, rawTickets);
   const ownEvidence = (evidenceProjection as Record<string, EvidenceRow[]> | undefined) ?? {};
   const ownComments = (commentsProjection as Record<string, CommentRecord[]> | undefined) ?? {};
   const foreignEvidence: Record<string, EvidenceRow[]> = {};

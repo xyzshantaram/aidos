@@ -77,7 +77,31 @@ export function setStagedState(sessionId: string, state: AppliedState): void {
 // ---- the tab badge store ----
 
 const counts = new Map<string, number>();
-let currentSessionId: string | null = null;
+/**
+ * The session whose board rendered most recently.
+ *
+ * This is a FALLBACK ONLY, and the distinction is the bug fix. It used to be
+ * the sole answer to "which session's count does the tab show", and it is
+ * the wrong authority: a board render happens for whatever board is on
+ * screen, so opening workspace B's board relabelled workspace A's tab.
+ * User-reported 2026-09-05, alongside the identical defect in the title
+ * index: "the ticket count in the chat/trajectory/tickets bar shows the
+ * count of the previous workspace you opened the board in" -- and then,
+ * exactly: "they both update when the board is opened but it doesn't matter
+ * WHICH board".
+ *
+ * Kept because the test harness (and any runtime with no sessions store)
+ * has no other source, and dropping it would silently zero the badge there.
+ */
+let lastRenderedSessionId: string | null = null;
+/**
+ * The current session according to the SESSIONS STORE (`list.current`),
+ * which is the only component that actually knows. Set by the plugin's
+ * visibility effect, which already subscribes to that store for exactly
+ * this reason. Takes precedence over the last-rendered fallback whenever it
+ * is known.
+ */
+let authoritativeSessionId: string | null = null;
 let bumpCallback: (() => void) | null = null;
 
 /** The callback the plugin entry registers to re-render the tab label. */
@@ -92,7 +116,7 @@ export function setCountCallback(callback: (() => void) | null): void {
 export function reportCount(sessionId: string, count: number): void {
   const changed = counts.get(sessionId) !== count;
   counts.set(sessionId, count);
-  currentSessionId = sessionId;
+  lastRenderedSessionId = sessionId;
   if (!changed) return;
   if (remountSuppressed) {
     // The label WILL be stale until release, deliberately: a stale count is
@@ -109,9 +133,28 @@ export function badgeLabelFor(sessionId: string): string {
   return count > 0 ? "Tickets (" + count + ")" : "Tickets";
 }
 
+/**
+ * Name the current session from the authority that knows it: the sessions
+ * store's `list.current`. Pass null when there is no current session.
+ *
+ * Separate from reportCount ON PURPOSE. A board RENDER is evidence that a
+ * board was rendered, nothing more; it is not evidence about which session
+ * the tab belongs to, and treating it as such is what made the badge follow
+ * the last workspace you looked at.
+ */
+export function setCurrentSession(sessionId: string | null): void {
+  authoritativeSessionId = sessionId;
+}
+
+/** The session the badge speaks for: the store's answer, else last rendered. */
+function badgeSessionId(): string | null {
+  return authoritativeSessionId ?? lastRenderedSessionId;
+}
+
 /** The tab label. A nonzero count for the current session adds a suffix. */
 export function badgeLabel(): string {
-  const count = currentSessionId === null ? 0 : counts.get(currentSessionId) ?? 0;
+  const sessionId = badgeSessionId();
+  const count = sessionId === null ? 0 : counts.get(sessionId) ?? 0;
   return count > 0 ? "Tickets (" + count + ")" : "Tickets";
 }
 
@@ -235,17 +278,47 @@ export function setSelection(sessionId: string, key: string | null): void {
  * been opened, or it degrades exactly where it is most useful -- a fresh
  * session reading back what an agent did earlier. A missing title yields a
  * bare id: a worse card, not a broken one.
+ *
+ * KEYED BY SESSION, not by bare ticket id. User-reported 2026-09-05: "It
+ * just showed me a Thursday ticket in the tool call summary for #39, even
+ * though the tool call body had the correct details." That split is the
+ * whole diagnosis -- the BODY comes from the call's own parsed result and is
+ * correct by construction, while the SUMMARY came through this index, which
+ * was a single `Map<ticketId, title>` written by whichever board rendered
+ * most recently. Open a Thursday board, then read an aidos card naming #39,
+ * and the card confidently showed Thursday's #39.
+ *
+ * The user named the cause precisely: "they both update when the board is
+ * opened but it doesn't matter WHICH board". Two ticket ids from different
+ * workspaces are not the same ticket and never were; the key was simply
+ * missing the half that distinguishes them.
  */
 const ticketTitles = new Map<string, string>();
 
-/** Publish the titles of the rows the board just rendered. */
-export function publishTicketTitles(rows: ReadonlyArray<{ id: number; title: string }>): void {
-  for (const row of rows) ticketTitles.set(String(row.id), row.title);
+/** The composite key: a bare id is ambiguous across workspaces. */
+function titleKey(sessionId: string, ticketId: number | string): string {
+  return sessionId + "\u0000" + String(ticketId);
 }
 
-/** The known title of one ticket id, or null when the board has not loaded. */
-export function ticketTitle(ticketId: number | string): string | null {
-  return ticketTitles.get(String(ticketId)) ?? null;
+/** Publish the titles of the rows one session's board just rendered. */
+export function publishTicketTitles(
+  sessionId: string,
+  rows: ReadonlyArray<{ id: number; title: string }>,
+): void {
+  for (const row of rows) ticketTitles.set(titleKey(sessionId, row.id), row.title);
+}
+
+/**
+ * The known title of one ticket in ONE session, or null when that session's
+ * board has not loaded it.
+ *
+ * Returning null rather than falling back to "some other board knew a #39"
+ * is the point of the fix: the fallback IS the bug. A bare id is a worse
+ * card; another workspace's title is a wrong one.
+ */
+export function ticketTitle(sessionId: string | undefined, ticketId: number | string): string | null {
+  if (sessionId === undefined) return null;
+  return ticketTitles.get(titleKey(sessionId, ticketId)) ?? null;
 }
 
 // ---- the workspace merge store ----

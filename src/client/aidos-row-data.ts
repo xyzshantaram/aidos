@@ -18,10 +18,22 @@
 import { STATE_ORDER } from "../kernel/types";
 import type { TicketState } from "../kernel/types";
 
-/** One `label: value` line in a card body. */
+/**
+ * One `label: value` line in a card body.
+ *
+ * `value` is always the short, one-line form the row shows by default.
+ * `full` is the untruncated text a "show more" toggle reveals in place --
+ * present only when there IS more than `value` already shows, so a row that
+ * checks `full !== undefined` never offers to expand a fact that has
+ * nothing more to give. `markdown` marks prose worth rendering as markdown
+ * once expanded (a ticket's description or body); a plain fact (a count, a
+ * state name, a path list) is never markdown, expanded or not.
+ */
 export interface Fact {
   label: string;
   value: string;
+  full?: string;
+  markdown?: boolean;
 }
 
 /** One ticket line in a board-read body. */
@@ -29,6 +41,27 @@ export interface TicketLine {
   id: string;
   state: string;
   title: string;
+}
+
+/**
+ * One ticket rendered as its OWN facts table in a board-read body.
+ *
+ * User direction (2026-09-05): "if it's a single ticket, it should be one
+ * table. if it's many, it should be a stack of tables, like batch_edit
+ * stacks single edit diffs in tool-render."
+ *
+ * So a board read is not a list of lines any more -- it is N of the SAME
+ * table a single-ticket read renders, stacked. The heading fields
+ * (`id`/`state`/`title`) are hoisted OUT of `facts` deliberately: they are
+ * the table's caption, not rows in it, and repeating "State" inside every
+ * table while the caption already carries it would be the wall of noise the
+ * one-line rule exists to prevent.
+ */
+export interface TicketTable {
+  id: string;
+  state: string;
+  title: string;
+  facts: Fact[];
 }
 
 /** One proposed path, and whether the approval will CREATE it (#104). */
@@ -74,11 +107,54 @@ export function oneLine(value: unknown, max = 120): string {
 }
 
 /**
+ * One fact that can expand IN PLACE to its untruncated text.
+ *
+ * User direction (2026-09-05): "every ellipsized strip should have a show
+ * more that expands its own cell". The row cannot decide that for itself --
+ * it sees only `value`, which is already flattened, so it cannot tell an
+ * ellipsis that was ADDED from one the author typed. The decision belongs
+ * here, where the original text is still in hand.
+ *
+ * `full` is set only when there is genuinely MORE to show: either the flat
+ * form was cut, or flattening destroyed structure the reader wants back
+ * (newlines in a criteria block, a markdown list in a description). A fact
+ * whose value is already the whole story gets no `full`, so no row ever
+ * offers a "show more" that reveals nothing -- the failure mode that makes
+ * an expander untrustworthy everywhere else in a UI.
+ */
+export function expandableFact(
+  label: string,
+  text: string,
+  options?: { max?: number; markdown?: boolean },
+): Fact {
+  const value = oneLine(text, options?.max);
+  const trimmed = text.trim();
+  // Two independent reasons the flat line is not the whole story. Compared
+  // against the TRIMMED source, not the raw one: trailing whitespace is not
+  // content worth a button.
+  const cut = value.endsWith("…");
+  const structural = /\n/.test(trimmed);
+  if (!cut && !structural) return { label, value };
+  return {
+    label,
+    value,
+    full: trimmed,
+    ...(options?.markdown === true ? { markdown: true } : {}),
+  };
+}
+
+/**
  * The facts of a single ticket read: what the reader wants without opening
  * the board, in the order they would ask for them.
  *
  * State and gate lead because they are the two questions a ticket is read to
  * answer. Counts are shown only when non-zero -- "0 comments" is noise.
+ *
+ * Description, criteria and body carry their full text for the in-cell
+ * expander (#73, 2026-09-05). Description and body are marked markdown
+ * because they ARE markdown -- every ticket in this project writes them
+ * that way, and a card that shows `**User ask**` as literal asterisks is
+ * the same defect the digest was fixed for.
  */
 export function ticketFacts(result: Record<string, unknown> | null): Fact[] {
   const ticket = asRecord(result?.ticket);
@@ -91,9 +167,20 @@ export function ticketFacts(result: Record<string, unknown> | null): Fact[] {
   if (typeof present === "number" && typeof total === "number") {
     facts.push({ label: "Gate", value: `${present}/${total}` });
   }
+  const description = asText(ticket.description);
+  if (description !== null && description.trim() !== "") {
+    facts.push(expandableFact("Description", description, { markdown: true }));
+  }
   const criteria = asText(ticket.criteria);
   if (criteria !== null && criteria.trim() !== "") {
-    facts.push({ label: "Criteria", value: oneLine(criteria) });
+    // NOT markdown: criteria are one plain assertion per line, and running
+    // them through a markdown parser silently swallows a line that happens
+    // to start with `#` or `-`.
+    facts.push(expandableFact("Criteria", criteria));
+  }
+  const body = asText(ticket.body);
+  if (body !== null && body.trim() !== "") {
+    facts.push(expandableFact("Body", body, { markdown: true }));
   }
   const allowlist = asArray(ticket.allowlist);
   if (allowlist.length > 0) {
@@ -108,6 +195,67 @@ export function ticketFacts(result: Record<string, unknown> | null): Fact[] {
     facts.push({ label: "Comments", value: String(comments) });
   }
   return facts;
+}
+
+/**
+ * The heading of ONE ticket table: `#id`, its state, its title. Shared by
+ * the board-read stack and the single-ticket read so the two render the
+ * same caption rather than two near-identical ones.
+ */
+export function ticketTableOf(row: Record<string, unknown>): TicketTable {
+  const facts: Fact[] = [];
+  const present = row.gatePresent;
+  const total = row.gateTotal;
+  if (typeof present === "number" && typeof total === "number") {
+    facts.push({ label: "Gate", value: `${present}/${total}` });
+  }
+  const score = row.confidenceScore;
+  if (typeof score === "number") facts.push({ label: "Score", value: String(score) });
+  const phase = row.phase;
+  if (typeof phase === "number") facts.push({ label: "Phase", value: String(phase) });
+  const dependsOn = row.dependsOnCount;
+  if (typeof dependsOn === "number" && dependsOn > 0) {
+    facts.push({ label: "Depends on", value: String(dependsOn) });
+  }
+  const allowlist = row.allowlistCount;
+  if (typeof allowlist === "number" && allowlist > 0) {
+    facts.push({ label: "Allowlist", value: `${allowlist} path${allowlist === 1 ? "" : "s"}` });
+  }
+  const excerpt = asText(row.descriptionExcerpt);
+  if (excerpt !== null && excerpt.trim() !== "") {
+    /*
+     * A board read ships an EXCERPT, not the description -- #92 caps what
+     * crosses the wire on purpose. So the expander here can only ever
+     * reveal what the excerpt itself already holds (its newlines, its
+     * markdown), never text the row does not have.
+     *
+     * `descriptionTruncated` is therefore rendered as a suffix on the
+     * expanded text rather than as a promise the button cannot keep: a
+     * reader who expands and finds it still cut needs to know the rest is
+     * in the ticket, not that the button failed.
+     */
+    const truncated = row.descriptionTruncated === true;
+    const text = truncated ? excerpt.trimEnd() + "\n\n_(excerpt — read the ticket for the rest)_" : excerpt;
+    facts.push(expandableFact("Description", text, { markdown: true }));
+  }
+  return {
+    id: asText(row.id) ?? "?",
+    state: asText(row.state) ?? "",
+    title: asText(row.title) ?? "",
+    facts,
+  };
+}
+
+/**
+ * A board read as a STACK OF TABLES, one per ticket (user direction
+ * 2026-09-05). Returns [] for a result with no rows, so the caller keeps
+ * its existing empty/unparseable distinction.
+ */
+export function ticketTables(result: Record<string, unknown> | null): TicketTable[] {
+  return asArray(result?.tickets)
+    .map((row) => asRecord(row))
+    .filter((row): row is Record<string, unknown> => row !== null)
+    .map((row) => ticketTableOf(row));
 }
 
 /** The bounded evidence rows a get_ticket result carries (#92 keeps them short). */
