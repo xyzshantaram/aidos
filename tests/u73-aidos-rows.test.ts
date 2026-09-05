@@ -19,6 +19,7 @@ import {
 } from "../src/client/view-state";
 import { AIDOS_ROWS, errorBody } from "../src/client/aidos-rows";
 import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
+import { ticketFromProjection } from "../src/client/aidos-row-data";
 import { apply } from "../src/tools/aidos-tools";
 import { asContext, createHarness } from "./b1-harness";
 
@@ -486,5 +487,39 @@ describe("#73 a failed call renders, it does not dump JSON", () => {
     expect(rows).not.toContain("aidos-evidence-strips");
     expect(rows).toContain('className="aidos-evidence-list"');
     expect(css).toContain(".aidos-evidence-list,");
+  });
+});
+
+describe("ticketFromProjection (the click-through peek's data source)", () => {
+  const projection = {
+    "ws:12": {
+      id: 12,
+      title: "Some ticket",
+      state: "in_progress",
+      slug: "some-ticket",
+      workspaceKey: "ws",
+      gatePresent: 1,
+      gateTotal: 2,
+      criteria: "ship it",
+      description: "the body text",
+    },
+  };
+
+  it("carries the fields TicketStrip renders, criteria included", async () => {
+    const hit = ticketFromProjection(projection, "ws:12");
+    expect(hit).not.toBeNull();
+    expect(hit?.gatePresent).toBe(1);
+    expect(hit?.gateTotal).toBe(2);
+    // THE REGRESSION: criteria used to be dropped by the copy step, and the
+    // peek's gate chip crashed on `criteria.trim()` the moment a projected
+    // ticket had a gate fraction to show.
+    expect(hit?.criteria).toBe("ship it");
+  });
+
+  it("returns null for missing or malformed entries instead of throwing", () => {
+    expect(ticketFromProjection(projection, "ws:99")).toBeNull();
+    expect(ticketFromProjection(projection, null)).toBeNull();
+    expect(ticketFromProjection("not a record", "ws:12")).toBeNull();
+    expect(ticketFromProjection({ "ws:12": { title: 3 } }, "ws:12")).toBeNull();
   });
 });

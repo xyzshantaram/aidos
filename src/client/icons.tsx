@@ -241,3 +241,19 @@ export function ChevronIcon({ open }: { open: boolean }) {
     />
   );
 }
+
+/*
+ * The BASE CARD's chevron: the tool-render classes, not the todo-panel ones.
+ * The tool-render stylesheet gives this chevron its own margin and rotation,
+ * so a row built from tool-render's classes must use this variant to sit
+ * identically to a native tool call -- the aidos-chevron margin was tuned
+ * for the board rows and rendered with the wrong padding beside the badge.
+ */
+export function ToolRenderChevron({ open }: { open: boolean }) {
+  return (
+    <IconChevronDownOutline14
+      className={"tool-render-chevron" + (open ? " tool-render-chevron-open" : "")}
+      aria-hidden={true}
+    />
+  );
+}

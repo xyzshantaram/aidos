@@ -27,7 +27,17 @@ import react from "react";
 import { EvidenceStrip } from "./evidence-strip";
 import { TicketStrip } from "./ticket-strip";
 import { ModalShell } from "./ui";
-import { ChevronIcon } from "./icons";
+import {
+  AlertCircleIcon,
+  AllowlistIcon,
+  CompassIcon,
+  ForkIcon,
+  KeyholeIcon,
+  PencilIcon,
+  PopOutIcon,
+  SignoffIcon,
+  ToolRenderChevron,
+} from "./icons";
 import { asBoardKey } from "./board-logic";
 import { setSelection, ticketTitle } from "./view-state";
 import {
@@ -105,6 +115,8 @@ function ticketLabel(ticketId: string | null): string | null {
 
 interface RowProps {
   title: string;
+  /** The badge's leading glyph, exactly as the base card's badge carries one. */
+  icon?: react.ReactNode;
   summary: string;
   state: RowState;
   body?: react.ReactNode | null;
@@ -197,8 +209,9 @@ function AidosRow(props: RowProps) {
           * so an aidos call and a native call hash to the same hue and
           * failures go white-on-red in both.
           */}
-        {expandable ? <ChevronIcon open={open} /> : null}
+        {expandable ? <ToolRenderChevron open={open} /> : null}
         <span className="tool-render-name-badge" style={nameBadgeColors(props.title, props.state === "error")}>
+          <span className="tool-render-name-badge-icon">{props.icon}</span>
           <span className="tool-render-name-badge-text" title={props.title} data-dsh-tip="">
             {props.title}
           </span>
@@ -329,13 +342,18 @@ export function errorBody(errorText: string | null): react.ReactNode | null {
   );
 }
 
-/** Everything the rows share: parse once, decide once. */
-function useAidosRow(props: AidosViewProps) {
-  const args = parseArgs(argsRawOf(props.block));
-  const state = rowStateOf(props.block);
-  const result = resultOf(props.block);
+/** Everything the rows share: parse once, decide once.
+ *
+ * `props` itself is optional: the harness may mount a toolview before its
+ * block is attached, and `undefined` props used to die on `props.block`
+ * inside the hook rather than rendering the ordinary "nothing yet" state. */
+function useAidosRow(props?: AidosViewProps) {
+  const block = props?.block;
+  const args = parseArgs(argsRawOf(block));
+  const state = rowStateOf(block);
+  const result = resultOf(block);
   const ticketId = ticketIdOf(args, result);
-  const errorText = state === "error" ? errorTextOf(props.block) : null;
+  const errorText = state === "error" ? errorTextOf(block) : null;
   const errorSummary =
     errorText !== null && errorText !== "" ? firstLineOfError(errorText) : undefined;
   /*
@@ -384,6 +402,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
         : null;
   return (
     <AidosRow
+      icon={<SignoffIcon />}
       title="Attach evidence"
       summary={ticketLabel(ticketId) ?? "evidence"}
       state={state}
@@ -415,6 +434,7 @@ export function MoveTicketRow(props: AidosViewProps) {
         : null;
   return (
     <AidosRow
+      icon={<ForkIcon />}
       title="Move ticket"
       summary={to === null ? (label ?? "move") : `${label ?? ""} → ${to}`.trim()}
       state={state}
@@ -448,6 +468,7 @@ export function SetTicketRow(props: AidosViewProps) {
         : null;
   return (
     <AidosRow
+      icon={<PencilIcon />}
       title={created ? "Create ticket" : "Edit ticket"}
       summary={summary ?? "ticket"}
       state={state}
@@ -496,6 +517,7 @@ export function GetTicketRow(props: AidosViewProps) {
           );
   return (
     <AidosRow
+      icon={<CompassIcon />}
       title="Read ticket"
       summary={ticketLabel(ticketId) ?? "ticket"}
       state={state}
@@ -553,6 +575,7 @@ export function GetTicketsRow(props: AidosViewProps) {
           );
   return (
     <AidosRow
+      icon={<KeyholeIcon />}
       title="Read the board"
       summary={summary}
       state={state}
@@ -609,6 +632,7 @@ export function RequestAllowlistRow(props: AidosViewProps) {
           );
   return (
     <AidosRow
+      icon={<AllowlistIcon />}
       title="Request allowlist"
       summary={summary}
       state={state}
@@ -656,6 +680,7 @@ export function SuggestActionsRow(props: AidosViewProps) {
           );
   return (
     <AidosRow
+      icon={<AlertCircleIcon />}
       title="Suggest actions"
       summary={summary}
       state={state}
@@ -684,6 +709,7 @@ export function PlanRow(props: AidosViewProps) {
     args?.projectId === undefined ? "the project plan" : "project " + String(args.projectId);
   return (
     <AidosRow
+      icon={<PopOutIcon />}
       title="Export plan"
       summary={summary}
       state={state}
@@ -719,6 +745,7 @@ export function PlanImportRow(props: AidosViewProps) {
         : null;
   return (
     <AidosRow
+      icon={<PopOutIcon />}
       title="Import plan"
       summary={file}
       state={state}
@@ -753,6 +780,7 @@ export function PlanMetaRow(props: AidosViewProps) {
         : null;
   return (
     <AidosRow
+      icon={<CompassIcon />}
       title="Read plan blocks"
       summary={summary}
       state={state}
@@ -780,6 +808,7 @@ export function PlanMetaSetRow(props: AidosViewProps) {
         : null;
   return (
     <AidosRow
+      icon={<PencilIcon />}
       title="Edit plan blocks"
       summary={blocks.length === 0 ? "no block" : blocks.join(" · ")}
       state={state}

@@ -82,6 +82,14 @@ describe("hasCriteria", () => {
   it("returns true for a non-empty criteria string", () => {
     expect(hasCriteria(makeTicket({ criteria: "ship the gate" }))).toBe(true);
   });
+
+  it("reads a MISSING criteria field as false, not a crash", () => {
+    // TicketStrip renders projected tickets off the wire; an older host
+    // build may omit the field entirely. This was `undefined.trim()` and it
+    // took the whole toolview slot down with it.
+    expect(hasCriteria({ criteria: undefined } as never)).toBe(false);
+    expect(hasCriteria({} as never)).toBe(false);
+  });
 });
 
 describe("compareTickets", () => {

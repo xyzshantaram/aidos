@@ -214,6 +214,13 @@ export interface ProjectedTicket {
   gatePresent?: number;
   gateTotal?: number;
   descriptionExcerpt?: string;
+  /*
+   * Carried through because TicketStrip's gate chip needs it: a ticket with
+   * criteria can FAIL its gate; one without cannot. This field was dropped
+   * by the copy step and the peek crashed on `criteria.trim()` -- it existed
+   * in the projection payload the whole time.
+   */
+  criteria?: string;
 }
 
 function isTicketState(value: unknown): value is TicketState {
@@ -266,6 +273,7 @@ export function ticketFromProjection(
   };
   if (typeof hit.gatePresent === "number") out.gatePresent = hit.gatePresent;
   if (typeof hit.gateTotal === "number") out.gateTotal = hit.gateTotal;
+  if (typeof hit.criteria === "string") out.criteria = hit.criteria;
   const excerpt = asText(hit.description);
   if (excerpt !== null && excerpt.trim() !== "") out.descriptionExcerpt = oneLine(excerpt, 220);
   return out;

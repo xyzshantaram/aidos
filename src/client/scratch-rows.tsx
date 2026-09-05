@@ -23,7 +23,12 @@ import react from "react";
 
 import { gutterWidth, highlightCode, languageFor } from "./highlight";
 import { numberedReadRows, readStartLine } from "./vendor/tool-render/text";
-import { ChevronIcon } from "./icons";
+import {
+  CompassIcon,
+  ForkIcon,
+  PencilIcon,
+  ToolRenderChevron,
+} from "./icons";
 
 import {
   argsRawOf,
@@ -54,11 +59,13 @@ export interface ToolViewProps {
  */
 function Leading({ state, open }: { state: RowState; open: boolean }) {
   void state;
-  return <ChevronIcon open={open} />;
+  return <ToolRenderChevron open={open} />;
 }
 
 interface RowOptions {
   title: string;
+  /** The badge's leading glyph, exactly as the base card's badge carries one. */
+  icon?: react.ReactNode;
   summary: string;
   state: RowState;
   body: react.ReactNode | null;
@@ -69,7 +76,7 @@ interface RowOptions {
  * The shared row shell. One shape for every scratch tool, so the rows read
  * as a column rather than as four different widgets.
  */
-function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
+function ScratchRow({ title, icon, summary, state, body, errorSummary }: RowOptions) {
   const [expanded, setExpanded] = react.useState(false);
   const expandable = body !== null;
   const open = expanded && expandable;
@@ -114,8 +121,9 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
             : undefined
         }
       >
-        <Leading state={state} open={open} />
+        {expandable ? <Leading state={state} open={open} /> : null}
         <span className="tool-render-name-badge" style={nameBadgeColors(title, state === "error")}>
+          <span className="tool-render-name-badge-icon">{icon}</span>
           <span className="tool-render-name-badge-text" title={title} data-dsh-tip="">
             {title}
           </span>
@@ -208,7 +216,7 @@ export function ScratchReadRow(props: ToolViewProps) {
       ? bodyOf(text, state === "error")
       : readBody(text, path);
   return (
-    <ScratchRow title="Scratch read" summary={summary} state={state} body={body} errorSummary={errorSummary} />
+    <ScratchRow icon={<CompassIcon />} title="Scratch read" summary={summary} state={state} body={body} errorSummary={errorSummary} />
   );
 }
 
@@ -219,6 +227,7 @@ export function ScratchWriteRow(props: ToolViewProps) {
   const written = state === "error" ? errorText : pickString(args, ["content"]) ?? null;
   return (
     <ScratchRow
+      icon={<PencilIcon />}
       title="Scratch write"
       summary={summary}
       state={state}
@@ -248,6 +257,7 @@ export function ScratchEditRow(props: ToolViewProps) {
   }
   return (
     <ScratchRow
+      icon={<PencilIcon />}
       title="Scratch edit"
       summary={summary}
       state={state}
@@ -261,6 +271,7 @@ export function ScratchMkdirRow(props: ToolViewProps) {
   const { state, summary, errorText, errorSummary } = useRow(props, "Mkdir");
   return (
     <ScratchRow
+      icon={<ForkIcon />}
       title="Scratch mkdir"
       summary={summary}
       state={state}

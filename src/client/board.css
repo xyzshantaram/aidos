@@ -2950,3 +2950,15 @@
   color: var(--dsw-alias-label-primary);
   font-weight: 500;
 }
+
+/*
+ * The aidos tool rows reuse the tool-render badge classes, but their glyphs
+ * are this repo's 12px viewBox icons rather than the shell's 14px
+ * primitives. The badge slot scales them to the base card's exact icon
+ * size -- shapes and font sizes match; only the glyph artwork itself is
+ * ours.
+ */
+.tool-render-name-badge-icon svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}

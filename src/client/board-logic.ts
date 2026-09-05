@@ -165,9 +165,15 @@ export function badgeClass(state: string): string {
   return "aidos-chip aidos-chip-state-" + stateClass(state);
 }
 
-/** True when the ticket carries a non-empty criteria string. */
+/** True when the ticket carries a non-empty criteria string.
+ *
+ * Defensive on the field itself: TicketStrip renders projected tickets that
+ * crossed the wire, and an older host build may simply not carry the field
+ * -- a missing criteria reads as "nothing to meet", not as a crash. This
+ * was `ticket.criteria.trim()` on an undefined field and took down the
+ * toolview slot with it. */
 export function hasCriteria<T extends TicketLike>(ticket: T): boolean {
-  return ticket.criteria.trim().length > 0;
+  return typeof ticket.criteria === "string" && ticket.criteria.trim().length > 0;
 }
 
 /** Compare two titles case-insensitively. Total and deterministic. */
