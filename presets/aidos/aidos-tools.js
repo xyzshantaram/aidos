@@ -28502,7 +28502,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       kind: "builtin:file_allowlist",
       payload: { paths }
     });
-    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: paths });
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const previousAllowlist = cache.state.tickets.get(pending.ticketId)?.allowlist ?? [];
+    const merged = [.../* @__PURE__ */ new Set([...previousAllowlist, ...paths])];
+    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: merged });
     return { resolved: `approved: ${paths.join(", ")}` };
   }
   suggestActions(agent, args) {
