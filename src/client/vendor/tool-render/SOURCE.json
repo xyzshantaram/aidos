@@ -4,11 +4,11 @@
   "files": {
     "client.module.css": {
       "vendoredAs": "tool-render.css",
-      "sha256": "696ebd879a48d16ac7a45bc339f058175d1fc6ebbca9708e17f7d02ef99f19c6"
+      "sha256": "565ca29e3c64d97dcd0be8a2650b82e52c08807a308924a2797a4a91f04f7f78"
     },
     "text.ts": {
       "vendoredAs": "text.js",
-      "sha256": "503eac3f1b232c42ce11a35dea3d1c28c3345e701e4ce11ef54a5240880be19c",
+      "sha256": "fed7e6061c0bda6c3bc30d10027010d610cac2d82aaa67e94f7fddca123b3091",
       "note": "vendored with a .js extension: upstream is untyped, and aidos typechecks strictly. The companion text.d.ts is aidos own, NOT vendored."
     }
   }

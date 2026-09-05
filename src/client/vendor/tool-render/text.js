@@ -220,6 +220,92 @@ export function looksLikeRawHtml(text) {
   return /^<[a-z][a-z0-9-]*(\s|>|\/>)/i.test(head);
 }
 
+// ---- outer code fence removal. ----
+// A compaction summary arrives wrapped in one fence, usually four backticks,
+// so the checkpoint's own triple-backtick blocks survive inside it.
+// Rendered as markdown that whole fence becomes one code block, which is why
+// the card showed a monospace wall with a copy button instead of the
+// headings and lists the checkpoint actually contains. This removes only a
+// fence that wraps the WHOLE text, and the closing fence must match the
+// opening one, so a summary that merely starts with a code block is left
+// alone.
+export function stripOuterFence(text) {
+  if (typeof text !== "string" || text === "") return text;
+  var trimmed = text.trim();
+  var match = /^(`{3,})[^\n]*\n([\s\S]*?)\n?\1$/.exec(trimmed);
+  return match === null ? text : match[2];
+}
+
+// ---- manual-compaction command outcome. ----
+// The manual-compaction chat node wraps { command, compaction }. `command` is
+// a CommandNode -- the /compact invocation's own lifecycle -- and its
+// `outcome` is the authoritative failure signal: { kind: 'success' | 'error',
+// text?, sourceEventSeq? } | null. `compaction` stays null on a failure for
+// the same reason it stays null while still running: nothing landed to
+// summarize. A failed run must be told apart from a still-running one, or the
+// card silently shows a blank "Compaction" row on a real failure. Returns the
+// outcome's error text, or null when there is no error to show.
+export function compactionCommandError(data) {
+  if (data === null || data === undefined || typeof data !== "object") return null;
+  var command = data.command;
+  if (command === null || command === undefined || typeof command !== "object") return null;
+  var outcome = command.outcome;
+  if (outcome === null || outcome === undefined || typeof outcome !== "object") return null;
+  if (outcome.kind !== "error") return null;
+  return typeof outcome.text === "string" && outcome.text !== "" ? outcome.text : "compaction failed";
+}
+
+// ---- compaction chat-node shapes. ----
+// The compaction card sits on conversation.chat.node, and two keys reach it
+// with different data. Key "compaction" hands the summary node itself. Key
+// "manual-compaction" wraps it as { command, compaction }, where compaction
+// stays null while the run is still going. The summary node names itself
+// with kind "compaction", so one test serves both keys.
+// Returns the summary node, or null when there is none to show yet.
+export function compactionSummaryNode(data) {
+  if (data === null || data === undefined || typeof data !== "object") return null;
+  if (data.kind === "compaction") return data;
+  var wrapped = data.compaction;
+  if (wrapped !== null && wrapped !== undefined && typeof wrapped === "object") {
+    if (wrapped.kind === "compaction") return wrapped;
+  }
+  return null;
+}
+
+// ---- list_agents result parsing. ----
+// The shipped tool renders one line per agent (dsh-tool-subagent-control's
+// list-agents render): `<id> [<status>] — <label>` for a child, and
+// `<id> [diagnostic: <reason>]` for one that could not be read. A
+// `descendants` scope inserts ` parent=<id> depth=<n>` before the label.
+// An empty roster renders the single line "(no subagents)".
+// A line that does not match is skipped, so a future format change degrades
+// to a shorter list instead of a broken card.
+var AGENT_LINE_RE =
+  /^(\S+)\s+\[([^\]]+)\](?:\s+parent=(\S+)\s+depth=(-?\d+))?(?:\s+—\s+([\s\S]*))?$/;
+
+export function parseAgentLines(text) {
+  if (typeof text !== "string" || text === "") return [];
+  var out = [];
+  var lines = text.split("\n");
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line === "" || line === "(no subagents)") continue;
+    var m = AGENT_LINE_RE.exec(line);
+    if (m === null) continue;
+    var mark = m[2];
+    var diagnostic = mark.indexOf("diagnostic:") === 0;
+    out.push({
+      id: m[1],
+      status: diagnostic ? null : mark,
+      reason: diagnostic ? mark.slice("diagnostic:".length).trim() : null,
+      parent: m[3] !== undefined ? m[3] : null,
+      depth: m[4] !== undefined ? Number(m[4]) : null,
+      label: m[5] !== undefined ? m[5] : "",
+    });
+  }
+  return out;
+}
+
 export function extractHunk(readText, removeFrom, removeTo, replacementText, startLine) {
   if (typeof readText !== "string" || readText === "") return null;
   var rows = [];
