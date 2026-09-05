@@ -68,6 +68,53 @@ export function declaredParameters(definition: unknown): Record<string, unknown>
   return parameters as Record<string, unknown>;
 }
 
+/*
+ * LINE ENDINGS, transcribed from the builtin rather than paraphrased, and
+ * lifted to module scope so each one can be DRIVEN by a test.
+ *
+ * They were local closures inside `editWithoutBackend`, and that hid a real
+ * gap: the only caller hands `restoreLineEndings` text that is already
+ * LF-normalised, so its own internal re-normalisation is unreachable from
+ * that path. Deleting it therefore changed nothing observable and no test
+ * could see it -- an EQUIVALENT MUTANT, not a caught defect. The guarantee
+ * looked tested and was not.
+ *
+ * Keeping the re-normalisation is right (it is the builtin's, and it makes
+ * the helper correct for any input rather than only for this call site), so
+ * the fix is to make the guarantee reachable: export it and assert the
+ * contract directly, on input that still contains CRLF.
+ */
+
+/** Every CRLF to LF, so matching happens in one representation. */
+export function normalizeLineEndings(content: string): string {
+  return content.replaceAll("\r\n", "\n");
+}
+
+/**
+ * The file's own ending, by MAJORITY VOTE over the first 4096 bytes.
+ *
+ * Not `includes("\r\n")`: one CRLF line in a mostly-LF file would then
+ * rewrite every other line's ending, silently writing bytes the caller never
+ * asked for.
+ */
+export function detectLineEndings(sample: string): "CRLF" | "LF" {
+  const head = sample.slice(0, 4096);
+  const crlf = head.split("\r\n").length - 1;
+  return crlf > head.split("\n").length - 1 - crlf ? "CRLF" : "LF";
+}
+
+/**
+ * Restore `style` on content that may hold EITHER ending.
+ *
+ * The re-normalisation is load-bearing on its own terms: a bare
+ * `.split("\n").join("\r\n")` over text already containing CRLF doubles it
+ * to `\r\r\n`. The builtin's source says that is exactly what the
+ * re-normalisation is for.
+ */
+export function restoreLineEndings(content: string, style: "CRLF" | "LF"): string {
+  return style === "LF" ? content : normalizeLineEndings(content).split("\n").join("\r\n");
+}
+
 /**
  * Perform a literal edit WITHOUT an `edit` backend, directly against the fs.
  *
@@ -170,17 +217,9 @@ async function editWithoutBackend(
    *     the very bug the change claimed to fix, left in place for any
    *     caller passing back bytes it had just read.
    *
-   * These are the builtin's helpers, transcribed, not paraphrased.
+   * These are the builtin's helpers, transcribed, not paraphrased. They live
+   * at module scope (above) so a test can drive each one directly.
    */
-  const normalizeLineEndings = (content: string): string => content.replaceAll("\r\n", "\n");
-  const detectLineEndings = (sample: string): "CRLF" | "LF" => {
-    const head = sample.slice(0, 4096);
-    const crlf = head.split("\r\n").length - 1;
-    return crlf > head.split("\n").length - 1 - crlf ? "CRLF" : "LF";
-  };
-  const restoreLineEndings = (content: string, style: "CRLF" | "LF"): string =>
-    style === "LF" ? content : normalizeLineEndings(content).split("\n").join("\r\n");
-
   const lineEndings = detectLineEndings(raw);
   const before = normalizeLineEndings(raw);
   // Normalised the same way the builtin normalises them, so a caller may

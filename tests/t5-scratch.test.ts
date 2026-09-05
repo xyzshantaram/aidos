@@ -16,7 +16,14 @@ import { join, isAbsolute } from "node:path";
 import { readFileSync } from "node:fs";
 
 import { childPathScope, writeBoundaryReason } from "../src/tools/allowlist";
-import { declaredParameters, resolveScratchPath, scratchRootForAgent } from "../src/tools/scratch";
+import {
+  declaredParameters,
+  detectLineEndings,
+  normalizeLineEndings,
+  resolveScratchPath,
+  restoreLineEndings,
+  scratchRootForAgent,
+} from "../src/tools/scratch";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { Store } from "../src/kernel/store";
 import { DEFAULT_CONFIG } from "../src/kernel/constants";
@@ -312,6 +319,43 @@ describe("the scratch tools", () => {
      * review proved it by handing it the corrupt bytes.
      */
     expect(content).not.toContain("\r\r");
+  });
+
+  /*
+   * The three line-ending helpers, driven DIRECTLY.
+   *
+   * A mutation run showed why this is needed: deleting the re-normalisation
+   * inside `restoreLineEndings` killed no test, because the only caller hands
+   * it text that is already LF-normalised. The deletion was an EQUIVALENT
+   * MUTANT through that path -- the guarantee read as tested and was not.
+   * These cases reach each helper's own contract, so the guarantee survives a
+   * refactor of the caller.
+   */
+  it("restoreLineEndings does not double an ending that is already CRLF", () => {
+    // The mutation the end-to-end tests could not see: without the internal
+    // re-normalisation this returns "a\r\r\nb\r\r\n".
+    expect(restoreLineEndings("a\r\nb\r\n", "CRLF")).toBe("a\r\nb\r\n");
+    expect(restoreLineEndings("a\nb\n", "CRLF")).toBe("a\r\nb\r\n");
+    // Mixed input still lands on one ending.
+    expect(restoreLineEndings("a\r\nb\n", "CRLF")).toBe("a\r\nb\r\n");
+    // LF is the identity, never a rewrite.
+    expect(restoreLineEndings("a\r\nb\n", "LF")).toBe("a\r\nb\n");
+  });
+
+  it("detectLineEndings takes a majority vote, not any-CRLF", () => {
+    expect(detectLineEndings("a\r\nb\nc\n")).toBe("LF"); // 1 of 3
+    expect(detectLineEndings("a\r\nb\r\nc\n")).toBe("CRLF"); // 2 of 3
+    expect(detectLineEndings("no endings at all")).toBe("LF");
+    // Only the first 4096 bytes vote: a long LF head outweighs a CRLF tail.
+    expect(detectLineEndings(`${"x\n".repeat(4096)}${"y\r\n".repeat(100)}`)).toBe("LF");
+  });
+
+  it("normalizeLineEndings collapses CRLF and leaves a lone CR alone", () => {
+    expect(normalizeLineEndings("a\r\nb")).toBe("a\nb");
+    // A bare CR is not a line ending this code claims to handle; a helper
+    // that ate it would corrupt files holding literal CR bytes.
+    expect(normalizeLineEndings("a\rb")).toBe("a\rb");
+    expect(normalizeLineEndings("a\r\r\nb")).toBe("a\r\nb");
   });
 
   /*

@@ -26930,6 +26930,17 @@ function declaredParameters(definition) {
   }
   return parameters;
 }
+function normalizeLineEndings(content) {
+  return content.replaceAll("\r\n", "\n");
+}
+function detectLineEndings(sample) {
+  const head = sample.slice(0, 4096);
+  const crlf = head.split("\r\n").length - 1;
+  return crlf > head.split("\n").length - 1 - crlf ? "CRLF" : "LF";
+}
+function restoreLineEndings(content, style) {
+  return style === "LF" ? content : normalizeLineEndings(content).split("\n").join("\r\n");
+}
 async function editWithoutBackend(ctx, root, absPath, args, exec) {
   if (Array.isArray(args.edits)) {
     throw new HarnessError(
@@ -26976,13 +26987,6 @@ async function editWithoutBackend(ctx, root, absPath, args, exec) {
   const fs = requireFs(ctx);
   const target = await fs.resolve(absPath, { signal: exec.signal });
   const raw = await fs.readText(target, exec.signal);
-  const normalizeLineEndings = (content) => content.replaceAll("\r\n", "\n");
-  const detectLineEndings = (sample) => {
-    const head = sample.slice(0, 4096);
-    const crlf = head.split("\r\n").length - 1;
-    return crlf > head.split("\n").length - 1 - crlf ? "CRLF" : "LF";
-  };
-  const restoreLineEndings = (content, style) => style === "LF" ? content : normalizeLineEndings(content).split("\n").join("\r\n");
   const lineEndings = detectLineEndings(raw);
   const before = normalizeLineEndings(raw);
   const oldNorm = normalizeLineEndings(oldString);

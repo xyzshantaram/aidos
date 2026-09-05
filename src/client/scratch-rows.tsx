@@ -23,12 +23,7 @@ import react from "react";
 
 import { gutterWidth, highlightCode, languageFor } from "./highlight";
 import { numberedReadRows, readStartLine } from "./vendor/tool-render/text";
-import {
-  CompassIcon,
-  ForkIcon,
-  PencilIcon,
-  ToolRenderChevron,
-} from "./icons";
+import { CompassIcon, ForkIcon, InspectIcon, PencilIcon, ToolRenderChevron } from "./icons";
 
 import {
   argsRawOf,
@@ -44,9 +39,28 @@ import {
   type RowState,
 } from "./tool-block";
 
+/**
+ * The slot's own currency (`ToolCallOwnerProps` on `tool.call.toolview`).
+ *
+ * `openFile` and `inspect` are the two affordances a review found MISSING
+ * from these rows while the builtin fs rows had them: the summary was inert
+ * text where the builtin's is a link that opens the file, and the expanded
+ * card had no way back to the call in the trajectory view. Both are handed
+ * to every registered view; the rows simply were not reading them.
+ *
+ * Both are declared OPTIONAL even though the slot always supplies
+ * `openFile`. A row is a rendering nicety that must never cost the page, and
+ * a props shape that hard-requires a callback turns any caller that omits it
+ * (a test, a future host, a compaction node) into a crash instead of a row
+ * without a link.
+ */
 export interface ToolViewProps {
   block: unknown;
   cwd?: string;
+  /** Open a tool-argument path through the host. */
+  openFile?: (path: string) => void;
+  /** Show this call in the trajectory view, when the host offers it. */
+  inspect?: () => void;
 }
 
 /*
@@ -70,15 +84,29 @@ interface RowOptions {
   state: RowState;
   body: react.ReactNode | null;
   errorSummary?: string;
+  /** The absolute path the summary stands for, when the call names one. */
+  path?: string;
+  openFile?: (path: string) => void;
+  inspect?: () => void;
 }
 
 /**
  * The shared row shell. One shape for every scratch tool, so the rows read
  * as a column rather than as four different widgets.
  */
-function ScratchRow({ title, icon, summary, state, body, errorSummary }: RowOptions) {
+function ScratchRow({
+  title,
+  icon,
+  summary,
+  state,
+  body,
+  errorSummary,
+  path,
+  openFile,
+  inspect,
+}: RowOptions) {
   const [expanded, setExpanded] = react.useState(false);
-  const expandable = body !== null;
+  const expandable = body !== null || inspect !== undefined;
   const open = expanded && expandable;
   /*
    * An errored row reports its ERROR where the path would go. The path is
@@ -87,8 +115,30 @@ function ScratchRow({ title, icon, summary, state, body, errorSummary }: RowOpti
    */
   const showsError = state === "error" && errorSummary !== undefined;
   const shown = showsError ? errorSummary : summary;
+  /*
+   * The path becomes a LINK, exactly where the base card puts one -- and,
+   * exactly as the base card does, only when there is no error to report.
+   * On a failed call the row's one line belongs to the reason; a link to the
+   * file the call did not manage to touch is the wrong thing to offer.
+   */
+  const linked = !showsError && path !== undefined && openFile !== undefined;
+  const openIt = () => {
+    if (path !== undefined && openFile !== undefined) openFile(path);
+  };
   return (
-    <div className="tool-render-card" data-error={state === "error" || undefined}>
+    <div
+      className="tool-render-card"
+      data-error={state === "error" || undefined}
+      /*
+       * STOPPED is not ERROR. An interrupted call takes the dimmer outline
+       * the vendored stylesheet already draws for it
+       * (`.tool-render-card[data-stopped]`), instead of sharing the crash-red
+       * of a call that actually failed. The attribute was simply never set,
+       * so every stopped scratch call rendered as an untinted success while
+       * the builtin's rendered as stopped.
+       */
+      data-stopped={state === "stopped" || undefined}
+    >
       {/*
         * A DIV with role="button", not a <button> element.
         *
@@ -130,16 +180,56 @@ function ScratchRow({ title, icon, summary, state, body, errorSummary }: RowOpti
         </span>
         {/* The dot between the tool name and its argument, as tool-render has. */}
         <span className="tool-render-sep" aria-hidden="true" />
-        <span
-          className="tool-render-summary"
-          tool-render-error={showsError ? true : undefined}
-          title={shown}
-          data-dsh-tip=""
-        >
-          {shown}
-        </span>
+        {linked ? (
+          <span
+            className="tool-render-path"
+            role="link"
+            tabIndex={0}
+            title={path}
+            data-dsh-tip=""
+            /*
+             * stopPropagation, or opening the file also toggles the card.
+             * The row's own click handler sits on the ancestor, so without
+             * it every path click expands or collapses as a side effect.
+             */
+            onClick={(event: react.MouseEvent<HTMLSpanElement>) => {
+              event.stopPropagation();
+              openIt();
+            }}
+            onKeyDown={(event: react.KeyboardEvent<HTMLSpanElement>) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                event.stopPropagation();
+                openIt();
+              }
+            }}
+          >
+            {shown}
+          </span>
+        ) : (
+          <span
+            className="tool-render-summary"
+            tool-render-error={showsError ? true : undefined}
+            title={shown}
+            data-dsh-tip=""
+          >
+            {shown}
+          </span>
+        )}
       </div>
-      {open ? <div className="tool-render-body">{body}</div> : null}
+      {open ? (
+        <div className="tool-render-body">
+          {body}
+          {/* The base card's way back to the call in the trajectory view. */}
+          {inspect !== undefined ? (
+            <button type="button" className="tool-render-inspect" onClick={inspect}>
+              {/* No leading space: `.tool-render-inspect` sets `gap`. */}
+              <InspectIcon />
+              Inspect
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -153,7 +243,21 @@ function useRow(props: ToolViewProps, label: string) {
   const summary = rawPath !== undefined ? relativize(rawPath, props.cwd) : label;
   const errorSummary =
     errorText !== null && errorText !== "" ? firstLineOfError(errorText) : undefined;
-  return { args, state, summary, errorText, errorSummary };
+  /*
+   * The link carries the ABSOLUTE path, while the row SHOWS the relativised
+   * one. `openFile` is a host call, and handing it the display string would
+   * ask the host to open a path relative to a cwd it was never told about.
+   */
+  return {
+    args,
+    state,
+    summary,
+    errorText,
+    errorSummary,
+    path: rawPath,
+    openFile: props.openFile,
+    inspect: props.inspect,
+  };
 }
 
 /** A body block, or null when there is nothing worth expanding. */
@@ -177,7 +281,21 @@ function bodyOf(text: string | null, isError: boolean): react.ReactNode | null {
  * resemblance; this matches by using the same code.
  */
 function readBody(text: string, path: string | undefined): react.ReactNode {
-  const rows = numberedReadRows(text, readStartLine(null, text));
+  return codeBlock(numberedReadRows(text, readStartLine(null, text)), path);
+}
+
+/**
+ * The numbered, highlighted code block both the read and the write body use.
+ *
+ * Shared because they must not drift: a write whose content rendered as a
+ * raw `<pre>` while a read of the SAME FILE rendered as numbered, highlighted
+ * lines is exactly the "you can tell which family it came from" tell this
+ * ticket exists to remove.
+ */
+function codeBlock(
+  rows: ReadonlyArray<{ number: number | null; text: string }>,
+  path: string | undefined,
+): react.ReactNode {
   const language = languageFor(path ?? "");
   const width = gutterWidth(rows.map((row) => row.number));
   return (
@@ -205,8 +323,35 @@ function readBody(text: string, path: string | undefined): react.ReactNode {
   );
 }
 
+/**
+ * A write body, matching the base card's.
+ *
+ * The base card diffs the new content against the LAST READ of the same path
+ * and falls back to "no earlier version on record" plus the new content
+ * when it has no earlier text. Aidos takes that fallback branch ALWAYS, and
+ * that is a real difference, named rather than papered over: the earlier
+ * text comes from a session snapshot the base card reads through its own
+ * `useSession` prop, which is tool-render's, not part of the
+ * `tool.call.toolview` owner currency every registered view receives
+ * (`callId`, `toolName`, `block`, `cwd`, `home`, `openFile`, `inspect`).
+ * Aidos cannot reach it without depending on tool-render, which #72 forbids.
+ *
+ * What IS matched is everything the fallback branch renders: the same note,
+ * the same numbered and highlighted lines, the same containers -- so the
+ * write body stops being a raw `<pre>` dump beside a highlighted read.
+ */
+function writeBody(content: string, path: string | undefined): react.ReactNode {
+  return (
+    <div className="tool-render-write">
+      <div className="tool-render-write-note">No earlier version on record; new content below</div>
+      {codeBlock(numberedReadRows(content, 1), path)}
+    </div>
+  );
+}
+
 export function ScratchReadRow(props: ToolViewProps) {
-  const { args, state, summary, errorText, errorSummary } = useRow(props, "Read");
+  const row = useRow(props, "Read");
+  const { args, state, errorText } = row;
   // The envelope's own fields are already on the row, so the body shows the
   // FILE CONTENT rather than the JSON wrapper around it.
   const text = state === "error" ? errorText : unwrapScratchResult(resultTextOf(props.block));
@@ -215,30 +360,25 @@ export function ScratchReadRow(props: ToolViewProps) {
     state === "error" || text === null || text === ""
       ? bodyOf(text, state === "error")
       : readBody(text, path);
-  return (
-    <ScratchRow icon={<CompassIcon />} title="Scratch read" summary={summary} state={state} body={body} errorSummary={errorSummary} />
-  );
+  return <ScratchRow {...row} icon={<CompassIcon />} title="Scratch read" body={body} />;
 }
 
 export function ScratchWriteRow(props: ToolViewProps) {
-  const { args, state, summary, errorText, errorSummary } = useRow(props, "Write");
+  const row = useRow(props, "Write");
+  const { args, state, errorText } = row;
   // The written CONTENT is the interesting part, and it is in the arguments
   // rather than the result -- the result only reports create-vs-update.
-  const written = state === "error" ? errorText : pickString(args, ["content"]) ?? null;
-  return (
-    <ScratchRow
-      icon={<PencilIcon />}
-      title="Scratch write"
-      summary={summary}
-      state={state}
-      body={bodyOf(written, state === "error")}
-      errorSummary={errorSummary}
-    />
-  );
+  const written = state === "error" ? errorText : (pickString(args, ["content"]) ?? null);
+  const body =
+    state === "error" || written === null || written === ""
+      ? bodyOf(written, state === "error")
+      : writeBody(written, row.path);
+  return <ScratchRow {...row} icon={<PencilIcon />} title="Scratch write" body={body} />;
 }
 
 export function ScratchEditRow(props: ToolViewProps) {
-  const { args, state, summary, errorText, errorSummary } = useRow(props, "Edit");
+  const row = useRow(props, "Edit");
+  const { args, state, errorText } = row;
   let text: string | null;
   if (state === "error") {
     text = errorText;
@@ -257,26 +397,23 @@ export function ScratchEditRow(props: ToolViewProps) {
   }
   return (
     <ScratchRow
+      {...row}
       icon={<PencilIcon />}
       title="Scratch edit"
-      summary={summary}
-      state={state}
       body={bodyOf(text, state === "error")}
-      errorSummary={errorSummary}
     />
   );
 }
 
 export function ScratchMkdirRow(props: ToolViewProps) {
-  const { state, summary, errorText, errorSummary } = useRow(props, "Mkdir");
+  const row = useRow(props, "Mkdir");
+  const { state, errorText } = row;
   return (
     <ScratchRow
+      {...row}
       icon={<ForkIcon />}
       title="Scratch mkdir"
-      summary={summary}
-      state={state}
       body={bodyOf(state === "error" ? errorText : null, state === "error")}
-      errorSummary={errorSummary}
     />
   );
 }

@@ -20,4 +20,21 @@ declare module "@deepseek-ai/dsh-client-ui-primitives" {
     className?: string;
     "aria-hidden"?: boolean;
   }): ReactElement;
+
+  /*
+   * The shell's own card renders this exact component beside the word
+   * "Inspect" (dsh-client-ui-tool's client bundle), so aidos's inspect
+   * affordance uses it rather than a redraw.
+   *
+   * Declared only after checking it is in the SAME frozen namespace the
+   * chevron comes from -- both appear as `Name:binding` entries of one
+   * object literal in dsh-web-frontend's bundle, 572 bytes apart. A name
+   * merely USED inside the shell would not be importable through this
+   * specifier, and this file's whole risk is declaring something the shell
+   * does not actually hand over.
+   */
+  export function IconInspectOutline12(props?: {
+    className?: string;
+    "aria-hidden"?: boolean;
+  }): ReactElement;
 }

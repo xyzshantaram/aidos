@@ -12,7 +12,10 @@
 
 import react from "react";
 
-import { IconChevronDownOutline14 } from "@deepseek-ai/dsh-client-ui-primitives";
+import {
+  IconChevronDownOutline14,
+  IconInspectOutline12,
+} from "@deepseek-ai/dsh-client-ui-primitives";
 
 /**
  * The shared stroke weight. 1.6 matches the visual weight of the 600-weight
@@ -256,4 +259,19 @@ export function ToolRenderChevron({ open }: { open: boolean }) {
       aria-hidden={true}
     />
   );
+}
+
+/**
+ * The BASE CARD's inspect glyph, and deliberately THE SAME COMPONENT the
+ * shell's own card renders (`dsh-client-ui-tool` draws
+ * `IconInspectOutline12` beside the word "Inspect").
+ *
+ * Not a hand-drawn lookalike. #82's whole test is that a reader cannot tell
+ * which family a card came from, and a redrawn glyph beside the shell's is
+ * precisely the kind of near-miss that gives the family away -- the same
+ * mistake three hand-ports of the read body already made before the text
+ * helpers were vendored instead.
+ */
+export function InspectIcon() {
+  return <IconInspectOutline12 />;
 }
