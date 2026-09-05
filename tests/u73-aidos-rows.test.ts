@@ -17,7 +17,7 @@ import {
   setSelection,
   ticketTitle,
 } from "../src/client/view-state";
-import { AIDOS_ROWS, errorBody } from "../src/client/aidos-rows";
+import { AIDOS_ROWS, errorBody, selectTitle } from "../src/client/aidos-rows";
 import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
 import { boardQuerySummary, ticketFromProjection } from "../src/client/aidos-row-data";
 import { apply } from "../src/tools/aidos-tools";
@@ -128,6 +128,26 @@ describe("#73 click-through uses the settled fallback", () => {
   it("does not offer a click when there is no ticket or no session", () => {
     expect(rows).toContain("props.ticketId !== null && props.ticketId !== undefined");
     expect(rows).toContain("props.sessionId !== undefined");
+  });
+
+  /*
+   * User-reported: "On hover, i see 'Open ticket [object Object] on the
+   * board'" -- the click-through link's title concatenated `shown`, the
+   * `{text, isError}` object `rowSummary` returns, instead of `shown.text`.
+   *
+   * TypeScript did NOT catch this: `"Select " + shown + " on the board"`
+   * type-checks cleanly under --strict, confirmed by compiling it in
+   * isolation, because `+` permits an arbitrary object on the string's other
+   * side and silently calls its `toString()`. Only a behavioural test does.
+   */
+  it("titles the hover with the SUMMARY TEXT, not the {text,isError} object", () => {
+    expect(selectTitle("#82 something")).toBe("Select #82 something on the board");
+    // The object's default toString is exactly the reported symptom.
+    expect(selectTitle("#82 something")).not.toContain("[object Object]");
+  });
+
+  it("passes shown.text to selectTitle at the call site, not the bare object", () => {
+    expect(rows).toContain("title={selectTitle(shown.text)}");
   });
 });
 

@@ -136,6 +136,22 @@ interface RowProps {
   useProjection?: (key: string) => unknown;
 }
 
+/**
+ * The click-through link's hover title.
+ *
+ * A pure function so this exact bug is unit tested rather than left to
+ * TypeScript, which does NOT catch it: `"Select " + shown + " on the board"`
+ * (`shown` being the `{text, isError}` object `rowSummary` returns, not a
+ * string) type-checks cleanly under `--strict` -- confirmed by compiling it
+ * in isolation -- because `+` permits an arbitrary object on the string's
+ * other side and silently calls its `toString()`. The result renders as the
+ * literal text "[object Object]" in a live hover, which is exactly what was
+ * reported ("On hover, i see 'Open ticket [object Object] on the board'").
+ */
+export function selectTitle(summaryText: string): string {
+  return `Select ${summaryText} on the board`;
+}
+
 function AidosRow(props: RowProps) {
   const [expanded, setExpanded] = react.useState(false);
   const [peekOpen, setPeekOpen] = react.useState(false);
@@ -234,7 +250,7 @@ function AidosRow(props: RowProps) {
             className="tool-render-path"
             role="link"
             tabIndex={0}
-            title={"Select " + shown + " on the board"}
+            title={selectTitle(shown.text)}
             data-dsh-tip=""
             onClick={select}
             onKeyDown={(event: react.KeyboardEvent) => {
