@@ -50,6 +50,7 @@ import {
   parseErrorEnvelope,
   resultTextOf,
   rowStateOf,
+  rowSummary,
   type RowState,
 } from "./tool-block";
 
@@ -119,8 +120,12 @@ function AidosRow(props: RowProps) {
   const body = props.body ?? null;
   const expandable = body !== null;
   const open = expanded && expandable;
-  const showsError = props.state === "error" && props.errorSummary !== undefined;
-  const shown = showsError ? props.errorSummary : props.summary;
+  /*
+   * The summary decision lives in rowSummary (tool-block), unit tested: the
+   * error summary swaps in whenever it exists -- the refusal retint must
+   * not suppress the reason -- and only a true error wears the red attr.
+   */
+  const shown = rowSummary(props.state, props.summary, props.errorSummary);
 
   /*
    * CLICK-THROUGH (#73 round 3).
@@ -190,7 +195,7 @@ function AidosRow(props: RowProps) {
         </span>
         <span className="tool-render-title">{props.title}</span>
         <span className="tool-render-sep" aria-hidden="true" />
-        {select !== undefined && !showsError ? (
+        {select !== undefined && props.errorSummary === undefined ? (
           <span
             className="tool-render-path"
             role="link"
@@ -205,11 +210,14 @@ function AidosRow(props: RowProps) {
               }
             }}
           >
-            {shown}
+            {shown.text}
           </span>
         ) : (
-          <span className="tool-render-summary" tool-render-error={showsError ? true : undefined}>
-            {shown}
+          <span
+            className="tool-render-summary"
+            tool-render-error={shown.isError ? true : undefined}
+          >
+            {shown.text}
           </span>
         )}
       </div>
@@ -349,7 +357,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
    * proved when three hand-written approximations of tool-render all failed.
    */
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : kind !== undefined
         ? (
@@ -391,7 +399,7 @@ export function MoveTicketRow(props: AidosViewProps) {
    */
   const facts = ticketFacts(result);
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : facts.length > 0
         ? <Facts facts={facts} />
@@ -424,7 +432,7 @@ export function SetTicketRow(props: AidosViewProps) {
    */
   const fields = writtenFields(args);
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : fields.length > 0
         ? <Facts facts={fields} />
@@ -453,7 +461,7 @@ export function GetTicketRow(props: AidosViewProps) {
    * is attached, and what the gate is still missing.
    */
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : facts.length === 0 && evidence.length === 0
         ? null
@@ -515,7 +523,7 @@ export function GetTicketsRow(props: AidosViewProps) {
    */
   const lines = ticketLines(result);
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : lines.length === 0
         ? null
@@ -572,7 +580,7 @@ export function RequestAllowlistRow(props: AidosViewProps) {
    * also brings it into being.
    */
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : paths.length === 0
         ? null
@@ -620,7 +628,7 @@ export function SuggestActionsRow(props: AidosViewProps) {
    * throw away the only part worth reading.
    */
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : lines.length === 0
         ? null
@@ -658,7 +666,11 @@ export function PlanRow(props: AidosViewProps) {
    * body is that text verbatim. resultOf returns null for it, correctly --
    * the text is read straight off the block instead.
    */
-  const text = state === "error" ? errorText : resultTextOf(props.block);
+  /*
+   * Error text first: a refusal here must still expand to its reason, and
+   * the retinted "stopped" state must not route the body back to the result.
+   */
+  const text = errorText ?? resultTextOf(props.block);
   const summary =
     args?.projectId === undefined ? "the project plan" : "project " + String(args.projectId);
   return (
@@ -666,7 +678,11 @@ export function PlanRow(props: AidosViewProps) {
       title="Export plan"
       summary={summary}
       state={state}
-      body={text === null || text === "" ? null : <TextBody text={text} isError={state === "error"} />}
+      body={
+        text === null || text === "" ? null : (
+          <TextBody text={text} isError={errorText !== null && state === "error"} />
+        )
+      }
       errorSummary={errorSummary}
     />
   );
@@ -687,7 +703,7 @@ export function PlanImportRow(props: AidosViewProps) {
     facts.push({ label: "Project", value: String(result.projectId) });
   }
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : facts.length > 0
         ? <Facts facts={facts} />
@@ -721,7 +737,7 @@ export function PlanMetaRow(props: AidosViewProps) {
     });
   }
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : facts.length > 0
         ? <Facts facts={facts} />
@@ -748,7 +764,7 @@ export function PlanMetaSetRow(props: AidosViewProps) {
   const blocks = planBlocksWritten(args);
   const written = writtenFields(args).filter((fact) => fact.label !== "projectId");
   const body =
-    state === "error"
+    errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : written.length > 0
         ? <Facts facts={written} />

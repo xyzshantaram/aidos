@@ -43,7 +43,29 @@ export function parseArgs(raw: string): Record<string, unknown> | null {
   }
 }
 
-/** The first of `keys` present as a non-empty string. */
+/**
+ * What the summary LINE shows, decided once, outside the component.
+ *
+ * The error summary swaps in whenever it EXISTS. A refusal is retinted to
+ * "stopped" -- a COLOUR decision -- and that retint must not also suppress
+ * the reason: coupling the swap to `state === "error"` made every gate
+ * refusal render its plain ticket label while the computed reason was
+ * thrown away, which is exactly the "a refused call renders without its
+ * reason" report. The red attribute stays coupled to the error state; a
+ * refusal's summary reads in full weight through a board.css rule keyed on
+ * the stopped state plus this error attribute.
+ */
+export function rowSummary(
+  state: RowState,
+  summary: string,
+  errorSummary?: string,
+): { text: string; isError: boolean } {
+  if (errorSummary === undefined) return { text: summary, isError: false };
+  return { text: errorSummary, isError: state === "error" };
+}
+
+/**
+ * The first of `keys` present as a non-empty string. */
 export function pickString(
   value: Record<string, unknown> | null,
   keys: readonly string[],

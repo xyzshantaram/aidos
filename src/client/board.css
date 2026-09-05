@@ -2920,3 +2920,15 @@
 .tool-render-body > .aidos-evidence-list {
   margin: 0.25rem 0 0.25rem 0.25rem;
 }
+
+/*
+ * A REFUSAL is retinted to "stopped" (not crash red) -- but the stopped
+ * state also MUTES its summary, and the refusal's reason is the one thing
+ * the row exists to say. When a stopped row carries an error summary, the
+ * summary reads in full weight instead of the mute. It is deliberately NOT
+ * the error red: a gate refusal is the system working.
+ */
+.tool-render-row[data-state="stopped"] .tool-render-summary[tool-render-error] {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+}

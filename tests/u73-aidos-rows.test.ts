@@ -18,7 +18,7 @@ import {
   ticketTitle,
 } from "../src/client/view-state";
 import { AIDOS_ROWS, errorBody } from "../src/client/aidos-rows";
-import { parseErrorEnvelope, unwrapErrorEnvelope } from "../src/client/tool-block";
+import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
 import { apply } from "../src/tools/aidos-tools";
 import { asContext, createHarness } from "./b1-harness";
 
@@ -385,6 +385,45 @@ describe("#73 a failed call renders, it does not dump JSON", () => {
     expect(parseErrorEnvelope(PLAIN)?.refusal).toBe(false);
     // And the row acts on it.
     expect(rows).toContain('envelope?.refusal === true ? "stopped" : state');
+  });
+
+  it("a REFUSAL's summary line shows the reason (#73 review blocker)", () => {
+    /*
+     * A refusal is retinted to "stopped" so it does not wear crash red --
+     * and that retint used to SUPPRESS the reason too, because the summary
+     * only swapped in the error text when state was "error". A gate refusal
+     * then rendered the plain ticket label ("evidence") while the computed
+     * reason was thrown away. The decision now lives in rowSummary, called
+     * for its RESULT, so the refusal case is asserted behaviourally: the
+     * text is the reason and it is NOT red.
+     */
+    const reason = unwrapErrorEnvelope(GATE_REFUSAL) as string;
+    const refusal = rowSummary("stopped", "#12 — some ticket", reason);
+    expect(refusal.text).toBe(reason);
+    expect(refusal.isError).toBe(false);
+    // A true failure swaps the reason in AND wears red.
+    const failure = rowSummary("error", "#12 — some ticket", reason);
+    expect(failure.text).toBe(reason);
+    expect(failure.isError).toBe(true);
+    // A healthy row is untouched.
+    expect(rowSummary("ok", "#12 — some ticket")).toEqual({
+      text: "#12 — some ticket",
+      isError: false,
+    });
+    // The component actually consults it, and the old coupling is gone.
+    expect(rows).toContain("rowSummary(props.state, props.summary, props.errorSummary)");
+    expect(rows).not.toContain('props.state === "error" && props.errorSummary !== undefined');
+  });
+
+  it("a refusal's reason stays readable under the stopped tint", () => {
+    // The stopped state mutes summaries; the refusal's reason is the one
+    // thing its row exists to say, so board.css restores full weight when
+    // the row carries an error summary. Red is deliberately NOT restored:
+    // a gate refusal is the system working.
+    const css = readFileSync(new URL("../src/client/board.css", import.meta.url), "utf8");
+    const rule = css.slice(css.indexOf('[data-state="stopped"] .tool-render-summary[tool-render-error]'));
+    expect(rule).toContain("}");
+    expect(rule.slice(0, rule.indexOf("}"))).toContain("var(--dsw-alias-label-primary)");
   });
 
   it("renders the message as prose and never the envelope", () => {
