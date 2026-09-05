@@ -93,7 +93,14 @@ export function reportCount(sessionId: string, count: number): void {
   const changed = counts.get(sessionId) !== count;
   counts.set(sessionId, count);
   currentSessionId = sessionId;
-  if (changed && bumpCallback !== null) bumpCallback();
+  if (!changed) return;
+  if (remountSuppressed) {
+    // The label WILL be stale until release, deliberately: a stale count is
+    // recoverable by looking again, a destroyed modal is not.
+    relabelPending = true;
+    return;
+  }
+  if (bumpCallback !== null) bumpCallback();
 }
 
 /** The tab label for a specific session. Use badgeLabel() for the current session. */
@@ -106,6 +113,39 @@ export function badgeLabelFor(sessionId: string): string {
 export function badgeLabel(): string {
   const count = currentSessionId === null ? 0 : counts.get(currentSessionId) ?? 0;
   return count > 0 ? "Tickets (" + count + ")" : "Tickets";
+}
+
+// ---- remount suppression (user-reported 2026-09-05: "opening the queue
+// makes the board vanish") ----
+//
+// A count change re-registers the Tickets tab (see index.ts), and a slot
+// re-registration UNMOUNTS AND REMOUNTS LocalTicketView -- the same
+// mechanism #100 traced for the reading-a-ticket bug. #100 fixed that bug by
+// moving `selectedKey` here, to a module store that survives the remount.
+// It did NOT do the same for `queueOpen` (or `createOpen`/`planOpen`): those
+// are still plain useState with no backing outside the component, so a
+// remount landing while the queue modal is open does not just flash the
+// board -- it silently sets queueOpen back to its initial `false` and the
+// modal is genuinely gone. Opening the queue did not CAUSE the count change
+// that triggered it (the change is some unrelated board write elsewhere in
+// the workspace landing at an unlucky moment); it just made the remount's
+// effect visible and interactive instead of a harmless flash.
+//
+// Rather than giving every such flag its own persisted slot (more state to
+// keep in sync, the same class of bug for the next modal someone adds), the
+// remount itself is deferred while any of them holds this open. The count
+// data is never stale for a WRITE -- `reportCount` still records the real
+// count immediately -- only the visible, destructive remount waits.
+let remountSuppressed = false;
+let relabelPending = false;
+
+/** Hold off the next tab remount; a suppressed change is applied on release. */
+export function setRemountSuppressed(suppressed: boolean): void {
+  remountSuppressed = suppressed;
+  if (!suppressed && relabelPending) {
+    relabelPending = false;
+    if (bumpCallback !== null) bumpCallback();
+  }
 }
 
 // ---- the selection store (#100) ----

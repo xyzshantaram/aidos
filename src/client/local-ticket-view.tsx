@@ -40,7 +40,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getMerge, getPulledVersion, getSelection, isMergePulling, onSelectionChanged, publishTicketTitles, setMerge, setMergePulling, setPulledVersion, setSelection } from "./view-state";
+import { getMerge, getPulledVersion, getSelection, isMergePulling, onSelectionChanged, publishTicketTitles, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -459,6 +459,38 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [createOpen, setCreateOpen] = react.useState(false);
   const [planOpen, setPlanOpen] = react.useState(false);
   const [queueOpen, setQueueOpen] = react.useState(false);
+
+  /*
+   * User-reported 2026-09-05: "opening the queue makes the board vanish."
+   *
+   * These three modals are plain useState, unlike `selectedKey` (#100),
+   * which was moved to the module store precisely because it had to survive
+   * a badge-triggered remount. A remount resets useState to its initial
+   * value, so one landing while the queue (or create/plan) is open silently
+   * flips it back to closed -- not a stale board, an actually-closed modal.
+   * Opening the queue did not CAUSE the remount; some unrelated board write
+   * elsewhere changed the open-ticket count at an unlucky moment, and #100's
+   * existing guard only skips a remount when the LABEL TEXT is unchanged --
+   * a genuine count change still fires it.
+   *
+   * Deferring the remount itself while any of these holds this tree open
+   * fixes the actual defect without giving each flag its own persisted
+   * slot (more state to keep in sync, the same bug for the next modal).
+   * The count is never stale for a WRITE, only for the visible badge text,
+   * and only until the last one of these closes.
+   */
+  react.useEffect(
+    function () {
+      const open = queueOpen || createOpen || planOpen;
+      setRemountSuppressed(open);
+      return function () {
+        // Release on unmount for a REAL reason (session switch), so a stale
+        // suppression cannot wedge a future mount's badge shut.
+        setRemountSuppressed(false);
+      };
+    },
+    [queueOpen, createOpen, planOpen],
+  );
   /*
    * #93: nominations are fetched when the queue OPENS, not polled. They only
    * annotate entries the derived queue already produced, so they can never

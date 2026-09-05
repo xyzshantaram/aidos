@@ -16,10 +16,16 @@
 
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { asBoardKey, boardKeyOf, resolveSelection } from "../src/client/board-logic";
-import { getSelection, setSelection } from "../src/client/view-state";
+import {
+  getSelection,
+  reportCount,
+  setCountCallback,
+  setRemountSuppressed,
+  setSelection,
+} from "../src/client/view-state";
 
 interface Row {
   id: number;
@@ -329,5 +335,62 @@ describe("#100 the tab no longer remounts for an unchanged label", () => {
     const body = index.slice(at, index.indexOf("});", at));
     expect(body).toContain("registration()");
     expect(body).toContain("registerTicketsTab(slots)");
+  });
+});
+
+describe("#100 follow-up: a remount does not fire while a modal holds the tree open", () => {
+  // User-reported 2026-09-05: "opening the queue makes the board vanish."
+  // queueOpen is plain useState with no module backing (unlike selectedKey),
+  // so a remount landing while it is open resets it to false -- the modal
+  // itself disappears, not just a stale badge.
+  afterEach(() => {
+    setCountCallback(null);
+    setRemountSuppressed(false);
+  });
+
+  it("does not bump the tab while suppressed, even though the count changed", () => {
+    let bumps = 0;
+    setCountCallback(() => {
+      bumps += 1;
+    });
+    setRemountSuppressed(true);
+    reportCount("sess-suppress", 3);
+    reportCount("sess-suppress", 3); // repeat: unchanged, must not bump either way
+    expect(bumps).toBe(0);
+  });
+
+  it("applies the deferred bump the instant suppression releases", () => {
+    let bumps = 0;
+    setCountCallback(() => {
+      bumps += 1;
+    });
+    setRemountSuppressed(true);
+    reportCount("sess-suppress2", 5);
+    expect(bumps).toBe(0);
+    setRemountSuppressed(false);
+    expect(bumps).toBe(1);
+  });
+
+  it("releasing with no pending change bumps nothing", () => {
+    let bumps = 0;
+    setCountCallback(() => {
+      bumps += 1;
+    });
+    setRemountSuppressed(true);
+    setRemountSuppressed(false);
+    expect(bumps).toBe(0);
+  });
+
+  it("an UNCHANGED count while suppressed leaves nothing pending to apply", () => {
+    let bumps = 0;
+    setCountCallback(() => {
+      bumps += 1;
+    });
+    reportCount("sess-suppress3", 7); // baseline, unsuppressed
+    bumps = 0;
+    setRemountSuppressed(true);
+    reportCount("sess-suppress3", 7); // same count: nothing changed
+    setRemountSuppressed(false);
+    expect(bumps).toBe(0);
   });
 });

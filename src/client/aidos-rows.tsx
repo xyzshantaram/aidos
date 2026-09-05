@@ -194,9 +194,43 @@ function AidosRow(props: RowProps) {
    */
   const canSelect =
     props.ticketId !== null && props.ticketId !== undefined && props.sessionId !== undefined;
+
+  /*
+   * CLICK-THROUGH INSTRUMENTATION (user-reported 2026-09-05: still broken
+   * after two rounds of source-level fixes, and after a full restart --
+   * which rules out the "stale bundle" explanation given for the earlier
+   * render crashes).
+   *
+   * Static reading cannot settle this further. The offline contract types
+   * available to this checkout only enumerate `tool.call.toolview`'s own
+   * `owner` fields -- callId, toolName, block, cwd, home, openFile, inspect
+   * -- with NO `sessionId` and NO `useProjection`. An earlier round claimed
+   * both are "Standard Props" on this exact slot via a LIVE Inspect
+   * Provider query; that tool is not available in this session, so the
+   * claim cannot be re-verified from here. If it was wrong, `props.sessionId`
+   * is undefined on every real render, `canSelect` is always false, and the
+   * summary never becomes a clickable link at all -- which matches "still
+   * broken" better than any DOM/CSS explanation would.
+   *
+   * Logs unconditionally (not behind logDebug's gate) on every row that
+   * names a ticket, and again the instant a click fires, so the next report
+   * settles this with the actual prop values instead of another read.
+   */
+  react.useEffect(() => {
+    if (props.ticketId === null || props.ticketId === undefined) return;
+    // eslint-disable-next-line no-console
+    console.info(
+      `[aidos] toolview ticket=${props.ticketId} sessionId=${props.sessionId ?? "MISSING"} ` +
+        `useProjection=${typeof props.useProjection} canSelect=${canSelect}`,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.ticketId, props.sessionId, props.useProjection, canSelect]);
+
   const select = canSelect
     ? (event: react.MouseEvent | react.KeyboardEvent) => {
         event.stopPropagation();
+        // eslint-disable-next-line no-console
+        console.info(`[aidos] click-through fired for ticket ${props.ticketId}`);
         setSelection(props.sessionId as string, asBoardKey(props.ticketId as string));
         setPeekOpen(true);
       }
@@ -403,7 +437,34 @@ function useAidosRow(props?: AidosViewProps) {
   const envelope = errorText === null ? null : parseErrorEnvelope(errorText);
   const shownState: RowState =
     state === "error" && envelope?.refusal === true ? "stopped" : state;
-  return { args, state: shownState, result, ticketId, errorText, errorSummary };
+  /*
+   * RAW RESULT TEXT, alongside the parsed one.
+   *
+   * User-reported: "I can see the call succeeded and the agent received the
+   * tickets but the rendered card does not expand." `resultOf` returns null
+   * whenever the block's text is not valid JSON -- which a truncated or
+   * spilled result (the harness's own large-payload handling) produces even
+   * though the call plainly succeeded. Every row that derives its body from
+   * `result` alone then computed zero facts/rows and rendered nothing,
+   * making the card silently unexpandable for exactly the calls whose
+   * result was too interesting to fit. Exposed here so a row can fall back
+   * to the raw text rather than to emptiness. See `fallbackBody`.
+   */
+  const resultText = resultTextOf(block);
+  return { args, state: shownState, result, resultText, ticketId, errorText, errorSummary };
+}
+
+/**
+ * The last resort for a body that would otherwise be null.
+ *
+ * A row's structured parse (facts, evidence, list rows) can come up empty
+ * for two very different reasons: the call genuinely returned nothing, or
+ * the result text existed but did not parse as the JSON shape the row
+ * expects. This makes the second case visible instead of indistinguishable
+ * from the first -- a card that HAS text always has something to expand.
+ */
+export function fallbackBody(resultText: string | null): react.ReactNode | null {
+  return resultText === null || resultText === "" ? null : <TextBody text={resultText} isError={false} />;
 }
 
 export function AttachEvidenceRow(props: AidosViewProps) {
@@ -449,7 +510,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
 }
 
 export function MoveTicketRow(props: AidosViewProps) {
-  const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
+  const { args, state, result, resultText, ticketId, errorText, errorSummary } = useAidosRow(props);
   const to = typeof args?.to === "string" ? args.to : null;
   const label = ticketLabel(ticketId);
   /*
@@ -464,7 +525,11 @@ export function MoveTicketRow(props: AidosViewProps) {
       ? errorBody(errorText)
       : facts.length > 0
         ? <Facts facts={facts} />
-        : null;
+        // See GetTicketsRow: only a genuine parse failure falls back to the
+        // raw text; a move that succeeded with no extra facts stays empty.
+        : result === null
+          ? fallbackBody(resultText)
+          : null;
   return (
     <AidosRow
       icon={<ForkIcon />}
@@ -515,7 +580,7 @@ export function SetTicketRow(props: AidosViewProps) {
 }
 
 export function GetTicketRow(props: AidosViewProps) {
-  const { state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
+  const { state, result, resultText, ticketId, errorText, errorSummary } = useAidosRow(props);
   const facts = ticketFacts(result);
   const evidence = ticketEvidence(result);
   /*
@@ -527,7 +592,9 @@ export function GetTicketRow(props: AidosViewProps) {
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : facts.length === 0 && evidence.length === 0
-        ? null
+        // See GetTicketsRow: fall back to raw text only when the JSON
+        // itself did not parse, not when a ticket genuinely has no facts.
+        ? (result === null ? fallbackBody(resultText) : null)
         : (
             <>
               <Facts facts={facts} />
@@ -564,7 +631,7 @@ export function GetTicketRow(props: AidosViewProps) {
 }
 
 export function GetTicketsRow(props: AidosViewProps) {
-  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
+  const { args, state, result, resultText, errorText, errorSummary } = useAidosRow(props);
   /*
    * THE ROW SAYS WHAT WAS ASKED FOR; THE COUNT GOES UNDER THE ANSWER.
    *
@@ -592,7 +659,12 @@ export function GetTicketsRow(props: AidosViewProps) {
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : lines.length === 0
-        ? null
+        // `result === null`: the text existed but did not parse as JSON --
+        // show it rather than nothing. `result !== null` with zero lines is
+        // a genuinely empty match; the footer already says so, and dumping
+        // the (valid, boring) envelope here would break #71's raw-JSON rule
+        // for no reason.
+        ? (result === null ? fallbackBody(resultText) : null)
         : (
             <ul className="aidos-tool-list">
               {lines.map((line) => (
@@ -760,7 +832,7 @@ export function PlanRow(props: AidosViewProps) {
 }
 
 export function PlanImportRow(props: AidosViewProps) {
-  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
+  const { args, state, result, resultText, errorText, errorSummary } = useAidosRow(props);
   const file = typeof args?.file === "string" ? args.file : "a plan";
   /*
    * An import is all-or-nothing and lands every ticket in `open`, so the
@@ -778,7 +850,9 @@ export function PlanImportRow(props: AidosViewProps) {
       ? errorBody(errorText)
       : facts.length > 0
         ? <Facts facts={facts} />
-        : null;
+        : result === null
+          ? fallbackBody(resultText)
+          : null;
   return (
     <AidosRow
       icon={<PopOutIcon />}
@@ -792,7 +866,7 @@ export function PlanImportRow(props: AidosViewProps) {
 }
 
 export function PlanMetaRow(props: AidosViewProps) {
-  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
+  const { args, state, result, resultText, errorText, errorSummary } = useAidosRow(props);
   const summary =
     args?.projectId === undefined ? "the plan blocks" : "project " + String(args.projectId);
   const facts: Fact[] = [];
@@ -813,7 +887,9 @@ export function PlanMetaRow(props: AidosViewProps) {
       ? errorBody(errorText)
       : facts.length > 0
         ? <Facts facts={facts} />
-        : null;
+        : result === null
+          ? fallbackBody(resultText)
+          : null;
   return (
     <AidosRow
       icon={<CompassIcon />}
