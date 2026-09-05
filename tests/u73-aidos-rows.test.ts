@@ -22,7 +22,14 @@ import {
 } from "../src/client/view-state";
 import { AIDOS_ROWS, errorBody, selectTitle } from "../src/client/aidos-rows";
 import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
-import { boardQuerySummary, ticketFromProjection } from "../src/client/aidos-row-data";
+import {
+  boardQuerySummary,
+  expandableFact,
+  ticketCaptionOf,
+  ticketFacts,
+  ticketFromProjection,
+  ticketTables,
+} from "../src/client/aidos-row-data";
 import { apply } from "../src/tools/aidos-tools";
 import { asContext, createHarness } from "./b1-harness";
 
@@ -407,12 +414,44 @@ describe("#73 every row can be expanded", () => {
     expect(rows).toContain("ticketEvidence(result)");
   });
 
-  it("expands a board read into the rows it returned", () => {
-    expect(rows).toContain("ticketLines(result)");
+  it("expands a board read into a STACK OF TABLES, one per ticket", () => {
+    /*
+     * User direction 2026-09-05: "if it's a single ticket, it should be one
+     * table. if it's many, it should be a stack of tables, like batch_edit
+     * stacks single edit diffs in tool-render", under the standing rule
+     * that "tool calls should look internally consistent".
+     *
+     * The old flat `#id · state · title` list was cheap and uniform, but it
+     * was a DIFFERENT shape from every other aidos body -- a single-ticket
+     * read rendered a facts table and a board read rendered something else
+     * for the same objects.
+     */
+    expect(rows).toContain("ticketTables(result)");
+    expect(rows).toContain("<FactsStack");
+    // And the single read gained the same caption, so the two are visibly
+    // one object at two counts rather than two layouts.
+    expect(rows).toContain("ticketCaption(result)");
+    expect(rows).toContain("function TicketCaption");
   });
 
   it("expands a ticket write into the fields it wrote", () => {
     expect(rows).toContain("writtenFields(args)");
+  });
+
+  it("the stack's scroll lives on the container, not on each table", () => {
+    /*
+     * "if the result then exceeds the max tool call card height, it should
+     * scroll, like usual" (user, 2026-09-05). One cap on the stack. Leaving
+     * the per-table cap in place inside a stack would give thirty tickets
+     * thirty independently-scrolling boxes each cut at the same arbitrary
+     * height, while the card itself grew without limit.
+     */
+    expect(css).toMatch(/\.aidos-tool-stack \{[^}]*overflow-y: auto/);
+    expect(css).toMatch(/\.aidos-tool-stack \.aidos-tool-facts \{[^}]*max-height: none/);
+  });
+
+  it("an expanded cell drops the one-line clamp it exists to undo", () => {
+    expect(css).toMatch(/dd\[data-expanded\] \{[^}]*white-space: normal/);
   });
 
   it("expands an allowlist request into its paths", () => {
@@ -717,5 +756,162 @@ describe("ticketFromProjection (the click-through peek's data source)", () => {
     expect(ticketFromProjection(projection, null)).toBeNull();
     expect(ticketFromProjection("not a record", "ws:12")).toBeNull();
     expect(ticketFromProjection({ "ws:12": { title: 3 } }, "ws:12")).toBeNull();
+  });
+});
+
+/*
+ * The DATA half of the table/markdown/show-more work, tested as data.
+ *
+ * These are pure functions on purpose (#73's own note: "logic inside a
+ * component is logic no test can reach, which is how the allowlist union
+ * and the backward-gate guard both shipped unverified"), so the rules that
+ * decide what a card shows are asserted here rather than grepped for.
+ */
+describe("#73 a fact expands only when there is genuinely more to show", () => {
+  it("offers no expander for a value that is already whole", () => {
+    const fact = expandableFact("State", "in_progress");
+    expect(fact.value).toBe("in_progress");
+    // The FAILURE MODE this prevents: an expander that reveals nothing
+    // teaches the reader that the control lies, everywhere in the UI.
+    expect(fact.full).toBeUndefined();
+  });
+
+  it("offers one when the flat line was CUT", () => {
+    const long = "x".repeat(400);
+    const fact = expandableFact("Description", long);
+    expect(fact.value.endsWith("…")).toBe(true);
+    expect(fact.full).toBe(long);
+  });
+
+  it("offers one when flattening ATE STRUCTURE, even under the length cap", () => {
+    /*
+     * The case a length check alone misses: three short lines flatten to
+     * one short line, so nothing is truncated and yet the reader has lost
+     * every line break. Criteria are exactly this shape.
+     */
+    const structured = "first line\nsecond line\nthird line";
+    const fact = expandableFact("Criteria", structured);
+    expect(fact.value).toBe("first line second line third line");
+    expect(fact.value.endsWith("…")).toBe(false);
+    expect(fact.full).toBe(structured);
+  });
+
+  it("does not treat trailing whitespace as content worth a button", () => {
+    const fact = expandableFact("Body", "just this   \n  ");
+    expect(fact.full).toBeUndefined();
+  });
+
+  it("marks prose as markdown and plain values as not", () => {
+    expect(expandableFact("Description", "**bold**\nmore", { markdown: true }).markdown).toBe(true);
+    // NOT markdown: criteria are one plain assertion per line, and a
+    // markdown pass silently eats a line starting with `#` or `-`.
+    expect(expandableFact("Criteria", "- one\n- two").markdown).toBeUndefined();
+  });
+});
+
+describe("#73 a board read becomes one table per ticket", () => {
+  const boardResult = {
+    tickets: [
+      {
+        id: 39,
+        title: "Workspace-unique ids from the database",
+        state: "in_progress",
+        phase: 7,
+        confidenceScore: 1,
+        gatePresent: 0,
+        gateTotal: 2,
+        dependsOnCount: 1,
+        allowlistCount: 0,
+        descriptionExcerpt: "`_nextTicketId` stops reading the per-session counter",
+        descriptionTruncated: true,
+      },
+      { id: 40, title: "The mirrored write path", state: "open" },
+    ],
+  };
+
+  it("returns one table per ticket, captioned by id, state and title", () => {
+    const tables = ticketTables(boardResult);
+    expect(tables).toHaveLength(2);
+    expect(tables[0].id).toBe("39");
+    expect(tables[0].state).toBe("in_progress");
+    expect(tables[0].title).toBe("Workspace-unique ids from the database");
+  });
+
+  it("keeps the caption fields OUT of the facts, so nothing is said twice", () => {
+    const labels = ticketTables(boardResult)[0].facts.map((fact) => fact.label);
+    expect(labels).not.toContain("State");
+    expect(labels).not.toContain("Title");
+    expect(labels).toContain("Gate");
+  });
+
+  it("omits a zero count rather than rendering '0 paths'", () => {
+    const labels = ticketTables(boardResult)[0].facts.map((fact) => fact.label);
+    expect(labels).toContain("Depends on");
+    // allowlistCount is 0 on this row.
+    expect(labels).not.toContain("Allowlist");
+  });
+
+  it("says the excerpt is an excerpt rather than promising text it lacks", () => {
+    /*
+     * A board read ships an EXCERPT -- #92 caps what crosses the wire on
+     * purpose -- so the expander here can only ever reveal what the excerpt
+     * already holds. A reader who expands and finds it still cut needs to
+     * know the rest is in the ticket, not that the button failed.
+     */
+    const description = ticketTables(boardResult)[0].facts.find(
+      (fact) => fact.label === "Description",
+    );
+    expect(description?.full).toContain("read the ticket for the rest");
+    expect(description?.markdown).toBe(true);
+  });
+
+  it("survives a malformed or empty result instead of throwing in a render", () => {
+    expect(ticketTables(null)).toEqual([]);
+    expect(ticketTables({})).toEqual([]);
+    expect(ticketTables({ tickets: "nope" })).toEqual([]);
+    expect(ticketTables({ tickets: [null, 3] })).toEqual([]);
+  });
+});
+
+describe("#73 a single-ticket read carries the same caption", () => {
+  it("reads id, state and title from result.ticket", () => {
+    const caption = ticketCaptionOf({
+      ticket: { id: 112, state: "in_progress", title: "A second allowlist approval" },
+    });
+    expect(caption).toEqual({ id: "112", state: "in_progress", title: "A second allowlist approval" });
+  });
+
+  it("returns null rather than a captionless header when there is no ticket", () => {
+    expect(ticketCaptionOf(null)).toBeNull();
+    expect(ticketCaptionOf({})).toBeNull();
+    expect(ticketCaptionOf({ ticket: { id: 1, title: "   " } })).toBeNull();
+  });
+
+  it("renders the ticket's description and body as markdown, criteria as text", () => {
+    const facts = ticketFacts({
+      ticket: {
+        id: 1,
+        state: "open",
+        title: "T",
+        description: "**User ask:**\nsomething long enough to keep its newline",
+        criteria: "one thing\nanother thing",
+        body: "# heading\ntext",
+      },
+    });
+    const by = (label: string) => facts.find((fact) => fact.label === label);
+    expect(by("Description")?.markdown).toBe(true);
+    expect(by("Body")?.markdown).toBe(true);
+    expect(by("Criteria")?.markdown).toBeUndefined();
+    expect(by("Criteria")?.full).toBe("one thing\nanother thing");
+  });
+
+  it("omits description, criteria and body entirely when they are empty", () => {
+    const facts = ticketFacts({
+      ticket: { id: 1, state: "open", title: "T", description: "", criteria: "  ", body: "" },
+    });
+    const labels = facts.map((fact) => fact.label);
+    expect(labels).not.toContain("Description");
+    expect(labels).not.toContain("Criteria");
+    expect(labels).not.toContain("Body");
   });
 });

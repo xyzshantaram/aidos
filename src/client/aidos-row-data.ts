@@ -247,6 +247,29 @@ export function ticketTableOf(row: Record<string, unknown>): TicketTable {
 }
 
 /**
+ * The caption of a SINGLE-ticket read: the same `#id · state · title` a
+ * stacked table carries, read from `result.ticket`.
+ *
+ * Separate from `ticketTableOf` because the two results are different
+ * shapes: a board row ships counts and an excerpt, a single read ships the
+ * ticket itself. Only the caption is common, so only the caption is shared.
+ * Returns null when there is no ticket or no title to show.
+ */
+export function ticketCaptionOf(
+  result: Record<string, unknown> | null,
+): { id: string; state: string; title: string } | null {
+  const ticket = asRecord(result?.ticket);
+  if (ticket === null) return null;
+  const title = asText(ticket.title) ?? "";
+  if (title.trim() === "") return null;
+  return {
+    id: asText(ticket.id) ?? "?",
+    state: asText(ticket.state) ?? "",
+    title,
+  };
+}
+
+/**
  * A board read as a STACK OF TABLES, one per ticket (user direction
  * 2026-09-05). Returns [] for a result with no rows, so the caller keeps
  * its existing empty/unparseable distinction.

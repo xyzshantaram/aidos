@@ -2871,6 +2871,161 @@
   line-height: 1.25rem;
 }
 
+/*
+ * THE STACK OF TABLES (user direction 2026-09-05): "if it's a single
+ * ticket, it should be one table. if it's many, it should be a stack of
+ * tables, like batch_edit stacks single edit diffs in tool-render."
+ *
+ * The SCROLL LIVES HERE, not on the tables inside it. `.aidos-tool-facts`
+ * carries the house 17.5rem cap with overflow-y: auto, which is right for a
+ * lone table but wrong inside a stack: thirty tickets would produce thirty
+ * independently-scrolling boxes, each cut at the same arbitrary height, and
+ * the card itself would grow without limit. One cap on the stack gives the
+ * behaviour the user asked for -- "if the result then exceeds the max tool
+ * call card height, it should scroll, like usual" -- with the tables laid
+ * out at their natural height inside it.
+ */
+.aidos-tool-stack {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin: 0.25rem 0 0.25rem 0.25rem;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+
+.aidos-tool-stack .aidos-tool-facts {
+  /* The stack owns the scroll; a nested scroller traps the wheel. */
+  margin: 0;
+  max-height: none;
+  overflow-y: visible;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.aidos-tool-table {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/*
+ * One table's caption. Shares the tables' surface so the caption and its
+ * rows read as one object, with the id and state leading because they are
+ * the two things a reader scans a board result for.
+ */
+.aidos-tool-table-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.375rem 0.8125rem 0.25rem;
+  border-radius: 0.625rem 0.625rem 0 0;
+  background: var(--dsw-alias-markdown-code-block, var(--surface-raised));
+  font-size: 0.8125rem;
+  line-height: 1.375rem;
+}
+
+/* A lone caption (the single-ticket read) has no table stacked under it in
+   a .aidos-tool-stack, so it keeps its own left margin to line up with the
+   facts table below it. */
+.tool-render-body > .aidos-tool-table-head {
+  margin: 0.25rem 0 0 0.25rem;
+}
+
+.tool-render-body > .aidos-tool-table-head + .aidos-tool-facts {
+  margin-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.aidos-tool-table-id {
+  flex: none;
+  font-family: var(--ds-font-family-code, monospace);
+  color: var(--dsw-alias-label-secondary, var(--text-secondary));
+}
+
+/* The id is the click-through target, so it looks like one -- but it is a
+   real <button>, not a styled span: it is reached by Tab and fires on
+   Enter without any handler written here. */
+.aidos-tool-table-id-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--ds-font-family-code, monospace);
+  color: var(--dsw-alias-label-secondary, var(--text-secondary));
+}
+
+.aidos-tool-table-id-link:hover,
+.aidos-tool-table-id-link:focus-visible {
+  color: var(--dsw-alias-label-primary, var(--text-primary));
+  text-decoration: underline;
+}
+
+.aidos-tool-table-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-primary, var(--text-primary));
+}
+
+/*
+ * THE IN-CELL EXPANDER (user direction 2026-09-05): "every ellipsized strip
+ * should have a show more that expands its own cell".
+ *
+ * An expanded cell drops the one-line clamp entirely -- nowrap and the
+ * ellipsis are what it exists to undo -- and keeps its newlines, since the
+ * flattening is exactly what the reader is asking to see through.
+ */
+.aidos-tool-facts dd[data-expanded] {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.aidos-tool-fact-clipped {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidos-tool-fact-full {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Markdown inside a fact cell: the shared .aidos-md rules already style it,
+   so only the cell's own spacing is set here. */
+.aidos-md.aidos-tool-fact-full {
+  white-space: normal;
+}
+
+.aidos-tool-fact-more {
+  display: block;
+  margin-top: 0.125rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+}
+
+.aidos-tool-fact-more:hover,
+.aidos-tool-fact-more:focus-visible {
+  color: var(--dsw-alias-label-primary, var(--text-primary));
+  text-decoration: underline;
+}
+
 .aidos-tool-list {
   display: flex;
   flex-direction: column;

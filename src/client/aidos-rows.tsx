@@ -23,6 +23,13 @@
  */
 
 import react from "react";
+/*
+ * The SAME markdown renderer the detail panel's DescriptionPanel uses. A
+ * ticket's description is markdown wherever it appears, and #73's rule --
+ * one thing looks identical in the card, the panel and the modal -- applies
+ * to prose exactly as it applies to an evidence row.
+ */
+import { marked } from "marked";
 
 import { EvidenceStrip } from "./evidence-strip";
 import { TicketStrip } from "./ticket-strip";
@@ -46,12 +53,14 @@ import {
   planBlocksWritten,
   suggestionLines,
   ticketEvidence,
+  ticketCaptionOf,
   ticketFacts,
   ticketFromProjection,
-  ticketLines,
+  ticketTables,
   writtenFields,
   oneLine,
   type Fact,
+  type TicketTable,
 } from "./aidos-row-data";
 import {
   argsRawOf,
@@ -354,11 +363,183 @@ function Facts({ facts }: { facts: Fact[] }) {
       {facts.map((fact) => (
         <react.Fragment key={fact.label}>
           <dt>{fact.label}</dt>
-          <dd title={fact.value} data-dsh-tip="">{fact.value}</dd>
+          <FactValue fact={fact} />
         </react.Fragment>
       ))}
     </dl>
   );
+}
+
+/**
+ * One fact's cell, which can expand IN PLACE to its untruncated text.
+ *
+ * User direction (2026-09-05): "every ellipsized strip should have a show
+ * more that expands its own cell (and if the result then exceeds the max
+ * tool call card height, it should scroll, like usual)."
+ *
+ * Two deliberate choices:
+ *
+ * ITS OWN CELL, not the whole card. Expanding one description must not
+ * reflow the facts beside it or push the rest of a stacked table off
+ * screen; the reader asked about that one value. The scroll half is met by
+ * the CONTAINER, not here -- `.aidos-tool-facts` already carries the house
+ * max-height with `overflow-y: auto`, so a cell that grows past it scrolls
+ * exactly like every other long tool body.
+ *
+ * NO BUTTON WHEN THERE IS NOTHING MORE. `full` is set upstream only when
+ * the flat line genuinely lost something (it was cut, or flattening ate
+ * newlines). An expander that reveals nothing is worse than no expander: it
+ * teaches the reader that the control lies, everywhere in the UI.
+ */
+function FactValue({ fact }: { fact: Fact }) {
+  const [expanded, setExpanded] = react.useState(false);
+  const expandable = fact.full !== undefined && fact.full !== "";
+  if (!expandable) {
+    return (
+      <dd title={fact.value} data-dsh-tip="">
+        {fact.value}
+      </dd>
+    );
+  }
+  return (
+    <dd data-expanded={expanded ? true : undefined}>
+      {expanded ? (
+        <ExpandedFact fact={fact} />
+      ) : (
+        <span className="aidos-tool-fact-clipped" title={fact.value} data-dsh-tip="">
+          {fact.value}
+        </span>
+      )}
+      <button
+        className="aidos-tool-fact-more"
+        type="button"
+        aria-expanded={expanded}
+        onClick={(event: react.MouseEvent) => {
+          // The row above is itself a click target that collapses the card;
+          // an expander inside it must not fold the card it lives in.
+          event.stopPropagation();
+          setExpanded(!expanded);
+        }}
+      >
+        {expanded ? "Show less" : "Show more"}
+      </button>
+    </dd>
+  );
+}
+
+/**
+ * The expanded text of one fact: rendered markdown for prose, preserved
+ * plain text for everything else.
+ *
+ * User direction (2026-09-05): "the body/description should render
+ * markdown". Every ticket in this project writes its description and body
+ * as markdown, and a card showing `**User ask (2026-09-03):**` as literal
+ * asterisks is the same defect the board digest was fixed for.
+ *
+ * Through `marked` and the `aidos-md` class, which is exactly what the
+ * detail panel's DescriptionPanel already does. Reusing that rather than
+ * writing a second renderer is the same rule #73 applies to EvidenceStrip:
+ * one description looks identical wherever it appears.
+ */
+function ExpandedFact({ fact }: { fact: Fact }) {
+  const text = fact.full ?? fact.value;
+  if (fact.markdown !== true) {
+    // Plain text with its newlines intact: criteria are one assertion per
+    // line, and a markdown pass silently eats a line starting with `#`.
+    return <span className="aidos-tool-fact-full">{text}</span>;
+  }
+  return (
+    <div
+      className="aidos-md aidos-tool-fact-full"
+      dangerouslySetInnerHTML={{ __html: String(marked.parse(text, { async: false })) }}
+    />
+  );
+}
+
+/**
+ * A STACK of per-ticket tables, one table per ticket.
+ *
+ * User direction (2026-09-05): "if it's a single ticket, it should be one
+ * table. if it's many, it should be a stack of tables, like batch_edit
+ * stacks single edit diffs in tool-render" -- and, before it, "tool calls
+ * should look internally consistent."
+ *
+ * So a board read stops being a list of one-line rows and becomes N of the
+ * SAME table a single-ticket read renders. The caption carries the id, the
+ * state and the title, so the facts inside never repeat them.
+ */
+function FactsStack({
+  tables,
+  onSelect,
+}: {
+  tables: TicketTable[];
+  onSelect?: (id: string) => void;
+}) {
+  if (tables.length === 0) return null;
+  return (
+    <div className="aidos-tool-stack">
+      {tables.map((table) => (
+        <section className="aidos-tool-table" key={table.id}>
+          <TicketCaption
+            id={table.id}
+            state={table.state}
+            title={table.title}
+            onSelect={onSelect}
+          />
+          <Facts facts={table.facts} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One table's caption: `#id`, its state, its title.
+ *
+ * Shared by the stack and the single-ticket read on purpose. Two
+ * near-identical captions is how "internally consistent" quietly stops
+ * being true after the next edit to one of them.
+ */
+function TicketCaption({
+  id,
+  state,
+  title,
+  onSelect,
+}: {
+  id: string;
+  state: string;
+  title: string;
+  onSelect?: (id: string) => void;
+}) {
+  return (
+    <header className="aidos-tool-table-head">
+      {onSelect !== undefined ? (
+        <button
+          className="aidos-tool-table-id aidos-tool-table-id-link"
+          type="button"
+          onClick={(event: react.MouseEvent) => {
+            event.stopPropagation();
+            onSelect(id);
+          }}
+        >
+          {"#" + id}
+        </button>
+      ) : (
+        <span className="aidos-tool-table-id">{"#" + id}</span>
+      )}
+      {state === "" ? null : <span className="aidos-tool-list-tag">{state}</span>}
+      <span className="aidos-tool-table-title" title={title} data-dsh-tip="">
+        {title}
+      </span>
+    </header>
+  );
+}
+
+/** The caption of a single-ticket read, or null when the result has no ticket. */
+function ticketCaption(result: Record<string, unknown> | null): react.ReactNode | null {
+  const caption = ticketCaptionOf(result);
+  if (caption === null) return null;
+  return <TicketCaption id={caption.id} state={caption.state} title={caption.title} />;
 }
 
 /** The plain text body tool-render uses, for a result that IS text. */
@@ -603,6 +784,14 @@ export function GetTicketRow(props: AidosViewProps) {
         ? (result === null ? fallbackBody(resultText) : null)
         : (
             <>
+              {/*
+                * ONE table, with the same caption a stacked table carries --
+                * "if it's a single ticket, it should be one table" (user,
+                * 2026-09-05). The caption is what makes a single read and a
+                * board read visibly the same object at two counts, rather
+                * than two unrelated layouts.
+                */}
+              {ticketCaption(result)}
               <Facts facts={facts} />
               {evidence.length > 0 ? (
                 <ul className="aidos-evidence-list">
@@ -660,31 +849,41 @@ export function GetTicketsRow(props: AidosViewProps) {
    * tickets it saw. Each id selects that ticket, the same click-through the
    * row summary carries.
    */
-  const lines = ticketLines(result);
+  /*
+   * A STACK OF TABLES, one per ticket (user direction 2026-09-05): "if it's
+   * a single ticket, it should be one table. if it's many, it should be a
+   * stack of tables, like batch_edit stacks single edit diffs in
+   * tool-render", under the standing rule that "tool calls should look
+   * internally consistent".
+   *
+   * This replaces a flat `#id · state · title` list. The list was cheap and
+   * uniform, but it was also a DIFFERENT shape from every other aidos card
+   * body -- a single-ticket read rendered a facts table, and reading the
+   * board rendered something else entirely for the same objects. The stack
+   * makes N tickets literally N of the one-ticket table.
+   */
+  const tables = ticketTables(result);
   const body =
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
-      : lines.length === 0
+      : tables.length === 0
         // `result === null`: the text existed but did not parse as JSON --
-        // show it rather than nothing. `result !== null` with zero lines is
+        // show it rather than nothing. `result !== null` with zero rows is
         // a genuinely empty match; the footer already says so, and dumping
         // the (valid, boring) envelope here would break #71's raw-JSON rule
         // for no reason.
         ? (result === null ? fallbackBody(resultText) : null)
         : (
-            <ul className="aidos-tool-list">
-              {lines.map((line) => (
-                <li key={line.id}>
-                  <span className="aidos-tool-list-key">#{line.id}</span>
-                  {line.state === "" ? null : (
-                    <span className="aidos-tool-list-tag">{line.state}</span>
-                  )}
-                  <span className="aidos-tool-list-text" title={line.title} data-dsh-tip="">
-                    {line.title}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <FactsStack
+              tables={tables}
+              onSelect={
+                props.sessionId === undefined
+                  ? undefined
+                  : (id: string) => {
+                      setSelection(props.sessionId as string, asBoardKey(id));
+                    }
+              }
+            />
           );
   return (
     <AidosRow
