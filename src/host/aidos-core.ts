@@ -1955,7 +1955,23 @@ registerAidosSessionEventTypes(ctx);
       kind: "builtin:file_allowlist",
       payload: { paths },
     });
-    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: paths });
+    /*
+     * #112: an approval is ADDITIVE by its own contract -- request_allowlist
+     * is framed throughout (its tool description, #9, #51) as the agent
+     * PROPOSING paths, never as replacing a grant. `_editTicket`'s general
+     * allowlist field is a REPLACE (the per-ticket editor, #14, needs that:
+     * a human shrinking the list on purpose). This call site is different:
+     * it must union the newly-approved batch into whatever the ticket
+     * already had, or a second approval round silently revokes the first --
+     * even though that earlier `builtin:file_allowlist` evidence row is
+     * still sitting there, satisfied, granting nothing once the field is
+     * overwritten.
+     */
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const previousAllowlist = cache.state.tickets.get(pending.ticketId)?.allowlist ?? [];
+    const merged = [...new Set([...previousAllowlist, ...paths])];
+    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: merged });
     return { resolved: `approved: ${paths.join(", ")}` };
   }
 
