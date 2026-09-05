@@ -14,7 +14,7 @@ import react from "react";
 import { AllowlistEditor } from "./allowlist-editor";
 import { EvidenceViewer } from "./evidence-viewer";
 import { CriterionLinker, criterionOf } from "./criterion-linker";
-import { marked } from "marked";
+import { renderMarkdownSafe } from "./safe-markdown";
 
 import {
   badgeClass,
@@ -123,7 +123,7 @@ function DescriptionPanel(props: {
   const clipped = long && !expanded;
   const html = empty
     ? ""
-    : String(marked.parse(text, { async: false }));
+    : renderMarkdownSafe(text);
 
   async function save() {
     if (saving) return;

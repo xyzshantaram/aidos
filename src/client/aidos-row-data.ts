@@ -129,10 +129,24 @@ export function expandableFact(
 ): Fact {
   const value = oneLine(text, options?.max);
   const trimmed = text.trim();
-  // Two independent reasons the flat line is not the whole story. Compared
-  // against the TRIMMED source, not the raw one: trailing whitespace is not
-  // content worth a button.
-  const cut = value.endsWith("…");
+  /*
+   * Two independent reasons the flat line is not the whole story. Compared
+   * against the TRIMMED source, not the raw one: trailing whitespace is not
+   * content worth a button.
+   *
+   * `cut` USED TO TEST `value.endsWith("…")`, which is the one thing this
+   * function's own docstring says it exists to avoid: it cannot tell an
+   * ellipsis that oneLine ADDED from one the author typed. An independent
+   * review proved it with "Wait for it…" -- value and full byte-identical,
+   * an expander offered, and the reader shown the same string back. The
+   * original text is right here, so compare against it instead of trying to
+   * read the tea leaves in the output.
+   *
+   * `full !== value` rather than a length test against `max`: it is the
+   * property that actually matters ("is there more than the reader can
+   * already see"), and it stays correct if oneLine's flattening changes.
+   */
+  const cut = trimmed !== value;
   const structural = /\n/.test(trimmed);
   if (!cut && !structural) return { label, value };
   return {

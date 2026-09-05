@@ -29,7 +29,7 @@ import react from "react";
  * one thing looks identical in the card, the panel and the modal -- applies
  * to prose exactly as it applies to an evidence row.
  */
-import { marked } from "marked";
+import { renderMarkdownSafe } from "./safe-markdown";
 
 import { EvidenceStrip } from "./evidence-strip";
 import { TicketStrip } from "./ticket-strip";
@@ -451,7 +451,7 @@ function ExpandedFact({ fact }: { fact: Fact }) {
   return (
     <div
       className="aidos-md aidos-tool-fact-full"
-      dangerouslySetInnerHTML={{ __html: String(marked.parse(text, { async: false })) }}
+      dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(text) }}
     />
   );
 }
