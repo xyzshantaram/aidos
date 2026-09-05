@@ -8,10 +8,12 @@
 
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  __resetBadgeStateForTests,
   badgeLabel,
+  setCountCallback,
   getSelection,
   onSelectionChanged,
   publishTicketTitles,
@@ -125,6 +127,38 @@ describe("#73 a ticket-bearing call names the ticket", () => {
     expect(view).toContain("publishTicketTitles(sessionId, rawTickets)");
   });
 
+  /*
+   * THE BLOCKING REGRESSION of round 1, found by independent review.
+   *
+   * A board renders `[...ownRows, ...foreignRows]` -- the foreign ones are
+   * sibling sessions' rows pulled through workspaceTickets -- and publishes
+   * the WHOLE array. Round 1 keyed all of it by the RENDERING session, so a
+   * sibling's #39, being appended last, overwrote this session's #39 under
+   * this session's own key. The contamination survived the fix; it moved
+   * from cross-workspace to cross-session-within-a-workspace.
+   *
+   * This drives the real merged shape rather than the tidy own-rows-only
+   * shape the round-1 tests used, which is precisely why they missed it.
+   */
+  it("a sibling session's row never overwrites this session's same id", () => {
+    publishTicketTitles("sess-viewer", [
+      // own rows carry their own session, exactly as the board stamps them
+      { id: 39, title: "MY ticket 39", sourceSessionId: "sess-viewer" },
+      // foreign rows arrive from workspaceTickets owned by a sibling, and
+      // are appended LAST, which is what made last-writer-wins bite
+      { id: 39, title: "SIBLING session ticket 39", sourceSessionId: "sess-sibling" },
+    ]);
+    expect(ticketTitle("sess-viewer", 39)).toBe("MY ticket 39");
+    expect(ticketTitle("sess-sibling", 39)).toBe("SIBLING session ticket 39");
+  });
+
+  it("a row with no owner falls back to the publishing session", () => {
+    // The fallback keeps any caller that has no sourceSessionId working
+    // rather than silently dropping its titles on the floor.
+    publishTicketTitles("sess-fallback", [{ id: 51, title: "Unowned row" }]);
+    expect(ticketTitle("sess-fallback", 51)).toBe("Unowned row");
+  });
+
   it("every card lookup passes its own session id", () => {
     // A single un-threaded call site reintroduces the contamination for that
     // one row, which is exactly how it would come back.
@@ -136,21 +170,19 @@ describe("#73 a ticket-bearing call names the ticket", () => {
 });
 
 describe("#114 the tab badge follows the CURRENT session, not the last board rendered", () => {
-  it("the plugin entry names the current session from the sessions store", () => {
-    /*
-     * User: "they both update when the board is opened but it doesn't matter
-     * WHICH board". `reportCount` fires during LocalTicketView's render, so
-     * it can only ever name the board on screen. `list.current` is the
-     * store's own answer and the effect already subscribes to it.
-     */
-    expect(index).toContain("setCurrentSession(list.current ?? null)");
-  });
-
-  it("reportCount no longer decides which session the badge speaks for", () => {
-    const state = readFileSync(new URL("../src/client/view-state.ts", import.meta.url), "utf8");
-    // The old line was `currentSessionId = sessionId;` inside reportCount.
-    expect(state).not.toContain("currentSessionId = sessionId");
-    expect(state).toContain("lastRenderedSessionId = sessionId");
+  /*
+   * ROUND 2. The round-1 tests here were SOURCE GREPS -- they asserted that
+   * index.ts contained the string "setCurrentSession(list.current ?? null)"
+   * and that view-state.ts no longer contained "currentSessionId =
+   * sessionId". Both passed. The badge still did not relabel, because
+   * assigning the field is not the same as making the tab re-read it.
+   *
+   * That is the whole lesson: a grep test pins SPELLING, and spelling is
+   * not behaviour. Every test below drives the real functions instead.
+   */
+  beforeEach(() => {
+    __resetBadgeStateForTests();
+    setCountCallback(null);
   });
 
   it("the authoritative session wins over the last board rendered", () => {
@@ -162,10 +194,68 @@ describe("#114 the tab badge follows the CURRENT session, not the last board ren
     expect(badgeLabel()).toBe("Tickets (3)");
   });
 
-  it("falls back to the last rendered board when no store answer exists", () => {
-    // The harness (and any runtime with no sessions store) has no other
-    // source; dropping the fallback would silently zero the badge there.
+  /*
+   * THE BLOCKING REGRESSION of round 1, and the reported symptom itself.
+   *
+   * Re-registration is the only thing that makes the tab header re-read the
+   * label thunk, and `setCurrentSession` did not trigger one. Switching
+   * sessions without opening the new board therefore left the OLD count in
+   * the header. A source-grep cannot see this; a bump counter can.
+   */
+  it("switching the current session asks the tab to relabel", () => {
+    let bumps = 0;
+    setCountCallback(() => {
+      bumps += 1;
+    });
+    setCurrentSession("sess-a");
+    reportCount("sess-a", 3);
+    const before = bumps;
+
+    // The human switches to session B and never opens its board, so no
+    // render and no reportCount happens for B at all.
+    setCurrentSession("sess-b");
+    expect(bumps).toBe(before + 1);
+    expect(badgeLabel()).toBe("Tickets");
+
+    // Switching BACK was the worse half: reportCount(A, 3) early-returns on
+    // an unchanged count, so without a bump here the header kept B's string.
+    setCurrentSession("sess-a");
+    expect(bumps).toBe(before + 2);
+    expect(badgeLabel()).toBe("Tickets (3)");
+  });
+
+  it("re-naming the SAME session does not churn the tab", () => {
+    // The visibility effect's sync() runs on every sessions-list change, so
+    // an unconditional bump would remount the board constantly -- the exact
+    // cost #100 exists to avoid.
+    let bumps = 0;
+    setCurrentSession("sess-a");
+    setCountCallback(() => {
+      bumps += 1;
+    });
+    setCurrentSession("sess-a");
+    setCurrentSession("sess-a");
+    expect(bumps).toBe(0);
+  });
+
+  it("no current session means NO count, not the previous board's", () => {
+    /*
+     * Advisory 3 of the review: round 1 used `authoritativeSessionId ??
+     * lastRenderedSessionId`, so null -- a real answer meaning "there is no
+     * current session" -- was indistinguishable from "nobody has told me
+     * yet", and the badge fell back to the previous board's count. The
+     * reviewer probed it and got "Tickets (11)". The tab stays registered
+     * when there is no current session, so this was visible.
+     */
+    reportCount("sess-previous", 11);
     setCurrentSession(null);
+    expect(badgeLabel()).toBe("Tickets");
+  });
+
+  it("falls back to the last rendered board only BEFORE any store answer", () => {
+    // The harness (and any runtime with no sessions store) never calls
+    // setCurrentSession at all; dropping this fallback would silently zero
+    // the badge there. Reachable only because the reset clears authorityKnown.
     reportCount("sess-harness", 7);
     expect(badgeLabel()).toBe("Tickets (7)");
   });

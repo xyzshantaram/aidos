@@ -102,6 +102,11 @@ let lastRenderedSessionId: string | null = null;
  * is known.
  */
 let authoritativeSessionId: string | null = null;
+/**
+ * Whether the sessions store has answered AT ALL. Distinct from
+ * `authoritativeSessionId !== null`, because null is itself an answer.
+ */
+let authorityKnown = false;
 let bumpCallback: (() => void) | null = null;
 
 /** The callback the plugin entry registers to re-render the tab label. */
@@ -127,6 +132,27 @@ export function reportCount(sessionId: string, count: number): void {
   if (bumpCallback !== null) bumpCallback();
 }
 
+/**
+ * Reset every piece of badge state. TEST-ONLY.
+ *
+ * Added in round 2 because the reviewer found the round-1 badge tests were
+ * ORDER-COUPLED: this module is process-global by nature (the slot label is
+ * a zero-argument thunk, so the badge cannot be per-instance), and each test
+ * inherited whatever the previous one left behind. In particular "no store
+ * answer yet" is unreachable once any earlier test has called
+ * `setCurrentSession`, so the fallback path could not be tested honestly
+ * without this.
+ *
+ * Deliberately not exported through any production path: nothing in src/
+ * calls it.
+ */
+export function __resetBadgeStateForTests(): void {
+  authoritativeSessionId = null;
+  authorityKnown = false;
+  lastRenderedSessionId = null;
+  counts.clear();
+}
+
 /** The tab label for a specific session. Use badgeLabel() for the current session. */
 export function badgeLabelFor(sessionId: string): string {
   const count = counts.get(sessionId) ?? 0;
@@ -143,12 +169,53 @@ export function badgeLabelFor(sessionId: string): string {
  * the last workspace you looked at.
  */
 export function setCurrentSession(sessionId: string | null): void {
+  /*
+   * ROUND 2 (independent review, 2026-09-05): THIS MUST BUMP THE LABEL.
+   *
+   * Round 1 only assigned the field, and re-registration is the ONLY thing
+   * that makes the tab header re-read the label thunk. `setCurrentSession`
+   * is called from the visibility effect's `sync()`, whose only other
+   * action is `reconcile()` -- a no-op while `want` is unchanged, and
+   * `want` does not change when switching between two aidos sessions.
+   *
+   * So the reported symptom SURVIVED round 1: open A's board (header shows
+   * "Tickets (3)"), switch to B without opening B's board, and the header
+   * still shows A's count. Switching BACK to A was worse, because
+   * `reportCount(A, 3)` sees an unchanged count and returns early, leaving
+   * the header on B's string until some unrelated count changed.
+   *
+   * Round 1's tests passed anyway because they asserted the SOURCE TEXT
+   * contained `setCurrentSession(list.current ?? null)`. The string was
+   * there, the test was green, and the badge did not relabel. That is the
+   * clearest evidence in this repository that a source-grep test is worse
+   * than no test: it manufactures confidence.
+   */
+  const changed = !authorityKnown || authoritativeSessionId !== sessionId;
   authoritativeSessionId = sessionId;
+  authorityKnown = true;
+  if (!changed) return;
+  if (remountSuppressed) {
+    // Same rule reportCount follows: a stale label is recoverable by
+    // looking again, a destroyed modal is not.
+    relabelPending = true;
+    return;
+  }
+  if (bumpCallback !== null) bumpCallback();
 }
 
-/** The session the badge speaks for: the store's answer, else last rendered. */
+/**
+ * The session the badge speaks for: the store's answer once it has given
+ * one, else the last board rendered.
+ *
+ * `authorityKnown` rather than `authoritativeSessionId !== null`, because
+ * null is a real answer ("there is no current session") and round 1
+ * conflated it with "nobody has told me yet". The reviewer probed exactly
+ * that: after `setCurrentSession(null)` the badge returned the PREVIOUS
+ * board's "Tickets (11)", and the tab stays registered when there is no
+ * current session, so it was visible rather than theoretical.
+ */
 function badgeSessionId(): string | null {
-  return authoritativeSessionId ?? lastRenderedSessionId;
+  return authorityKnown ? authoritativeSessionId : lastRenderedSessionId;
 }
 
 /** The tab label. A nonzero count for the current session adds a suffix. */
@@ -300,12 +367,36 @@ function titleKey(sessionId: string, ticketId: number | string): string {
   return sessionId + "\u0000" + String(ticketId);
 }
 
-/** Publish the titles of the rows one session's board just rendered. */
+/**
+ * Publish the titles of the rows one session's board just rendered, EACH
+ * UNDER THE SESSION THAT OWNS IT.
+ *
+ * ROUND 2 (independent review, 2026-09-05). Round 1 keyed every row by the
+ * RENDERING session, which is the wrong half of the pair. A board renders
+ * `[...ownRows, ...foreignRows]` -- the foreign ones are sibling sessions'
+ * rows pulled through `workspaceTickets` -- and they are appended LAST, so
+ * a sibling's #39 overwrote this session's #39 under this session's own
+ * key. The contamination survived the fix; it merely moved from
+ * cross-workspace to cross-session-within-a-workspace.
+ *
+ * This repository states the rule twice, and round 1 violated it anyway:
+ * `board-logic.ts` ("addressed sourceSessionId:id, because ids collide
+ * across sessions") and `aidos-core.ts` ("deliberately NOT the numeric id,
+ * which collides across sessions and is the confusion behind eleven bugs in
+ * this file").
+ *
+ * The distinguishing half is the session that OWNS the row, which every row
+ * already carries: own rows are stamped `sourceSessionId: sessionId` when
+ * they are built, and foreign rows arrive with the owner's id on them. The
+ * rendering session is only the fallback for a row that carries no owner.
+ */
 export function publishTicketTitles(
   sessionId: string,
-  rows: ReadonlyArray<{ id: number; title: string }>,
+  rows: ReadonlyArray<{ id: number; title: string; sourceSessionId?: string }>,
 ): void {
-  for (const row of rows) ticketTitles.set(titleKey(sessionId, row.id), row.title);
+  for (const row of rows) {
+    ticketTitles.set(titleKey(row.sourceSessionId ?? sessionId, row.id), row.title);
+  }
 }
 
 /**

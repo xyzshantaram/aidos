@@ -372,10 +372,16 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * no React state involved, and an effect would leave the first card render
    * after a board load showing bare ids for one frame.
    *
-   * PUBLISHED UNDER THIS SESSION'S ID. Without it the index was one global
-   * `Map<ticketId, title>` and the last board to render owned every id, so a
-   * card in an aidos session showed a Thursday ticket's title for #39
-   * (user-reported 2026-09-05).
+   * EACH ROW IS PUBLISHED UNDER THE SESSION THAT OWNS IT, not under this
+   * one. `rawTickets` is `[...ownRows, ...foreignRows]`: own rows are
+   * stamped `sourceSessionId: sessionId` above, and foreign rows arrive
+   * from `workspaceTickets` carrying their owner's id. Publishing the whole
+   * array under the RENDERING session -- which round 1 of this fix did --
+   * let a sibling session's #39 overwrite this session's #39, because the
+   * foreign rows are appended last. The contamination did not go away, it
+   * moved from cross-workspace to cross-session (independent review,
+   * 2026-09-05). `sessionId` remains only as the fallback for a row that
+   * carries no owner.
    */
   publishTicketTitles(sessionId, rawTickets);
   const ownEvidence = (evidenceProjection as Record<string, EvidenceRow[]> | undefined) ?? {};
