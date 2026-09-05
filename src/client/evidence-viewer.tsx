@@ -50,7 +50,7 @@ export function EvidenceViewer(props: EvidenceViewerProps) {
           <h3 className="aidos-modal-title">
             <span
               className="aidos-chip aidos-chip-kind"
-              style={{ background: kindColor(row.kind) }}
+              style={{ ["--chip-hue"]: kindColor(row.kind) } as react.CSSProperties}
             >
               <span className="aidos-chip-key">{kindKeyword(row.kind)}</span>
             </span>

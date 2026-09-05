@@ -804,7 +804,7 @@ export function DetailPanel(props: DetailPanelBodyProps) {
       <div className="aidos-detail-chips">
         <span
           className="aidos-chip aidos-chip-id"
-          style={{ background: idColor(fullTicketId(ticket)) }}
+          style={{ ["--chip-hue"]: idColor(fullTicketId(ticket)) } as react.CSSProperties}
           title={fullTicketId(ticket)}
           data-dsh-tip=""
         >

@@ -22,6 +22,7 @@ import {
   displayDep,
   openCount,
   formatGateFraction,
+  gateIsFailed,
   ringPercent,
   fullTicketId,
   idColor,
@@ -326,6 +327,29 @@ describe("formatGateFraction", () => {
     expect(formatGateFraction(1, 2, true)).toBe("1/2");
     expect(formatGateFraction(2, 2, true)).toBe("2/2");
     expect(formatGateFraction(1, 1, true)).toBe("1/1");
+  });
+});
+
+describe("gateIsFailed", () => {
+  /*
+   * The board's one hard failure is an unmet gate: criteria exist and the
+   * required evidence is not all attached. The tile and the queue strip
+   * both consult this to decide whether the gate chip wears red, so the
+   * two surfaces cannot disagree about what counts as failing.
+   */
+  it("fails when criteria exist and evidence is missing", () => {
+    expect(gateIsFailed(0, 2, true)).toBe(true);
+    expect(gateIsFailed(1, 2, true)).toBe(true);
+    expect(gateIsFailed(null, 2, true)).toBe(true);
+    expect(gateIsFailed(1, null, true)).toBe(true);
+  });
+
+  it("does not fail a met gate or a ticket with nothing to meet", () => {
+    expect(gateIsFailed(2, 2, true)).toBe(false);
+    expect(gateIsFailed(1, 1, true)).toBe(false);
+    // No criteria: nothing to fail, even at zero evidence.
+    expect(gateIsFailed(0, 0, false)).toBe(false);
+    expect(gateIsFailed(null, null, false)).toBe(false);
   });
 });
 

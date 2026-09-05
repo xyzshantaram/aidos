@@ -57,7 +57,7 @@ export function EvidenceStrip(props: EvidenceStripProps) {
       <div className="aidos-evidence-strip-main">
         <span
           className="aidos-chip aidos-chip-kind"
-          style={{ background: kindColor(row.kind) }}
+          style={{ ["--chip-hue"]: kindColor(row.kind) } as react.CSSProperties}
           title={kindDescription(row.kind)}
           data-dsh-tip=""
         >

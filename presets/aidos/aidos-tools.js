@@ -27766,7 +27766,7 @@ var OwnerUnavailable = class extends Error {
   }
 };
 function _mdInline(text) {
-  return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>])/g, "\\$1");
+  return text.replace(/\s+/g, " ").trim().replace(/([\\`*_[\]<>~])/g, "\\$1");
 }
 function _mdCode(text) {
   const hadNewline = /[\r\n]/.test(text);
@@ -27788,7 +27788,7 @@ function _isUserAction(actor) {
   return actor === "user";
 }
 function _mdQuote(text) {
-  const escaped = _mdInline(text).replace(/^(\s*)(\d+)\./, "$1$2\\.").replace(/^(\s*)([#>+*-]|~{3,})/, "$1\\$2");
+  const escaped = _mdInline(text).replace(/^(\s*)(\d+)([.)])/, "$1$2\\$3").replace(/^(\s*)([#>+*-]|~{3,})/, "$1\\$2");
   return `
   > ${escaped}`;
 }

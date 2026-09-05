@@ -22,12 +22,13 @@ import {
   badgeClass,
   formatGateFraction,
   fullTicketId,
+  gateIsFailed,
   hasCriteria,
   idColor,
   stateLabel,
   ticketChipLabel,
 } from "./board-logic";
-import { KeyholeIcon, PopOutIcon } from "./icons";
+import { ChevronIcon, KeyholeIcon, PopOutIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 
@@ -89,6 +90,12 @@ export function TicketStrip(props: TicketStripProps) {
   return (
     <li className={className}>
       <div className="aidos-ticket-strip-main">
+        {/* The persistent chevron, matching the tool-render rows and the
+            board tiles: always present, rotating when this row's actions
+            are expanded. */}
+        <span className="aidos-ticket-strip-chevron">
+          <ChevronIcon open={props.expanded === true} />
+        </span>
         {/*
           * #93 (user's design): the STATE moves under the id as coloured
           * TEXT rather than sitting in the chip row as another badge.
@@ -102,7 +109,7 @@ export function TicketStrip(props: TicketStripProps) {
         <span className="aidos-ticket-strip-idcol">
           <span
             className="aidos-chip aidos-chip-id"
-            style={{ background: idColor(full) }}
+            style={{ ["--chip-hue"]: idColor(full) } as react.CSSProperties}
             title={full}
             data-dsh-tip=""
           >
@@ -171,9 +178,19 @@ export function TicketStrip(props: TicketStripProps) {
                 hasCriteria(ticket as TicketView),
               );
               const sentence = `Gate: ${fraction} of the required evidence is attached`;
+              /* Red for failures, same rule as the tile -- the decision is
+                 shared, in board-logic. */
+              const failed = gateIsFailed(
+                ticket.gatePresent ?? null,
+                ticket.gateTotal ?? null,
+                hasCriteria(ticket as TicketView),
+              );
               return (
                 <span
-                  className="aidos-chip aidos-chip-metric aidos-chip-gate"
+                  className={
+                    "aidos-chip aidos-chip-metric aidos-chip-gate" +
+                    (failed ? " aidos-chip-fail" : "")
+                  }
                   aria-label={sentence}
                   title={sentence}
                   data-dsh-tip=""

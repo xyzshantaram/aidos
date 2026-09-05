@@ -255,7 +255,7 @@ export function FilterPanel(props: FilterPanelProps) {
                 <span className="aidos-suggestion-title">{ticket.title}</span>
                 <span
                   className="aidos-chip aidos-chip-id"
-                  style={{ background: idColor(fullTicketId(ticket)) }}
+                  style={{ ["--chip-hue"]: idColor(fullTicketId(ticket)) } as react.CSSProperties}
                   title={fullTicketId(ticket)}
                   data-dsh-tip=""
                 >
@@ -402,7 +402,7 @@ export function FilterPanel(props: FilterPanelProps) {
                   <span className="aidos-suggestion-title">{ticket.title}</span>
                   <span
                     className="aidos-chip aidos-chip-id"
-                    style={{ background: idColor(fullTicketId(ticket)) }}
+                    style={{ ["--chip-hue"]: idColor(fullTicketId(ticket)) } as react.CSSProperties}
                     title={fullTicketId(ticket)}
                     data-dsh-tip=""
                   >

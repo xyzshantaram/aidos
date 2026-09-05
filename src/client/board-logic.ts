@@ -294,6 +294,22 @@ export function formatGateFraction(
 }
 
 /**
+ * Red for failures, in tool-render's sense: the gate chip reports an unmet
+ * gate -- criteria exist and the required evidence is not all attached. A
+ * ticket with no criteria has nothing to fail. The tile and the queue strip
+ * must agree on when the gate chip wears red, so the decision lives here
+ * and not in either component.
+ */
+export function gateIsFailed(
+  present: number | null,
+  total: number | null,
+  hasCriteriaValue: boolean,
+): boolean {
+  if (!hasCriteriaValue) return false;
+  return present === null || total === null || present < total;
+}
+
+/**
  * Map the advisory score to a ring percent. The score runs 0..5 and the
  * percent is clamped to 0..100.
  */

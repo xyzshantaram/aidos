@@ -1,14 +1,14 @@
 {
   "source": "/home/sid/repos/dotfiles-ai/plugins/tool-render/src",
-  "vendoredAt": "2026-09-04",
+  "vendoredAt": "2026-09-05",
   "files": {
     "client.module.css": {
       "vendoredAs": "tool-render.css",
-      "sha256": "2df953432e4c611ef934c8099dfb3bb1096caaecd6d21a2943b40bb883918502"
+      "sha256": "696ebd879a48d16ac7a45bc339f058175d1fc6ebbca9708e17f7d02ef99f19c6"
     },
     "text.ts": {
       "vendoredAs": "text.js",
-      "sha256": "516cf0be4f48e0a8ac848eaa31b19e80754e2a1ef14609b73693d38014492bd2",
+      "sha256": "503eac3f1b232c42ce11a35dea3d1c28c3345e701e4ce11ef54a5240880be19c",
       "note": "vendored with a .js extension: upstream is untyped, and aidos typechecks strictly. The companion text.d.ts is aidos own, NOT vendored."
     }
   }
