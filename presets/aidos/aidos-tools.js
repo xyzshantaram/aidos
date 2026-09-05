@@ -28798,7 +28798,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     try {
       const live = this.ctx.agents?.get?.(session.id);
       if (live === void 0) return;
-      const header = `**aidos board update** \u2014 ${lines.length} change${lines.length === 1 ? "" : "s"}`;
+      const header = `aidos board update \u2014 ${lines.length} change${lines.length === 1 ? "" : "s"}`;
       const shown = lines.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
       if (lines.length > DIGEST_LINE_CAP) {
         shown.push(`\u2026and ${lines.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);

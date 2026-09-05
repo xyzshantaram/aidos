@@ -2505,7 +2505,25 @@ registerAidosSessionEventTypes(ctx);
        * bounds name what they dropped rather than trailing off, because a
        * silent truncation is indistinguishable from nothing having happened.
        */
-      const header = `**aidos board update** — ${lines.length} change${lines.length === 1 ? "" : "s"}`;
+      /*
+       * NOT bold. The digest is delivered as a `notice`-form context message
+       * (agent.steer), and every context node's text renders through the
+       * shell's `ModelFacingContent` -- a literal `<pre>` tag, confirmed by
+       * reading dsh-client-ui-conversation's bundled source. No markdown
+       * parser reaches it (the shell's own `MarkdownText` is wired only to
+       * the compaction card and to real assistant messages). `**...**`
+       * rendered as four literal asterisks around the header, which is the
+       * user-reported bug this fixes.
+       *
+       * The REST of this file's digest lines still carry markdown syntax
+       * (`_mdCode`, `_mdInline`, `_mdTicketHead`'s bold/italic, `_mdQuote`'s
+       * `>`) with the same problem, plus backslash-escaping that is actively
+       * wrong now -- a title containing `_` renders with a visible backslash
+       * that was never in the real title. That is a bigger, deliberately
+       * DEFERRED change (touches ~15 call sites and their tests); this
+       * header is fixed now because it is what was reported.
+       */
+      const header = `aidos board update — ${lines.length} change${lines.length === 1 ? "" : "s"}`;
       const shown = lines.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
       if (lines.length > DIGEST_LINE_CAP) {
         shown.push(`…and ${lines.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);

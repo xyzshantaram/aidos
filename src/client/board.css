@@ -2909,6 +2909,26 @@
   white-space: nowrap;
 }
 
+/*
+ * The card FOOTER: a fact ABOUT the body, under the body (user, 2026-09-05 --
+ * a board read's count belongs after its rows, not on the collapsed line).
+ *
+ * Tertiary and small on purpose. It is a total, not a row: it must read as
+ * the caption under the list rather than as one more entry in it, which is
+ * how it would read at the list's own weight.
+ *
+ * The left margin matches .aidos-tool-list's, so the caption lines up with
+ * the box it belongs to instead of with the card's edge.
+ */
+.aidos-tool-footer {
+  margin: 0.125rem 0 0.125rem 0.25rem;
+  padding: 0 0.8125rem;
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  font-variant-numeric: tabular-nums;
+}
+
 /* An evidence strip inside a card body keeps the strip's own look; it only
    needs the surrounding box the other two body shapes carry. */
 /*

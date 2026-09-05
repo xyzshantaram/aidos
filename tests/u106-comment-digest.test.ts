@@ -333,7 +333,12 @@ describe("#106 the digest is valid Markdown", () => {
     svc.userAddComment(agent, { ticketId: ticket.id, text: "one" });
     svc.userAddComment(agent, { ticketId: ticket.id, text: "two" });
     const text = flush();
-    expect(text).toContain("**aidos board update** — 2 changes\n\n- ");
+    /*
+     * NOT bold. The digest renders through the shell's plain-`<pre>` notice
+     * body, confirmed by reading dsh-client-ui-conversation's source; `**`
+     * around the header showed as four literal asterisks (user-reported).
+     */
+    expect(text).toContain("aidos board update — 2 changes\n\n- ");
     // Every top-level list item is one line; a quote continues indented.
     const items = text.split("\n").filter((line) => line.startsWith("- "));
     expect(items.length).toBe(2);

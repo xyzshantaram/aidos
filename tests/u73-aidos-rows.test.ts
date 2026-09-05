@@ -19,7 +19,7 @@ import {
 } from "../src/client/view-state";
 import { AIDOS_ROWS, errorBody } from "../src/client/aidos-rows";
 import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
-import { ticketFromProjection } from "../src/client/aidos-row-data";
+import { boardQuerySummary, ticketFromProjection } from "../src/client/aidos-row-data";
 import { apply } from "../src/tools/aidos-tools";
 import { asContext, createHarness } from "./b1-harness";
 
@@ -131,11 +131,108 @@ describe("#73 click-through uses the settled fallback", () => {
   });
 });
 
-describe("#73 the board read leads with its count", () => {
-  it("prefers the #71 summary field over re-deriving it", () => {
-    // "Showing 30 of 42 matching tickets" -- a truncated read used to look
-    // exactly like a complete one.
-    expect(rows).toContain('typeof result?.summary === "string"');
+/*
+ * ── The board read describes its QUERY, and counts under the answer ──────
+ *
+ * User direction, 2026-09-05: the collapsed summary should be a one-line
+ * summary of the ARGUMENTS, and the result count moves to after the body.
+ *
+ * The test this replaces asserted the source substring
+ * `typeof result?.summary === "string"` under the name "the board read leads
+ * with its count". That substring SURVIVES this change -- the count still
+ * exists, it just feeds the footer now -- so the old test would have gone on
+ * passing while its named subject became false. Behaviour, not source text.
+ */
+describe("the board read's collapsed summary describes the query", () => {
+  it("names the filters that were asked for", () => {
+    expect(boardQuerySummary({ stateIds: ["in_progress"] })).toBe("in_progress");
+    expect(boardQuerySummary({ stateIds: ["open", "done"] })).toBe("open|done");
+    expect(boardQuerySummary({ search: "allowlist" })).toBe('"allowlist"');
+    expect(boardQuerySummary({ stateIds: ["open"], search: "gate" })).toBe('open · "gate"');
+  });
+
+  it("DISTINGUISHES two reads that return the same count", () => {
+    /*
+     * The whole point of the change. Under the old rule both of these
+     * rendered as the result's own "Showing 7 of 7 matching tickets" and
+     * were indistinguishable in a transcript.
+     */
+    const a = boardQuerySummary({ stateIds: ["in_progress"] });
+    const b = boardQuerySummary({ search: "vendor", sortKey: "alpha" });
+    expect(a).not.toBe(b);
+  });
+
+  it("carries the direction WITH the sort key, never alone", () => {
+    expect(boardQuerySummary({ sortKey: "confidence" })).toBe("confidence ↓");
+    expect(boardQuerySummary({ sortKey: "alpha", descending: false })).toBe("alpha ↑");
+    // A direction with nothing to apply to says nothing and is dropped.
+    expect(boardQuerySummary({ descending: false })).toBe("all tickets");
+  });
+
+  it("says so when nothing was filtered, instead of rendering blank", () => {
+    expect(boardQuerySummary({})).toBe("all tickets");
+    expect(boardQuerySummary(null)).toBe("all tickets");
+    // An empty stateIds array is not a filter.
+    expect(boardQuerySummary({ stateIds: [] })).toBe("all tickets");
+  });
+
+  it("shows a real page but not the default offset", () => {
+    expect(boardQuerySummary({ limit: 30 })).toBe("limit 30");
+    expect(boardQuerySummary({ limit: 30, offset: 0 })).toBe("limit 30");
+    expect(boardQuerySummary({ limit: 30, offset: 30 })).toBe("limit 30 · offset 30");
+  });
+
+  it("prefers projectIds over projectId when both are present", () => {
+    expect(boardQuerySummary({ projectId: 1 })).toBe("project 1");
+    expect(boardQuerySummary({ projectIds: [1, 2] })).toBe("projects 1,2");
+    expect(boardQuerySummary({ projectId: 1, projectIds: [2, 3] })).toBe("projects 2,3");
+  });
+
+  it("SHOWS a malformed filter rather than swallowing it", () => {
+    /*
+     * Arguments arrive as whatever the model emitted, and the tempting
+     * defensive move -- drop anything off-shape -- makes the row LIE: a call
+     * that passed `stateIds: "open"` would render "all tickets", which is
+     * the one thing it certainly did not ask for. A row that hides a filter
+     * is worse than one that shows an odd-looking filter, because only the
+     * odd-looking one prompts anybody to look.
+     *
+     * This expectation was originally written the other way round and the
+     * test caught the code being inconsistent with itself: a numeric
+     * `search` was shown while a string `stateIds` vanished.
+     */
+    expect(boardQuerySummary({ stateIds: "open" })).toBe("open");
+    expect(boardQuerySummary({ search: 42 })).toBe('"42"');
+    expect(boardQuerySummary({ stateIds: [null, "open"] })).toBe("open");
+  });
+
+  it("never throws on a shape it cannot read", () => {
+    // A row must never take down the transcript.
+    expect(() => boardQuerySummary({ stateIds: {} })).not.toThrow();
+    expect(() => boardQuerySummary({ search: {} })).not.toThrow();
+    expect(() => boardQuerySummary({ projectIds: "x" })).not.toThrow();
+    expect(boardQuerySummary({ stateIds: {} })).toBe("all tickets");
+  });
+});
+
+describe("the board read's count moves under the rows it counts", () => {
+  it("feeds the #71 summary field to the FOOTER, not the row", () => {
+    // A truncated read must still be visible as truncated -- the count is
+    // moved, not dropped.
+    expect(rows).toContain("footer={footer}");
+    expect(rows).toContain('const footer = typeof result?.summary === "string"');
+    // And the collapsed summary no longer reads the result at all.
+    expect(rows).toContain("const summary = boardQuerySummary(args)");
+  });
+
+  it("renders the footer after the body inside the expanded card", () => {
+    const body = rows.indexOf("{body}\n          {footer !== null");
+    expect(body).toBeGreaterThan(-1);
+  });
+
+  it("expands for a footer even when there are no rows to list", () => {
+    // "Showing 0 of 42" is the whole answer for a read that matched nothing.
+    expect(rows).toContain("const expandable = body !== null || footer !== null");
   });
 });
 

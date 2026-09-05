@@ -139,6 +139,69 @@ export function ticketLines(result: Record<string, unknown> | null): TicketLine[
 }
 
 /**
+ * The one-line description of WHAT A BOARD READ ASKED FOR.
+ *
+ * User direction (2026-09-05): the collapsed summary should describe the
+ * ARGUMENTS, not the results, and the result count belongs after the body.
+ *
+ * The reasoning holds up under the row's own anatomy: collapsed, a row is a
+ * record of what the agent DID, and "Showing 30 of 42 matching tickets"
+ * describes what came back -- which the reader cannot check without opening
+ * the card anyway. Two reads with completely different filters rendered
+ * identically whenever they happened to return the same count, so the
+ * summary hid exactly the thing worth scanning a transcript for.
+ *
+ * An unfiltered read says so ("all tickets") rather than rendering blank.
+ */
+export function boardQuerySummary(args: Record<string, unknown> | null): string {
+  if (args === null) return "all tickets";
+  const parts: string[] = [];
+  /*
+   * A malformed argument is SHOWN, not swallowed.
+   *
+   * Arguments arrive as whatever the model emitted, and the tempting
+   * defensive move -- drop anything that is not the declared shape -- makes
+   * the row LIE: a call that passed `stateIds: "open"` would render "all
+   * tickets", which is the one thing it certainly did not ask for. A row
+   * that hides a filter is worse than a row that shows an odd-looking one,
+   * because only the odd-looking one prompts anybody to look.
+   *
+   * So a bare string is read as a single state, and every scalar is read as
+   * its text. The rule is: render what can be read, never throw, and never
+   * silently make a filtered read look unfiltered.
+   */
+  const rawStates = Array.isArray(args.stateIds) ? args.stateIds : [args.stateIds];
+  const states = rawStates
+    .map((value) => asText(value))
+    .filter((value): value is string => value !== null && value !== "");
+  if (states.length > 0) parts.push(states.join("|"));
+  const search = asText(args.search);
+  if (search !== null && search !== "") parts.push(`"${search}"`);
+  const projectIds = asArray(args.projectIds)
+    .map((value) => asText(value))
+    .filter((value): value is string => value !== null && value !== "");
+  const projectId = asText(args.projectId);
+  if (projectIds.length > 0) parts.push(`projects ${projectIds.join(",")}`);
+  else if (projectId !== null && projectId !== "") parts.push(`project ${projectId}`);
+  const sortKey = asText(args.sortKey);
+  if (sortKey !== null && sortKey !== "") {
+    /*
+     * The DIRECTION rides the sort key rather than standing alone: a bare
+     * "descending" says nothing without the key it applies to, and the pair
+     * is what the reader is checking ("newest first?").
+     */
+    parts.push(`${sortKey} ${args.descending === false ? "↑" : "↓"}`);
+  }
+  if (args.detail === "full") parts.push("full");
+  const limit = asText(args.limit);
+  if (limit !== null && limit !== "") parts.push(`limit ${limit}`);
+  const offset = asText(args.offset);
+  // Offset 0 is the default and says nothing; only a real page is worth a chip.
+  if (offset !== null && offset !== "" && offset !== "0") parts.push(`offset ${offset}`);
+  return parts.length === 0 ? "all tickets" : parts.join(" · ");
+}
+
+/**
  * The fields a set_ticket call actually WROTE.
  *
  * `ticketId` and `projectId` are excluded: they name which ticket was

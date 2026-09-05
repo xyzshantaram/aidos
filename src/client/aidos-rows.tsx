@@ -42,6 +42,7 @@ import { asBoardKey } from "./board-logic";
 import { setSelection, ticketTitle } from "./view-state";
 import {
   allowlistPaths,
+  boardQuerySummary,
   planBlocksWritten,
   suggestionLines,
   ticketEvidence,
@@ -120,6 +121,14 @@ interface RowProps {
   summary: string;
   state: RowState;
   body?: react.ReactNode | null;
+  /**
+   * A line rendered AFTER the body, inside the expanded card.
+   *
+   * For counts and other facts ABOUT the result: they belong under the thing
+   * they count, where they read as a total, rather than on the collapsed row
+   * where they crowd out what the call actually asked for.
+   */
+  footer?: react.ReactNode | null;
   errorSummary?: string;
   /** Selecting this ticket on the board when the summary is clicked. */
   ticketId?: string | null;
@@ -131,7 +140,10 @@ function AidosRow(props: RowProps) {
   const [expanded, setExpanded] = react.useState(false);
   const [peekOpen, setPeekOpen] = react.useState(false);
   const body = props.body ?? null;
-  const expandable = body !== null;
+  const footer = props.footer ?? null;
+  // A footer alone is worth expanding for: a read that matched nothing has
+  // no rows to list, and "Showing 0 of 42" is the whole answer.
+  const expandable = body !== null || footer !== null;
   const open = expanded && expandable;
   /*
    * The summary decision lives in rowSummary (tool-block), unit tested: the
@@ -243,7 +255,12 @@ function AidosRow(props: RowProps) {
           </span>
         )}
       </div>
-      {open ? <div className="tool-render-body">{body}</div> : null}
+      {open ? (
+        <div className="tool-render-body">
+          {body}
+          {footer !== null ? <div className="aidos-tool-footer">{footer}</div> : null}
+        </div>
+      ) : null}
       {peekOpen ? (
         <ModalShell title="Ticket" onClose={() => setPeekOpen(false)}>
           {peeked !== null ? (
@@ -533,19 +550,21 @@ export function GetTicketRow(props: AidosViewProps) {
 export function GetTicketsRow(props: AidosViewProps) {
   const { args, state, result, errorText, errorSummary } = useAidosRow(props);
   /*
-   * The board read leads with its COUNT, which is the #71 summary field:
-   * "Showing 30 of 42 matching tickets". A truncated read used to look
-   * exactly like a complete one.
+   * THE ROW SAYS WHAT WAS ASKED FOR; THE COUNT GOES UNDER THE ANSWER.
+   *
+   * It used to be the other way round: the collapsed summary led with the
+   * result's own `summary` field ("Showing 30 of 42 matching tickets") and
+   * fell back to the filters only when that was missing. Two reads with
+   * completely different filters then rendered identically whenever they
+   * returned the same count, and the count is the one part of a board read a
+   * reader cannot act on without opening the card anyway.
+   *
+   * The count is not dropped -- it moves to the footer, under the rows it
+   * counts, where it still catches a TRUNCATED read (30 of 42) that would
+   * otherwise look complete.
    */
-  const summary =
-    typeof result?.summary === "string"
-      ? result.summary
-      : [
-          Array.isArray(args?.stateIds) ? (args.stateIds as string[]).join("|") : null,
-          typeof args?.search === "string" && args.search !== "" ? `"${args.search}"` : null,
-        ]
-          .filter((part): part is string => part !== null)
-          .join(" · ") || "the board";
+  const summary = boardQuerySummary(args);
+  const footer = typeof result?.summary === "string" ? result.summary : null;
   /*
    * The body is the ROWS THE READ RETURNED, which is what a reader checking
    * the agent's work actually wants: not "it read the board" but which
@@ -576,10 +595,11 @@ export function GetTicketsRow(props: AidosViewProps) {
   return (
     <AidosRow
       icon={<KeyholeIcon />}
-      title="Read the board"
+      title="Read board"
       summary={summary}
       state={state}
       body={body}
+      footer={footer}
       errorSummary={errorSummary}
     />
   );
