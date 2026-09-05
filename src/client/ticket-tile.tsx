@@ -19,7 +19,7 @@ import {
   ticketChipLabel,
 } from "./board-logic";
 import { EvidenceTags } from "./evidence-tags";
-import { AlertCircleIcon, ChevronIcon, CompassIcon, ForkIcon, KeyholeIcon } from "./icons";
+import { AlertCircleIcon, CompassIcon, ForkIcon, KeyholeIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
@@ -82,12 +82,6 @@ export function TicketTile(props: TicketTileProps) {
 
     <button className={className} onClick={props.onSelect}>
       <div className="aidos-tile-meta">
-        {/* The persistent chevron, matching the tool-render rows: always
-            present so every tile carries the same affordance, rotating when
-            this tile is the one whose detail is open. */}
-        <span className="aidos-tile-chevron">
-          <ChevronIcon open={props.selected} />
-        </span>
         <span
           className="aidos-chip aidos-chip-id"
           style={{ ["--chip-hue"]: idColor(fullTicketId(ticket)) } as react.CSSProperties}

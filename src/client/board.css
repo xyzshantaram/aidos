@@ -1106,24 +1106,9 @@
 .aidos-tile-meta {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
   min-width: 0;
-  /* The chevron joined the row's head, so space-between would spread its
-     gap across every chip. The row starts at the left and only the last
-     child (the state chip) pushes to the far edge. */
-  justify-content: flex-start;
-}
-
-.aidos-tile-meta > :last-child {
-  margin-left: auto;
-}
-
-/* The tile's persistent chevron: same grammar as the tool-render rows --
-   always visible, rotating when this tile is the one whose detail is open. */
-.aidos-tile-chevron {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
 }
 
 .aidos-tile-chips {
@@ -2420,15 +2405,6 @@
   gap: 8px;
   min-width: 0;
   flex: 1;
-}
-
-/* The strip row's persistent chevron: same grammar as the tiles and the
-   tool-render rows -- always visible, rotating when the row's actions are
-   expanded. */
-.aidos-ticket-strip-chevron {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
 }
 
 .aidos-ticket-strip-body {

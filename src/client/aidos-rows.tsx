@@ -51,6 +51,7 @@ import {
   resultTextOf,
   rowStateOf,
   rowSummary,
+  nameBadgeColors,
   type RowState,
 } from "./tool-block";
 
@@ -186,14 +187,22 @@ function AidosRow(props: RowProps) {
             : undefined
         }
       >
-        <span className="tool-render-leading" aria-hidden="true">
-          {props.state === "error" || props.state === "stopped" ? (
-            "●"
-          ) : (
-            <ChevronIcon open={open} />
-          )}
+        {/*
+          * The base card's row anatomy (dotfiles-ai tool-render), mirrored:
+          * chevron leading on every expandable row -- errored ones included,
+          * and the old state DOTS are gone, a failed card is announced by
+          * its red badge and its data-error outline instead -- then the
+          * hashed name badge, then the summary. The badge colours come from
+          * nameBadgeColors (tool-block), the same hash the native rows use,
+          * so an aidos call and a native call hash to the same hue and
+          * failures go white-on-red in both.
+          */}
+        {expandable ? <ChevronIcon open={open} /> : null}
+        <span className="tool-render-name-badge" style={nameBadgeColors(props.title, props.state === "error")}>
+          <span className="tool-render-name-badge-text" title={props.title} data-dsh-tip="">
+            {props.title}
+          </span>
         </span>
-        <span className="tool-render-title">{props.title}</span>
         <span className="tool-render-sep" aria-hidden="true" />
         {select !== undefined && props.errorSummary === undefined ? (
           <span

@@ -34,6 +34,7 @@ import {
   relativize,
   resultTextOf,
   rowStateOf,
+  nameBadgeColors,
   unwrapScratchResult,
   type RowState,
 } from "./tool-block";
@@ -43,23 +44,16 @@ export interface ToolViewProps {
   cwd?: string;
 }
 
-/**
- * The leading slot, matching tool-render's: a chevron when open, a state dot
- * when the call failed or was stopped, and the tool's own icon otherwise.
- *
- * A STOPPED call gets the warning dot rather than the error dot. The user
- * stopped it; tinting a deliberate stop as a failure teaches people to
- * ignore the tint.
- *
- * The chevron is the shell's own primitive in the todo panel's rotation
- * style (user, 2026-09-05) -- the text glyphs `▾`/`▸` this replaces were the
- * F7 rendering-parity gap a review flagged: text glyphs next to every other
- * row's real icon component. The running state keeps its spinner-ish `◌`
- * glyph; no primitive matches it and inventing one is out of scope.
+/*
+ * The leading slot, matching tool-render's row anatomy: the chevron leads on
+ * every expandable row -- errored ones included -- and the old state DOTS
+ * are gone, matching the base card ("the old state dots are gone"): a failed
+ * card is announced by its red badge and its data-error outline instead. The
+ * chevron is the shell's own primitive in the todo panel's rotation style
+ * (user, 2026-09-05).
  */
 function Leading({ state, open }: { state: RowState; open: boolean }) {
-  if (state === "error" || state === "stopped") return <>●</>;
-  if (state === "running") return <>◌</>;
+  void state;
   return <ChevronIcon open={open} />;
 }
 
@@ -120,10 +114,12 @@ function ScratchRow({ title, summary, state, body, errorSummary }: RowOptions) {
             : undefined
         }
       >
-        <span className="tool-render-leading" aria-hidden="true">
-          <Leading state={state} open={open} />
+        <Leading state={state} open={open} />
+        <span className="tool-render-name-badge" style={nameBadgeColors(title, state === "error")}>
+          <span className="tool-render-name-badge-text" title={title} data-dsh-tip="">
+            {title}
+          </span>
         </span>
-        <span className="tool-render-title">{title}</span>
         {/* The dot between the tool name and its argument, as tool-render has. */}
         <span className="tool-render-sep" aria-hidden="true" />
         <span

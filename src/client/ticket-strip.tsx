@@ -28,7 +28,7 @@ import {
   stateLabel,
   ticketChipLabel,
 } from "./board-logic";
-import { ChevronIcon, KeyholeIcon, PopOutIcon } from "./icons";
+import { KeyholeIcon, PopOutIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 
@@ -90,12 +90,6 @@ export function TicketStrip(props: TicketStripProps) {
   return (
     <li className={className}>
       <div className="aidos-ticket-strip-main">
-        {/* The persistent chevron, matching the tool-render rows and the
-            board tiles: always present, rotating when this row's actions
-            are expanded. */}
-        <span className="aidos-ticket-strip-chevron">
-          <ChevronIcon open={props.expanded === true} />
-        </span>
         {/*
           * #93 (user's design): the STATE moves under the id as coloured
           * TEXT rather than sitting in the chip row as another badge.

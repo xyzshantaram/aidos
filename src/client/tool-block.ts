@@ -290,3 +290,49 @@ export function unwrapScratchResult(text: string | null): string | null {
     return text;
   }
 }
+
+/**
+ * Deterministic hue from a row title, stable across sessions and reloads.
+ *
+ * Ported from dotfiles-ai's tool-render (`toolNameHue`), so an aidos row's
+ * name badge hashes exactly like a native tool call's: same name, same hue,
+ * everywhere. The hash is multiplied by the golden ratio conjugate and the
+ * fractional part kept -- a raw hash % 360 clumps similar short strings
+ * into a narrow hue range, and the golden spread is the standard declump.
+ */
+export function toolNameHue(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) {
+    h = (h * 31 + name.charCodeAt(i)) | 0;
+  }
+  h = Math.abs(h);
+  const golden = 0.6180339887498949;
+  const frac = (h * golden) % 1;
+  return Math.floor(frac * 360);
+}
+
+/**
+ * The tool-call name badge's inline colours, matching the base card: hashed
+ * hue mixed against the theme's tertiary background, bordered in a lighter
+ * step of the same hue. On a FAILED call the badge goes white-on-red -- the
+ * failure state is the one thing the row leads with, so the badge carries
+ * it. A refusal is NOT a failure: the badge keeps its hue and the reason
+ * reads in the summary, per #73.
+ */
+export function nameBadgeColors(
+  name: string,
+  isError: boolean,
+): { background: string; borderColor: string; color?: string } {
+  if (isError) {
+    return {
+      background: "color-mix(in srgb, var(--dsw-alias-state-error-primary) 85%, black)",
+      borderColor: "var(--dsw-alias-state-error-primary)",
+      color: "#fff",
+    };
+  }
+  const hue = toolNameHue(name);
+  return {
+    background: `color-mix(in srgb, hsl(${hue} 65% 45%) 55%, var(--dsw-alias-bg-tertiary))`,
+    borderColor: `hsl(${hue} 55% 60%)`,
+  };
+}

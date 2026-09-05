@@ -22,11 +22,13 @@ import {
   firstLine,
   firstLineOfError,
   isDone,
+  nameBadgeColors,
   parseArgs,
   pickString,
   relativize,
   resultTextOf,
   rowStateOf,
+  toolNameHue,
   unwrapErrorEnvelope,
   unwrapScratchResult,
 } from "../src/client/tool-block";
@@ -227,8 +229,10 @@ describe("#82 the rows USE tool-render, rather than approximating it", () => {
     for (const cls of [
       "tool-render-card",
       "tool-render-row",
-      "tool-render-leading",
-      "tool-render-title",
+      // The name badge replaced the leading wrapper and plain title: the row
+      // now leads with the same hashed chip the native tool calls wear.
+      "tool-render-name-badge",
+      "tool-render-name-badge-text",
       "tool-render-sep",
       "tool-render-summary",
       "tool-render-body",
@@ -418,5 +422,45 @@ describe("#82 an error envelope never renders as raw JSON", () => {
     expect(unwrapErrorEnvelope("{not json")).toBeNull();
     expect(unwrapErrorEnvelope('{"a":1}')).toBeNull();
     expect(unwrapErrorEnvelope("[1,2]")).toBeNull();
+  });
+});
+
+describe("toolNameHue / nameBadgeColors (#82: rows mirror the base card)", () => {
+  const rows = readFileSync(
+    new URL("../src/client/scratch-rows.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("hashes a name to a stable, declumped hue", () => {
+    // Stable across calls and sessions: same name, same hue, always.
+    expect(toolNameHue("Attach evidence")).toBe(toolNameHue("Attach evidence"));
+    expect(toolNameHue("Move ticket")).toBe(toolNameHue("Move ticket"));
+    // Different names land on different hues.
+    expect(toolNameHue("Attach evidence")).not.toBe(toolNameHue("Move ticket"));
+    // Within the hue wheel.
+    const hue = toolNameHue("Read the board");
+    expect(hue).toBeGreaterThanOrEqual(0);
+    expect(hue).toBeLessThan(360);
+  });
+
+  it("dresses the badge from the hashed hue, red only on failure", () => {
+    const normal = nameBadgeColors("Attach evidence", false);
+    expect(normal.background).toContain("hsl(" + toolNameHue("Attach evidence") + " 65% 45%)");
+    expect(normal.borderColor).toContain("hsl(" + toolNameHue("Attach evidence") + " 55% 60%)");
+    expect(normal.color).toBeUndefined();
+
+    // A FAILED call goes white-on-red, exactly as the base card's badge does.
+    const failed = nameBadgeColors("Attach evidence", true);
+    expect(failed.background).toContain("--dsw-alias-state-error-primary");
+    expect(failed.color).toBe("#fff");
+  });
+
+  it("renders the badge with the base card's own classes", () => {
+    // The row leads with the hashed chip, not a plain title: same anatomy as
+    // the native tool calls, so the two cannot be told apart by shape.
+    expect(rows).toContain('className="tool-render-name-badge"');
+    expect(rows).toContain("tool-render-name-badge-text");
+    // The old state dots are gone, as in the base card.
+    expect(rows).not.toContain("●");
   });
 });
