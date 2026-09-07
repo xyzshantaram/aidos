@@ -2534,7 +2534,21 @@
   margin-top: 2px;
 }
 
-.aidos-ticket-strip-actionrow .aidos-btn {
+/*
+ * #141: the row's buttons are tool-render approval buttons now, so this
+ * selector names that class as well.
+ *
+ * SIZE ONLY. Every colour, border, radius, hover, armed and disabled rule
+ * comes from the vendored sheet -- re-stating any of them here is what the
+ * ticket forbids, because a second copy of a look is a second thing to keep
+ * in step, and the three hand-ports that preceded the vendoring all died of
+ * exactly that. What the vendored sheet cannot know is the SCALE of the
+ * surface it landed in: its buttons are sized for a tool card (12px/20px
+ * text, 5px 12px padding, ~30px tall) and these sit in a list whose chips
+ * are 20px, where they would dominate the ask they answer.
+ */
+.aidos-ticket-strip-actionrow .aidos-btn,
+.aidos-ticket-strip-actionrow .tool-render-approval-btn {
   /*
    * Sized to the surrounding UI, not to a dialog. These were 28px tall in a
    * modal whose chips are 20px, so the buttons dominated rows they are
@@ -2550,6 +2564,7 @@
   min-width: 5.5rem;
   padding: 0 8px;
   font-size: 11px;
+  line-height: 20px;
   justify-content: center;
   white-space: nowrap;
 }

@@ -163,6 +163,21 @@ export function QueuePanel(props: QueuePanelProps) {
   const [sortKey, setSortKey] = react.useState<QueueSortKey>("suggested");
 
   /*
+   * #141: which Dismiss is ARMED, by nomination id.
+   *
+   * The tool card's reject is a two-step (first click arms, second confirms)
+   * and this row now wears that button's anatomy, so it must carry the
+   * behaviour the anatomy promises -- a red button that fires on one click
+   * while the identical red button elsewhere asks first is worse than two
+   * different-looking buttons.
+   *
+   * ONE SLOT, not a set: arming a second row disarms the first, which is
+   * what the human expects from a list ("I changed my mind, I meant that
+   * one"), and it makes a stale armed row impossible to leave behind.
+   */
+  const [armedDismiss, setArmedDismiss] = react.useState<string | null>(null);
+
+  /*
    * ANSWERED ASKS ARE HIDDEN AT ONCE (user ask).
    *
    * An ask disappears when the action it offers stops being available --
@@ -324,21 +339,50 @@ export function QueuePanel(props: QueuePanelProps) {
                   * no hole -- and the space it was wasting goes back to the
                   * ticket's description, which the user also asked for.
                   */}
+                {/*
+                  * #141: the tool card's approval anatomy, reused rather
+                  * than re-implemented -- reject on the left, the primary
+                  * on the right, both from the VENDORED sheet so the queue
+                  * and the inline tool-call actions read as one system.
+                  *
+                  * The container stays `aidos-ticket-strip-actionrow` and
+                  * does NOT become `tool-render-approval-actions`: the row's
+                  * own layout is load-bearing (the Dismiss-first collapse
+                  * above), and adopting a second flex container would undo
+                  * the alignment fix it exists for. The BUTTONS are what the
+                  * ticket asked to unify.
+                  */}
                 {entry.nominationId !== undefined && props.onDismiss !== undefined ? (
                   <button
-                    className="aidos-btn"
+                    type="button"
+                    className="tool-render-approval-btn tool-render-approval-reject"
+                    data-armed={armedDismiss === entry.nominationId ? true : undefined}
+                    disabled={working}
                     title="Drop this suggestion without acting on it"
                     data-dsh-tip=""
                     onClick={() => {
-                      props.onDismiss?.(entry.nominationId as string);
+                      const id = entry.nominationId as string;
+                      // First click ARMS, second click dismisses -- the
+                      // tool card's contract for this exact button.
+                      if (armedDismiss !== id) {
+                        setArmedDismiss(id);
+                        return;
+                      }
+                      setArmedDismiss(null);
+                      props.onDismiss?.(id);
                     }}
                   >
-                    Dismiss
+                    {armedDismiss === entry.nominationId ? "? Confirm dismiss" : "Dismiss"}
                   </button>
                 ) : null}
                 <button
-                  className="aidos-btn aidos-btn-primary"
+                  type="button"
+                  className="tool-render-approval-btn tool-render-approval-approve"
+                  disabled={working}
                   onClick={() => {
+                    // Acting disarms: a Dismiss left armed on the row you
+                    // just signed off is a loaded button on a dead ask.
+                    setArmedDismiss(null);
                     setRunning(entry);
                   }}
                 >

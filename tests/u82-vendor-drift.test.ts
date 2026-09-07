@@ -33,6 +33,8 @@ const VENDOR_DIR = new URL("../src/client/vendor/tool-render/", import.meta.url)
 interface Manifest {
   source: string;
   vendoredAt: string;
+  /** #141: the upstream commit the vendored bytes were copied from. */
+  upstreamCommit?: string;
   files: Record<string, { vendoredAs: string; sha256: string }>;
 }
 
@@ -80,6 +82,34 @@ function upstreamText(upstreamPath: string): string {
     ) as string;
   } catch {
     return readFileSync(upstreamPath, "utf8");
+  }
+}
+
+/** The upstream repo's current commit, or null when it is not reachable. */
+function upstreamHead(): string | null {
+  try {
+    return execFileSync("git", ["-C", manifest.source, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** One upstream file's content AT a specific commit, or null if unreadable. */
+function textAtCommit(commit: string, upstreamPath: string): string | null {
+  try {
+    const toplevel = execFileSync(
+      "git",
+      ["-C", manifest.source, "rev-parse", "--show-toplevel"],
+      { encoding: "utf8" },
+    ).trim();
+    const relative = upstreamPath.slice(toplevel.length + 1);
+    return execFileSync("git", ["-C", manifest.source, "show", `${commit}:${relative}`], {
+      encoding: "utf8",
+    }) as string;
+  } catch {
+    return null;
   }
 }
 
@@ -146,6 +176,14 @@ describe("#82 vendored tool-render files", () => {
 
     if (process.env.VENDOR_UPDATE === "1") {
       manifest.vendoredAt = new Date().toISOString().slice(0, 10);
+      /*
+       * #141: the commit moves WITH the bytes. Recording it by hand would
+       * rot at the first re-vendor, and a stale commit is worse than none
+       * -- it points a reader at a diff that does not contain the change
+       * they are looking at.
+       */
+      const head = upstreamHead();
+      if (head !== null) manifest.upstreamCommit = head;
       writeFileSync(join(VENDOR_DIR, "SOURCE.json"), JSON.stringify(manifest, null, 2) + "\n");
       return;
     }
@@ -157,6 +195,38 @@ describe("#82 vendored tool-render files", () => {
         "then READ THE DIFF: an upstream change may need a matching change in " +
         "src/client/scratch-rows.tsx.",
     ).toEqual([]);
+  });
+
+  /*
+   * #141: provenance that can be CHECKED, not just read.
+   *
+   * "vendoredAt: 2026-09-07" tells a reader when someone copied something,
+   * which is the least useful half of the question. The commit tells them
+   * WHAT they copied, and this test proves the recorded commit is really
+   * the one the bytes came from -- otherwise the field is a comment, and a
+   * comment that nothing verifies drifts exactly like the file it claims to
+   * describe (which is the whole reason this suite exists).
+   */
+  it("records the upstream COMMIT the bytes came from", () => {
+    expect(manifest.upstreamCommit, "SOURCE.json must record upstreamCommit").toMatch(
+      /^[0-9a-f]{7,40}$/,
+    );
+  });
+
+  it("the recorded commit really produces the vendored bytes", () => {
+    if (!existsSync(manifest.source)) return; // Same skip rule as the drift check.
+    const commit = manifest.upstreamCommit;
+    if (commit === undefined) return; // The assertion above owns that failure.
+    for (const [upstream, entry] of Object.entries(manifest.files)) {
+      const text = textAtCommit(commit, join(manifest.source, upstream));
+      if (text === null) {
+        throw new Error(
+          `#82/#141: SOURCE.json names commit ${commit}, but ${upstream} cannot be read at it. ` +
+            "The commit is wrong, was rebased away, or the file moved.",
+        );
+      }
+      expect(sha256(text), `${upstream} at ${commit.slice(0, 12)}`).toBe(entry.sha256);
+    }
   });
 
   it("the vendored copy matches its own recorded hash", () => {

@@ -604,7 +604,15 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
      * after the container was fixed. And at 28px in a modal whose chips are
      * 20px the buttons dominated the rows they are subordinate to.
      */
-    const button = rule(".aidos-ticket-strip-actionrow .aidos-btn {");
+    /*
+     * #141 moved the row onto the tool card's approval buttons, so the
+     * selector grew a second arm. The RULE is unchanged and still worth
+     * pinning: an unsized vendored button is ~30px tall, which is exactly
+     * the dominance this test was written about, so the new class has to be
+     * in the sizing selector or the original report comes straight back.
+     */
+    const button = rule(".aidos-ticket-strip-actionrow .aidos-btn,");
+    expect(button).toContain(".tool-render-approval-btn");
     expect(button).toContain("min-width: 5.5rem");
     expect(button).toContain("height: 22px");
     expect(css).not.toContain(".aidos-ticket-strip-actionrow .aidos-btn-primary {");
