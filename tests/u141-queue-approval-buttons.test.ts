@@ -38,6 +38,53 @@ const vendored = readFileSync(
   "utf8",
 );
 
+/**
+ * The properties aidos may set on these buttons: LAYOUT only.
+ *
+ * Named "layout" rather than "geometry" because the review pointed out that
+ * `align-self` is geometry by any reading and the old message told the
+ * author it was not — a guard whose refusal reads as wrong gets argued
+ * with, then disabled.
+ */
+const LAYOUT_ONLY = new Set([
+  "display",
+  "height",
+  "min-height",
+  "max-height",
+  "width",
+  "min-width",
+  "max-width",
+  "padding",
+  "margin",
+  "margin-top",
+  "gap",
+  "font-size",
+  "line-height",
+  "align-items",
+  "align-self",
+  "justify-content",
+  "order",
+  "white-space",
+  "flex",
+  "flex-direction",
+]);
+
+/**
+ * Every property declared in a CSS fragment, lower-cased.
+ *
+ * Case folding is not cosmetic: the review slipped `COLOR:` past the first
+ * version of this guard, because CSS property names are case-INSENSITIVE to
+ * a browser and the pattern was not. A guard that only sees lowercase is a
+ * guard with a documented bypass.
+ */
+function declaredProperties(fragment: string): string[] {
+  // Comments first: prose about colour is not a colour declaration.
+  const declarations = fragment.replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...declarations.matchAll(/(^|[{;])\s*([A-Za-z-]+)\s*:/g)].map((match) =>
+    (match[2] as string).toLowerCase(),
+  );
+}
+
 /** The action-row block of board.css, where a re-implementation would land. */
 function actionRowRules(): string {
   const start = css.indexOf(".aidos-ticket-strip-actionrow");
@@ -93,41 +140,46 @@ describe("#141 the states come from the vendored sheet, not a local copy", () =>
      * hand-ports of this look died of "close enough", and a colour quietly
      * re-stated here is the first step back to that.
      */
-    const GEOMETRY = new Set([
-      "display",
-      "height",
-      "min-height",
-      "max-height",
-      "width",
-      "min-width",
-      "max-width",
-      "padding",
-      "margin",
-      "margin-top",
-      "gap",
-      "font-size",
-      "line-height",
-      "align-items",
-      "justify-content",
-      "white-space",
-      "flex",
-      "flex-direction",
-    ]);
     const rules = actionRowRules();
-    // Strip comments first: prose about colour is not a colour declaration.
-    const declarations = rules.replace(/\/\*[\s\S]*?\*\//g, "");
-    const properties = [...declarations.matchAll(/(^|[{;])\s*([a-z-]+)\s*:/g)].map(
-      (match) => match[2] as string,
-    );
-    expect(properties.length).toBeGreaterThan(0);
-    for (const property of properties) {
+    for (const property of declaredProperties(rules)) {
       expect(
-        GEOMETRY.has(property),
-        `#141: board.css sets "${property}" on the queue's approval buttons. Only geometry ` +
+        LAYOUT_ONLY.has(property),
+        `#141: board.css sets "${property}" on the queue's approval buttons. Only LAYOUT ` +
           `belongs here — colour, border, radius and the armed/disabled/hover states come ` +
           `from the vendored tool-render sheet, and a second copy of them is what drifts.`,
       ).toBe(true);
     }
+  });
+
+  it("declares no look ANYWHERE in board.css for the vendored approval classes", () => {
+    /*
+     * Round 2 review, M7c-out: the check above only reads the slice between
+     * two markers, so the same colour rule placed elsewhere in board.css
+     * passed. A guard whose coverage depends on WHERE the offending rule is
+     * written protects nothing from someone who adds a rule at the bottom
+     * of the file, which is where rules usually get added.
+     *
+     * This one is position-independent: every rule block whose selector
+     * mentions a tool-render approval class must be layout-only, wherever
+     * it lives.
+     */
+    const blocks = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+    let checked = 0;
+    for (const block of blocks) {
+      const selector = (block[1] ?? "").trim();
+      if (!selector.includes("tool-render-approval")) continue;
+      checked += 1;
+      for (const property of declaredProperties(block[2] ?? "")) {
+        expect(
+          LAYOUT_ONLY.has(property),
+          `#141: board.css rule "${selector.replace(/\s+/g, " ")}" sets "${property}" on a ` +
+            `vendored approval class. The look is the vendored sheet's; aidos may only ` +
+            `adjust layout.`,
+        ).toBe(true);
+      }
+    }
+    // The scan must actually reach something, or it passes by finding none.
+    expect(checked, "no board.css rule targets the vendored approval classes").toBeGreaterThan(0);
   });
 
   it("the size override names the vendored class so the row keeps its scale", () => {
@@ -188,11 +240,25 @@ describe("#141 the armed reject behaves like the card's, not just like it", () =
      */
     const handler = panel.slice(panel.indexOf("tool-render-approval-reject"));
     const body = handler.slice(0, handler.indexOf("</button>"));
-    expect(body).toContain("dismissArmStep(armedDismiss, id)");
-    expect(body).toContain("setArmedDismiss(step.armed)");
-    expect(body).toContain("if (step.dismiss) props.onDismiss?.(id)");
-    // An unconditional dismissal must NOT survive beside the guarded one.
-    expect(body).not.toMatch(/\n\s*props\.onDismiss\?\.\(id\);\s*\n/);
+
+    // Tolerant of renames and brace-vs-inline formatting, because a
+    // prettier pass must not turn this into a false failure -- a guard that
+    // cries wolf on innocent refactors gets deleted by the next person.
+    expect(body).toMatch(/dismissArmStep\(\s*armedDismiss\s*,\s*\w+\s*\)/);
+    expect(body).toMatch(/setArmedDismiss\(\s*step\.armed\s*\)/);
+    expect(body).toContain("step.dismiss");
+
+    /*
+     * EXACTLY ONE dismissal call. The previous form forbade a bare
+     * `props.onDismiss?.(id);` line, and the review walked past it by
+     * writing `void props.onDismiss?.(id);` before the step -- every
+     * required string still present, the button firing on the first click.
+     * Counting the calls is what no prefix token escapes.
+     */
+    expect(
+      body.match(/onDismiss/g)?.length,
+      "the handler must call onDismiss exactly once, guarded by the step",
+    ).toBe(1);
   });
 
   it("the armed state still reaches the DOM as the vendored sheet's attribute", () => {
