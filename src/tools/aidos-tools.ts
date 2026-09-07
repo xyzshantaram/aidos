@@ -477,7 +477,15 @@ function refusal(error: unknown, overrides?: { kind?: string }): never {
 
 // ---- the tool:aidos prompt section ----
 
-/** The lifecycle rules the model reads before it reaches for the board. */
+/**
+ * The lifecycle rules the model reads before it reaches for the board.
+ *
+ * The suggest_actions rule is deliberately BRANCHLESS (#133): re-nomination
+ * replaces, so the agent never needs a prose-reminder exception. The
+ * bottom-anchored rendering of the call row -- the surface that makes the
+ * queue impossible to miss, so prose nagging stays unnecessary -- is #115's
+ * deliverable, cross-referenced here.
+ */
 const AIDOS_GUIDANCE =
   "Run the ticket lifecycle of the session's project with the board tools. " +
   "get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. " +
@@ -491,10 +499,12 @@ const AIDOS_GUIDANCE =
   "The board tools are the orchestrator's: a subagent cannot use them. " +
   "Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. " +
   "The depth guard refuses a subagent anyway, so the filter is a second layer. " +
-  "NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination replaces the reason), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). " +
+  "NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). " +
+  "The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. " +
   "The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. " +
-  "BAD (a hand-written work queue in a closing message): 'So the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the human must mine ticket numbers out of prose and hunt for each card, and the list dies at the next compaction. " +
-  "GOOD (the same ask, encoded): call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: ...} and {ticketId: 118, actionId: 'signoff', reason: ...}, then write exactly one line: 'Please approve the suggested actions.'";
+  "Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. " +
+  "BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. " +
+  "GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
 
 // ---- the six tools ----
 

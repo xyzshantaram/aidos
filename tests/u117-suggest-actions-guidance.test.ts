@@ -74,12 +74,12 @@ describe("#117 the guidance prefers suggest_actions over prose", () => {
     const text = harness.promptSections.find((s) => s.name === "tool:aidos")?.text ?? "";
     // The BAD example is a real hand-written work queue, verbatim in shape:
     // ticket numbers mined out of a closing message.
-    expect(text).toContain("BAD (a hand-written work queue");
+    expect(text).toContain("BAD (a work report with the asks welded into it)");
     expect(text).toContain("#117 signoff, #118 signoff");
     // The GOOD example is the encoded ask: the tool call plus exactly one
     // line -- no list. The one-liner is the contract; if the example shows
     // a list AND a nomination, it teaches the wrong thing.
-    expect(text).toContain("GOOD (the same ask, encoded)");
+    expect(text).toContain("GOOD (the same turn, asks encoded)");
     expect(text).toContain("actionId: 'signoff'");
     expect(text).toContain("Please approve the suggested actions.");
   });

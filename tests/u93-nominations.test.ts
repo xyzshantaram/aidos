@@ -102,6 +102,24 @@ describe("#93 nominations: what the agent may ask for", () => {
     expect(rows[0].reason).toBe("second");
   });
 
+  /*
+   * #133: the guidance is branchless ONLY because re-suggestion is safe.
+   * The agent is told to call suggest_actions again instead of writing a
+   * prose reminder, so the identical repeat -- not just the updated one --
+   * must be a no-op-ish refresh: one row, same reason, no duplicate.
+   */
+  it("an IDENTICAL re-nomination is a refresh, not a duplicate (#133)", () => {
+    const { svc, agent } = setup();
+    const ticket = svc.setTicket(agent, { title: "Probe" });
+    const ask = { ticketId: ticket.id, actionId: "signoff", reason: "same ask" };
+    svc.suggestActions(agent, { suggestions: [ask] });
+    svc.suggestActions(agent, { suggestions: [ask] });
+    svc.suggestActions(agent, { suggestions: [ask] });
+    const rows = svc.actionNominations(agent);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].reason).toBe("same ask");
+  });
+
   it("the same ticket under two different actions is two nominations", () => {
     const { svc, agent } = setup();
     const ticket = svc.setTicket(agent, { title: "Probe" });
