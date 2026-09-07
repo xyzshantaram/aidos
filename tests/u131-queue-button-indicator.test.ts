@@ -247,6 +247,46 @@ describe("#131 the poll keeps running while the queue is SHUT", () => {
       "an open-only early return anywhere in the board view re-creates the bug #131 fixed: " +
         "the indicator would light only after the human had already opened the queue",
     ).not.toContain("if (!queueOpen) return");
+    /*
+     * TWO HONEST LIMITS, recorded here rather than discovered later.
+     *
+     * 1. This pins a SPELLING, not the property. The re-review confirmed it
+     *    kills the natural forms -- the guard in either position, one
+     *    inside refreshNominations, `return undefined;` -- but not
+     *    `if (queueOpen === false) return;`, and not arming the interval
+     *    only inside `if (queueOpen)`, which has no early return at all and
+     *    is the same closed-queue blackout. The durable fix is behavioural
+     *    (fake timers: mount with queueOpen false, advance the closed
+     *    cadence, assert a fetch fired) and is ticketed; this stays as a
+     *    cheap tripwire for the spellings someone would actually write.
+     *
+     * 2. It is FILE-WIDE, so it governs future effects too. If it ever
+     *    fails for an effect that legitimately needs an open-only return,
+     *    the fix is to scope the ban to this effect's span -- extract it to
+     *    a named function and assert within that -- NOT to delete the
+     *    assertion.
+     */
+  });
+
+  it("the button is told when its count is STALE, and says so", () => {
+    /*
+     * The re-review's NOTE 1, closed in the same round it was raised.
+     *
+     * Hardcoding the prop false, inverting its polarity, and deleting the
+     * tooltip text all passed the full suite: the staleness disclosure was
+     * the one piece of #131 with no failing-capable test. That is the third
+     * round running in which newly-added UI wiring shipped untested, in the
+     * very commit that was editing this file -- so it gets closed here
+     * rather than noted.
+     *
+     * The disclosure is what makes keep-last-good honest: without it the
+     * button presents a possibly-old number as current.
+     */
+    expect(view).toContain("agentAskCountStale");
+    expect(view).toContain("the last refresh failed; showing the last known count");
+    // ...and it must be DERIVED from the fetch state, not passed as a
+    // constant: `agentAskCountStale={false}` was a surviving mutation.
+    expect(board).toContain("agentAskCountStale={queueError !== null}");
   });
 });
 
