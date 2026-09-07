@@ -462,6 +462,11 @@ export interface ProjectedTicket {
   gatePresent?: number;
   gateTotal?: number;
   descriptionExcerpt?: string;
+  /**
+   * #135: the whole description, for the peek modal's markdown body. The
+   * excerpt stays for one-line contexts; the modal renders this instead.
+   */
+  descriptionFull?: string;
   /*
    * Carried through because TicketStrip's gate chip needs it: a ticket with
    * criteria can FAIL its gate; one without cannot. This field was dropped
@@ -524,7 +529,61 @@ export function ticketFromProjection(
   if (typeof hit.criteria === "string") out.criteria = hit.criteria;
   const excerpt = asText(hit.description);
   if (excerpt !== null && excerpt.trim() !== "") out.descriptionExcerpt = oneLine(excerpt, 220);
+  /*
+   * #135: the peek needs the WHOLE description, rendered as markdown like
+   * the detail panel renders it. The excerpt above stays for the strip's
+   * one-line contexts; the full text rides the same row for the modal.
+   */
+  if (excerpt !== null && excerpt.trim() !== "") out.descriptionFull = excerpt;
   return out;
+}
+
+/**
+ * #135: activate the Tickets tab from outside the tab strip.
+ *
+ * WHY DOM. The tab strip switches views by calling an action (`setView`)
+ * on the chat store, and that store reaches a component only as
+ * `PropsStore<ChatStore>`. The chat view gets it because ui-conversation
+ * registers that entry itself; a THIRD-PARTY view entry's props type is
+ * `ConvViewProps = PropsRuntime<'conversation.view'>` -- no store, no
+ * actions. `chatStore` is module-private inside ui-conversation's apply().
+ * There is no plugin-reachable activation API (verified against the
+ * installed dsh client runtime, 2026-09-07; the full tracing is recorded
+ * on ticket #135).
+ *
+ * So the honest mechanism is the same one a human click uses: the rendered
+ * tab button, `<button role="tab">` inside the `role="tablist"` strip.
+ * Pure over a minimal DOM interface so it is unit-testable without a
+ * browser -- the same rule selectTitle follows after its "[object Object]"
+ * bug. Returns the button it activated, or null with a reason the caller
+ * can show, never a false success.
+ */
+export function findTicketsTabButton(
+  root: {
+    querySelectorAll(selector: string): ArrayLike<{
+      getAttribute(name: string): string | null;
+      textContent: string | null;
+      click(): void;
+    }>;
+  } | null
+  | undefined,
+): { button: { click(): void } | null; reason: string | null } {
+  if (root === null || root === undefined) {
+    return { button: null, reason: "no document" };
+  }
+  const tabs = root.querySelectorAll('[role="tab"]');
+  for (const tab of Array.from(tabs)) {
+    const label = (tab.textContent ?? "").trim();
+    // The tab's label is badgeLabel(): "Tickets" or "Tickets (N)". Match on
+    // the word, not the count, so a badge change cannot break activation.
+    if (label === "Tickets" || label.startsWith("Tickets (")) {
+      return { button: tab, reason: null };
+    }
+  }
+  // The strip renders only when more than one view exists: a session with
+  // the Tickets tab as its ONLY view has no button to click. The selection
+  // is still written, so opening the view by hand lands on the ticket.
+  return { button: null, reason: "the Tickets tab is not shown on this screen" };
 }
 
 /**

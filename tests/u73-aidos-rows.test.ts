@@ -27,6 +27,7 @@ import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/clie
 import {
   boardQuerySummary,
   expandableFact,
+  findTicketsTabButton,
   planImportSummary,
   ticketCaptionOf,
   ticketFacts,
@@ -847,6 +848,98 @@ describe("ticketFromProjection (the click-through peek's data source)", () => {
     expect(ticketFromProjection(projection, null)).toBeNull();
     expect(ticketFromProjection("not a record", "ws:12")).toBeNull();
     expect(ticketFromProjection({ "ws:12": { title: 3 } }, "ws:12")).toBeNull();
+  });
+
+  /*
+   * #135: the peek modal renders the WHOLE description as markdown, so the
+   * projection row must carry both texts -- the excerpt for the strip's
+   * one-line contexts and the full text for the modal body. The excerpt
+   * keeps its cut; the full text must NOT be an excerpt of anything.
+   */
+  it("carries the full description beside the excerpt, uncut (#135)", () => {
+    // Long enough that flattening still exceeds the 220-char excerpt cap.
+    const long = "line one\n\nline two ".repeat(20);
+    const hit = ticketFromProjection(
+      { "ws:12": { ...projection["ws:12"], description: long } },
+      "ws:12",
+    );
+    expect(hit?.descriptionExcerpt).toBeDefined();
+    expect(hit?.descriptionExcerpt?.endsWith("…")).toBe(true);
+    expect(hit?.descriptionFull).toBe(long);
+  });
+
+  it("carries neither text when the projection has no description (#135)", () => {
+    const { description, ...bare } = projection["ws:12"];
+    void description;
+    const hit = ticketFromProjection({ "ws:12": bare }, "ws:12");
+    expect(hit?.descriptionExcerpt).toBeUndefined();
+    expect(hit?.descriptionFull).toBeUndefined();
+  });
+});
+
+/*
+ * #135: OPEN ON BOARD. The tab activation is deliberately DOM-mediated
+ * (there is no plugin-reachable setView; the tracing is on the ticket),
+ * so the finder is pure over a minimal tab-strip interface. These tests
+ * drive that interface with fakes -- no browser -- which is the only
+ * level at which the finder's contract (match the word, not the count;
+ * never a false success) can be asserted.
+ */
+describe("#135 findTicketsTabButton activates the Tickets tab a human would click", () => {
+  function stripWith(...labels: string[]): {
+    querySelectorAll: (sel: string) => Array<{
+      getAttribute: (n: string) => string | null;
+      textContent: string | null;
+      click: () => void;
+    }>;
+  } {
+    const buttons = labels.map((label, i) => ({
+      getAttribute: () => "tab",
+      textContent: label,
+      click: () => {
+        (buttons as unknown as { clicked: number[] }).clicked.push(i);
+      },
+    }));
+    (buttons as unknown as { clicked: number[] }).clicked = [];
+    return { querySelectorAll: () => buttons };
+  }
+
+  it("finds the bare 'Tickets' tab", () => {
+    const strip = stripWith("Chat", "Tickets");
+    const found = findTicketsTabButton(strip);
+    expect(found.reason).toBeNull();
+    expect(found.button).not.toBeNull();
+  });
+
+  it("matches the WORD, not the count: a badge cannot break activation", () => {
+    const strip = stripWith("Tickets (7)", "Chat");
+    const found = findTicketsTabButton(strip);
+    expect(found.reason).toBeNull();
+    expect(found.button).not.toBeNull();
+  });
+
+  it("does not match a similarly-named tab", () => {
+    const strip = stripWith("Chat", "Tickets backlog");
+    expect(findTicketsTabButton(strip).button).toBeNull();
+  });
+
+  it("reports why, instead of a false success, when the strip is absent", () => {
+    // Single-view screens render no tab strip at all: no document to search.
+    expect(findTicketsTabButton(undefined).button).toBeNull();
+    expect(findTicketsTabButton(undefined).reason).toBe("no document");
+    // And a strip with no Tickets tab is honest too.
+    const strip = stripWith("Chat");
+    const found = findTicketsTabButton(strip);
+    expect(found.button).toBeNull();
+    expect(found.reason).toBe("the Tickets tab is not shown on this screen");
+  });
+
+  it("returns a button whose click is the activation itself", () => {
+    const strip = stripWith("Chat", "Tickets");
+    const found = findTicketsTabButton(strip);
+    found.button?.click();
+    const clicked = (strip.querySelectorAll("") as unknown as { clicked: number[] }).clicked;
+    expect(clicked).toEqual([1]);
   });
 });
 

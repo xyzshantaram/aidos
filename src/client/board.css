@@ -2871,6 +2871,44 @@
   line-height: 1.25rem;
 }
 
+/* #135: the peek modal's full-description body and its action row. The
+   description reuses .aidos-md (the detail panel's markdown styling) and
+   only adds its own scroll cap, so a long description scrolls inside the
+   modal instead of stretching it past the viewport. */
+.aidos-ticket-peek-description {
+  margin: 0.5rem 0.25rem 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.aidos-ticket-peek-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--dsw-alias-border-l1, var(--border-color));
+}
+
+/* The action button wears the vendored tool-render approval anatomy (#82):
+   the same .tool-render-approval-btn the inline tool-card actions use, so
+   the peek's primary action reads as part of the same system. Only the
+   gap beside the icon is aidos's own. */
+.aidos-ticket-peek-actions .tool-render-approval-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.aidos-ticket-peek-note {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary, var(--text-secondary));
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+
 /*
  * THE STACK OF TABLES (user direction 2026-09-05): "if it's a single
  * ticket, it should be one table. if it's many, it should be a stack of

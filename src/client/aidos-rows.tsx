@@ -50,6 +50,7 @@ import { setSelection, ticketTitle } from "./view-state";
 import {
   allowlistPaths,
   boardQuerySummary,
+  findTicketsTabButton,
   planBlocksWritten,
   planImportSummary,
   suggestionLines,
@@ -171,6 +172,12 @@ export function selectTitle(summaryText: string): string {
 function AidosRow(props: RowProps) {
   const [expanded, setExpanded] = react.useState(false);
   const [peekOpen, setPeekOpen] = react.useState(false);
+  /*
+   * #135: the open-on-board action's honest refusal. When the Tickets tab
+   * button cannot be found (single-view screen, strip not rendered), the
+   * click still wrote the selection; this says so instead of pretending.
+   */
+  const [activationNotice, setActivationNotice] = react.useState<string | null>(null);
   const body = props.body ?? null;
   const footer = props.footer ?? null;
   // A footer alone is worth expanding for: a read that matched nothing has
@@ -248,6 +255,7 @@ function AidosRow(props: RowProps) {
         // eslint-disable-next-line no-console
         console.info(`[aidos] click-through fired for ticket ${props.ticketId}`);
         setSelection(props.sessionId as string, asBoardKey(props.ticketId as string));
+        setActivationNotice(null);
         setPeekOpen(true);
       }
     : undefined;
@@ -336,9 +344,57 @@ function AidosRow(props: RowProps) {
           {peeked !== null ? (
             <>
               <TicketStrip ticket={peeked} />
-              {peeked.descriptionExcerpt !== undefined ? (
+              {/*
+                * #135: the whole description, rendered as markdown through
+                * the SAME safe renderer the detail panel uses -- the excerpt
+                * below stays only for the no-projection strip contexts.
+                */}
+              {peeked.descriptionFull !== undefined ? (
+                <div
+                  className="aidos-md aidos-ticket-peek-description"
+                  dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(peeked.descriptionFull) }}
+                />
+              ) : peeked.descriptionExcerpt !== undefined ? (
                 <p className="aidos-ticket-peek-excerpt">{peeked.descriptionExcerpt}</p>
               ) : null}
+              {/*
+                * #135: OPEN ON BOARD. Writes the selection FIRST (the
+                * #73/#100 seam -- the board adopts it on change and on
+                * mount), then activates the Tickets tab the only way a
+                * plugin can: the rendered tab button itself. There is no
+                * plugin-reachable setView API; the full tracing is on the
+                * ticket. Order matters: even when activation cannot happen
+                * (single-view screen, strip absent), the ticket is already
+                * selected, so opening the tab by hand lands on it.
+                */}
+              <div className="aidos-ticket-peek-actions">
+                {canSelect ? (
+                  <button
+                    type="button"
+                    className="tool-render-approval-btn tool-render-approval-approve"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelection(props.sessionId as string, asBoardKey(props.ticketId as string));
+                      const found = findTicketsTabButton(
+                        typeof document === "undefined" ? undefined : document,
+                      );
+                      if (found.button !== null) {
+                        found.button.click();
+                        setPeekOpen(false);
+                      } else {
+                        setActivationNotice(found.reason);
+                      }
+                    }}
+                  >
+                    <PopOutIcon /> Open on board
+                  </button>
+                ) : null}
+                {activationNotice !== null ? (
+                  <p className="aidos-ticket-peek-note" role="status">
+                    {activationNotice}
+                  </p>
+                ) : null}
+              </div>
             </>
           ) : (
             <p className="aidos-ticket-peek-empty">
