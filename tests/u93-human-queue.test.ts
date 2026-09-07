@@ -14,7 +14,6 @@ import { describe, expect, it } from "vitest";
 import {
   derivedQueue,
   humanQueue,
-  queueCount,
   sortQueue,
   unmatchedNominations,
 } from "../src/client/human-queue";
@@ -80,7 +79,14 @@ describe("u93 human-queue: the derived half", () => {
     expect(entries.map((e) => e.actionId)).toEqual([]);
   });
 
-  it("counts what it lists", () => {
+  it("lists one ask per ticket that has one, and none for the rest", () => {
+    /*
+     * Was "counts what it lists", asserting queueCount(entries) === 2.
+     * `queueCount` was `entries.length` and #131 deleted it as dead once
+     * the toolbar stopped showing a total — this keeps the real assertion
+     * (which tickets produce an ask) without resurrecting the export just
+     * to have something to call.
+     */
     const entries = derivedQueue(
       [
         makeTicket({ id: 1, state: "open" }),
@@ -89,7 +95,10 @@ describe("u93 human-queue: the derived half", () => {
       ],
       noEvidence,
     );
-    expect(queueCount(entries)).toBe(2);
+    expect(entries).toHaveLength(2);
+    // The in_progress ticket contributes nothing: there is no human action
+    // available on it, and inventing one is what the gate forbids.
+    expect(entries.map((entry) => entry.ticket.id).sort()).toEqual([1, 2]);
   });
 });
 

@@ -459,12 +459,21 @@ export function queueEntriesFor(
   tickets: readonly TicketView[],
   evidenceByTicket: Record<string, readonly EvidenceRow[]>,
   nominations: readonly Nomination[] = [],
+  /*
+   * #131 round 2: approvals ride through too, so the toolbar's count is
+   * taken over the SAME entry list the panel renders. Without them an
+   * allowlist card -- the ask the agent is actually blocked on -- was
+   * invisible to the indicator.
+   */
+  approvals: readonly PendingApprovalLike[] = [],
 ): QueueEntry[] {
   return humanQueue(
     tickets,
     (ticket) =>
       (evidenceByTicket[boardKeyOf(ticket)] ?? []).map((row) => row.kind),
     nominations,
+    "suggested",
+    approvals,
   );
 }
 

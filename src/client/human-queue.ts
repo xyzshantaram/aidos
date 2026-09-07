@@ -275,10 +275,16 @@ export function sortQueue(
   }
 }
 
-/** The badge count the human sees without opening the queue. */
-export function queueCount(entries: readonly QueueEntry[]): number {
-  return entries.length;
-}
+/*
+ * #131 review: `queueCount` (entries.length) is deleted.
+ *
+ * It was the old total-entry badge, and after the toolbar moved to the
+ * agent-ask count nothing in src called it -- only a test kept it alive,
+ * and its doc comment still described a badge that no longer existed. A
+ * dead export with a stale description is worse than no export: the next
+ * person greps "queue count", finds it, and reintroduces the surface it
+ * belonged to.
+ */
 
 /**
  * #131: how many queue entries carry an agent nomination the gate STILL
@@ -292,8 +298,58 @@ export function queueCount(entries: readonly QueueEntry[]): number {
  * learn that the indicator lies. An entry with a `nominationId` is exactly
  * "the agent asked for this AND you can do it right now".
  */
-export function nominatedCount(entries: readonly QueueEntry[]): number {
-  return entries.filter((entry) => entry.nominationId !== undefined).length;
+/*
+ * There is no separate `nominatedCount`.
+ *
+ * Round 1 exported one, and once the toolbar moved to counting every agent
+ * ask it had no caller left -- which is precisely the dead-export state
+ * that `queueCount` was just deleted for, two functions above. One counter,
+ * with the rule stated in its own doc comment.
+ */
+
+/**
+ * #131 round 2: everything the AGENT is currently asking for — nominations
+ * AND pending approval cards.
+ *
+ * The review found the indicator idle in the one state where the agent is
+ * hard-blocked: an allowlist approval. `humanQueue` appends approvals as
+ * entries carrying `approvalId`, they can never carry a `nominationId`, so
+ * counting nominations alone left the button dark while the agent sat
+ * waiting — and `sortQueue` ranks those very entries ABOVE everything else
+ * precisely because the agent is blocked on them. An indicator that stays
+ * dark for the most urgent ask is not a conservative indicator, it is a
+ * broken one.
+ *
+ * This is the honest reading of the ticket's own goal ("the agent has asked
+ * for something") rather than of the word "nomination" in its title, and it
+ * is a deliberate widening of the user's literal spec — recorded here and
+ * flagged to them rather than slipped in.
+ *
+ * Un-nominated gate asks are still NOT counted: a backlog of tickets
+ * awaiting signoff is present nearly always, so colouring it would make the
+ * state permanent and therefore meaningless.
+ */
+export function agentAskCount(entries: readonly QueueEntry[]): number {
+  return entries.filter(
+    (entry) => entry.nominationId !== undefined || entry.approvalId !== undefined,
+  ).length;
+}
+
+/**
+ * How often the queue's nominations are re-fetched, in milliseconds.
+ *
+ * A function rather than two constants read inline, because the RULE is the
+ * thing worth pinning: the poll must keep running while the queue is SHUT.
+ * The review broke that with one mutation (reinstating `if (!queueOpen)
+ * return`) and nothing failed — the indicator would then light only after
+ * the human had already opened the queue, which is the entire thing #131
+ * exists to spare them.
+ */
+export function queuePollMs(queueOpen: boolean): number {
+  // Open: fast enough that a nomination landing mid-read appears. Closed:
+  // freshness measured in glances, not seconds, because this is a poll
+  // against a remote rather than a push.
+  return queueOpen ? 4000 : 20000;
 }
 
 /**

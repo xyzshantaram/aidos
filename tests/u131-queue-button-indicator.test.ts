@@ -27,11 +27,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  agentAskCount,
   humanQueue,
-  nominatedCount,
   queueButtonState,
+  queuePollMs,
 } from "../src/client/human-queue";
-import type { Nomination } from "../src/client/human-queue";
+import type { Nomination, PendingApprovalLike } from "../src/client/human-queue";
 import { makeTicket } from "./u2c-helpers";
 
 const noEvidence = () => [] as string[];
@@ -89,7 +90,7 @@ describe("#131 the count is nominations the gate ALLOWS, not raw rows", () => {
 
   it("counts a nomination that matched a real ask", () => {
     const entries = humanQueue([openTicket], noEvidence, [nominate()]);
-    expect(nominatedCount(entries)).toBe(1);
+    expect(agentAskCount(entries)).toBe(1);
   });
 
   it("does NOT count a nomination the gate refuses, so the button cannot lie", () => {
@@ -102,13 +103,13 @@ describe("#131 the count is nominations the gate ALLOWS, not raw rows", () => {
     const entries = humanQueue([openTicket], noEvidence, [
       nominate({ actionId: "verify" }),
     ]);
-    expect(nominatedCount(entries)).toBe(0);
-    expect(queueButtonState(nominatedCount(entries)).indicator).toBe(false);
+    expect(agentAskCount(entries)).toBe(0);
+    expect(queueButtonState(agentAskCount(entries)).indicator).toBe(false);
   });
 
   it("does NOT count a nomination naming a ticket that is not on this board", () => {
     const entries = humanQueue([openTicket], noEvidence, [nominate({ ticketId: 999 })]);
-    expect(nominatedCount(entries)).toBe(0);
+    expect(agentAskCount(entries)).toBe(0);
   });
 
   it("counts entries, not rows: an un-nominated ask never lights the button", () => {
@@ -121,8 +122,8 @@ describe("#131 the count is nominations the gate ALLOWS, not raw rows", () => {
       [],
     );
     expect(entries.length).toBeGreaterThan(0);
-    expect(nominatedCount(entries)).toBe(0);
-    expect(queueButtonState(nominatedCount(entries)).count).toBeNull();
+    expect(agentAskCount(entries)).toBe(0);
+    expect(queueButtonState(agentAskCount(entries)).count).toBeNull();
   });
 
   it("counts each nominated entry once, across several tickets", () => {
@@ -131,7 +132,93 @@ describe("#131 the count is nominations the gate ALLOWS, not raw rows", () => {
       noEvidence,
       [nominate(), nominate({ id: "nom-2", ticketId: 2 })],
     );
-    expect(nominatedCount(entries)).toBe(2);
+    expect(agentAskCount(entries)).toBe(2);
+  });
+
+  /*
+   * ROUND 2, from the independent review: a PENDING APPROVAL is an agent
+   * ask too, and it was leaving the button completely idle.
+   *
+   * That is the state where the agent is hard-blocked — it cannot write a
+   * file until the card is answered — and `sortQueue` already ranks those
+   * entries above everything else for exactly that reason. An indicator
+   * that stays dark for the most urgent ask on the board is not cautious,
+   * it is broken.
+   */
+  function approvalCard(over: Partial<PendingApprovalLike> = {}): PendingApprovalLike {
+    return {
+      id: "req-1",
+      ticketId: 1,
+      kind: "allowlist",
+      prompt: "may I write these paths",
+      payload: { paths: ["src/client"] },
+      at: 0,
+      ...over,
+    };
+  }
+
+  it("counts a pending approval card: the agent is BLOCKED on it", () => {
+    const approval = approvalCard();
+    const entries = humanQueue([openTicket], noEvidence, [], "suggested", [approval]);
+    expect(agentAskCount(entries)).toBe(1);
+    expect(queueButtonState(agentAskCount(entries)).indicator).toBe(true);
+  });
+
+  it("counts approvals and nominations together, without double-counting", () => {
+    const approval = approvalCard();
+    const entries = humanQueue([openTicket], noEvidence, [nominate()], "suggested", [approval]);
+    // One nominated gate ask + one approval card = two asks, and the
+    // approval must not be folded onto the nomination's entry.
+    expect(agentAskCount(entries)).toBe(2);
+  });
+
+  it("still ignores a plain gate ask when an approval is present", () => {
+    // The discrimination that keeps the indicator meaningful: adding an
+    // approval must not suddenly make the whole backlog count.
+    const approval = approvalCard();
+    const entries = humanQueue(
+      [openTicket, makeTicket({ id: 2, state: "open" }), makeTicket({ id: 3, state: "open" })],
+      noEvidence,
+      [],
+      "suggested",
+      [approval],
+    );
+    expect(entries.length).toBeGreaterThan(1);
+    expect(agentAskCount(entries)).toBe(1);
+  });
+});
+
+describe("#131 the poll keeps running while the queue is SHUT", () => {
+  /*
+   * The mutation that survived round 1 (M8): reinstating `if (!queueOpen)
+   * return` in the effect destroys the feature — the indicator would light
+   * only after the human opened the queue, which is the exact thing they
+   * asked to be spared — and the entire 1110-test suite stayed green,
+   * because the test was a byte-match against one historical line layout.
+   *
+   * The cadence is now a function, so the RULE is testable, and the effect
+   * is pinned to use it.
+   */
+  it("polls when the queue is CLOSED — the whole point of the indicator", () => {
+    expect(queuePollMs(false)).toBeGreaterThan(0);
+  });
+
+  it("polls faster while the queue is open than while it is closed", () => {
+    expect(queuePollMs(true)).toBeLessThan(queuePollMs(false));
+  });
+
+  it("closed-queue polling is a glance-level cadence, not a busy loop", () => {
+    // Bounds rather than an exact number: the value is a judgement call,
+    // but "seconds" and "minutes" are both wrong for a background signal.
+    expect(queuePollMs(false)).toBeGreaterThanOrEqual(10000);
+    expect(queuePollMs(false)).toBeLessThanOrEqual(60000);
+  });
+
+  it("the effect asks queuePollMs and has NO open-only early return", () => {
+    expect(board).toContain("setInterval(refreshNominations, queuePollMs(queueOpen))");
+    const effect = board.slice(board.indexOf("react.useEffect(\n    function () {\n      refreshNominations();"));
+    const body = effect.slice(0, effect.indexOf("[queueOpen, refreshNominations]"));
+    expect(body).not.toContain("if (!queueOpen) return");
   });
 });
 
@@ -182,7 +269,7 @@ describe("#131 the indicator is fed while the queue is SHUT", () => {
     // the count is structurally always zero -- the button would never light
     // and every test above would still pass.
     expect(board).toContain(
-      "nominatedCount(queueEntriesFor(rawTickets, rawEvidence, nominations))",
+      "agentAskCount(",
     );
   });
 
@@ -194,7 +281,6 @@ describe("#131 the indicator is fed while the queue is SHUT", () => {
      * indicator only after the human had already looked -- the very thing
      * they asked to be spared.
      */
-    expect(board).not.toContain("if (!queueOpen) return;\n      const timer");
-    expect(board).toContain("queueOpen ? QUEUE_POLL_OPEN_MS : QUEUE_POLL_CLOSED_MS");
+    expect(board).toContain("queueEntriesFor(rawTickets, rawEvidence, nominations, approvals)");
   });
 });

@@ -32,7 +32,7 @@ import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { boardKeyOf, resolveSelection } from "./board-logic";
 import { ModalShell } from "./ui";
-import { nominatedCount } from "./human-queue";
+import { agentAskCount, queuePollMs } from "./human-queue";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
 import { asBoardKey, fullTicketId } from "./board-logic";
 import type { BoardKey } from "./board-logic";
@@ -566,7 +566,16 @@ function ProjectionReader(props: ProjectionReaderProps) {
           setNominations((rows as unknown as Nomination[]) ?? []);
         })
         .catch((error: unknown) => {
-          setNominations([]);
+          /*
+           * #131 review: the LAST GOOD list is kept rather than cleared.
+           *
+           * Clearing made a failed fetch indistinguishable from "nothing is
+           * waiting on you" -- the #93 header calls that the worst possible
+           * failure mode for this surface, and then the toolbar indicator
+           * gave it teeth: a transient failure silently extinguished a lit
+           * button, so the human was told "nothing to do" by an outage.
+           * Stale-but-lit plus a visible error beats confidently dark.
+           */
           const detail =
             "nominations: " +
             (error instanceof Error ? error.message : String(error));
@@ -580,7 +589,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
           setApprovals((rows as unknown as PendingApprovalLike[]) ?? []);
         })
         .catch((error: unknown) => {
-          setApprovals([]);
+          // Same rule as the nominations fetch above: an outage must not
+          // masquerade as an empty queue, and these entries now feed the
+          // toolbar indicator too.
           const detail =
             "approvals: " +
             (error instanceof Error ? error.message : String(error));
@@ -605,15 +616,12 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * slowly, because a closed queue needs freshness measured in glances, not
    * in seconds, and this is a poll against a remote rather than a push.
    */
-  const QUEUE_POLL_OPEN_MS = 4000;
-  const QUEUE_POLL_CLOSED_MS = 20000;
   react.useEffect(
     function () {
       refreshNominations();
-      const timer = setInterval(
-        refreshNominations,
-        queueOpen ? QUEUE_POLL_OPEN_MS : QUEUE_POLL_CLOSED_MS,
-      );
+      // The cadence rule lives in queuePollMs so it can be tested; the
+      // review's mutation (reinstating an open-only guard here) now fails.
+      const timer = setInterval(refreshNominations, queuePollMs(queueOpen));
       return function () {
         clearInterval(timer);
       };
@@ -1077,16 +1085,22 @@ function ProjectionReader(props: ProjectionReaderProps) {
           setCreateOpen(true);
         }}
         onQueue={() => {
-          refreshNominations();
+          // No refresh call here: the poll effect re-runs the moment
+          // queueOpen flips and fetches immediately, so this was a second
+          // identical request on every open (#131 review, MINOR).
           setQueueOpen(true);
         }}
         /*
          * #131: the SAME composition the panel renders, counted. Passing the
          * nominations in is what makes the count mean "asks the gate allows"
          * -- humanQueue drops a nomination it cannot match, so an ask that
-         * would open to nothing can never light the button.
+         * would open to nothing can never light the button. The approvals
+         * ride in for the same reason: an allowlist card IS the agent
+         * asking, and it is the state where it is hard-blocked.
          */
-        nominatedCount={nominatedCount(queueEntriesFor(rawTickets, rawEvidence, nominations))}
+        nominatedCount={agentAskCount(
+          queueEntriesFor(rawTickets, rawEvidence, nominations, approvals),
+        )}
       />
     );
   }
