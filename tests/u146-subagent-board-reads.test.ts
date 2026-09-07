@@ -350,14 +350,28 @@ describe("#146 the guidance tells the orchestrator the truth", () => {
     return harness.promptSections.find((section) => section.name === "tool:aidos")?.text ?? "";
   }
 
-  it("says the reads are allowed and names them", () => {
-    const text = guidanceText();
-    expect(text).toContain("get_tickets");
-    expect(text).toContain("get_ticket");
-    expect(text).toContain("plan_meta");
-    // The claim itself, not merely the names: a list with no statement
-    // around it reads as the old "deny these" instruction.
-    expect(text.toLowerCase()).toContain("read");
+  it("names the permitted reads in ONE verbatim clause", () => {
+    /*
+     * Pinned as a whole sentence, because the re-review walked past the
+     * per-name version (M18'): every read tool's name appears elsewhere in
+     * this long paragraph -- "get_tickets reads the board", "plan_meta
+     * reads the stored plan blocks" -- so dropping a name from the sentence
+     * that GRANTS the reads left every substring assertion satisfied.
+     *
+     * A substring check on a name proves the paragraph mentions it, which
+     * is not the claim. The claim is the permission, and the permission is
+     * this clause.
+     */
+    expect(guidanceText()).toContain(
+      "a subagent may call get_tickets, get_ticket, plan and plan_meta",
+    );
+  });
+
+  it("says where a subagent's reads RESOLVE, not just that they are allowed", () => {
+    // An unblocked read against the child's own empty session hands a
+    // reviewer an empty board, which is worse than a refusal because it
+    // looks like an answer.
+    expect(guidanceText()).toContain("resolve against the board that DISPATCHED it");
   });
 
   it("tells the orchestrator to deny only the WRITE tools when it spawns", () => {

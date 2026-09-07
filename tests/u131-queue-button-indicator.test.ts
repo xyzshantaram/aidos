@@ -33,6 +33,9 @@ import {
   queuePollMs,
 } from "../src/client/human-queue";
 import type { Nomination, PendingApprovalLike } from "../src/client/human-queue";
+// The wrapper the VIEW calls. The approval tests above exercise humanQueue
+// directly; these exercise the seam the toolbar's count actually rides on.
+import { queueEntriesFor } from "../src/client/queue-panel";
 import { makeTicket } from "./u2c-helpers";
 
 const noEvidence = () => [] as string[];
@@ -214,13 +217,103 @@ describe("#131 the poll keeps running while the queue is SHUT", () => {
     expect(queuePollMs(false)).toBeLessThanOrEqual(60000);
   });
 
+  it("bounds the OPEN cadence too, so it cannot become a busy loop", () => {
+    // The review's N2b: with only "greater than zero" on the open side, a
+    // 1ms cadence -- 240x the traffic while the panel is up -- passed
+    // every test in this file.
+    expect(queuePollMs(true)).toBeGreaterThanOrEqual(1000);
+    expect(queuePollMs(true)).toBeLessThanOrEqual(10000);
+  });
+
   it("the effect asks queuePollMs and has NO open-only early return", () => {
     expect(board).toContain("setInterval(refreshNominations, queuePollMs(queueOpen))");
-    const effect = board.slice(board.indexOf("react.useEffect(\n    function () {\n      refreshNominations();"));
-    const body = effect.slice(0, effect.indexOf("[queueOpen, refreshNominations]"));
-    expect(body).not.toContain("if (!queueOpen) return");
+    /*
+     * FILE-WIDE, not a slice.
+     *
+     * Round 2 sliced from `react.useEffect(\n function () {\n
+     * refreshNominations();`, so a guard placed BEFORE that line -- the
+     * canonical position, and the literal round-1 mutation -- fell outside
+     * the window and passed. The same byte-anchored disease twice over:
+     * blind exactly where it matters, and guaranteed to false-fail on a
+     * reformat of those bytes.
+     *
+     * Nothing in this view legitimately needs an open-only early return
+     * now, so its absence is asserted over the whole source. If some future
+     * effect genuinely needs one, this failure is the conversation that
+     * should happen before it lands.
+     */
+    expect(
+      board,
+      "an open-only early return anywhere in the board view re-creates the bug #131 fixed: " +
+        "the indicator would light only after the human had already opened the queue",
+    ).not.toContain("if (!queueOpen) return");
   });
 });
+
+describe("#131 the seam the toolbar actually uses carries the approvals", () => {
+  /*
+   * The review's N6, and the sharpest of its findings: every approval test
+   * called `humanQueue` directly, while the VIEW calls `queueEntriesFor`.
+   * Dropping the approvals argument inside that wrapper -- the seam the
+   * whole round-2 fix rides on -- left the button dark for a blocked agent
+   * with the entire suite green.
+   *
+   * These call the wrapper the view calls.
+   */
+  it("queueEntriesFor forwards approvals, so the count sees them", () => {
+    const approval = {
+      id: "req-1",
+      ticketId: 1,
+      kind: "allowlist",
+      prompt: "may I write these paths",
+      payload: { paths: ["src/client"] },
+      at: 0,
+    } as PendingApprovalLike;
+    const tickets = [makeTicket({ id: 1, state: "open" })];
+    const entries = queueEntriesFor(tickets, {}, [], [approval]);
+    expect(entries.some((entry) => entry.approvalId === "req-1")).toBe(true);
+    expect(agentAskCount(entries)).toBe(1);
+    expect(queueButtonState(agentAskCount(entries)).indicator).toBe(true);
+  });
+
+  it("queueEntriesFor without approvals leaves the button dark", () => {
+    // The discriminating half: if the wrapper invented entries, the test
+    // above would pass for the wrong reason.
+    const tickets = [makeTicket({ id: 1, state: "open" })];
+    const entries = queueEntriesFor(tickets, {}, [], []);
+    expect(entries.length).toBeGreaterThan(0); // the gate ask still exists
+    expect(agentAskCount(entries)).toBe(0);
+  });
+
+  it("queueEntriesFor forwards nominations too, on the same call shape", () => {
+    const tickets = [makeTicket({ id: 1, state: "open" })];
+    const entries = queueEntriesFor(
+      tickets,
+      {},
+      [{ id: "nom-1", ticketId: 1, actionId: "signoff", reason: "why", at: 0 } as Nomination],
+      [],
+    );
+    expect(agentAskCount(entries)).toBe(1);
+  });
+});
+
+/*
+ * ACCEPTED AS UNTESTED, recorded here rather than nowhere (review N7).
+ *
+ * The keep-last-good policy on a failed nominations fetch has no
+ * behavioural test: it lives inside a promise `.catch` in a React effect,
+ * and this suite has no component harness to mount it. It is asserted only
+ * by the absence of `setNominations([])` in that handler, which the source
+ * carries with a comment explaining why.
+ *
+ * The reasoning, so a later reader can weigh it rather than rediscover it:
+ * confidently-dark turns an outage into a silent deadlock -- the human
+ * never looks and the agent waits forever -- while stale-but-lit costs one
+ * wasted glance and self-corrects on the next successful poll. The honest
+ * costs: a long outage keeps a stale number on screen, and a FRESH mount
+ * against a failing remote still starts dark, because there is no last-good
+ * to keep.
+ */
 
 describe("#131 the button renders the decision it was given", () => {
   it("the toolbar button asks queueButtonState rather than testing the number itself", () => {

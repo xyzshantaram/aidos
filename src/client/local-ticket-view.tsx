@@ -1098,9 +1098,15 @@ function ProjectionReader(props: ProjectionReaderProps) {
          * ride in for the same reason: an allowlist card IS the agent
          * asking, and it is the state where it is hard-blocked.
          */
-        nominatedCount={agentAskCount(
+        agentAskCount={agentAskCount(
           queueEntriesFor(rawTickets, rawEvidence, nominations, approvals),
         )}
+        /*
+         * The count SURVIVES a failed fetch (see refreshNominations), so the
+         * button discloses that it may be stale rather than presenting a
+         * possibly-old number as current.
+         */
+        agentAskCountStale={queueError !== null}
       />
     );
   }

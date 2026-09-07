@@ -37,15 +37,32 @@ export interface TicketViewProps {
   /** #93: opens the human work queue. Absent hides the button entirely. */
   onQueue?: () => void;
   /**
-   * #131: how many queue entries carry an agent nomination the gate still
-   * allows. This drives BOTH the number and the button's attention state.
+   * #131: how many queue entries are the AGENT ASKING for something the
+   * gate still allows — nominations and pending approval cards alike. This
+   * drives BOTH the number and the button's attention state.
    *
-   * It replaced #93's total-entry count deliberately (user, 2026-09-07). The
-   * total answers "how big is the backlog", which does not change from one
-   * minute to the next and so never earns a glance. A nomination is the
-   * agent asking for something NEW, which is the signal worth a colour.
+   * It replaced #93's total-entry count deliberately (user, 2026-09-07).
+   * The total answers "how big is the backlog", which barely changes from
+   * one minute to the next and so never earns a glance. An agent ask is
+   * new information, which is the signal worth a colour.
+   *
+   * Approvals were added in round 2 after a review found the button idle in
+   * the one state where the agent is hard-blocked. The name says "ask"
+   * rather than "nomination" because it counts both: the previous name
+   * outlived its meaning by exactly one commit.
    */
-  nominatedCount?: number;
+  agentAskCount?: number;
+  /**
+   * True when the last fetch behind that count FAILED and the view is
+   * showing the last known value.
+   *
+   * The count is kept rather than cleared on failure, because a dark button
+   * during an outage tells the human "nothing is waiting" — the worst lie
+   * this surface can tell. The honest cost is a possibly-stale number, so
+   * the button says so in its tooltip rather than presenting stale data as
+   * current.
+   */
+  agentAskCountStale?: boolean;
   projects?: { id: number; name: string }[];
   /** #21: the viewing session's workspace, so local id chips drop the prefix. */
   ownWorkspaceKey?: string;
@@ -106,7 +123,7 @@ export function TicketView(props: TicketViewProps) {
 
   // #131: one decision, evaluated once, read by the class, the title and the
   // number so the three can never disagree.
-  const queueButton = queueButtonState(props.nominatedCount ?? 0);
+  const queueButton = queueButtonState(props.agentAskCount ?? 0);
 
   return (
     <div className="aidos-root">
@@ -127,9 +144,18 @@ export function TicketView(props: TicketViewProps) {
               className={"aidos-btn" + (queueButton.indicator ? " aidos-btn-attention" : "")}
               onClick={props.onQueue}
               title={
-                queueButton.indicator
+                (queueButton.indicator
                   ? "The agent has asked for something you can act on"
-                  : "What is waiting on you"
+                  : "What is waiting on you") +
+                /*
+                 * Staleness is disclosed, not hidden. Keeping the last good
+                 * count through an outage is the right call -- a dark
+                 * button would say "nothing is waiting" -- but presenting a
+                 * stale number as current is how the surface loses trust.
+                 */
+                (props.agentAskCountStale === true
+                  ? " (the last refresh failed; showing the last known count)"
+                  : "")
               }
               data-dsh-tip=""
             >
