@@ -17,6 +17,7 @@ import { AllowlistIcon, MarkDoneIcon, SignoffIcon, VerifyIcon } from "./icons";
 
 import {
   dismissArmStep,
+  groupQueueByState,
   humanQueue,
   unmatchedNominations,
   QUEUE_SORT_LABELS,
@@ -296,9 +297,22 @@ export function QueuePanel(props: QueuePanelProps) {
           ))}
         </ul>
       ) : null}
-      <ul className="aidos-ticket-strips">
-        {visible.map((entry) => (
+      {/*
+        * #137: grouped by ticket state, in WORKDOWN order — sign off, then
+        * approve, then verify. Read top to bottom, the queue is the order
+        * you would actually work it. The heading carries the state, which
+        * is why the strips below it no longer repeat it (showState={false}).
+        */}
+      {groupQueueByState(visible).map((group) => (
+        <div className="aidos-queue-group" key={group.state}>
+          <h3 className="aidos-queue-group-heading">
+            {group.label}
+            <span className="aidos-queue-group-count">{group.entries.length}</span>
+          </h3>
+          <ul className="aidos-ticket-strips">
+            {group.entries.map((entry) => (
           <TicketStrip
+            showState={false}
             key={entryKey(entry)}
             actionIcon={ACTION_ICONS[entry.actionId]?.icon}
             actionHint={ACTION_ICONS[entry.actionId]?.hint}
@@ -399,8 +413,10 @@ export function QueuePanel(props: QueuePanelProps) {
               </>
             }
           />
-        ))}
-      </ul>
+            ))}
+          </ul>
+        </div>
+      ))}
       {running !== null ? (
         <ApprovalRunner
           title={running.label}

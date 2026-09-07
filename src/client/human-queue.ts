@@ -336,6 +336,60 @@ export function agentAskCount(entries: readonly QueueEntry[]): number {
 }
 
 /**
+ * #137: the queue, grouped by the ticket's state.
+ *
+ * **The order is the WORKDOWN order, and that is the whole point** (user's
+ * design): open first (sign off unstarted work), then in-progress (approve
+ * the files that work needs), then awaiting-verification (verify what is
+ * finished). Read top to bottom, the queue is the order you would actually
+ * work it, rather than a flat list sorted by something else.
+ *
+ * Grouping also RETIRES the parenthesised state on each strip: once the
+ * heading says "Open", repeating "(Open)" on every row underneath is noise
+ * that costs the title its horizontal space.
+ *
+ * A state that has no entries contributes NO heading — an empty section is
+ * a promise of work that is not there. Any state outside the three (a done
+ * ticket that somehow carries an ask) lands in a trailing group rather than
+ * being dropped, because silently losing a queue row is worse than showing
+ * one in an odd place.
+ */
+export const QUEUE_GROUP_ORDER = ["open", "in_progress", "awaiting_verification"] as const;
+
+/** The heading each group carries, in the user's words for the work. */
+export const QUEUE_GROUP_LABELS: Record<string, string> = {
+  open: "Sign off",
+  in_progress: "Approve",
+  awaiting_verification: "Verify",
+  other: "Other",
+};
+
+export interface QueueGroup {
+  /** The ticket state this group holds, or "other" for anything unexpected. */
+  state: string;
+  /** The heading text. */
+  label: string;
+  entries: QueueEntry[];
+}
+
+export function groupQueueByState(entries: readonly QueueEntry[]): QueueGroup[] {
+  const groups: QueueGroup[] = [];
+  for (const state of QUEUE_GROUP_ORDER) {
+    const matching = entries.filter((entry) => entry.ticket.state === state);
+    // No empty headings: a section with nothing under it reads as work that
+    // vanished.
+    if (matching.length === 0) continue;
+    groups.push({ state, label: QUEUE_GROUP_LABELS[state] ?? state, entries: matching });
+  }
+  const known = new Set<string>(QUEUE_GROUP_ORDER);
+  const rest = entries.filter((entry) => !known.has(entry.ticket.state));
+  if (rest.length > 0) {
+    groups.push({ state: "other", label: QUEUE_GROUP_LABELS.other as string, entries: rest });
+  }
+  return groups;
+}
+
+/**
  * How often the queue's nominations are re-fetched, in milliseconds.
  *
  * A function rather than two constants read inline, because the RULE is the

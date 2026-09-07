@@ -2366,6 +2366,35 @@
   padding: 0;
 }
 
+/* #137: the queue's state groups. The heading carries the state, so the
+   strips below it drop the parenthesised copy they used to repeat. */
+.aidos-queue-group + .aidos-queue-group {
+  /* Separation between sections, not around every row: the groups are the
+     structure, and spacing is what says so without a rule line. */
+  margin-top: 14px;
+}
+
+.aidos-queue-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px 2px;
+  /* Deliberately quiet: this is a label for the rows beneath it, not a
+     title competing with them. Same size as the strip meta. */
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.aidos-queue-group-count {
+  /* How many asks are in this section, so the size of each piece of work
+     is visible before you start reading rows. */
+  font-weight: 400;
+  color: var(--text-muted, var(--text-secondary));
+}
+
 .aidos-ticket-strip {
   /*
    * A COLUMN, so the revealed action row can sit BELOW the strip (#93).

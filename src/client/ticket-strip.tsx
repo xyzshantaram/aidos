@@ -42,6 +42,15 @@ export type TicketStripTicket = Pick<
 export interface TicketStripProps {
   ticket: TicketStripTicket;
   /**
+   * #137: whether the strip prints the ticket's state under its id chip.
+   *
+   * Defaults to TRUE (every existing caller keeps what it had). The grouped
+   * queue passes false because its section heading already says the state,
+   * and repeating it on every row underneath is noise the title pays for
+   * in horizontal space.
+   */
+  showState?: boolean;
+  /**
    * The context line under the title. A string renders as plain meta; a node
    * lets a caller mix chips or emphasis into it.
    */
@@ -118,14 +127,22 @@ export function TicketStrip(props: TicketStripProps) {
             *
             * The title keeps the bare label: a tooltip reading "(Open)" is
             * quoting the punctuation rather than naming the state.
+            *
+            * #137: SUPPRESSED where a section heading already says it. In
+            * the grouped queue every strip under "Sign off" is open, so
+            * repeating "(Open)" on each row is noise that costs the title
+            * its horizontal space. Opt-out rather than opt-in, so every
+            * other surface keeps the state without being touched.
             */}
-          <span
-            className={"aidos-ticket-strip-state " + badgeClass(ticket.state)}
-            title={stateLabel(ticket.state)}
-            data-dsh-tip=""
-          >
-            ({stateLabel(ticket.state)})
-          </span>
+          {props.showState === false ? null : (
+            <span
+              className={"aidos-ticket-strip-state " + badgeClass(ticket.state)}
+              title={stateLabel(ticket.state)}
+              data-dsh-tip=""
+            >
+              ({stateLabel(ticket.state)})
+            </span>
+          )}
         </span>
         <span className="aidos-ticket-strip-body">
           <span className="aidos-ticket-strip-title" title={ticket.title} data-dsh-tip="">
