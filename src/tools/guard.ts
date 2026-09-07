@@ -27,14 +27,17 @@ import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { boardAccessOf, boardToolNames } from "./board-access";
 import { isAidosAgent } from "./preset-gate";
 
-/**
- * Every board tool, derived from the declarations rather than retyped.
- * Exported for the spawn-time toolFilter tests; a caller that wants only
- * the tools a subagent must not see wants `boardToolNames("write")`.
+/*
+ * There is deliberately no `boardTools()` re-export here.
+ *
+ * #146 shipped one, reasoning it would be handy for the toolFilter tests;
+ * nothing ever imported it, because every caller wants a SIDE of the split
+ * (`boardToolNames("write")` to deny, `boardToolNames("read")` to leave
+ * alone) rather than the undivided list. A re-export that hands out the
+ * whole set is a small invitation to deny all of it again, which is the
+ * bug this file was rewritten to fix. Import `boardToolNames` from
+ * board-access directly.
  */
-export function boardTools(): string[] {
-  return boardToolNames();
-}
 
 /** The denial text the guard and the tool bodies both use. */
 export const ORCHESTRATOR_ONLY_MESSAGE =

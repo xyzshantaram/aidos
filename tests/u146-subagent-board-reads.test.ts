@@ -26,6 +26,7 @@ import { describe, expect, it } from "vitest";
 
 import { apply } from "../src/tools/aidos-tools";
 import { boardAccessOf, boardToolNames, declareBoardTool } from "../src/tools/board-access";
+import { installAidosMask } from "../src/tools/mask";
 import {
   asContext,
   createHarness,
@@ -200,10 +201,181 @@ describe("#146 the writes still refuse", () => {
       ["attach_evidence", { ticketId: ticket.id, kind: "review_pass" }],
       ["move_ticket", { ticketId: ticket.id, to: "in_progress" }],
       ["suggest_actions", { suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "x" }] }],
+      /*
+       * The three the review caught missing. Each could lose its body
+       * re-check with the suite green, because the guard still covered it
+       * -- and "both layers hold" is the claim this file exists to prove.
+       */
+      ["plan_import", { file: "PLAN.md" }],
+      ["plan_meta_set", { preamble: "x" }],
+      ["request_allowlist", { ticketId: ticket.id, paths: ["src"] }],
     ] as const) {
       const payload = failureJson(await harness.runTool(name, args, { agent: child }));
       expect(payload.ok, `${name} must refuse a subagent`).toBe(false);
-      expect(payload.error).toBe("orchestrator_only");
+      expect(payload.error, `${name} must refuse as orchestrator_only`).toBe("orchestrator_only");
+    }
+  });
+
+  it("EVERY declared write is body-tested, so the list cannot outgrow its coverage", () => {
+    /*
+     * The loop above names its tools by hand, and a hand-written list is
+     * exactly how the gap survived: three of seven writes were simply not
+     * in it. This fails when a newly declared write tool has no body test,
+     * naming the omission instead of shipping it uncovered.
+     */
+    expect(
+      [...boardToolNames("write")].sort(),
+      "a write tool was declared without a body-refusal test in this file",
+    ).toEqual(
+      [
+        "attach_evidence",
+        "move_ticket",
+        "plan_import",
+        "plan_meta_set",
+        "request_allowlist",
+        "set_ticket",
+        "suggest_actions",
+      ].sort(),
+    );
+  });
+});
+
+/*
+ * THE MASK — the layer the independent review found entirely untested, and
+ * the reason this ticket came back FAIL.
+ *
+ * Mutation M8 changed one token in mask.ts (`boardToolNames("write")` ->
+ * `boardToolNames()`), which re-hides get_tickets/get_ticket/plan/plan_meta
+ * from every subagent — the EXACT bug the user filed, twice — and the whole
+ * 1128-test suite stayed green.
+ *
+ * The test that appeared to cover this built its own deny list from
+ * `boardToolNames("write")` and applied it by hand, so it exercised the
+ * harness's restriction model and never ran the shipped mask. Sharing a
+ * symbol with the implementation makes a test agree with it by
+ * construction; these fire the real wiring instead and read back what the
+ * mask ACTUALLY restricted.
+ */
+describe("#146 the SHIPPED mask leaves a subagent its reads", () => {
+  function maskedHarness(): { harness: Harness; child: FakeAgent } {
+    const harness = riggedHarness();
+    // Without the tier tools registered the mask has nothing to mask, and
+    // every assertion below would pass vacuously.
+    harness.registerTierTools();
+    installAidosMask(asContext(harness.ctx));
+    harness.service.setTicket(harness.asAgent(), { title: "Anything" });
+    const child = childOf(harness, harness.agent);
+    harness.fireSessionStart(child);
+    return { harness, child };
+  }
+
+  it("does NOT hide the read tools from a depth-1 agent", () => {
+    const { harness } = maskedHarness();
+    const reads = boardToolNames("read");
+    expect(reads.length).toBeGreaterThan(0);
+    const visible = harness.effectiveToolSet([...reads, ...boardToolNames("write"), "read"]);
+    for (const name of reads) {
+      expect(
+        visible,
+        `#146: the shipped mask hid ${name} from a subagent — that IS the reported bug`,
+      ).toContain(name);
+    }
+  });
+
+  it("still hides every write tool from a depth-1 agent", () => {
+    const { harness } = maskedHarness();
+    const writes = boardToolNames("write");
+    expect(writes.length).toBeGreaterThan(0);
+    const visible = harness.effectiveToolSet([...boardToolNames("read"), ...writes, "read"]);
+    for (const name of writes) {
+      expect(visible, `the mask must hide ${name} from a subagent`).not.toContain(name);
+    }
+  });
+
+  it("strips the same set from the system prompt, so schema and runtime agree", () => {
+    /*
+     * The mask has two halves. A tool left visible at runtime but stripped
+     * from the prompt is one the model never calls — indistinguishable
+     * from being blocked, and twice as confusing to diagnose.
+     */
+    const { harness, child } = maskedHarness();
+    const assembly = {
+      tools: [...boardToolNames("read"), ...boardToolNames("write")].map((name) => ({ name })),
+    };
+    for (const record of harness.listeners["system-prompt/assemble"] ?? []) {
+      record.listener(assembly, { agent: child }, () => undefined);
+    }
+    const names = assembly.tools.map((tool) => tool.name);
+    for (const name of boardToolNames("read")) {
+      expect(names, `${name} must survive the prompt strip for a subagent`).toContain(name);
+    }
+    for (const name of boardToolNames("write")) {
+      expect(names, `${name} must be stripped from a subagent's prompt`).not.toContain(name);
+    }
+  });
+
+  it("leaves the ORCHESTRATOR every board tool, reads and writes alike", () => {
+    // The mask's depth branch must not leak into the depth-0 path: an
+    // orchestrator that lost set_ticket would be a far louder bug, but the
+    // same one-token edit could cause it.
+    const harness = riggedHarness();
+    harness.registerTierTools();
+    installAidosMask(asContext(harness.ctx));
+    const ticket = harness.service.setTicket(harness.asAgent(), { title: "Anything" });
+    harness.seedEvidence(harness.agent, ticket.id, "builtin:user_signoff");
+    harness.service.agentMoveTicket(harness.asAgent(), { ticketId: ticket.id, to: "in_progress" });
+    harness.fireSessionStart(harness.agent);
+
+    const all = [...boardToolNames("read"), ...boardToolNames("write")];
+    const visible = harness.effectiveToolSet([...all, "read"]);
+    for (const name of all) {
+      expect(visible, `the orchestrator must keep ${name}`).toContain(name);
+    }
+  });
+});
+
+/*
+ * THE GUIDANCE — pinned the way #117 and #133 pin theirs.
+ *
+ * The review's M10 reverted the paragraph to the old deny-everything
+ * sentence and the suite stayed green, which means a future edit can
+ * silently re-instruct every orchestrator to strip the reads from its
+ * subagents. That would restore the user's original complaint through the
+ * prompt rather than the code, and prompt text is the tier where this
+ * project has been burned before.
+ */
+describe("#146 the guidance tells the orchestrator the truth", () => {
+  function guidanceText(): string {
+    const harness = riggedHarness();
+    return harness.promptSections.find((section) => section.name === "tool:aidos")?.text ?? "";
+  }
+
+  it("says the reads are allowed and names them", () => {
+    const text = guidanceText();
+    expect(text).toContain("get_tickets");
+    expect(text).toContain("get_ticket");
+    expect(text).toContain("plan_meta");
+    // The claim itself, not merely the names: a list with no statement
+    // around it reads as the old "deny these" instruction.
+    expect(text.toLowerCase()).toContain("read");
+  });
+
+  it("tells the orchestrator to deny only the WRITE tools when it spawns", () => {
+    const text = guidanceText();
+    expect(text).toContain("WRITE");
+    // The retired instruction must be gone: it named the read tools in the
+    // deny list, which is the bug in prose form.
+    expect(text).not.toContain(
+      "denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set",
+    );
+  });
+
+  it("every declared read tool is named in the guidance", () => {
+    // So a newly declared read cannot be omitted from the text that tells
+    // the orchestrator what to leave alone.
+    const text = guidanceText();
+    for (const name of boardToolNames("read")) {
+      expect(text, `the guidance must name the read tool ${name}`).toContain(name);
     }
   });
 });
