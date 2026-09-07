@@ -1,7 +1,93 @@
 import { build } from "esbuild";
-import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile, writeFile, mkdir, rm, readdir } from "node:fs/promises";
+import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+
+/*
+ * #148: the artifacts below are what aidos SHIPS.
+ *
+ * aidos is installed from git and pnpm runs no build at install time, so
+ * `src/` is only the input -- these three files are the product. Nothing
+ * enforced that they agreed with their sources, and by 2026-09-07 they had
+ * silently diverged by twelve commits: the committed client bundle still
+ * rendered a pill that had been deleted, and four tickets' worth of work
+ * (#100, #131, #135, #141) was absent from the artifact a consumer
+ * installs. Two independent reviews of that work were verifying source
+ * that nobody was running.
+ *
+ * The manifest below is how that becomes impossible to do silently. It is
+ * the same shape as the vendored sheet's SOURCE.json, which is the one
+ * control in this repo with a proven catch record (it caught upstream drift
+ * three times in one session): record hashes, then check BOTH directions --
+ * sources that moved without a rebuild, and artifacts edited by hand.
+ */
+const SHIPPED_ARTIFACTS = [
+  "presets/aidos/aidos-tools.js",
+  "dist/host/aidos-plugin.js",
+  "lib/client.js",
+];
+
+/** Where the recorded hashes live. Read by tests/u148-bundle-freshness. */
+const BUILD_MANIFEST = "lib/build-manifest.json";
+
+function sha256(text) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** Every source file that feeds an artifact, sorted so the digest is stable. */
+async function sourceFiles(dir = "src") {
+  const out = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...(await sourceFiles(path)));
+    else out.push(path);
+  }
+  return out.sort();
+}
+
+/**
+ * One digest over every input that can change an artifact.
+ *
+ * `build.mjs` hashes ITSELF as well: a change to the recipe (a new external,
+ * a different target) changes the output with no source edit at all, and a
+ * check that missed that would be wrong in exactly the situation where the
+ * artifacts are hardest to eyeball.
+ *
+ * The set is deliberately WIDE (all of src/, not a per-artifact import
+ * trace): over-approximating costs one rebuild of a build that takes 100ms,
+ * while under-approximating means a stale artifact passes -- which is the
+ * defect this exists to prevent.
+ */
+export async function sourceDigest() {
+  const files = await sourceFiles();
+  const parts = [];
+  for (const file of files) parts.push(`${file}\n${sha256(await readFile(file, "utf8"))}`);
+  parts.push(`build.mjs\n${sha256(await readFile("build.mjs", "utf8"))}`);
+  return sha256(parts.join("\n"));
+}
+
+/** Record the digest and every artifact's hash, after a successful build. */
+async function writeBuildManifest() {
+  const artifacts = {};
+  for (const path of SHIPPED_ARTIFACTS) artifacts[path] = sha256(await readFile(path, "utf8"));
+  await writeFile(
+    BUILD_MANIFEST,
+    JSON.stringify(
+      {
+        note:
+          "#148: written by build.mjs. sourceDigest covers every file under src/ plus " +
+          "build.mjs itself; artifacts are the files this package ships. " +
+          "tests/u148-bundle-freshness.test.ts fails when either side moves without the " +
+          "other. Regenerate with: node build.mjs",
+        sourceDigest: await sourceDigest(),
+        artifacts,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
 
 // gray-matter calls require at runtime. An ESM bundle has no require, so
 // esbuild's shim throws "Dynamic require of \"fs\" is not supported" the
@@ -118,4 +204,9 @@ await build({
   }
   await rm(probeFile);
 }
+
+// #148: LAST, so the manifest only ever describes a build that succeeded --
+// including the smoke probe above. A manifest written before the probe would
+// certify a bundle that cannot load.
+await writeBuildManifest();
 

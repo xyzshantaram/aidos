@@ -15,4 +15,17 @@ coverage/
 # builds until allowBuilds is configured, so lib/client.js,
 # dist/host/aidos-plugin.js and presets/aidos/aidos-tools.js must ship from
 # the repo instead of being generated at install time.
+#
+# THE RULE (#148): a commit that touches src/ ships its rebuild. Run
+# `node build.mjs` and commit the artifacts it writes, in the same commit as
+# the source change. These files are not by-products — they are the product,
+# and src/ is only their input.
+#
+# This is enforced, not remembered: build.mjs records a digest of every
+# source plus its own recipe in lib/build-manifest.json, and
+# tests/u148-bundle-freshness.test.ts fails the normal suite run when the
+# two sides disagree in either direction. It exists because the rule WAS
+# only remembered, and the shipped client bundle silently fell twelve
+# commits behind src/ — four tickets' worth of work absent from the artifact
+# consumers install, while every test stayed green.
 

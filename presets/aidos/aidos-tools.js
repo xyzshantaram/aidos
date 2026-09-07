@@ -25637,7 +25637,7 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve2 } from "node:path";
 import { execFile } from "node:child_process";
 
@@ -27504,6 +27504,22 @@ var FileNotReadError = class extends Error {
     this.path = path;
   }
 };
+var PlanImportDirtyTreeError = class extends Error {
+  paths;
+  constructor(paths, message) {
+    super(message);
+    this.paths = paths;
+  }
+};
+var PlanImportFileUncommittedError = class extends Error {
+  file;
+  status;
+  constructor(file2, status, message) {
+    super(message);
+    this.file = file2;
+    this.status = status;
+  }
+};
 var ACTOR_UNION = z2.union(["agent", "user", "system"]);
 var AIDOS_SETTINGS_SCHEMA = z2.object({
   injectEnabled: z2.boolean().default(true),
@@ -27975,8 +27991,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   // ---- reads ----
   /** The board rows of one agent's session. Sorted by phase and order. */
   getTickets(agent, opts) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
     let projectId;
     if (opts?.projectId !== void 0) {
       projectId = opts.projectId;
@@ -27984,7 +28001,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         throw new UnknownProject(projectId);
       }
     } else {
-      projectId = this._ensureProject(agent).projectId;
+      projectId = this._ensureProject(reader).projectId;
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
     const scoped = [...views.values()].filter((view) => view.projectId === projectId);
@@ -28009,7 +28026,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * Accepts a composite `sessionId:id` so a foreign ticket resolves too.
    */
   getTicket(agent, args) {
-    const routed = this._routedAgent(agent, args.ticketId);
+    const routed = this._routedAgent(this._boardAgent(agent), args.ticketId);
     const id = this._resolveTicketId(routed, args.ticketId);
     const cache = this._cache(routed.session);
     this._sync(routed.session, cache);
@@ -28126,9 +28143,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** Serialize one project's plan as markdown. */
   plan(agent, opts) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
@@ -28159,9 +28177,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   * project is a refusal, like plan().
     */
   planMeta(agent, opts) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
@@ -28402,6 +28421,46 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   _ownerAgent(agent, sourceSessionId) {
     const owner = this._ownerSession(agent, sourceSessionId);
     return { ...agent, session: owner };
+  }
+  /**
+   * #146: the session whose BOARD a caller reads.
+   *
+   * A subagent has its own session, and that session holds no aidos events
+   * — so unblocking its reads without this would hand a reviewer an EMPTY
+   * board, which is worse than a refusal because it looks like an answer.
+   * The board it must read is the orchestrator's: the session that
+   * dispatched it. `header.parentSession` is the durable direct parent, so
+   * this walks up until it reaches a session that is not itself a subagent
+   * (depth 2 -> 1 -> 0 for a nested child).
+   *
+   * The walk is gated on the DELEGATION markers (`origin: "subagent"` /
+   * `delegationDepth`), never on `parentSession` alone: a FORKED top-level
+   * session also carries a parent, and routing a fork's board to its
+   * ancestor would hide the fork's own tickets (#83 is the standing proof
+   * that fork lineage and board ownership are different questions).
+   *
+   * A parent that is no longer live stops the walk: the caller keeps its
+   * own session, which is honest rather than throwing at a reviewer.
+   */
+  _boardAgent(agent) {
+    let session = agent.session;
+    const seen = /* @__PURE__ */ new Set([session.id]);
+    for (; ; ) {
+      const header = session.header;
+      const isChild = header.origin === "subagent" || (header.delegationDepth ?? 0) > 0;
+      if (!isChild) break;
+      const parentId = header.parentSession;
+      if (parentId === void 0 || seen.has(parentId)) break;
+      let parent;
+      for (const candidate of this.ctx.agents.list()) {
+        if (candidate.session.id === parentId) parent = candidate.session;
+      }
+      if (parent === void 0) break;
+      seen.add(parentId);
+      session = parent;
+    }
+    if (session === agent.session) return agent;
+    return { ...agent, session };
   }
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
@@ -28653,19 +28712,32 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   userSetPlanMeta(agent, args) {
     return this._setPlanMeta(agent, args, "user");
   }
-  /** Import one plan file into an empty project. */
-  planImport(agent, args) {
+  /** Import one plan file into an empty project.
+   *
+   * #120 owns the file's lifecycle: a successful import deletes the plan
+   * file. Before importing, when the file sits inside a git repo, the
+   * import refuses while the working tree is dirty (paths named) or the
+   * plan file itself is uncommitted (untracked or modified) — deletion
+   * must never destroy uncommitted work or ride alongside unrelated
+   * changes. Outside a git repo the import proceeds without the checks.
+   * A refusal throws BEFORE any event is committed, so it imports nothing
+   * and deletes nothing. A deletion failure after a successful import is
+   * reported in the result, never rolled back.
+   */
+  async planImport(agent, args) {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const projectId = args.projectId ?? this._ensureProject(agent).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
-    const text = this._readPlanFile(agent, args.file);
+    const target = this._planFileTarget(agent, args.file);
+    const text = this._readPlanFileAt(target, args.file);
     const document = parsePlan(text);
     if (this._ticketsFor(projectId, cache.state).length > 0) {
       throw new ProjectNotEmptyError(projectId);
     }
+    await this._checkPlanImportGitClean(target);
     const planValue = {
       frontmatter: document.frontmatter,
       context: {
@@ -28708,7 +28780,85 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
       ticketIds.push(ticketId);
     }
-    return { tickets: ticketIds };
+    let deleted = true;
+    let deletionError = null;
+    try {
+      unlinkSync(target);
+    } catch (error51) {
+      deleted = false;
+      deletionError = error51 instanceof Error ? error51.message : String(error51);
+    }
+    return { tickets: ticketIds, deleted, deletionError };
+  }
+  /**
+   * #120: the lifecycle gate for a plan import. The file's OWN repo
+   * governs — a plan file can live in a different repo than the
+   * workspace, and the workspace may not be a repo at all — so no
+   * workspace path enters here. Outside a git repo (rev-parse fails)
+   * there are no checks. Inside one, the plan file's own fate is named
+   * first: when it is the only uncommitted thing, the tree check would
+   * otherwise misreport it as tree dirt.
+   *
+   * A status command that fails INSIDE a repo throws (failing closed):
+   * the gate cannot verify, so it refuses rather than deleting blindly.
+   */
+  async _checkPlanImportGitClean(target) {
+    const dir = dirname(target);
+    let repoRoot;
+    try {
+      repoRoot = (await this._gitRawIn(dir, ["rev-parse", "--show-toplevel"])).trim();
+    } catch {
+      return;
+    }
+    if (repoRoot === "") {
+      return;
+    }
+    const raw = await this._gitIn(dir, [
+      "-c",
+      "core.quotePath=false",
+      "-C",
+      repoRoot,
+      "status",
+      "--porcelain=v1",
+      "-z"
+    ]);
+    const fileRel = relative2(repoRoot, target).replace(/\\/g, "/");
+    let fileStatus = "clean";
+    const dirtyPaths = [];
+    for (const segment of raw.split("\0")) {
+      if (segment.length < 4 || segment[2] !== " ") {
+        continue;
+      }
+      const code = segment.slice(0, 2);
+      const entryPath = segment.slice(3);
+      if (entryPath === fileRel) {
+        fileStatus = code === "??" ? "untracked" : "modified";
+        continue;
+      }
+      dirtyPaths.push(entryPath);
+    }
+    if (fileStatus === "untracked") {
+      throw new PlanImportFileUncommittedError(
+        fileRel,
+        "untracked",
+        `cannot import the plan file ${fileRel}: it is untracked in the git repo \u2014 commit it first`
+      );
+    }
+    if (fileStatus === "modified") {
+      throw new PlanImportFileUncommittedError(
+        fileRel,
+        "modified",
+        `cannot import the plan file ${fileRel}: it has uncommitted changes in the git repo \u2014 commit them first`
+      );
+    }
+    if (dirtyPaths.length > 0) {
+      const shown = dirtyPaths.slice(0, 6).join(", ");
+      const rest = dirtyPaths.length > 6 ? `, and ${dirtyPaths.length - 6} more` : "";
+      throw new PlanImportDirtyTreeError(
+        dirtyPaths,
+        `cannot import the plan file: the git working tree is dirty (${shown}${rest}) \u2014 commit or stash first`
+      );
+    }
   }
   /**
    * The shared plan-meta write path. The stored meta is the merge base, so a
@@ -29143,14 +29293,34 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    */
   _gitInWorkspace(agent, args, timeoutMs = 5e3) {
     const workspace = this._workspacePath(agent);
+    return this._gitIn(workspace, args, timeoutMs);
+  }
+  /**
+   * #120: run one git command in an arbitrary directory. Same contract as
+   * `_gitInWorkspace` (execFile, no shell, fixed argument list) but the
+   * caller names the cwd — the plan-import lifecycle checks follow the
+   * plan FILE's repo, which need not be the workspace's.
+   */
+  _gitIn(cwd, args, timeoutMs = 5e3) {
+    return this._gitRawIn(cwd, args, timeoutMs).catch((error51) => {
+      const detail = error51 instanceof Error ? error51.message : String(error51);
+      throw new BadPayloadError("git " + args[0] + " failed: " + detail.split("\n")[0]);
+    });
+  }
+  /**
+   * #120: the raw probe behind `_gitIn`. Rejects with git's own error so
+   * callers can distinguish "not a repo" (checks do not apply) from a
+   * command that failed inside a repo (failing closed).
+   */
+  _gitRawIn(cwd, args, timeoutMs = 5e3) {
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         "git",
         args,
-        { cwd: workspace, timeout: timeoutMs },
+        { cwd, timeout: timeoutMs },
         (error51, stdout) => {
           if (error51) {
-            rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error51.message).split("\n")[0]));
+            rejectPromise(error51);
             return;
           }
           resolvePromise(stdout);
@@ -29697,24 +29867,36 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return max + 1;
   }
   /**
+   * Resolve one plan file to its absolute path. Absolute paths are taken
+   * verbatim (tool contract: "relative to the session's workspace or
+   * absolute") — only relative paths are confined to the workspace so `../`
+   * cannot escape. See the `plan_import` file param.
+   */
+  _planFileTarget(agent, file2) {
+    if (isAbsolute2(file2)) {
+      return file2;
+    }
+    const workspace = this._workspacePath(agent);
+    const target = resolve2(workspace, file2);
+    const rel = relative2(workspace, target);
+    const normRel = rel.replace(/\\/g, "/");
+    if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute2(rel))) {
+      throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
+    }
+    return target;
+  }
+  /**
    * Read one plan file, resolved under the session's workspace root.
    * Absolute paths are taken verbatim (tool contract: "relative to the
    * workspace or absolute") — only relative paths are confined to the
    * workspace so `../` cannot escape. See the `plan_import` file param.
    */
   _readPlanFile(agent, file2) {
-    let target;
-    if (isAbsolute2(file2)) {
-      target = file2;
-    } else {
-      const workspace = this._workspacePath(agent);
-      target = resolve2(workspace, file2);
-      const rel = relative2(workspace, target);
-      const normRel = rel.replace(/\\/g, "/");
-      if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute2(rel))) {
-        throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
-      }
-    }
+    const target = this._planFileTarget(agent, file2);
+    return this._readPlanFileAt(target, file2);
+  }
+  /** Read one plan file at an already-resolved absolute path. */
+  _readPlanFileAt(target, file2) {
     try {
       return readFileSync(target, "utf8");
     } catch (error51) {
@@ -29820,18 +30002,30 @@ __publicField(AidosService, "inject", [
 ]);
 __publicField(AidosService, "Config", z2.object({}));
 
+// src/tools/board-access.ts
+var declared = /* @__PURE__ */ new Map();
+function declareBoardTool(name2, access) {
+  const previous = declared.get(name2);
+  if (previous !== void 0 && previous !== access) {
+    throw new Error(
+      `board tool ${name2} is declared both ${previous} and ${access}; one definition must be wrong`
+    );
+  }
+  declared.set(name2, access);
+}
+function boardAccessOf(name2) {
+  return declared.get(name2);
+}
+function boardToolNames(access) {
+  const names = [];
+  for (const [name2, kind] of declared) {
+    if (access === void 0 || kind === access) names.push(name2);
+  }
+  return names.sort();
+}
+
 // src/tools/guard.ts
 import { delegationDepthOf as delegationDepthOf2 } from "@deepseek-ai/dsh-subagent";
-
-// src/tools/board-tools.ts
-var BOARD_TOOLS = [
-  "get_tickets",
-  "set_ticket",
-  "attach_evidence",
-  "move_ticket",
-  "plan",
-  "plan_import"
-];
 
 // src/tools/preset-gate.ts
 var AIDOS_PRESET_ID = "aidos";
@@ -29848,15 +30042,15 @@ function isAidosAgent(ctx, agent) {
 }
 
 // src/tools/guard.ts
-var BOARD_TOOLS2 = BOARD_TOOLS;
-var BOARD_TOOL_SET = new Set(BOARD_TOOLS2);
-var ORCHESTRATOR_ONLY_MESSAGE = "the orchestrator is the only actor that may use the board tools; a subagent cannot";
+var ORCHESTRATOR_ONLY_MESSAGE = "the orchestrator is the only actor that may WRITE to the board; a subagent may read it (get_tickets, get_ticket, plan, plan_meta) but never change it";
 function installAidosGuard(ctx) {
   return ctx.tools.guard((execution) => {
-    if (!BOARD_TOOL_SET.has(execution.name)) return void 0;
+    const access = boardAccessOf(execution.name);
+    if (access === void 0) return void 0;
     const agent = execution.agent;
     if (!agent) return "the board tools require a calling agent";
     if (!isAidosAgent(ctx, agent)) return void 0;
+    if (access === "read") return void 0;
     if (delegationDepthOf2(agent) !== 0) {
       return ORCHESTRATOR_ONLY_MESSAGE;
     }
@@ -29918,14 +30112,14 @@ function installAidosMask(ctx) {
       return [...TOOL_UNIVERSE];
     }
   };
-  for (const name2 of BOARD_TOOLS) {
-    if (!TOOL_UNIVERSE.has(name2)) throw new Error(`BOARD_TOOLS ${name2} missing from TOOL_UNIVERSE`);
+  for (const name2 of [...TICKET_TOOLS, ...PLAN_TOOLS]) {
+    if (!TOOL_UNIVERSE.has(name2)) throw new Error(`tier tool ${name2} missing from TOOL_UNIVERSE`);
   }
   const denyFor = (agent) => {
     if (!aidos) return null;
     if (!isAidosAgent(ctx, agent)) return [];
     if (delegationDepthOf3(agent) !== 0) {
-      return [...BOARD_TOOLS, ...PLAN_TOOLS].sort();
+      return boardToolNames("write");
     }
     let states;
     try {
@@ -30267,18 +30461,26 @@ function parseContextSectionsArg(raw) {
     return { heading, text, index };
   });
 }
+function registerBoardTool(ctx, access, definition) {
+  declareBoardTool(definition.name, access);
+  ctx.tools.register(definition);
+}
 function orchestratorAgent(exec) {
+  const agent = callingAgent2(exec);
+  if (delegationDepthOf5(agent) !== 0) {
+    throw new HarnessError2(
+      JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
+      "AIDOS_ORCHESTRATOR_ONLY"
+    );
+  }
+  return agent;
+}
+function callingAgent2(exec) {
   const agent = exec.agent;
   if (!agent) {
     throw new HarnessError2(
       JSON.stringify({ ok: false, error: "agent_required", message: "the board tools require a calling agent" }),
       "AIDOS_AGENT_REQUIRED"
-    );
-  }
-  if (delegationDepthOf5(agent) !== 0) {
-    throw new HarnessError2(
-      JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
-      "AIDOS_ORCHESTRATOR_ONLY"
     );
   }
   return agent;
@@ -30347,6 +30549,24 @@ function refusal(error51, overrides) {
       "context_too_long"
     );
   }
+  if (error51 instanceof PlanImportDirtyTreeError) {
+    throw new HarnessError2(
+      JSON.stringify({ ok: false, error: "plan_import_dirty_tree", paths: error51.paths, message: error51.message }),
+      "plan_import_dirty_tree"
+    );
+  }
+  if (error51 instanceof PlanImportFileUncommittedError) {
+    throw new HarnessError2(
+      JSON.stringify({
+        ok: false,
+        error: "plan_import_file_uncommitted",
+        file: error51.file,
+        status: error51.status,
+        message: error51.message
+      }),
+      "plan_import_file_uncommitted"
+    );
+  }
   if (error51 instanceof BadPayloadError) {
     throw new HarnessError2(
       JSON.stringify({ ok: false, error: "bad_payload", message: error51.message }),
@@ -30371,9 +30591,11 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board tools are the orchestrator's: a subagent cannot use them. Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. The depth guard refuses a subagent anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination replaces the reason), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. BAD (a hand-written work queue in a closing message): 'So the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the human must mine ticket numbers out of prose and hunt for each card, and the list dies at the next compaction. GOOD (the same ask, encoded): call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: ...} and {ticketId: 118, actionId: 'signoff', reason: ...}, then write exactly one line: 'Please approve the suggested actions.'";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
 function registerGetTickets(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool2({
       name: "get_tickets",
       description: "Read the board rows of the session's project: every ticket with its state, confidence score, and gate fraction. Optional FilterPanel-parity filters (#49); with no filters, returns everything as before.",
@@ -30442,7 +30664,7 @@ function registerGetTickets(ctx) {
         render: renderJson2
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent2(exec);
         ctx.logger?.info?.(`aidos: get_tickets called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: get_tickets args ${JSON.stringify(args)}`);
         try {
@@ -30489,7 +30711,9 @@ function registerGetTickets(ctx) {
   );
 }
 function registerGetTicket(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool2({
       name: "get_ticket",
       description: "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, plus its evidence rows and comments. The companion to get_tickets, which returns compact summary rows by default - read the board to find what you need, then read the one ticket you are about to work on. Accepts a composite '<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
@@ -30527,7 +30751,7 @@ function registerGetTicket(ctx) {
         render: renderJson2
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent2(exec);
         try {
           const result = ctx.aidos.getTicket(agent, { ticketId: args.ticketId });
           return {
@@ -30559,7 +30783,9 @@ function registerGetTicket(ctx) {
   );
 }
 function registerSetTicket(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "set_ticket",
       description: "Create or edit one ticket. With no ticketId it creates a ticket in open (title required; the phase is created when absent, titled 'Untitled phase'). With a ticketId it edits the named fields; an absent field leaves its value. It never changes a ticket's state.",
@@ -30635,7 +30861,9 @@ function registerSetTicket(ctx) {
   );
 }
 function registerAttachEvidence(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "attach_evidence",
       description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_fail, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them. review_pass means a reviewer ACCEPTED the change and is the gate key; a FAILING review is review_fail, which satisfies no gate.",
@@ -30708,7 +30936,9 @@ function registerAttachEvidence(ctx) {
   );
 }
 function registerMoveTicket(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "move_ticket",
       description: "Move one ticket along a legal transition. The gate enforces the move: the refusal names the missing evidence kinds and the actors allowed to supply them. An agent never reaches done: only a human marks a ticket done.",
@@ -30746,7 +30976,9 @@ function registerMoveTicket(ctx) {
   );
 }
 function registerPlan(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool2({
       name: "plan",
       description: "Serialize one project's plan as markdown: frontmatter, preamble, the context sections, and every ticket on its own line with the real state mark. The one tool whose result is the plan text, not JSON.",
@@ -30761,7 +30993,7 @@ function registerPlan(ctx) {
         render: (_args, value) => [{ type: "text", text: value }]
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent2(exec);
         ctx.logger?.info?.(`aidos: plan called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: plan args ${JSON.stringify(args)}`);
         try {
@@ -30777,7 +31009,9 @@ function registerPlan(ctx) {
   );
 }
 function registerRequestAllowlist(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "request_allowlist",
       description: "Propose file paths for a ticket's write allowlist (#51). Each path is validated immediately (inside the session workspace, exists on disk); a bad list is refused naming every bad path. A valid proposal queues an APPROVAL CARD on the board and returns at once - do not wait, do not poll: you will be steered with the outcome (approved paths or a rejection) when the user resolves the card.",
@@ -30844,7 +31078,9 @@ function registerRequestAllowlist(ctx) {
   );
 }
 function registerSuggestActions(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "suggest_actions",
       description: "Nominate tickets for the human's attention (#93), each with a reason. They appear at the top of the board's 'Waiting on you' queue, so you never have to list what you need in prose and the human never has to hunt for the tickets. PREFER THIS TOOL OVER PROSE: whenever an ask can be encoded as a nomination, call this instead of writing a list in chat. This does NOT create work: a nomination only annotates an ask the gate ALREADY allows, and one naming an action that is not currently available is dropped rather than shown as a button that cannot work. Returns at once - do not wait, do not poll: you are steered when the human acts on or dismisses one. Re-nominating the same ticket and action replaces the reason instead of stacking a duplicate row.",
@@ -30923,10 +31159,12 @@ function registerSuggestActions(ctx) {
   );
 }
 function registerPlanImport(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "plan_import",
-      description: "Load one plan document into an empty project. The file is read from the session's workspace. A parse error imports nothing and names the line; a project that already holds a ticket refuses; every imported ticket lands in open with the document's claimed state kept as builtin:imported_state evidence.",
+      description: "Load one plan document into an empty project. The file is read from the session's workspace. A parse error imports nothing and names the line; a project that already holds a ticket refuses; every imported ticket lands in open with the document's claimed state kept as builtin:imported_state evidence. The file is disposable: a successful import DELETES it. In a git repo the import first refuses while the working tree is dirty or the plan file itself is uncommitted (untracked or modified) \u2014 commit the plan, and keep the tree clean, before importing. Outside a git repo it imports and deletes without the git checks.",
       parameters: {
         file: {
           type: "string",
@@ -30944,7 +31182,9 @@ function registerPlanImport(ctx) {
           additionalProperties: false,
           properties: {
             ok: { type: "boolean", const: true, required: true },
-            tickets: { type: "array", items: { type: "integer" }, required: true }
+            tickets: { type: "array", items: { type: "integer" }, required: true },
+            deleted: { type: "boolean", required: true },
+            deletionError: { oneOf: [{ type: "string" }, { type: "null" }], required: true }
           }
         },
         render: renderJson2
@@ -30955,8 +31195,8 @@ function registerPlanImport(ctx) {
         ctx.logger?.debug?.(`aidos: plan_import args ${JSON.stringify(args)}`);
         try {
           const result = await ctx.aidos.planImport(agent, args);
-          ctx.logger?.info?.(`aidos: plan_import landed ${result.tickets.length} ticket(s) for agent ${agent.session?.id}`);
-          return { ok: true, tickets: result.tickets };
+          ctx.logger?.info?.(`aidos: plan_import landed ${result.tickets.length} ticket(s) for agent ${agent.session?.id}${result.deleted ? ", plan file deleted" : `, plan file NOT deleted: ${result.deletionError ?? "unknown error"}`}`);
+          return { ok: true, tickets: result.tickets, deleted: result.deleted, deletionError: result.deletionError };
         } catch (error51) {
           refusal(error51);
         }
@@ -30966,7 +31206,9 @@ function registerPlanImport(ctx) {
   );
 }
 function registerPlanMeta(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool2({
       name: "plan_meta",
       description: "Read one project's stored plan blocks as JSON: frontmatter, preamble, and the context sections with their headings and indexes. The result is the editor's data, not the rendered plan markdown.",
@@ -30988,7 +31230,7 @@ function registerPlanMeta(ctx) {
         render: renderJson2
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent2(exec);
         ctx.logger?.info?.(`aidos: plan_meta called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: plan_meta args ${JSON.stringify(args)}`);
         try {
@@ -31007,7 +31249,9 @@ function registerPlanMeta(ctx) {
   );
 }
 function registerPlanMetaSet(ctx) {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool2({
       name: "plan_meta_set",
       description: "Edit one plan block in place. Every present field replaces its stored value and absent fields keep it, so pass only the block you changed: frontmatter, preamble, or the full contextSections array with one section's text replaced. The 2000-line context cap runs over the resulting plan. No file read and no markdown parse. You edit the structure, not a document.",

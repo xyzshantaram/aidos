@@ -25433,7 +25433,7 @@ import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve2 } from "node:path";
 import { execFile } from "node:child_process";
 
@@ -27045,6 +27045,22 @@ var FileNotReadError = class extends Error {
     this.path = path;
   }
 };
+var PlanImportDirtyTreeError = class extends Error {
+  paths;
+  constructor(paths, message) {
+    super(message);
+    this.paths = paths;
+  }
+};
+var PlanImportFileUncommittedError = class extends Error {
+  file;
+  status;
+  constructor(file2, status, message) {
+    super(message);
+    this.file = file2;
+    this.status = status;
+  }
+};
 var ACTOR_UNION = z2.union(["agent", "user", "system"]);
 var AIDOS_SETTINGS_SCHEMA = z2.object({
   injectEnabled: z2.boolean().default(true),
@@ -27516,8 +27532,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   // ---- reads ----
   /** The board rows of one agent's session. Sorted by phase and order. */
   getTickets(agent, opts) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
     let projectId;
     if (opts?.projectId !== void 0) {
       projectId = opts.projectId;
@@ -27525,7 +27542,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         throw new UnknownProject(projectId);
       }
     } else {
-      projectId = this._ensureProject(agent).projectId;
+      projectId = this._ensureProject(reader).projectId;
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
     const scoped = [...views.values()].filter((view) => view.projectId === projectId);
@@ -27550,7 +27567,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * Accepts a composite `sessionId:id` so a foreign ticket resolves too.
    */
   getTicket(agent, args) {
-    const routed = this._routedAgent(agent, args.ticketId);
+    const routed = this._routedAgent(this._boardAgent(agent), args.ticketId);
     const id = this._resolveTicketId(routed, args.ticketId);
     const cache = this._cache(routed.session);
     this._sync(routed.session, cache);
@@ -27667,9 +27684,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** Serialize one project's plan as markdown. */
   plan(agent, opts) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
@@ -27700,9 +27718,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   * project is a refusal, like plan().
     */
   planMeta(agent, opts) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
@@ -27943,6 +27962,46 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   _ownerAgent(agent, sourceSessionId) {
     const owner = this._ownerSession(agent, sourceSessionId);
     return { ...agent, session: owner };
+  }
+  /**
+   * #146: the session whose BOARD a caller reads.
+   *
+   * A subagent has its own session, and that session holds no aidos events
+   * — so unblocking its reads without this would hand a reviewer an EMPTY
+   * board, which is worse than a refusal because it looks like an answer.
+   * The board it must read is the orchestrator's: the session that
+   * dispatched it. `header.parentSession` is the durable direct parent, so
+   * this walks up until it reaches a session that is not itself a subagent
+   * (depth 2 -> 1 -> 0 for a nested child).
+   *
+   * The walk is gated on the DELEGATION markers (`origin: "subagent"` /
+   * `delegationDepth`), never on `parentSession` alone: a FORKED top-level
+   * session also carries a parent, and routing a fork's board to its
+   * ancestor would hide the fork's own tickets (#83 is the standing proof
+   * that fork lineage and board ownership are different questions).
+   *
+   * A parent that is no longer live stops the walk: the caller keeps its
+   * own session, which is honest rather than throwing at a reviewer.
+   */
+  _boardAgent(agent) {
+    let session = agent.session;
+    const seen = /* @__PURE__ */ new Set([session.id]);
+    for (; ; ) {
+      const header = session.header;
+      const isChild = header.origin === "subagent" || (header.delegationDepth ?? 0) > 0;
+      if (!isChild) break;
+      const parentId = header.parentSession;
+      if (parentId === void 0 || seen.has(parentId)) break;
+      let parent;
+      for (const candidate of this.ctx.agents.list()) {
+        if (candidate.session.id === parentId) parent = candidate.session;
+      }
+      if (parent === void 0) break;
+      seen.add(parentId);
+      session = parent;
+    }
+    if (session === agent.session) return agent;
+    return { ...agent, session };
   }
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
@@ -28194,19 +28253,32 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   userSetPlanMeta(agent, args) {
     return this._setPlanMeta(agent, args, "user");
   }
-  /** Import one plan file into an empty project. */
-  planImport(agent, args) {
+  /** Import one plan file into an empty project.
+   *
+   * #120 owns the file's lifecycle: a successful import deletes the plan
+   * file. Before importing, when the file sits inside a git repo, the
+   * import refuses while the working tree is dirty (paths named) or the
+   * plan file itself is uncommitted (untracked or modified) — deletion
+   * must never destroy uncommitted work or ride alongside unrelated
+   * changes. Outside a git repo the import proceeds without the checks.
+   * A refusal throws BEFORE any event is committed, so it imports nothing
+   * and deletes nothing. A deletion failure after a successful import is
+   * reported in the result, never rolled back.
+   */
+  async planImport(agent, args) {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const projectId = args.projectId ?? this._ensureProject(agent).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
-    const text = this._readPlanFile(agent, args.file);
+    const target = this._planFileTarget(agent, args.file);
+    const text = this._readPlanFileAt(target, args.file);
     const document = parsePlan(text);
     if (this._ticketsFor(projectId, cache.state).length > 0) {
       throw new ProjectNotEmptyError(projectId);
     }
+    await this._checkPlanImportGitClean(target);
     const planValue = {
       frontmatter: document.frontmatter,
       context: {
@@ -28249,7 +28321,85 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
       ticketIds.push(ticketId);
     }
-    return { tickets: ticketIds };
+    let deleted = true;
+    let deletionError = null;
+    try {
+      unlinkSync(target);
+    } catch (error51) {
+      deleted = false;
+      deletionError = error51 instanceof Error ? error51.message : String(error51);
+    }
+    return { tickets: ticketIds, deleted, deletionError };
+  }
+  /**
+   * #120: the lifecycle gate for a plan import. The file's OWN repo
+   * governs — a plan file can live in a different repo than the
+   * workspace, and the workspace may not be a repo at all — so no
+   * workspace path enters here. Outside a git repo (rev-parse fails)
+   * there are no checks. Inside one, the plan file's own fate is named
+   * first: when it is the only uncommitted thing, the tree check would
+   * otherwise misreport it as tree dirt.
+   *
+   * A status command that fails INSIDE a repo throws (failing closed):
+   * the gate cannot verify, so it refuses rather than deleting blindly.
+   */
+  async _checkPlanImportGitClean(target) {
+    const dir = dirname(target);
+    let repoRoot;
+    try {
+      repoRoot = (await this._gitRawIn(dir, ["rev-parse", "--show-toplevel"])).trim();
+    } catch {
+      return;
+    }
+    if (repoRoot === "") {
+      return;
+    }
+    const raw = await this._gitIn(dir, [
+      "-c",
+      "core.quotePath=false",
+      "-C",
+      repoRoot,
+      "status",
+      "--porcelain=v1",
+      "-z"
+    ]);
+    const fileRel = relative2(repoRoot, target).replace(/\\/g, "/");
+    let fileStatus = "clean";
+    const dirtyPaths = [];
+    for (const segment of raw.split("\0")) {
+      if (segment.length < 4 || segment[2] !== " ") {
+        continue;
+      }
+      const code = segment.slice(0, 2);
+      const entryPath = segment.slice(3);
+      if (entryPath === fileRel) {
+        fileStatus = code === "??" ? "untracked" : "modified";
+        continue;
+      }
+      dirtyPaths.push(entryPath);
+    }
+    if (fileStatus === "untracked") {
+      throw new PlanImportFileUncommittedError(
+        fileRel,
+        "untracked",
+        `cannot import the plan file ${fileRel}: it is untracked in the git repo \u2014 commit it first`
+      );
+    }
+    if (fileStatus === "modified") {
+      throw new PlanImportFileUncommittedError(
+        fileRel,
+        "modified",
+        `cannot import the plan file ${fileRel}: it has uncommitted changes in the git repo \u2014 commit them first`
+      );
+    }
+    if (dirtyPaths.length > 0) {
+      const shown = dirtyPaths.slice(0, 6).join(", ");
+      const rest = dirtyPaths.length > 6 ? `, and ${dirtyPaths.length - 6} more` : "";
+      throw new PlanImportDirtyTreeError(
+        dirtyPaths,
+        `cannot import the plan file: the git working tree is dirty (${shown}${rest}) \u2014 commit or stash first`
+      );
+    }
   }
   /**
    * The shared plan-meta write path. The stored meta is the merge base, so a
@@ -28684,14 +28834,34 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    */
   _gitInWorkspace(agent, args, timeoutMs = 5e3) {
     const workspace = this._workspacePath(agent);
+    return this._gitIn(workspace, args, timeoutMs);
+  }
+  /**
+   * #120: run one git command in an arbitrary directory. Same contract as
+   * `_gitInWorkspace` (execFile, no shell, fixed argument list) but the
+   * caller names the cwd — the plan-import lifecycle checks follow the
+   * plan FILE's repo, which need not be the workspace's.
+   */
+  _gitIn(cwd, args, timeoutMs = 5e3) {
+    return this._gitRawIn(cwd, args, timeoutMs).catch((error51) => {
+      const detail = error51 instanceof Error ? error51.message : String(error51);
+      throw new BadPayloadError("git " + args[0] + " failed: " + detail.split("\n")[0]);
+    });
+  }
+  /**
+   * #120: the raw probe behind `_gitIn`. Rejects with git's own error so
+   * callers can distinguish "not a repo" (checks do not apply) from a
+   * command that failed inside a repo (failing closed).
+   */
+  _gitRawIn(cwd, args, timeoutMs = 5e3) {
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         "git",
         args,
-        { cwd: workspace, timeout: timeoutMs },
+        { cwd, timeout: timeoutMs },
         (error51, stdout) => {
           if (error51) {
-            rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error51.message).split("\n")[0]));
+            rejectPromise(error51);
             return;
           }
           resolvePromise(stdout);
@@ -29238,24 +29408,36 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return max + 1;
   }
   /**
+   * Resolve one plan file to its absolute path. Absolute paths are taken
+   * verbatim (tool contract: "relative to the session's workspace or
+   * absolute") — only relative paths are confined to the workspace so `../`
+   * cannot escape. See the `plan_import` file param.
+   */
+  _planFileTarget(agent, file2) {
+    if (isAbsolute2(file2)) {
+      return file2;
+    }
+    const workspace = this._workspacePath(agent);
+    const target = resolve2(workspace, file2);
+    const rel = relative2(workspace, target);
+    const normRel = rel.replace(/\\/g, "/");
+    if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute2(rel))) {
+      throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
+    }
+    return target;
+  }
+  /**
    * Read one plan file, resolved under the session's workspace root.
    * Absolute paths are taken verbatim (tool contract: "relative to the
    * workspace or absolute") — only relative paths are confined to the
    * workspace so `../` cannot escape. See the `plan_import` file param.
    */
   _readPlanFile(agent, file2) {
-    let target;
-    if (isAbsolute2(file2)) {
-      target = file2;
-    } else {
-      const workspace = this._workspacePath(agent);
-      target = resolve2(workspace, file2);
-      const rel = relative2(workspace, target);
-      const normRel = rel.replace(/\\/g, "/");
-      if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute2(rel))) {
-        throw new FileNotReadError(file2, `cannot read the plan file ${file2}: it escapes the workspace root`);
-      }
-    }
+    const target = this._planFileTarget(agent, file2);
+    return this._readPlanFileAt(target, file2);
+  }
+  /** Read one plan file at an already-resolved absolute path. */
+  _readPlanFileAt(target, file2) {
     try {
       return readFileSync(target, "utf8");
     } catch (error51) {
