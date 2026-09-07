@@ -281,6 +281,48 @@ export function queueCount(entries: readonly QueueEntry[]): number {
 }
 
 /**
+ * #131: how many queue entries carry an agent nomination the gate STILL
+ * allows.
+ *
+ * Counted over merged ENTRIES, never over the raw nomination rows, and the
+ * difference is the whole point. `humanQueue` drops a nomination whose
+ * action the gate does not currently allow (fulfilled, not on this board,
+ * or wrong state), so counting raw rows would light the indicator for asks
+ * the human cannot act on -- they would open the queue, find nothing, and
+ * learn that the indicator lies. An entry with a `nominationId` is exactly
+ * "the agent asked for this AND you can do it right now".
+ */
+export function nominatedCount(entries: readonly QueueEntry[]): number {
+  return entries.filter((entry) => entry.nominationId !== undefined).length;
+}
+
+/** What the "Waiting on you" button renders (#131). */
+export interface QueueButtonState {
+  /** The number to show, or null when the button stays bare. */
+  count: number | null;
+  /** Whether the button wears the attention state (blue, white text). */
+  indicator: boolean;
+}
+
+/**
+ * The toolbar button's rendering decision, as a function of the nominated
+ * count ALONE (the user's spec: bold number beside the label, blue button
+ * when something is pending, plain button and no number when nothing is).
+ *
+ * A pure function rather than a ternary inside the component, because the
+ * rule -- "the count and the colour are the same signal" -- is the thing
+ * worth pinning. Logic inside a component is logic no test can reach, which
+ * is how the allowlist union and the backward-gate guard both shipped
+ * unverified in this codebase.
+ */
+export function queueButtonState(nominated: number): QueueButtonState {
+  if (!Number.isFinite(nominated) || nominated <= 0) {
+    return { count: null, indicator: false };
+  }
+  return { count: nominated, indicator: true };
+}
+
+/**
  * Nominations that matched NO entry, with why (#93).
  *
  * `humanQueue` drops an unmatched nomination on purpose -- the agent must not

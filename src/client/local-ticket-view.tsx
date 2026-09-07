@@ -32,6 +32,7 @@ import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { boardKeyOf, resolveSelection } from "./board-logic";
 import { ModalShell } from "./ui";
+import { nominatedCount } from "./human-queue";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
 import { asBoardKey, fullTicketId } from "./board-logic";
 import type { BoardKey } from "./board-logic";
@@ -594,11 +595,25 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * reasoning that nominations cannot change the badge count -- true, but it
    * means an agent nominating something while the queue is already open is
    * invisible, and the human sees a stale list with no hint that it is stale.
+   *
+   * #131 RETIRED that reasoning. Nominations now DO change what the toolbar
+   * shows, so "nothing to keep live while the queue is shut" became the bug:
+   * the user asked for an indicator precisely because a new nomination was
+   * invisible until the queue was opened, and an indicator fed by a list
+   * that is only fetched on open would light up only after you had already
+   * looked. So the fetch runs on mount and keeps running while closed --
+   * slowly, because a closed queue needs freshness measured in glances, not
+   * in seconds, and this is a poll against a remote rather than a push.
    */
+  const QUEUE_POLL_OPEN_MS = 4000;
+  const QUEUE_POLL_CLOSED_MS = 20000;
   react.useEffect(
     function () {
-      if (!queueOpen) return;
-      const timer = setInterval(refreshNominations, 4000);
+      refreshNominations();
+      const timer = setInterval(
+        refreshNominations,
+        queueOpen ? QUEUE_POLL_OPEN_MS : QUEUE_POLL_CLOSED_MS,
+      );
       return function () {
         clearInterval(timer);
       };
@@ -1065,7 +1080,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
           refreshNominations();
           setQueueOpen(true);
         }}
-        queueCount={queueEntriesFor(rawTickets, rawEvidence).length}
+        /*
+         * #131: the SAME composition the panel renders, counted. Passing the
+         * nominations in is what makes the count mean "asks the gate allows"
+         * -- humanQueue drops a nomination it cannot match, so an ask that
+         * would open to nothing can never light the button.
+         */
+        nominatedCount={nominatedCount(queueEntriesFor(rawTickets, rawEvidence, nominations))}
       />
     );
   }

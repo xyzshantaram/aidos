@@ -10,6 +10,7 @@ import { FilterPanel } from "./filter-panel";
 import type { AppliedState } from "./view-state";
 import { TicketTile } from "./ticket-tile";
 import { boardKeyOf } from "./board-logic";
+import { queueButtonState } from "./human-queue";
 import type { BoardKey } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 
@@ -35,8 +36,16 @@ export interface TicketViewProps {
   onCreate: () => void;
   /** #93: opens the human work queue. Absent hides the button entirely. */
   onQueue?: () => void;
-  /** #93: how many asks are waiting on the human, for the badge. */
-  queueCount?: number;
+  /**
+   * #131: how many queue entries carry an agent nomination the gate still
+   * allows. This drives BOTH the number and the button's attention state.
+   *
+   * It replaced #93's total-entry count deliberately (user, 2026-09-07). The
+   * total answers "how big is the backlog", which does not change from one
+   * minute to the next and so never earns a glance. A nomination is the
+   * agent asking for something NEW, which is the signal worth a colour.
+   */
+  nominatedCount?: number;
   projects?: { id: number; name: string }[];
   /** #21: the viewing session's workspace, so local id chips drop the prefix. */
   ownWorkspaceKey?: string;
@@ -95,6 +104,10 @@ export function TicketView(props: TicketViewProps) {
     content = <div className="aidos-board-grid">{tiles}</div>;
   }
 
+  // #131: one decision, evaluated once, read by the class, the title and the
+  // number so the three can never disagree.
+  const queueButton = queueButtonState(props.nominatedCount ?? 0);
+
   return (
     <div className="aidos-root">
       <div className="aidos-toolbar">
@@ -103,15 +116,26 @@ export function TicketView(props: TicketViewProps) {
         </span>
         <span className="aidos-toolbar-actions">
           {props.onQueue !== undefined ? (
+            /*
+             * #131: the count and the colour are ONE decision, taken by
+             * queueButtonState so it can be tested without a browser. The
+             * number is typographic (bold text beside the label), never a
+             * pill -- the pill read as a second chip competing with the id
+             * and gate chips the board already uses.
+             */
             <button
-              className="aidos-btn"
+              className={"aidos-btn" + (queueButton.indicator ? " aidos-btn-attention" : "")}
               onClick={props.onQueue}
-              title="What is waiting on you"
+              title={
+                queueButton.indicator
+                  ? "The agent has asked for something you can act on"
+                  : "What is waiting on you"
+              }
               data-dsh-tip=""
             >
               {"Waiting on you"}
-              {props.queueCount !== undefined && props.queueCount > 0 ? (
-                <span className="aidos-queue-badge">{props.queueCount}</span>
+              {queueButton.count !== null ? (
+                <b className="aidos-queue-count">{queueButton.count}</b>
               ) : null}
             </button>
           ) : null}
