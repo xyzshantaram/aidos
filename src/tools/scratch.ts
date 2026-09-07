@@ -562,14 +562,35 @@ export function registerScratchTools(ctx: Context): void {
   ctx.tools.register(
     defineTool({
       name: "scratch_edit",
+      /*
+       * #145: this schema no longer advertises the ANCHOR grammar (`edits`).
+       *
+       * It used to, and the tool then refused every call that used it:
+       * `edit_grammar_unsupported ... the resolved edit tool does not accept
+       * the anchor grammar`. The diagnosis (independent, 2026-09-07) found
+       * the schema was the liar, not the resolver. The builtin `edit` this
+       * wrapper delegates to declares only file_path/old_string/new_string/
+       * replace_all (dsh-tool-fs), and it never had `edits`. The anchor
+       * grammar came from dsh-better-edit, which was mounted once and has
+       * since been dropped.
+       *
+       * The runtime detection below is CORRECT and stays: it inspects the
+       * resolved tool's real parameters and refuses a grammar that backend
+       * cannot take. What was wrong was advertising a capability whose
+       * availability is decided at runtime in a schema that is fixed at
+       * registration. A tool that documents a grammar it usually cannot
+       * accept teaches the model to write calls that always fail.
+       *
+       * If an anchor-capable backend is mounted again, restore the
+       * parameter here — the detection already handles both.
+       */
       description:
-        "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Accepts the same edit arguments (old_string, new_string, replace_all) plus a scratch-relative path. The path is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
+        "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Takes the same literal-edit arguments (old_string, new_string, replace_all) plus a scratch-relative path, which is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
       parameters: {
         path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
-        old_string: { type: "string", description: "Literal-edit grammar: the text to replace. Omit when using edits." },
-        new_string: { type: "string", description: "Literal-edit grammar: the replacement text." },
-        replace_all: { type: "boolean", description: "Literal-edit grammar: replace every match." },
-        edits: { type: "array", items: { type: "array" }, description: "Anchor-edit grammar: [[remove_from, remove_to, replacement_text], ...] with 3-char hashline anchors. Omit old_string/new_string when using edits." },
+        old_string: { type: "string", description: "The literal text to replace." },
+        new_string: { type: "string", description: "The replacement text." },
+        replace_all: { type: "boolean", description: "Replace every match rather than requiring a unique one." },
       },
       output: {
         schema: {
@@ -646,7 +667,20 @@ export function registerScratchTools(ctx: Context): void {
          */
         const editParams = declaredParameters(editDef);
         const accepts = (key: string): boolean => Object.hasOwn(editParams, key);
-        const wantsAnchors = Array.isArray(args.edits);
+        /*
+         * #145: read through a cast, because this tool no longer DECLARES
+         * `edits` and the typed args therefore have no such field.
+         *
+         * The check stays anyway, deliberately. Dropping the parameter from
+         * the schema stops the model being INVITED to use anchors; it does
+         * not stop a caller sending them, and a silently ignored `edits`
+         * array would apply nothing while reporting success — far worse
+         * than the refusal this ticket started from. It is also what lets
+         * an anchor-capable backend be remounted with no code change:
+         * restore the parameter and this path already works.
+         */
+        const anchorEdits = (args as unknown as { edits?: unknown }).edits;
+        const wantsAnchors = Array.isArray(anchorEdits);
         const pathKey = accepts("file_path") ? "file_path" : "path";
 
         if (wantsAnchors && !accepts("edits")) {
@@ -696,7 +730,7 @@ export function registerScratchTools(ctx: Context): void {
         }
 
         const delegatedArgs: Record<string, unknown> = wantsAnchors
-          ? { [pathKey]: absPath, edits: args.edits }
+          ? { [pathKey]: absPath, edits: anchorEdits }
           : {
               [pathKey]: absPath,
               old_string: args.old_string,

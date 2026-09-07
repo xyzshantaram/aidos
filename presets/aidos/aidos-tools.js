@@ -27224,13 +27224,34 @@ function registerScratchTools(ctx) {
   ctx.tools.register(
     defineTool({
       name: "scratch_edit",
-      description: "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Accepts the same edit arguments (old_string, new_string, replace_all) plus a scratch-relative path. The path is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
+      /*
+       * #145: this schema no longer advertises the ANCHOR grammar (`edits`).
+       *
+       * It used to, and the tool then refused every call that used it:
+       * `edit_grammar_unsupported ... the resolved edit tool does not accept
+       * the anchor grammar`. The diagnosis (independent, 2026-09-07) found
+       * the schema was the liar, not the resolver. The builtin `edit` this
+       * wrapper delegates to declares only file_path/old_string/new_string/
+       * replace_all (dsh-tool-fs), and it never had `edits`. The anchor
+       * grammar came from dsh-better-edit, which was mounted once and has
+       * since been dropped.
+       *
+       * The runtime detection below is CORRECT and stays: it inspects the
+       * resolved tool's real parameters and refuses a grammar that backend
+       * cannot take. What was wrong was advertising a capability whose
+       * availability is decided at runtime in a schema that is fixed at
+       * registration. A tool that documents a grammar it usually cannot
+       * accept teaches the model to write calls that always fail.
+       *
+       * If an anchor-capable backend is mounted again, restore the
+       * parameter here — the detection already handles both.
+       */
+      description: "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Takes the same literal-edit arguments (old_string, new_string, replace_all) plus a scratch-relative path, which is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
       parameters: {
         path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
-        old_string: { type: "string", description: "Literal-edit grammar: the text to replace. Omit when using edits." },
-        new_string: { type: "string", description: "Literal-edit grammar: the replacement text." },
-        replace_all: { type: "boolean", description: "Literal-edit grammar: replace every match." },
-        edits: { type: "array", items: { type: "array" }, description: "Anchor-edit grammar: [[remove_from, remove_to, replacement_text], ...] with 3-char hashline anchors. Omit old_string/new_string when using edits." }
+        old_string: { type: "string", description: "The literal text to replace." },
+        new_string: { type: "string", description: "The replacement text." },
+        replace_all: { type: "boolean", description: "Replace every match rather than requiring a unique one." }
       },
       output: {
         schema: {
@@ -27257,7 +27278,8 @@ function registerScratchTools(ctx) {
         }
         const editParams = declaredParameters(editDef);
         const accepts = (key) => Object.hasOwn(editParams, key);
-        const wantsAnchors = Array.isArray(args.edits);
+        const anchorEdits = args.edits;
+        const wantsAnchors = Array.isArray(anchorEdits);
         const pathKey = accepts("file_path") ? "file_path" : "path";
         if (wantsAnchors && !accepts("edits")) {
           throw new HarnessError(
@@ -27291,7 +27313,7 @@ function registerScratchTools(ctx) {
             "AIDOS_EDIT_ARGUMENTS_INCOMPLETE"
           );
         }
-        const delegatedArgs = wantsAnchors ? { [pathKey]: absPath, edits: args.edits } : {
+        const delegatedArgs = wantsAnchors ? { [pathKey]: absPath, edits: anchorEdits } : {
           [pathKey]: absPath,
           old_string: args.old_string,
           new_string: args.new_string ?? ""
