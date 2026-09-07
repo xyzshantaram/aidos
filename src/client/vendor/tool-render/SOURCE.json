@@ -1,10 +1,10 @@
 {
   "source": "/home/sid/repos/dotfiles-ai/plugins/tool-render/src",
-  "vendoredAt": "2026-09-05",
+  "vendoredAt": "2026-09-07",
   "files": {
     "client.module.css": {
       "vendoredAs": "tool-render.css",
-      "sha256": "8f9806c27b5082e06761176c4af8355853bf1d104612e586c77b24f32f99d213"
+      "sha256": "6d5d41bebca8e01613477119d47532f7df29c8e4e2db40e9ce53ab003a690654"
     },
     "text.ts": {
       "vendoredAs": "text.js",
