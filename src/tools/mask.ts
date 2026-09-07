@@ -23,7 +23,7 @@ import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { Session } from "@deepseek-ai/dsh-session";
 import { scopeOf } from "@deepseek-ai/dsh-scope";
 import type { TicketState } from "../kernel/types";
-import { BOARD_TOOLS } from "./board-tools";
+import { boardToolNames } from "./board-access";
 import { isAidosAgent } from "./preset-gate";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 
@@ -132,9 +132,12 @@ export function installAidosMask(ctx: Context): () => void {
    * ready. Mirrors the runtime restrict() computation so the system-prompt
    * schema strip (below) and the runtime mask stay in lockstep.
    */
-  // M8: every board tool must be in the mask universe — fail fast on drift
-  for (const name of BOARD_TOOLS) {
-    if (!TOOL_UNIVERSE.has(name)) throw new Error(`BOARD_TOOLS ${name} missing from TOOL_UNIVERSE`);
+  /*
+   * M8: every tool the TIER table governs must be in the mask universe, or
+   * a tier could name a tool the mask can never deny. Fail fast on drift.
+   */
+  for (const name of [...TICKET_TOOLS, ...PLAN_TOOLS]) {
+    if (!TOOL_UNIVERSE.has(name)) throw new Error(`tier tool ${name} missing from TOOL_UNIVERSE`);
   }
   const denyFor = (agent: Agent): string[] | null => {
     if (!aidos) return null;
@@ -142,12 +145,21 @@ export function installAidosMask(ctx: Context): () => void {
     // composed preset is not aidos must keep its full tool surface: lift any
     // restriction the mask previously applied and deny nothing.
     if (!isAidosAgent(ctx, agent)) return [];
-    // A subagent NEVER sees the orchestrator-only tools — not in the mask
-    // and not in the prompt (skill-gate pattern, A5). Depth decides, not
-    // the session's ticket tiers: a child of an in-progress session must
-    // not inherit set_ticket/attach_evidence/move_ticket/plan_*.
+    /*
+     * #146: a subagent READS the board and never writes it. The write half
+     * is hidden in the mask and in the prompt (skill-gate pattern, A5), so
+     * the child never sees set_ticket/attach_evidence/move_ticket/
+     * plan_import/plan_meta_set/request_allowlist/suggest_actions — depth
+     * decides, not the session's ticket tiers, so a child of an in-progress
+     * session inherits no write. The READ half (get_tickets, get_ticket,
+     * plan, plan_meta) stays: a reviewer must read the ticket it reviews
+     * from the board rather than from a pasted summary.
+     *
+     * The list is DERIVED from each tool's own declaration, so a new write
+     * tool is denied here the moment it declares itself.
+     */
     if (delegationDepthOf(agent) !== 0) {
-      return [...BOARD_TOOLS, ...PLAN_TOOLS].sort();
+      return boardToolNames("write");
     }
     let states: TicketState[];
     try {

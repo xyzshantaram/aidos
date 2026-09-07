@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { apply } from "../src/tools/aidos-tools";
 import { writeBoundaryReason } from "../src/tools/allowlist";
 import { installAidosGuard, ORCHESTRATOR_ONLY_MESSAGE } from "../src/tools/guard";
 import { installAidosMask } from "../src/tools/mask";
@@ -56,10 +57,13 @@ describe("aidos enforcement stands down for a non-aidos agent at call time", () 
 
   it("the delegation guard lets a standard-preset agent's board calls pass", () => {
     const harness = foreignPresetHarness();
-    installAidosGuard(asContext(harness.ctx));
+    // The real registration declares each tool's access class (#146); the
+    // guard reads those declarations, so a guard installed over an
+    // unregistered registry would pass everything for the wrong reason.
+    apply(asContext(harness.ctx), {});
     const agent = harness.asAgent();
     const refusal = harness.guards[0]?.({
-      name: "get_tickets",
+      name: "set_ticket",
       agent: { ...agent, session: agent.session },
       arguments: {},
     } as never);
@@ -68,16 +72,32 @@ describe("aidos enforcement stands down for a non-aidos agent at call time", () 
 
   it("the delegation guard still refuses a subagent of an aidos agent", () => {
     const harness = createHarness();
-    installAidosGuard(asContext(harness.ctx));
+    harness.installService();
+    apply(asContext(harness.ctx), {});
     const agent = harness.asAgent();
+    const child = harness.makeAgent({ depth: 1 });
+    // A WRITE: #146 opened the reads, so the refusal lives on the mutating
+    // half. get_tickets here would now (correctly) pass.
+    const refusal = harness.guards[0]?.({
+      name: "set_ticket",
+      agent: child,
+      arguments: {},
+    } as never);
+    void agent;
+    expect(refusal).toBe(ORCHESTRATOR_ONLY_MESSAGE);
+  });
+
+  it("the same subagent READS the board without a refusal (#146)", () => {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
     const child = harness.makeAgent({ depth: 1 });
     const refusal = harness.guards[0]?.({
       name: "get_tickets",
       agent: child,
       arguments: {},
     } as never);
-    void agent;
-    expect(refusal).toBe(ORCHESTRATOR_ONLY_MESSAGE);
+    expect(refusal).toBeUndefined();
   });
 
   it("the mask installs no restriction and lifts nothing for a standard-preset agent", () => {

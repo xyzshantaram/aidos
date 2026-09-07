@@ -1248,8 +1248,11 @@ registerAidosSessionEventTypes(ctx);
       descending?: boolean;
     },
   ): TicketView[] {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
+    // #146: a subagent reads the board that dispatched it, not its own
+    // (empty) session log.
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
     let projectId: ProjectId;
     if (opts?.projectId !== undefined) {
       projectId = opts.projectId;
@@ -1257,7 +1260,7 @@ registerAidosSessionEventTypes(ctx);
         throw new UnknownProject(projectId);
       }
     } else {
-      projectId = this._ensureProject(agent).projectId;
+      projectId = this._ensureProject(reader).projectId;
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
     const scoped = [...views.values()].filter((view) => view.projectId === projectId);
@@ -1291,7 +1294,9 @@ registerAidosSessionEventTypes(ctx);
     evidence: EvidenceRow[];
     comments: CommentRecord[];
   } {
-    const routed = this._routedAgent(agent, args.ticketId);
+    // #146: hop to the dispatching board FIRST, then apply composite
+    // `sessionId:id` routing on top of it.
+    const routed = this._routedAgent(this._boardAgent(agent), args.ticketId);
     const id = this._resolveTicketId(routed, args.ticketId);
     const cache = this._cache(routed.session);
     this._sync(routed.session, cache);
@@ -1421,9 +1426,11 @@ registerAidosSessionEventTypes(ctx);
 
   /** Serialize one project's plan as markdown. */
   plan(agent: Agent, opts?: { projectId?: number }): string {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    // #146: a subagent serializes the dispatching board's plan.
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
@@ -1459,9 +1466,11 @@ registerAidosSessionEventTypes(ctx);
  * project is a refusal, like plan().
    */
   planMeta(agent: Agent, opts?: { projectId?: number }): PlanMetaView {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(agent).projectId;
+    // #146: same reader rule as plan().
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
@@ -1790,6 +1799,51 @@ registerAidosSessionEventTypes(ctx);
   private _ownerAgent(agent: Agent, sourceSessionId: string): Agent {
     const owner = this._ownerSession(agent, sourceSessionId);
     return { ...agent, session: owner } as unknown as Agent;
+  }
+
+  /**
+   * #146: the session whose BOARD a caller reads.
+   *
+   * A subagent has its own session, and that session holds no aidos events
+   * — so unblocking its reads without this would hand a reviewer an EMPTY
+   * board, which is worse than a refusal because it looks like an answer.
+   * The board it must read is the orchestrator's: the session that
+   * dispatched it. `header.parentSession` is the durable direct parent, so
+   * this walks up until it reaches a session that is not itself a subagent
+   * (depth 2 -> 1 -> 0 for a nested child).
+   *
+   * The walk is gated on the DELEGATION markers (`origin: "subagent"` /
+   * `delegationDepth`), never on `parentSession` alone: a FORKED top-level
+   * session also carries a parent, and routing a fork's board to its
+   * ancestor would hide the fork's own tickets (#83 is the standing proof
+   * that fork lineage and board ownership are different questions).
+   *
+   * A parent that is no longer live stops the walk: the caller keeps its
+   * own session, which is honest rather than throwing at a reviewer.
+   */
+  private _boardAgent(agent: Agent): Agent {
+    let session: Session = agent.session;
+    const seen = new Set<string>([session.id]);
+    for (;;) {
+      const header = session.header as {
+        origin?: string;
+        delegationDepth?: number;
+        parentSession?: string;
+      };
+      const isChild = header.origin === "subagent" || (header.delegationDepth ?? 0) > 0;
+      if (!isChild) break;
+      const parentId = header.parentSession;
+      if (parentId === undefined || seen.has(parentId)) break;
+      let parent: Session | undefined;
+      for (const candidate of this.ctx.agents.list()) {
+        if (candidate.session.id === parentId) parent = candidate.session;
+      }
+      if (parent === undefined) break;
+      seen.add(parentId);
+      session = parent;
+    }
+    if (session === agent.session) return agent;
+    return { ...agent, session } as unknown as Agent;
   }
 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */

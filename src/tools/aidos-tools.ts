@@ -14,7 +14,12 @@
 import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { defineTool } from "@deepseek-ai/dsh-tools";
-import type { GenericCallView, ToolCallKind, ToolRunContext } from "@deepseek-ai/dsh-tools";
+import type {
+  GenericCallView,
+  ToolCallKind,
+  ToolDefinition,
+  ToolRunContext,
+} from "@deepseek-ai/dsh-tools";
 import { HarnessError } from "@deepseek-ai/dsh-llm";
 import type { JsonValue } from "@deepseek-ai/dsh-session";
 import type { Agent } from "@deepseek-ai/dsh-agent";
@@ -41,6 +46,7 @@ import {
   UnknownProject,
   UnknownTicket,
 } from "../kernel/types";
+import { declareBoardTool, type BoardAccess } from "./board-access";
 import { installAidosGuard, ORCHESTRATOR_ONLY_MESSAGE } from "./guard";
 import { installAidosMask } from "./mask";
 import { installAllowlistGuard } from "./allowlist";
@@ -337,25 +343,53 @@ function parseContextSectionsArg(raw: string | undefined): ContextSection[] | un
   });
 }
 
+// ---- registration, and the access each tool declares ----
+
+/**
+ * Register one board tool and DECLARE its access class in the same call
+ * (#146).
+ *
+ * The access rides the registration rather than a list in another file, so
+ * a tool's own definition is the single place that says whether a subagent
+ * may call it. The guard and the mask read those declarations; nothing
+ * retypes the set. `defineTool`'s options are a closed interface, which is
+ * why the flag rides the wrapper instead of the definition object.
+ */
+function registerBoardTool(ctx: Context, access: BoardAccess, definition: ToolDefinition): void {
+  declareBoardTool(definition.name, access);
+  ctx.tools.register(definition);
+}
+
 // ---- the orchestrator check ----
 
 /**
- * The call-time re-check every board tool body runs: the caller must be the
- * orchestrator. The registry-level guard already denied depth-1 calls; this
- * keeps the guarantee even if a toolFilter is misconfigured.
+ * The call-time re-check every board tool body that WRITES runs: the caller
+ * must be the orchestrator. The registry-level guard already denied depth-1
+ * calls; this keeps the guarantee even if a toolFilter is misconfigured.
+ *
+ * #146: read tools call `callingAgent` instead — a subagent reads the board.
  */
 function orchestratorAgent(exec: ToolRunContext): Agent {
+  const agent = callingAgent(exec);
+  if (delegationDepthOf(agent) !== 0) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
+      "AIDOS_ORCHESTRATOR_ONLY",
+    );
+  }
+  return agent;
+}
+
+/**
+ * The call-time check every board tool body that READS runs: there must be
+ * a calling agent, at any delegation depth (#146).
+ */
+function callingAgent(exec: ToolRunContext): Agent {
   const agent = exec.agent;
   if (!agent) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "agent_required", message: "the board tools require a calling agent" }),
       "AIDOS_AGENT_REQUIRED",
-    );
-  }
-  if (delegationDepthOf(agent) !== 0) {
-    throw new HarnessError(
-      JSON.stringify({ ok: false, error: "orchestrator_only", message: ORCHESTRATOR_ONLY_MESSAGE }),
-      "AIDOS_ORCHESTRATOR_ONLY",
     );
   }
   return agent;
@@ -496,9 +530,11 @@ const AIDOS_GUIDANCE =
   "plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. " +
   "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
-  "The board tools are the orchestrator's: a subagent cannot use them. " +
-  "Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. " +
-  "The depth guard refuses a subagent anyway, so the filter is a second layer. " +
+  "The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. " +
+  "Its READS are not: a subagent may call get_tickets, get_ticket, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. " +
+  "So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. " +
+  "Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. " +
+  "The depth guard refuses a subagent's writes anyway, so the filter is a second layer. " +
   "NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). " +
   "The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. " +
   "The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. " +
@@ -509,7 +545,9 @@ const AIDOS_GUIDANCE =
 // ---- the six tools ----
 
 function registerGetTickets(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool({
       name: "get_tickets",
       description:
@@ -582,7 +620,7 @@ function registerGetTickets(ctx: Context): void {
         render: renderJson,
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent(exec);
         ctx.logger?.info?.(`aidos: get_tickets called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: get_tickets args ${JSON.stringify(args)}`);
         try {
@@ -634,7 +672,9 @@ function registerGetTickets(ctx: Context): void {
 }
 
 function registerGetTicket(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool({
       name: "get_ticket",
       description:
@@ -677,7 +717,7 @@ function registerGetTicket(ctx: Context): void {
         render: renderJson,
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent(exec);
         try {
           const result = ctx.aidos.getTicket(agent, { ticketId: args.ticketId });
           return {
@@ -710,7 +750,9 @@ function registerGetTicket(ctx: Context): void {
 }
 
 function registerSetTicket(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "set_ticket",
       description:
@@ -797,7 +839,9 @@ function registerSetTicket(ctx: Context): void {
 }
 
 function registerAttachEvidence(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "attach_evidence",
       description:
@@ -881,7 +925,9 @@ function registerAttachEvidence(ctx: Context): void {
 }
 
 function registerMoveTicket(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "move_ticket",
       description:
@@ -921,7 +967,9 @@ function registerMoveTicket(ctx: Context): void {
 }
 
 function registerPlan(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool({
       name: "plan",
       description:
@@ -937,7 +985,7 @@ function registerPlan(ctx: Context): void {
         render: (_args, value) => [{ type: "text", text: value }],
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent(exec);
         ctx.logger?.info?.(`aidos: plan called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: plan args ${JSON.stringify(args)}`);
         try {
@@ -954,7 +1002,9 @@ function registerPlan(ctx: Context): void {
 }
 
 function registerRequestAllowlist(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "request_allowlist",
       description:
@@ -1027,7 +1077,9 @@ function registerRequestAllowlist(ctx: Context): void {
 }
 
 function registerSuggestActions(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "suggest_actions",
       description:
@@ -1120,7 +1172,9 @@ function registerSuggestActions(ctx: Context): void {
 }
 
 function registerPlanImport(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "plan_import",
       description:
@@ -1168,7 +1222,9 @@ function registerPlanImport(ctx: Context): void {
 }
 
 function registerPlanMeta(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "read",
     defineTool({
       name: "plan_meta",
       description:
@@ -1191,7 +1247,7 @@ function registerPlanMeta(ctx: Context): void {
         render: renderJson,
       },
       execute: async (args, exec) => {
-        const agent = orchestratorAgent(exec);
+        const agent = callingAgent(exec);
         ctx.logger?.info?.(`aidos: plan_meta called by agent ${agent.session?.id}`);
         ctx.logger?.debug?.(`aidos: plan_meta args ${JSON.stringify(args)}`);
         try {
@@ -1211,7 +1267,9 @@ function registerPlanMeta(ctx: Context): void {
 }
 
 function registerPlanMetaSet(ctx: Context): void {
-  ctx.tools.register(
+  registerBoardTool(
+    ctx,
+    "write",
     defineTool({
       name: "plan_meta_set",
       description:
