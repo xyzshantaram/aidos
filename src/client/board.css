@@ -2856,14 +2856,10 @@
 
 /* The click-through peek (#73 round 3): the ticket card shown when a tool
    row's ticket link is clicked. Matches the tool-facts card's chrome, since
-   the two surface the same kind of summary in the same kind of context. */
-.aidos-ticket-peek-excerpt {
-  margin: 0.5rem 0.25rem 0;
-  color: var(--dsw-alias-label-secondary, var(--text-secondary));
-  font-size: 0.8125rem;
-  line-height: 1.25rem;
-}
-
+   the two surface the same kind of summary in the same kind of context.
+   (#135 review: the peek's excerpt paragraph is gone — the modal renders
+   the full description; descriptionExcerpt still feeds the collapsed
+   strip contexts elsewhere.) */
 .aidos-ticket-peek-empty {
   margin: 0.25rem;
   color: var(--dsw-alias-label-tertiary, var(--text-secondary));

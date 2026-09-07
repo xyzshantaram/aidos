@@ -941,6 +941,51 @@ describe("#135 findTicketsTabButton activates the Tickets tab a human would clic
     const clicked = (strip.querySelectorAll("") as unknown as { clicked: number[] }).clicked;
     expect(clicked).toEqual([1]);
   });
+
+  /*
+   * #135 review (MAJOR finding): the OPEN ON BOARD handler's wiring had
+   * ZERO coverage — order swap, false-success close, and excerpt-instead-
+   * of-full all survived the entire suite. The handler is JSX logic a
+   * pure-function test cannot reach, so these use the file's own
+   * rows-const source-assertion convention (u73:296-328), each assertion
+   * aimed at exactly one of the mutations that lived.
+   */
+  it("writes the selection BEFORE activating the tab (mutation: order swap)", () => {
+    // The write must precede findTicketsTabButton in the handler body, so
+    // a thrown click() cannot lose the selection the board adopts on
+    // change and on mount. Scoped to THIS handler's marker: the #73 link
+    // handler earlier in the file also calls setSelection, so an unscoped
+    // indexOf is satisfied by the wrong call site (the mutation run that
+    // created this test proved exactly that).
+    const marker = rows.indexOf("#135: OPEN ON BOARD");
+    expect(marker).toBeGreaterThanOrEqual(0);
+    const body = rows.slice(marker);
+    const writeAt = body.indexOf("setSelection(");
+    const activateAt = body.indexOf("findTicketsTabButton(");
+    expect(writeAt).toBeGreaterThanOrEqual(0);
+    expect(activateAt).toBeGreaterThan(writeAt);
+  });
+
+  it("closes the modal ONLY on successful activation (mutation: false success)", () => {
+    // setPeekOpen(false) must live inside the found.button !== null arm;
+    // the else arm shows the notice instead. A close that also runs on
+    // failure is the false success the review flagged.
+    const body = rows.slice(rows.indexOf("const found = findTicketsTabButton("));
+    const closeAt = body.indexOf("setPeekOpen(false)");
+    const elseAt = body.indexOf("} else {");
+    expect(closeAt).toBeGreaterThanOrEqual(0);
+    expect(elseAt).toBeGreaterThan(closeAt);
+    expect(body).toContain("setActivationNotice(found.reason)");
+  });
+
+  it("renders the FULL description through the safe renderer, never the excerpt (mutation: excerpt render)", () => {
+    expect(rows).toContain("renderMarkdownSafe(peeked.descriptionFull)");
+    // The modal body must not read descriptionExcerpt — that string may
+    // appear elsewhere (strips), so pin the modal's own class instead.
+    const bodyStart = rows.indexOf("aidos-ticket-peek-description");
+    const body = rows.slice(bodyStart - 200, bodyStart + 200);
+    expect(body).not.toContain("descriptionExcerpt");
+  });
 });
 
 /*

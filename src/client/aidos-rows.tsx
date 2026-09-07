@@ -346,16 +346,15 @@ function AidosRow(props: RowProps) {
               <TicketStrip ticket={peeked} />
               {/*
                 * #135: the whole description, rendered as markdown through
-                * the SAME safe renderer the detail panel uses -- the excerpt
-                * below stays only for the no-projection strip contexts.
+                * the SAME safe renderer the detail panel uses. The excerpt
+                * still feeds the collapsed, no-projection strip contexts;
+                * the modal body is always the full text.
                 */}
               {peeked.descriptionFull !== undefined ? (
                 <div
                   className="aidos-md aidos-ticket-peek-description"
                   dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(peeked.descriptionFull) }}
                 />
-              ) : peeked.descriptionExcerpt !== undefined ? (
-                <p className="aidos-ticket-peek-excerpt">{peeked.descriptionExcerpt}</p>
               ) : null}
               {/*
                 * #135: OPEN ON BOARD. Writes the selection FIRST (the
