@@ -20,6 +20,8 @@ declare module "fs" {
   export function realpathSync(path: string): string;
   /** #101: link node_modules into a fresh worktree, which has none. */
   export function symlinkSync(target: string, path: string, type?: string): void;
+  /** #120: a successful plan import deletes the plan file. */
+  export function unlinkSync(path: string): void;
 }
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
@@ -29,6 +31,8 @@ declare module "node:fs" {
   export function realpathSync(path: string): string;
   /** #101: link node_modules into a fresh worktree, which has none. */
   export function symlinkSync(target: string, path: string, type?: string): void;
+  /** #120: a successful plan import deletes the plan file. */
+  export function unlinkSync(path: string): void;
 }
 declare module "path" {
   export function isAbsolute(path: string): boolean;

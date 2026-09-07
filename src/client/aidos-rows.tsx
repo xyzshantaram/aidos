@@ -1055,6 +1055,18 @@ export function PlanImportRow(props: AidosViewProps) {
   if (typeof result?.projectId === "number") {
     facts.push({ label: "Project", value: String(result.projectId) });
   }
+  /*
+   * #120: the deletion outcome is a fact of the import, and a FAILURE is
+   * the fact that matters most -- the tickets landed but the file the
+   * import was supposed to consume is still on disk.
+   */
+  const deleted = result?.deleted;
+  if (typeof deleted === "boolean") {
+    facts.push({ label: "Plan file", value: deleted ? "deleted" : "KEPT" });
+  }
+  if (typeof result?.deletionError === "string" && result.deletionError !== "") {
+    facts.push({ label: "Deletion error", value: result.deletionError });
+  }
   const body =
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
@@ -1073,9 +1085,14 @@ export function PlanImportRow(props: AidosViewProps) {
        * the body: a collapsed row is what the transcript shows by default,
        * so the fact that matters has to be on the always-visible line. The
        * helper drops the count while the call is still running, when no
-       * result exists yet -- "0 tickets" would read like a failure.
+       * result exists yet -- "0 tickets" would read like a failure. The
+       * deletion outcome rides it too (#120).
        */
-      summary={planImportSummary(file, typeof imported === "number" ? imported : undefined)}
+      summary={planImportSummary(
+        file,
+        typeof imported === "number" ? imported : undefined,
+        typeof result?.deleted === "boolean" ? result.deleted : undefined,
+      )}
       state={state}
       body={body}
       errorSummary={errorSummary}

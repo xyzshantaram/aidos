@@ -15,6 +15,15 @@ PLAN.md that `parsePlan` accepts.
 
 - Import needs an EMPTY project. If the project already has tickets, import
   throws `ProjectNotEmptyError`. Import never merges. It is a one-shot seed.
+- The import owns the file's lifecycle. A successful import DELETES the plan
+  file. If the file sits inside a git repo, the import first refuses while
+  the working tree is dirty or the file itself is uncommitted (untracked or
+  modified) — the refusals are `plan_import_dirty_tree` (paths named) and
+  `plan_import_file_uncommitted`. So: commit the PLAN.md, and keep the tree
+  clean, before importing. Outside a git repo the import deletes without the
+  git checks. A refusal imports nothing and deletes nothing. If the file
+  cannot be deleted after a successful import, the result says so
+  (`deleted: false`, `deletionError`) and the tickets still stand.
 - Every ticket lands in the `open` state. The checkbox mark (`[x]`, `[~]`, `?`,
   ` `) does not set the live state. The mark becomes one `builtin:imported_state`
   evidence row per ticket, authored by `system`. It records the claimed state.

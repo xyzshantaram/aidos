@@ -537,8 +537,23 @@ export function ticketFromProjection(
  * was read and "N tickets" says what happened. The count is omitted while
  * the call is still running, because `undefined` is honest and "0 tickets"
  * would be a lie that reads like a failure.
+ *
+ * #120: the import owns the file's lifecycle, so the summary also says
+ * what happened to the FILE -- deleted rides the line (it is the expected
+ * end state), and a deletion failure rides it too, because a file that
+ * survived an import is a surprise the user must not have to expand the
+ * row to discover.
  */
-export function planImportSummary(file: string, imported: number | undefined): string {
-  if (imported === undefined) return file;
-  return file + " · " + imported + (imported === 1 ? " ticket" : " tickets");
+export function planImportSummary(
+  file: string,
+  imported: number | undefined,
+  deleted?: boolean | null,
+): string {
+  let out = file;
+  if (imported !== undefined) {
+    out += " · " + imported + (imported === 1 ? " ticket" : " tickets");
+  }
+  if (deleted === false) out += " · file kept";
+  else if (deleted === true) out += " · file deleted";
+  return out;
 }

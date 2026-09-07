@@ -164,24 +164,24 @@ describe("no agent path to done", () => {
     expect(inProgressState).toBe("in_progress");
   });
 
-  it("a plan import cannot produce a done ticket", () => {
+  it("a plan import cannot produce a done ticket", async () => {
     const harness = createHarness();
     harness.installService();
     const agent = harness.asAgent();
     const planFile = harness.tempPlanFile(ALL_DONE_PLAN);
-    harness.service.planImport(agent, { file: planFile });
+    await harness.service.planImport(agent, { file: planFile });
 
     const tickets = harness.service.getTickets(agent);
     expect(tickets.length).toBe(2);
     expect(tickets.map((ticket) => ticket.state)).toEqual(["open", "open"]);
   });
 
-  it("an import keeps the done claim as evidence only", () => {
+  it("an import keeps the done claim as evidence only", async () => {
     const harness = createHarness();
     harness.installService();
     const agent = harness.asAgent();
     const planFile = harness.tempPlanFile(ALL_DONE_PLAN);
-    harness.service.planImport(agent, { file: planFile });
+    await harness.service.planImport(agent, { file: planFile });
 
     for (const ticketId of [1, 2]) {
       const rows = harness

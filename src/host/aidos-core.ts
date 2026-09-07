@@ -26,7 +26,7 @@ import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
-import { existsSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import {
@@ -112,6 +112,35 @@ export class FileNotReadError extends Error {
   constructor(path: string, message: string) {
     super(message);
     this.path = path;
+  }
+}
+
+/**
+ * #120: the working tree was dirty when a plan import was attempted. The
+ * tool renders it as `plan_import_dirty_tree`; the refusal carries the
+ * offending paths. A refusal imports nothing and deletes nothing.
+ */
+export class PlanImportDirtyTreeError extends Error {
+  readonly paths: string[];
+  constructor(paths: string[], message: string) {
+    super(message);
+    this.paths = paths;
+  }
+}
+
+/**
+ * #120: the plan file itself was uncommitted (untracked or modified) when
+ * a plan import was attempted. The tool renders it as
+ * `plan_import_file_uncommitted`; the refusal carries the file and how it
+ * differs. A refusal imports nothing and deletes nothing.
+ */
+export class PlanImportFileUncommittedError extends Error {
+  readonly file: string;
+  readonly status: "untracked" | "modified";
+  constructor(file: string, status: "untracked" | "modified", message: string) {
+    super(message);
+    this.file = file;
+    this.status = status;
   }
 }
 
@@ -2315,26 +2344,43 @@ registerAidosSessionEventTypes(ctx);
     return this._setPlanMeta(agent, args, "user");
   }
 
-  /** Import one plan file into an empty project. */
-  planImport(agent: Agent, args: PlanImportArgs): {
+  /** Import one plan file into an empty project.
+   *
+   * #120 owns the file's lifecycle: a successful import deletes the plan
+   * file. Before importing, when the file sits inside a git repo, the
+   * import refuses while the working tree is dirty (paths named) or the
+   * plan file itself is uncommitted (untracked or modified) — deletion
+   * must never destroy uncommitted work or ride alongside unrelated
+   * changes. Outside a git repo the import proceeds without the checks.
+   * A refusal throws BEFORE any event is committed, so it imports nothing
+   * and deletes nothing. A deletion failure after a successful import is
+   * reported in the result, never rolled back.
+   */
+  async planImport(agent: Agent, args: PlanImportArgs): Promise<{
     tickets: number[];
-  } {
+    deleted: boolean;
+    deletionError: string | null;
+  }> {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const projectId = args.projectId ?? this._ensureProject(agent).projectId;
     if (!cache.state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
+    const target = this._planFileTarget(agent, args.file);
 
-    // The file read (through the workspace root), then parse first: a parse
-    // error imports nothing.
-    const text = this._readPlanFile(agent, args.file);
+    // The file read, then parse first: a parse error imports nothing.
+    const text = this._readPlanFileAt(target, args.file);
     const document = parsePlan(text);
 
     // An import loads a whole plan into an empty project; it never merges.
     if (this._ticketsFor(projectId, cache.state).length > 0) {
       throw new ProjectNotEmptyError(projectId);
     }
+
+    // The lifecycle gate, before any commit: refuses on dirty or
+    // uncommitted git state, passes through outside a git repo.
+    await this._checkPlanImportGitClean(target);
 
     // The plan meta stores verbatim; rules stay "".
     const planValue: PlanValue = {
@@ -2386,7 +2432,91 @@ registerAidosSessionEventTypes(ctx);
       );
       ticketIds.push(ticketId);
     }
-    return { tickets: ticketIds };
+
+    // The imported plan is disposable: remove it. A deletion failure is
+    // reported in the result — the tickets stay landed, never rolled back.
+    let deleted = true;
+    let deletionError: string | null = null;
+    try {
+      unlinkSync(target);
+    } catch (error) {
+      deleted = false;
+      deletionError = error instanceof Error ? error.message : String(error);
+    }
+    return { tickets: ticketIds, deleted, deletionError };
+  }
+
+  /**
+   * #120: the lifecycle gate for a plan import. The file's OWN repo
+   * governs — a plan file can live in a different repo than the
+   * workspace, and the workspace may not be a repo at all — so no
+   * workspace path enters here. Outside a git repo (rev-parse fails)
+   * there are no checks. Inside one, the plan file's own fate is named
+   * first: when it is the only uncommitted thing, the tree check would
+   * otherwise misreport it as tree dirt.
+   *
+   * A status command that fails INSIDE a repo throws (failing closed):
+   * the gate cannot verify, so it refuses rather than deleting blindly.
+   */
+  private async _checkPlanImportGitClean(target: string): Promise<void> {
+    const dir = dirname(target);
+    let repoRoot: string;
+    try {
+      repoRoot = (await this._gitRawIn(dir, ["rev-parse", "--show-toplevel"])).trim();
+    } catch {
+      return;
+    }
+    if (repoRoot === "") {
+      return;
+    }
+    const raw = await this._gitIn(dir, [
+      "-c",
+      "core.quotePath=false",
+      "-C",
+      repoRoot,
+      "status",
+      "--porcelain=v1",
+      "-z",
+    ]);
+    const fileRel = relative(repoRoot, target).replace(/\\/g, "/");
+    let fileStatus: "clean" | "untracked" | "modified" = "clean";
+    const dirtyPaths: string[] = [];
+    for (const segment of raw.split("\0")) {
+      // A rename's source arrives as a bare path segment with no status
+      // prefix; so does the trailing empty segment. Skip both.
+      if (segment.length < 4 || segment[2] !== " ") {
+        continue;
+      }
+      const code = segment.slice(0, 2);
+      const entryPath = segment.slice(3);
+      if (entryPath === fileRel) {
+        fileStatus = code === "??" ? "untracked" : "modified";
+        continue;
+      }
+      dirtyPaths.push(entryPath);
+    }
+    if (fileStatus === "untracked") {
+      throw new PlanImportFileUncommittedError(
+        fileRel,
+        "untracked",
+        `cannot import the plan file ${fileRel}: it is untracked in the git repo — commit it first`,
+      );
+    }
+    if (fileStatus === "modified") {
+      throw new PlanImportFileUncommittedError(
+        fileRel,
+        "modified",
+        `cannot import the plan file ${fileRel}: it has uncommitted changes in the git repo — commit them first`,
+      );
+    }
+    if (dirtyPaths.length > 0) {
+      const shown = dirtyPaths.slice(0, 6).join(", ");
+      const rest = dirtyPaths.length > 6 ? `, and ${dirtyPaths.length - 6} more` : "";
+      throw new PlanImportDirtyTreeError(
+        dirtyPaths,
+        `cannot import the plan file: the git working tree is dirty (${shown}${rest}) — commit or stash first`,
+      );
+    }
   }
 
   /**
@@ -2996,14 +3126,36 @@ registerAidosSessionEventTypes(ctx);
     timeoutMs = 5000,
   ): Promise<string> {
     const workspace = this._workspacePath(agent);
+    return this._gitIn(workspace, args, timeoutMs);
+  }
+
+  /**
+   * #120: run one git command in an arbitrary directory. Same contract as
+   * `_gitInWorkspace` (execFile, no shell, fixed argument list) but the
+   * caller names the cwd — the plan-import lifecycle checks follow the
+   * plan FILE's repo, which need not be the workspace's.
+   */
+  private _gitIn(cwd: string, args: string[], timeoutMs = 5000): Promise<string> {
+    return this._gitRawIn(cwd, args, timeoutMs).catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new BadPayloadError("git " + args[0] + " failed: " + detail.split("\n")[0]);
+    });
+  }
+
+  /**
+   * #120: the raw probe behind `_gitIn`. Rejects with git's own error so
+   * callers can distinguish "not a repo" (checks do not apply) from a
+   * command that failed inside a repo (failing closed).
+   */
+  private _gitRawIn(cwd: string, args: string[], timeoutMs = 5000): Promise<string> {
     return new Promise((resolvePromise, rejectPromise) => {
       execFile(
         "git",
         args,
-        { cwd: workspace, timeout: timeoutMs },
+        { cwd, timeout: timeoutMs },
         (error, stdout) => {
           if (error) {
-            rejectPromise(new BadPayloadError("git " + args[0] + " failed: " + String(error.message).split("\n")[0]));
+            rejectPromise(error);
             return;
           }
           resolvePromise(stdout);
@@ -3730,24 +3882,38 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
+   * Resolve one plan file to its absolute path. Absolute paths are taken
+   * verbatim (tool contract: "relative to the session's workspace or
+   * absolute") — only relative paths are confined to the workspace so `../`
+   * cannot escape. See the `plan_import` file param.
+   */
+  private _planFileTarget(agent: Agent, file: string): string {
+    if (isAbsolute(file)) {
+      return file;
+    }
+    const workspace = this._workspacePath(agent);
+    const target = resolve(workspace, file);
+    const rel = relative(workspace, target);
+    const normRel = rel.replace(/\\/g, "/");
+    if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute(rel))) {
+      throw new FileNotReadError(file, `cannot read the plan file ${file}: it escapes the workspace root`);
+    }
+    return target;
+  }
+
+  /**
    * Read one plan file, resolved under the session's workspace root.
    * Absolute paths are taken verbatim (tool contract: "relative to the
    * workspace or absolute") — only relative paths are confined to the
    * workspace so `../` cannot escape. See the `plan_import` file param.
    */
   private _readPlanFile(agent: Agent, file: string): string {
-    let target: string;
-    if (isAbsolute(file)) {
-      target = file;
-    } else {
-      const workspace = this._workspacePath(agent);
-      target = resolve(workspace, file);
-      const rel = relative(workspace, target);
-      const normRel = rel.replace(/\\/g, "/");
-      if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute(rel))) {
-        throw new FileNotReadError(file, `cannot read the plan file ${file}: it escapes the workspace root`);
-      }
-    }
+    const target = this._planFileTarget(agent, file);
+    return this._readPlanFileAt(target, file);
+  }
+
+  /** Read one plan file at an already-resolved absolute path. */
+  private _readPlanFileAt(target: string, file: string): string {
     try {
       return readFileSync(target, "utf8");
     } catch (error) {

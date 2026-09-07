@@ -27,6 +27,8 @@ import type { ContextSection } from "../kernel/types";
 import {
   BadPayloadError,
   FileNotReadError,
+  PlanImportDirtyTreeError,
+  PlanImportFileUncommittedError,
 } from "../host/aidos-core";
 import {
   ContextTooLongError,
@@ -428,6 +430,24 @@ function refusal(error: unknown, overrides?: { kind?: string }): never {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "context_too_long", overage: error.overage, message: error.message }),
       "context_too_long",
+    );
+  }
+  if (error instanceof PlanImportDirtyTreeError) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "plan_import_dirty_tree", paths: error.paths, message: error.message }),
+      "plan_import_dirty_tree",
+    );
+  }
+  if (error instanceof PlanImportFileUncommittedError) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "plan_import_file_uncommitted",
+        file: error.file,
+        status: error.status,
+        message: error.message,
+      }),
+      "plan_import_file_uncommitted",
     );
   }
   if (error instanceof BadPayloadError) {
@@ -1094,7 +1114,8 @@ function registerPlanImport(ctx: Context): void {
     defineTool({
       name: "plan_import",
       description:
-        "Load one plan document into an empty project. The file is read from the session's workspace. A parse error imports nothing and names the line; a project that already holds a ticket refuses; every imported ticket lands in open with the document's claimed state kept as builtin:imported_state evidence.",
+        "Load one plan document into an empty project. The file is read from the session's workspace. A parse error imports nothing and names the line; a project that already holds a ticket refuses; every imported ticket lands in open with the document's claimed state kept as builtin:imported_state evidence. " +
+        "The file is disposable: a successful import DELETES it. In a git repo the import first refuses while the working tree is dirty or the plan file itself is uncommitted (untracked or modified) — commit the plan, and keep the tree clean, before importing. Outside a git repo it imports and deletes without the git checks.",
       parameters: {
         file: {
           type: "string",
@@ -1113,6 +1134,8 @@ function registerPlanImport(ctx: Context): void {
           properties: {
             ok: { type: "boolean", const: true, required: true },
             tickets: { type: "array", items: { type: "integer" }, required: true },
+            deleted: { type: "boolean", required: true },
+            deletionError: { oneOf: [{ type: "string" }, { type: "null" }], required: true },
           },
         },
         render: renderJson,
@@ -1123,8 +1146,8 @@ function registerPlanImport(ctx: Context): void {
         ctx.logger?.debug?.(`aidos: plan_import args ${JSON.stringify(args)}`);
         try {
           const result = await ctx.aidos.planImport(agent, args);
-          ctx.logger?.info?.(`aidos: plan_import landed ${result.tickets.length} ticket(s) for agent ${agent.session?.id}`);
-          return { ok: true, tickets: result.tickets };
+          ctx.logger?.info?.(`aidos: plan_import landed ${result.tickets.length} ticket(s) for agent ${agent.session?.id}${result.deleted ? ", plan file deleted" : `, plan file NOT deleted: ${result.deletionError ?? "unknown error"}`}`);
+          return { ok: true, tickets: result.tickets, deleted: result.deleted, deletionError: result.deletionError };
         } catch (error) {
           refusal(error);
         }

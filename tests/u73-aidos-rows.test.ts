@@ -1025,4 +1025,22 @@ describe("#73 the plan_import summary carries the count on the always-visible li
   it("omits the count while the call is running -- undefined is honest, '0 tickets' reads like a failure", () => {
     expect(planImportSummary("PLAN-AIDOS.md", undefined)).toBe("PLAN-AIDOS.md");
   });
+
+  /*
+   * #120: the import owns the file's lifecycle, so the summary also says
+   * what happened to the FILE. Deleted is the expected end state and rides
+   * the line; a kept file is a surprise that must be visible collapsed.
+   */
+  it("appends the deletion outcome after the count (#120)", () => {
+    expect(planImportSummary("PLAN-AIDOS.md", 14, true)).toBe("PLAN-AIDOS.md · 14 tickets · file deleted");
+  });
+
+  it("says 'file kept' when a deletion failed", () => {
+    expect(planImportSummary("plan.md", 1, false)).toBe("plan.md · 1 ticket · file kept");
+  });
+
+  it("omits the deletion clause when no result exists yet", () => {
+    expect(planImportSummary("plan.md", undefined, undefined)).toBe("plan.md");
+    expect(planImportSummary("plan.md", undefined, null)).toBe("plan.md");
+  });
 });
