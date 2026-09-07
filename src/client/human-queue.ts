@@ -296,6 +296,36 @@ export function nominatedCount(entries: readonly QueueEntry[]): number {
   return entries.filter((entry) => entry.nominationId !== undefined).length;
 }
 
+/**
+ * #141: one click of an armed-reject button, as a decision rather than a
+ * branch buried in JSX.
+ *
+ * The queue's Dismiss wears the tool card's reject anatomy, which promises
+ * a two-step: the first click arms, the second acts. The independent review
+ * proved the promise was unprotected — deleting the arming branch shipped a
+ * one-click Dismiss with the whole suite green, because the test that
+ * claimed to cover it only asserted that the strings "armedDismiss" and
+ * "? Confirm dismiss" appeared in the file. Both survive a handler that
+ * never reaches them.
+ *
+ * Extracting the step makes the RULE testable: what a click does is now a
+ * value, and the component's only job is to apply it.
+ *
+ * @param armed the nomination id currently armed, or null
+ * @param id    the nomination whose button was clicked
+ */
+export function dismissArmStep(
+  armed: string | null,
+  id: string,
+): { armed: string | null; dismiss: boolean } {
+  // Arming a different row moves the armed slot rather than dismissing it:
+  // a human who armed one row and then clicked another meant "that one",
+  // and firing on the second click there would be a dismissal they never
+  // confirmed.
+  if (armed !== id) return { armed: id, dismiss: false };
+  return { armed: null, dismiss: true };
+}
+
 /** What the "Waiting on you" button renders (#131). */
 export interface QueueButtonState {
   /** The number to show, or null when the button stays bare. */

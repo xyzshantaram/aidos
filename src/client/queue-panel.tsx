@@ -15,7 +15,12 @@ import react from "react";
 
 import { AllowlistIcon, MarkDoneIcon, SignoffIcon, VerifyIcon } from "./icons";
 
-import { humanQueue, unmatchedNominations, QUEUE_SORT_LABELS } from "./human-queue";
+import {
+  dismissArmStep,
+  humanQueue,
+  unmatchedNominations,
+  QUEUE_SORT_LABELS,
+} from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { parseCriteria, boardKeyOf } from "./board-logic";
@@ -362,14 +367,17 @@ export function QueuePanel(props: QueuePanelProps) {
                     data-dsh-tip=""
                     onClick={() => {
                       const id = entry.nominationId as string;
-                      // First click ARMS, second click dismisses -- the
-                      // tool card's contract for this exact button.
-                      if (armedDismiss !== id) {
-                        setArmedDismiss(id);
-                        return;
-                      }
-                      setArmedDismiss(null);
-                      props.onDismiss?.(id);
+                      /*
+                       * First click ARMS, second dismisses -- the tool
+                       * card's contract for this exact button. The rule
+                       * lives in dismissArmStep so it can be tested; this
+                       * handler only applies the step it returns. The
+                       * previous inline branch passed its "test" with the
+                       * branch deleted (#141 review, M4).
+                       */
+                      const step = dismissArmStep(armedDismiss, id);
+                      setArmedDismiss(step.armed);
+                      if (step.dismiss) props.onDismiss?.(id);
                     }}
                   >
                     {armedDismiss === entry.nominationId ? "? Confirm dismiss" : "Dismiss"}

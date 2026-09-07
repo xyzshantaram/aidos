@@ -217,6 +217,35 @@ describe("#82 vendored tool-render files", () => {
     if (!existsSync(manifest.source)) return; // Same skip rule as the drift check.
     const commit = manifest.upstreamCommit;
     if (commit === undefined) return; // The assertion above owns that failure.
+
+    /*
+     * #141 review, MINOR-3: upstream present but NOT a git repository is a
+     * supported configuration -- the drift check above deliberately falls
+     * back to the working tree for it. This test used to throw there,
+     * turning a green supported setup red for an environmental reason,
+     * which is how a check earns itself a `skip` and stops protecting
+     * anything. The environmental rule now matches its sibling's: no git,
+     * no commit verification, and say so out loud.
+     */
+    let isRepo = true;
+    try {
+      execFileSync("git", ["-C", manifest.source, "rev-parse", "--git-dir"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      isRepo = false;
+    }
+    if (!isRepo) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `#82/#141: upstream at ${manifest.source} is not a git repository, so the recorded ` +
+          `commit ${commit.slice(0, 12)} cannot be verified. The byte-level drift check above ` +
+          "still ran against the working tree.",
+      );
+      return;
+    }
+
     for (const [upstream, entry] of Object.entries(manifest.files)) {
       const text = textAtCommit(commit, join(manifest.source, upstream));
       if (text === null) {
