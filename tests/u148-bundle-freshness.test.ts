@@ -30,6 +30,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -42,11 +43,23 @@ interface BuildManifest {
   artifacts: Record<string, string>;
 }
 
-const manifest = JSON.parse(
-  readFileSync(join(ROOT, "lib/build-manifest.json"), "utf8"),
-) as BuildManifest;
-
 const REBUILD = "run `node build.mjs` and COMMIT the artifacts it writes";
+
+/*
+ * A MISSING manifest is the same defect as a stale one, so it must produce
+ * the same instruction. Round 1 let the module-level read throw a raw
+ * ENOENT during collection: loud, but it named node:fs rather than the
+ * remedy, and it took the whole file down instead of failing one assertion.
+ */
+const MANIFEST_PATH = join(ROOT, "lib/build-manifest.json");
+if (!existsSync(MANIFEST_PATH)) {
+  throw new Error(
+    `#148: lib/build-manifest.json is missing, so nothing records which sources the ` +
+      `shipped bundles were built from — ${REBUILD}.`,
+  );
+}
+
+const manifest = JSON.parse(readFileSync(MANIFEST_PATH, "utf8")) as BuildManifest;
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -74,12 +87,40 @@ function sourceFiles(dir: string): string[] {
   return out.sort();
 }
 
+/*
+ * The non-src inputs, restated here INDEPENDENTLY of build.mjs's own list.
+ *
+ * Round 1 hashed only src/ plus build.mjs, and the review broke it with one
+ * mutation: `tsconfig.client.json` is handed to esbuild, so a compiler-option
+ * change rewrote the shipped bundle while the suite stayed green. The
+ * lockfile is here for the same reason one step out — gray-matter, marked,
+ * yaml, zod and highlight.js are BUNDLED rather than external, so a version
+ * bump changes the artifacts with no source edit at all.
+ *
+ * Kept as a literal rather than imported: if build.mjs's list and this one
+ * ever diverge, the digests disagree and the suite says so on the next
+ * build. That is the same reason the file walk below is duplicated, and it
+ * is not theoretical — it fired on the very commit that added these two.
+ */
+const NON_SRC_INPUTS = [
+  "build.mjs",
+  "tsconfig.json",
+  "tsconfig.client.json",
+  "package.json",
+  "pnpm-lock.yaml",
+];
+
 function currentSourceDigest(): string {
   const parts: string[] = [];
   for (const file of sourceFiles("src")) {
     parts.push(`${file}\n${sha256(readFileSync(join(ROOT, file), "utf8"))}`);
   }
-  parts.push(`build.mjs\n${sha256(readFileSync(join(ROOT, "build.mjs"), "utf8"))}`);
+  for (const file of NON_SRC_INPUTS) {
+    const path = join(ROOT, file);
+    // Absence contributes a value rather than throwing: a tarball checkout
+    // without a lockfile must still run the suite.
+    parts.push(`${file}\n${sha256(existsSync(path) ? readFileSync(path, "utf8") : " absent")}`);
+  }
   return sha256(parts.join("\n"));
 }
 
@@ -135,38 +176,39 @@ describe("#148 the shipped bundles match their sources", () => {
     }
   });
 
-  it("A CHANGED SOURCE FILE CHANGES THE DIGEST — the check can actually fire", () => {
+  it("THE SHIPPED DIGEST FUNCTION agrees with this file's independent walk", () => {
     /*
-     * The proof that this control is not decorative, done in-process so it
-     * is permanent and repeatable rather than a mutation someone performed
-     * by hand once and described in a commit message.
+     * The wiring proof, and the reason the two tests it replaced are gone.
      *
-     * One source file's content is perturbed IN MEMORY and the digest
-     * recomputed the same way; it must differ. If it does not, the digest
-     * is insensitive to source changes and every other assertion in this
-     * file is theatre — a green suite that certifies nothing, which is
-     * precisely the state #148 was filed about.
+     * Round 1 had tests that perturbed a source IN MEMORY and recomputed a
+     * digest inline. The independent review killed them with one mutation:
+     * replace build.mjs's sourceDigest() with a constant, and BOTH still
+     * passed — because neither ever executed the production function. They
+     * proved sha256 hashes things. The commit message calling them proof
+     * that the check "can actually fire" was an overstatement, and this is
+     * the correction.
+     *
+     * This runs the REAL function (`node build.mjs --print-digest`, which
+     * exits before building) and compares it to the walk implemented above.
+     * A production digest that is constant, that skips a directory, or that
+     * hashes a different input set now disagrees with an independent
+     * recomputation of the same rule, and the suite goes red. That is also
+     * what makes the deliberate duplication of the walk pay for itself:
+     * two implementations of one rule disagree loudly, where a shared one
+     * would agree by construction and hide the bug.
      */
-    const files = sourceFiles("src");
-    expect(files.length).toBeGreaterThan(0);
-    const target = files[0] as string;
-
-    const perturbed = (() => {
-      const parts: string[] = [];
-      for (const file of files) {
-        const text = readFileSync(join(ROOT, file), "utf8");
-        // One added byte in one file: the smallest change a careless commit
-        // can make, and the check must still catch it.
-        parts.push(`${file}\n${sha256(file === target ? text + " " : text)}`);
-      }
-      parts.push(`build.mjs\n${sha256(readFileSync(join(ROOT, "build.mjs"), "utf8"))}`);
-      return sha256(parts.join("\n"));
-    })();
-
-    expect(perturbed).not.toBe(manifest.sourceDigest);
-    // And the unperturbed recomputation still matches, so the difference is
-    // attributable to the edit rather than to a broken walk.
-    expect(currentSourceDigest()).toBe(manifest.sourceDigest);
+    const printed = execFileSync("node", ["build.mjs", "--print-digest"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    }).trim();
+    expect(
+      printed,
+      "#148: build.mjs's own sourceDigest() disagrees with this test's independent " +
+        "recomputation — the recorded manifest is being produced by a different rule " +
+        "than the one being checked, so the freshness guarantee is void.",
+    ).toBe(currentSourceDigest());
+    // ...and that shared value is what the manifest recorded.
+    expect(printed).toBe(manifest.sourceDigest);
   });
 
   it("A RENAMED SOURCE FILE CHANGES THE DIGEST — content-only hashing would miss it", () => {
@@ -190,20 +232,36 @@ describe("#148 the shipped bundles match their sources", () => {
     expect(renamed).not.toBe(manifest.sourceDigest);
   });
 
-  it("the recorded digest covers build.mjs itself, not only src/", () => {
+  it("the digest covers the NON-src inputs, one at a time", () => {
     /*
-     * A recipe change (a new external, a different target) changes every
-     * artifact with no source edit at all. Asserting the digest CHANGES
-     * when build.mjs changes proves the input set really includes it,
-     * rather than trusting the comment that says so.
+     * Each input is dropped individually and the digest must change. A
+     * whole-set check would pass while one member was silently ignored,
+     * and that is exactly the shape of the bug the review found: the set
+     * LOOKED complete because src/ dominated it, while tsconfig.client.json
+     * — the file esbuild is literally handed — was absent.
+     *
+     * `pnpm-lock.yaml` earns its place the same way: the bundled deps
+     * (gray-matter, marked, yaml, zod, highlight.js) are compiled INTO the
+     * artifacts, so the lockfile decides their bytes.
      */
-    const withoutBuildFile = (() => {
-      const parts: string[] = [];
-      for (const file of sourceFiles("src")) {
-        parts.push(`${file}\n${sha256(readFileSync(join(ROOT, file), "utf8"))}`);
-      }
-      return sha256(parts.join("\n"));
-    })();
-    expect(withoutBuildFile).not.toBe(manifest.sourceDigest);
+    for (const dropped of NON_SRC_INPUTS) {
+      const partial = (() => {
+        const parts: string[] = [];
+        for (const file of sourceFiles("src")) {
+          parts.push(`${file}\n${sha256(readFileSync(join(ROOT, file), "utf8"))}`);
+        }
+        for (const file of NON_SRC_INPUTS) {
+          if (file === dropped) continue;
+          const path = join(ROOT, file);
+          parts.push(
+            `${file}\n${sha256(existsSync(path) ? readFileSync(path, "utf8") : " absent")}`,
+          );
+        }
+        return sha256(parts.join("\n"));
+      })();
+      expect(partial, `dropping ${dropped} must change the digest`).not.toBe(
+        manifest.sourceDigest,
+      );
+    }
   });
 });

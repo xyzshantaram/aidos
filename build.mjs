@@ -1,6 +1,6 @@
 import { build } from "esbuild";
 import { readFile, writeFile, mkdir, rm, readdir } from "node:fs/promises";
-import { resolve, join } from "node:path";
+import { resolve, join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 
@@ -30,6 +30,33 @@ const SHIPPED_ARTIFACTS = [
 
 /** Where the recorded hashes live. Read by tests/u148-bundle-freshness. */
 const BUILD_MANIFEST = "lib/build-manifest.json";
+
+/*
+ * #148 round 2: the NON-src inputs that also decide the output.
+ *
+ * The first cut hashed src/ plus build.mjs and its comment claimed that was
+ * "every input that can change an artifact". The independent review proved
+ * otherwise in one mutation: `tsconfig.client.json` is handed straight to
+ * esbuild (see the client build below), so flipping a compiler option there
+ * changed lib/client.js's bytes while the suite stayed green. The same
+ * blindness covered the dependency set -- gray-matter, marked, yaml, zod
+ * and highlight.js are BUNDLED, not external, so a version bump rewrites
+ * the artifacts with no source edit at all.
+ *
+ * Hashing the lockfile closes the dependency case exactly, because that is
+ * the file which decides which versions get bundled. What remains
+ * deliberately outside: the esbuild binary itself and the Node version --
+ * a digest cannot see those, and pretending otherwise would be the same
+ * overclaim the review just caught. That residue is stated in the manifest
+ * note rather than left for the next reviewer to find.
+ */
+export const BUILD_INPUT_FILES = [
+  "build.mjs",
+  "tsconfig.json",
+  "tsconfig.client.json",
+  "package.json",
+  "pnpm-lock.yaml",
+];
 
 function sha256(text) {
   return createHash("sha256").update(text).digest("hex");
@@ -63,7 +90,19 @@ export async function sourceDigest() {
   const files = await sourceFiles();
   const parts = [];
   for (const file of files) parts.push(`${file}\n${sha256(await readFile(file, "utf8"))}`);
-  parts.push(`build.mjs\n${sha256(await readFile("build.mjs", "utf8"))}`);
+  for (const file of BUILD_INPUT_FILES) {
+    // A missing optional input contributes its absence, not a crash: the
+    // lockfile can be absent in a tarball checkout, and a digest that
+    // throws there would make the whole suite unrunnable rather than
+    // reporting drift.
+    let text = "";
+    try {
+      text = await readFile(file, "utf8");
+    } catch {
+      text = "\u0000absent";
+    }
+    parts.push(`${file}\n${sha256(text)}`);
+  }
   return sha256(parts.join("\n"));
 }
 
@@ -93,6 +132,28 @@ async function writeBuildManifest() {
 // esbuild's shim throws "Dynamic require of \"fs\" is not supported" the
 // moment the plugin loads. This banner gives every node bundle a real
 // require, built from the module URL.
+/*
+ * #148 round 2: `node build.mjs --print-digest` prints the digest and exits
+ * WITHOUT building.
+ *
+ * The review's sharpest hit landed here. My "proves it can fire" tests
+ * perturbed a source in memory and re-implemented the digest inline, so a
+ * mutation that replaced the real sourceDigest() with a constant left them
+ * both passing -- they proved that sha256 is a hash function, not that the
+ * shipped check is wired to anything. The honest fix is for the test to
+ * execute THIS function and compare it against its own independent walk: a
+ * production digest that is constant, or that reads a different file set,
+ * then disagrees with the recomputation and the suite goes red.
+ *
+ * A flag rather than an import because importing this module would run the
+ * build as a side effect, and a test that rebuilds the artifacts it is
+ * judging is not a test.
+ */
+if (process.argv.includes("--print-digest")) {
+  process.stdout.write((await sourceDigest()) + "\n");
+  process.exit(0);
+}
+
 const NODE_REQUIRE_BANNER = {
   js: "import { createRequire as __aidosCreateRequire } from 'node:module';\nconst require = __aidosCreateRequire(import.meta.url);",
 };
@@ -135,11 +196,24 @@ await build({
 // from dotfiles-ai). The board imports "./board.css" and injects the text
 // once at runtime. dsh ships the CSS as a single string, so there is no
 // bundler-level css loader to rely on.
+/*
+ * #148 round 2: the resolved path is made RELATIVE to the repo root.
+ *
+ * esbuild writes each resolved path into the bundle as a `// css-text:...`
+ * comment, so the absolute form embedded the build machine's checkout into
+ * the shipped artifact: the committed lib/client.js differed from a rebuild
+ * in /tmp by exactly three comment lines. That made the bundle
+ * irreproducible anywhere but this directory -- a reviewer could not
+ * confirm the committed artifact by rebuilding it, and any future
+ * rebuild-and-compare check would false-fail for every other contributor.
+ * A relative path is the same file to esbuild (the build runs from the
+ * repo root) and identical bytes everywhere.
+ */
 const cssTextPlugin = {
   name: "css-text",
   setup(build) {
     build.onResolve({ filter: /\.css$/ }, (args) => ({
-      path: resolve(args.resolveDir, args.path),
+      path: relative(process.cwd(), resolve(args.resolveDir, args.path)),
       namespace: "css-text",
     }));
     build.onLoad({ filter: /.*/, namespace: "css-text" }, async (args) => {
