@@ -526,3 +526,19 @@ export function ticketFromProjection(
   if (excerpt !== null && excerpt.trim() !== "") out.descriptionExcerpt = oneLine(excerpt, 220);
   return out;
 }
+
+/**
+ * The summary line of a plan_import call: the file plus the count it
+ * created (user, 2026-09-05: "import plan tool call summary should show the
+ * count of imported tickets").
+ *
+ * The count is the fact that matters in the transcript -- an import is
+ * all-or-nothing and lands every ticket in open, so "which file" says what
+ * was read and "N tickets" says what happened. The count is omitted while
+ * the call is still running, because `undefined` is honest and "0 tickets"
+ * would be a lie that reads like a failure.
+ */
+export function planImportSummary(file: string, imported: number | undefined): string {
+  if (imported === undefined) return file;
+  return file + " · " + imported + (imported === 1 ? " ticket" : " tickets");
+}

@@ -51,6 +51,7 @@ import {
   allowlistPaths,
   boardQuerySummary,
   planBlocksWritten,
+  planImportSummary,
   suggestionLines,
   ticketEvidence,
   ticketCaptionOf,
@@ -278,15 +279,19 @@ function AidosRow(props: RowProps) {
       >
         {/*
           * The base card's row anatomy (dotfiles-ai tool-render), mirrored:
-          * chevron leading on every expandable row -- errored ones included,
-          * and the old state DOTS are gone, a failed card is announced by
-          * its red badge and its data-error outline instead -- then the
-          * hashed name badge, then the summary. The badge colours come from
-          * nameBadgeColors (tool-block), the same hash the native rows use,
-          * so an aidos call and a native call hash to the same hue and
-          * failures go white-on-red in both.
+          * the chevron leads on EVERY row now -- expandable ones rotating,
+          * non-expandable ones rendered in the disabled variant (upstream
+          * change, 2026-09-05: always visible but inert). Holding the slot
+          * on every row keeps the name badges vertically aligned, so a
+          * column of mixed cards reads as a column instead of a ragged
+          * list. The old state DOTS are gone, a failed card is announced
+          * by its red badge and its data-error outline instead -- then the
+          * hashed name badge, then the summary. The badge colours come
+          * from nameBadgeColors (tool-block), the same hash the native
+          * rows use, so an aidos call and a native call hash to the same
+          * hue and failures go white-on-red in both.
           */}
-        {expandable ? <ToolRenderChevron open={open} /> : null}
+        <ToolRenderChevron open={open} disabled={!expandable} />
         <span className="tool-render-name-badge" style={nameBadgeColors(props.title, props.state === "error")}>
           <span className="tool-render-name-badge-icon">{props.icon}</span>
           <span className="tool-render-name-badge-text" title={props.title} data-dsh-tip="">
@@ -684,7 +689,7 @@ export function AttachEvidenceRow(props: AidosViewProps) {
   return (
     <AidosRow
       icon={<SignoffIcon />}
-      title="Attach evidence"
+      title="Evidence"
       summary={ticketLabel(props.sessionId, ticketId) ?? "evidence"}
       state={state}
       body={body}
@@ -1062,7 +1067,15 @@ export function PlanImportRow(props: AidosViewProps) {
     <AidosRow
       icon={<PopOutIcon />}
       title="Import plan"
-      summary={file}
+      /*
+       * The count rides the SUMMARY (user, 2026-09-05: "import plan tool
+       * call summary should show the count of imported tickets"), not only
+       * the body: a collapsed row is what the transcript shows by default,
+       * so the fact that matters has to be on the always-visible line. The
+       * helper drops the count while the call is still running, when no
+       * result exists yet -- "0 tickets" would read like a failure.
+       */
+      summary={planImportSummary(file, typeof imported === "number" ? imported : undefined)}
       state={state}
       body={body}
       errorSummary={errorSummary}

@@ -27,6 +27,7 @@ import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/clie
 import {
   boardQuerySummary,
   expandableFact,
+  planImportSummary,
   ticketCaptionOf,
   ticketFacts,
   ticketFromProjection,
@@ -1003,5 +1004,25 @@ describe("#73 a single-ticket read carries the same caption", () => {
     expect(labels).not.toContain("Description");
     expect(labels).not.toContain("Criteria");
     expect(labels).not.toContain("Body");
+  });
+});
+
+describe("#73 the plan_import summary carries the count on the always-visible line", () => {
+  /*
+   * User, 2026-09-05: "import plan tool call summary should show the count
+   * of imported tickets". The collapsed row is what the transcript shows by
+   * default, so the fact has to ride the summary -- the body's "Imported"
+   * fact is invisible until expanded.
+   */
+  it("appends the count after the file", () => {
+    expect(planImportSummary("PLAN-AIDOS.md", 14)).toBe("PLAN-AIDOS.md · 14 tickets");
+  });
+
+  it("singularizes exactly one ticket", () => {
+    expect(planImportSummary("plan.md", 1)).toBe("plan.md · 1 ticket");
+  });
+
+  it("omits the count while the call is running -- undefined is honest, '0 tickets' reads like a failure", () => {
+    expect(planImportSummary("PLAN-AIDOS.md", undefined)).toBe("PLAN-AIDOS.md");
   });
 });

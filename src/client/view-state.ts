@@ -151,6 +151,14 @@ export function __resetBadgeStateForTests(): void {
   authorityKnown = false;
   lastRenderedSessionId = null;
   counts.clear();
+  /*
+   * Round 3, reviewer advisory 3: the original reset cleared four fields
+   * and left these two, so a test that ended with suppression on silently
+   * swallowed the NEXT test's relabel (0 bumps instead of 1) -- the exact
+   * order-coupling class this helper was added to end.
+   */
+  remountSuppressed = false;
+  relabelPending = false;
 }
 
 /** The tab label for a specific session. Use badgeLabel() for the current session. */
@@ -392,9 +400,25 @@ function titleKey(sessionId: string, ticketId: number | string): string {
  */
 export function publishTicketTitles(
   sessionId: string,
-  rows: ReadonlyArray<{ id: number; title: string; sourceSessionId?: string }>,
+  rows: ReadonlyArray<{
+    id: number;
+    title: string;
+    sourceSessionId?: string;
+    foreign?: boolean;
+  }>,
 ): void {
   for (const row of rows) {
+    /*
+     * Round 3, reviewer advisory 4: a FOREIGN row with no owner is not
+     * published at all rather than published under the viewing session.
+     * The `?? sessionId` fallback exists for callers whose rows are all
+     * their own; defaulting an ownerless FOREIGN row onto the viewer is
+     * exactly the round-1 bug, silently reinstated by the next caller
+     * that forgets to stamp. Dropping the title costs a bare id on one
+     * card; borrowing it puts ANOTHER session's title on this session's
+     * card.
+     */
+    if (row.foreign === true && row.sourceSessionId === undefined) continue;
     ticketTitles.set(titleKey(row.sourceSessionId ?? sessionId, row.id), row.title);
   }
 }

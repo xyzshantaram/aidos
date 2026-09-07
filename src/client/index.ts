@@ -221,10 +221,39 @@ export function apply(ctx: Context): void {
   // Owned by the visibility effect below; read by the badge callback.
   let registration: (() => void) | null = null;
   let want = false;
+  /*
+   * #114 round 3 (independent review found the reported symptom STILL
+   * reachable): the label the header last displayed. Declared HERE, not at
+   * the badge callback, because reconcile() must be able to correct it --
+   * see reconcile.
+   */
+  let lastLabel = badgeLabel();
 
   function reconcile(slots: SlotRegistry): void {
     if (want && registration === null) {
       registration = registerTicketsTab(slots);
+      /*
+       * #114 round 3: a registration by THIS path never used to update
+       * lastLabel, so the badge callback's `next === lastLabel` guard
+       * compared against a label the header stopped showing sessions ago.
+       * The repro: A(aidos, 3) -> non-aidos chat (bump re-registers
+       * "Tickets", then reconcile disposes) -> back to A (bump
+       * early-returns because registration is null; reconcile registers;
+       * header correct, but lastLabel still says "Tickets") -> switch to
+       * aidos B without opening its board: next === lastLabel -> early
+       * return -> the header keeps "Tickets (3)" while you are in B. The
+       * reported symptom, alive through a detour the round-2 tests never
+       * drove.
+       *
+       * Set to badgeLabel() AT REGISTRATION TIME, which may still name the
+       * PREVIOUS session when sync() has not run setCurrentSession yet --
+       * deliberately conservative: it forces the bump guard to re-check
+       * after setCurrentSession lands and re-register if the label then
+       * differs, which is the safe direction. A stale-too-low lastLabel
+       * costs one redundant re-register; a stale-too-high one hides the
+       * wrong count.
+       */
+      lastLabel = badgeLabel();
     }
     if (!want && registration !== null) {
       registration();
@@ -268,14 +297,25 @@ export function apply(ctx: Context): void {
        * workspace B's count. This effect already subscribes to the sessions
        * store precisely because it needs to know the current session, so
        * the authoritative answer was one line away the whole time.
+       *
+       * ORDER (#114 round 3, reviewer advisory 2): want is computed and
+       * reconciled BEFORE setCurrentSession. The bump inside
+       * setCurrentSession re-registers the tab while `want` still holds
+       * its previous value, so with the old order, switching AWAY from
+       * aidos mounted a fresh LocalTicketView -- a full board for a
+       * session that must not have the tab -- microseconds before
+       * reconcile disposed it. Reconciling first means the bump finds
+       * registration === null and early-returns: no mount for a session
+       * with no tab, and the entering-aidos churn is one synchronous
+       * re-register before any render.
        */
-      setCurrentSession(list.current ?? null);
       const preset = list.current
         ? list.byId[list.current]?.agentPreset
         : undefined;
       // undefined = the deployment composes no presets; keep the tab.
       want = preset === undefined || preset === AIDOS_PRESET;
       reconcile(slots);
+      setCurrentSession(list.current ?? null);
     };
 
     const disposeSubscribe = sessions.list.subscribe(function () {
@@ -311,8 +351,12 @@ export function apply(ctx: Context): void {
    * churning between zero and zero-again, or any change that does not alter
    * the text, previously still remounted the tree for no visible benefit.
    * Comparing the rendered string removes that churn entirely.
+   *
+   * `lastLabel` itself now lives beside reconcile(), which can also
+   * register the tab -- round 3: a reconcile registration that left
+   * lastLabel stale made this guard compare against a label the header
+   * stopped showing, hiding the wrong count on the next switch.
    */
-  let lastLabel = badgeLabel();
   setCountCallback(function () {
     if (registration === null) return;
     const next = badgeLabel();

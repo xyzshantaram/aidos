@@ -470,7 +470,11 @@ const AIDOS_GUIDANCE =
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
   "The board tools are the orchestrator's: a subagent cannot use them. " +
   "Pass a toolFilter that denies get_tickets, set_ticket, attach_evidence, move_ticket, plan, plan_import, plan_meta, and plan_meta_set whenever you spawn a subagent or a fork. " +
-  "The depth guard refuses a subagent anyway, so the filter is a second layer.";
+  "The depth guard refuses a subagent anyway, so the filter is a second layer. " +
+  "NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination replaces the reason), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). " +
+  "The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. " +
+  "BAD (a hand-written work queue in a closing message): 'So the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the human must mine ticket numbers out of prose and hunt for each card, and the list dies at the next compaction. " +
+  "GOOD (the same ask, encoded): call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: ...} and {ticketId: 118, actionId: 'signoff', reason: ...}, then write exactly one line: 'Please approve the suggested actions.'";
 
 // ---- the six tools ----
 
@@ -999,7 +1003,9 @@ function registerSuggestActions(ctx: Context): void {
       description:
         "Nominate tickets for the human's attention (#93), each with a reason. They appear " +
         "at the top of the board's 'Waiting on you' queue, so you never have to list what " +
-        "you need in prose and the human never has to hunt for the tickets. This does NOT " +
+        "you need in prose and the human never has to hunt for the tickets. PREFER THIS TOOL " +
+        "OVER PROSE: whenever an ask can be encoded as a nomination, call this instead of " +
+        "writing a list in chat. This does NOT " +
         "create work: a nomination only annotates an ask the gate ALREADY allows, and one " +
         "naming an action that is not currently available is dropped rather than shown as a " +
         "button that cannot work. Returns at once - do not wait, do not poll: you are " +

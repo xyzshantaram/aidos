@@ -251,8 +251,23 @@ export function ChevronIcon({ open }: { open: boolean }) {
  * so a row built from tool-render's classes must use this variant to sit
  * identically to a native tool call -- the aidos-chevron margin was tuned
  * for the board rows and rendered with the wrong padding beside the badge.
+ *
+ * `disabled` (user, 2026-09-05: "i updated it to make chevron always
+ * visible but disabled"): every row shows a chevron, a non-expandable one
+ * dimmed and inert, mirroring upstream tool-render exactly. The point is
+ * grid alignment -- when only some rows carry the chevron, the name badges
+ * start at different x positions per row and the column of cards reads as
+ * ragged. A disabled chevron holds the slot without promising a click.
  */
-export function ToolRenderChevron({ open }: { open: boolean }) {
+export function ToolRenderChevron({ open, disabled }: { open: boolean; disabled?: boolean }) {
+  if (disabled === true) {
+    return (
+      <IconChevronDownOutline14
+        className="tool-render-chevron tool-render-chevron-disabled"
+        aria-hidden={true}
+      />
+    );
+  }
   return (
     <IconChevronDownOutline14
       className={"tool-render-chevron" + (open ? " tool-render-chevron-open" : "")}
