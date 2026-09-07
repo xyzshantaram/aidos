@@ -2654,28 +2654,22 @@
 .aidos-queue-count {
   margin-left: 6px;
   font-weight: 700;
-  /* Inherit: on the attention state the button paints the text white, and
-     a colour here would fight it. */
+  /* Typographic in the resting state: bold text beside the label, no chip
+     chrome. Inherits the button's colour so it never fights it. */
   color: inherit;
 }
 
-/* #131: the attention state. The button itself turns blue with white text
-   when the agent has asked for something the gate ALLOWS -- a signal
-   visible from any screen the toolbar is on, which is the whole ask (a
-   nomination used to be invisible until the queue was opened). */
-.aidos-btn.aidos-btn-attention {
+/* #131 round 2: the attention state lives on the BADGE, not the button.
+   Round 1 painted the whole control blue and the user reported it on
+   sight -- a button changing colour is a far louder statement than a
+   coloured count, and it fought every other button in the toolbar. The
+   badge is the smallest thing that can carry the signal, so it carries it
+   alone: the button keeps its ordinary styling in every state. */
+.aidos-queue-count.aidos-queue-count-asks {
   background: var(--accent-blue);
-  border-color: var(--accent-blue);
   color: #fff;
-}
-
-.aidos-btn.aidos-btn-attention:hover {
-  /* Keep the blue on hover: the neutral hover background would read as the
-     state clearing itself under the cursor. */
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
-  color: #fff;
-  filter: brightness(1.1);
+  border-radius: 999px;
+  padding: 0 6px;
 }
 
 /* #85 runner steps. */

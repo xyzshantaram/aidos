@@ -10,7 +10,7 @@ import { FilterPanel } from "./filter-panel";
 import type { AppliedState } from "./view-state";
 import { TicketTile } from "./ticket-tile";
 import { boardKeyOf } from "./board-logic";
-import { queueButtonState } from "./human-queue";
+import { queueButtonState, queueButtonTitle } from "./human-queue";
 import type { BoardKey } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 
@@ -52,6 +52,17 @@ export interface TicketViewProps {
    * outlived its meaning by exactly one commit.
    */
   agentAskCount?: number;
+  /**
+   * #131 round 2: the TOTAL number of queue entries — what the number on
+   * the badge shows, always, including zero.
+   *
+   * Separate from the ask count on purpose. The number answers "how much is
+   * waiting" and must match what opening the queue shows; the ask count
+   * only decides the badge's colour and its tooltip. Round 1 collapsed the
+   * two into one value and the toolbar ended up showing nothing at all in
+   * the common case.
+   */
+  queueTotal?: number;
   /**
    * True when the last fetch behind that count FAILED and the view is
    * showing the last known value.
@@ -121,9 +132,9 @@ export function TicketView(props: TicketViewProps) {
     content = <div className="aidos-board-grid">{tiles}</div>;
   }
 
-  // #131: one decision, evaluated once, read by the class, the title and the
-  // number so the three can never disagree.
-  const queueButton = queueButtonState(props.agentAskCount ?? 0);
+  // #131: one decision, evaluated once, read by the badge class, the title
+  // and the number so the three can never disagree.
+  const queueButton = queueButtonState(props.queueTotal ?? 0, props.agentAskCount ?? 0);
 
   return (
     <div className="aidos-root">
@@ -141,28 +152,32 @@ export function TicketView(props: TicketViewProps) {
              * and gate chips the board already uses.
              */
             <button
-              className={"aidos-btn" + (queueButton.indicator ? " aidos-btn-attention" : "")}
+              className="aidos-btn"
               onClick={props.onQueue}
-              title={
-                (queueButton.indicator
-                  ? "The agent has asked for something you can act on"
-                  : "What is waiting on you") +
-                /*
-                 * Staleness is disclosed, not hidden. Keeping the last good
-                 * count through an outage is the right call -- a dark
-                 * button would say "nothing is waiting" -- but presenting a
-                 * stale number as current is how the surface loses trust.
-                 */
-                (props.agentAskCountStale === true
-                  ? " (the last refresh failed; showing the last known count)"
-                  : "")
-              }
+              /*
+               * Staleness is disclosed rather than hidden: keeping the last
+               * good count through an outage is right -- a blank button
+               * would claim nothing is waiting -- but presenting a stale
+               * number as current is how a surface loses trust.
+               */
+              title={queueButtonTitle(queueButton, props.agentAskCountStale === true)}
               data-dsh-tip=""
             >
               {"Waiting on you"}
-              {queueButton.count !== null ? (
-                <b className="aidos-queue-count">{queueButton.count}</b>
-              ) : null}
+              {/*
+                * The BADGE carries the attention colour, never the button.
+                * Round 1 put the class on the button and the user reported
+                * it on sight: a whole control changing colour is a much
+                * louder statement than a coloured count, and it fought
+                * every other button in the toolbar.
+                */}
+              <b
+                className={
+                  "aidos-queue-count" + (queueButton.indicator ? " aidos-queue-count-asks" : "")
+                }
+              >
+                {queueButton.count}
+              </b>
             </button>
           ) : null}
           <button className="aidos-btn" onClick={props.onPlan}>

@@ -384,10 +384,12 @@ export function dismissArmStep(
 
 /** What the "Waiting on you" button renders (#131). */
 export interface QueueButtonState {
-  /** The number to show, or null when the button stays bare. */
-  count: number | null;
-  /** Whether the button wears the attention state (blue, white text). */
+  /** The number on the badge: the TOTAL queue size, always shown. */
+  count: number;
+  /** Whether the BADGE wears the attention colour. Never the button. */
   indicator: boolean;
+  /** How many of those entries the agent is asking for; 0 when none. */
+  asks: number;
 }
 
 /**
@@ -401,11 +403,46 @@ export interface QueueButtonState {
  * is how the allowlist union and the backward-gate guard both shipped
  * unverified in this codebase.
  */
-export function queueButtonState(nominated: number): QueueButtonState {
-  if (!Number.isFinite(nominated) || nominated <= 0) {
-    return { count: null, indicator: false };
-  }
-  return { count: nominated, indicator: true };
+export function queueButtonState(total: number, asks: number): QueueButtonState {
+  /*
+   * ROUND 2 (user, 2026-09-07), correcting a misread of the original ask.
+   * Three separate things, and the first build conflated all three:
+   *
+   *  - the NUMBER is the total queue size and is ALWAYS visible. It answers
+   *    "how much is waiting" and it matches what opening the queue shows.
+   *    Hiding it at zero meant the toolbar said nothing in the common case.
+   *  - the COLOUR is binary and belongs to the BADGE, not the button. The
+   *    first build turned the whole button blue, which is a far louder
+   *    thing than a coloured count chip and was reported as a bug on sight.
+   *  - the ASK COUNT is detail-on-demand: it lives in the tooltip when
+   *    there are asks, and nowhere when there are none.
+   */
+  const safeTotal = Number.isFinite(total) && total > 0 ? Math.floor(total) : 0;
+  const safeAsks = Number.isFinite(asks) && asks > 0 ? Math.floor(asks) : 0;
+  return {
+    count: safeTotal,
+    // Fails SAFE: a nonsense ask count never lights a badge over an empty
+    // queue, because there would be nothing to open.
+    indicator: safeAsks > 0 && safeTotal > 0,
+    asks: safeAsks,
+  };
+}
+
+/**
+ * The button's tooltip: what is waiting, and what the agent is asking for.
+ *
+ * A function beside the state for the same reason the state is one: the
+ * rule "name the ask count only when there is one" is worth pinning, and a
+ * template literal inside JSX is not testable.
+ */
+export function queueButtonTitle(state: QueueButtonState, stale: boolean): string {
+  const waiting =
+    state.count === 0 ? "Nothing is waiting on you" : `${state.count} waiting on you`;
+  // Stated ONLY when non-zero: "0 the agent is asking for" is noise on
+  // every hover of an ordinary backlog.
+  const asking = state.asks > 0 ? `; ${state.asks} the agent is asking for` : "";
+  const staleness = stale ? " (the last refresh failed; showing the last known count)" : "";
+  return waiting + asking + staleness;
 }
 
 /**

@@ -1063,6 +1063,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
       </div>
     );
   } else {
+    /*
+     * #131: composed ONCE and read twice. The toolbar needs the total and
+     * the ask count, and computing them from two separate calls would let
+     * the badge's number and its colour drift apart under a mid-render
+     * change.
+     */
+    const queueEntries = queueEntriesFor(rawTickets, rawEvidence, nominations, approvals);
     body = (
       <TicketView
         ownWorkspaceKey={ownWorkspaceKey}
@@ -1098,9 +1105,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
          * ride in for the same reason: an allowlist card IS the agent
          * asking, and it is the state where it is hard-blocked.
          */
-        agentAskCount={agentAskCount(
-          queueEntriesFor(rawTickets, rawEvidence, nominations, approvals),
-        )}
+        /*
+         * BOTH numbers come from ONE composition, so the badge's number and
+         * its colour cannot disagree: the total is what the panel would
+         * list, and the ask count is how many of those the agent raised.
+         */
+        queueTotal={queueEntries.length}
+        agentAskCount={agentAskCount(queueEntries)}
         /*
          * The count SURVIVES a failed fetch (see refreshNominations), so the
          * button discloses that it may be stale rather than presenting a
