@@ -49,7 +49,7 @@ interface TabEntry {
  */
 function fakeRuntime() {
   const ticketsRegistrations: TabEntry[] = [];
-  const scratchRegistrations: number[] = [];
+  const scratchRegistrations: TabEntry[] = [];
   // The label the tab header currently displays: the newest live entry.
   let live: TabEntry | null = null;
 

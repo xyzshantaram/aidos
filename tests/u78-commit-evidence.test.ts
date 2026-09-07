@@ -81,10 +81,13 @@ describe("git-commit evidence (#78)", () => {
       expect(out.payload.note).toBe("this is the change");
 
       // The row is really in the session log, with the host-resolved subject.
-      const rows = harness
-        .aidosEvents(harness.agent)
-        .filter((event: { kind: string }) => event.kind === "evidence/attached")
-        .map((event: { row: { kind: string; payload: Record<string, unknown> } }) => event.row);
+      const rows = (
+        harness.aidosEvents(harness.agent) as Array<
+          { kind: string } & { row: { kind: string; payload: Record<string, unknown> } }
+        >
+      )
+        .filter((event) => event.kind === "evidence/attached")
+        .map((event) => event.row);
       const row = rows.find((r: { kind: string }) => r.kind === "builtin:user_commit");
       expect(row).toBeDefined();
       expect(row!.payload.subject).toBe("first commit");

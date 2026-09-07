@@ -106,10 +106,6 @@ describe("#51 the allowlist suggestion flow", () => {
       .find((t: { id: number }) => t.id === ticket.id);
     // The stored entry carries the validator's clean form (no trailing /).
     expect(row.allowlist).toEqual(["src/client"]);
-    const evidence = harness.service.getTickets
-      ? undefined
-      : undefined;
-    void evidence;
     // The queue dropped the request.
     expect(svc.pendingApproval(agent, { ticketId: ticket.id })).toBeNull();
   });
@@ -397,13 +393,6 @@ describe("#51 the allowlist suggestion flow", () => {
     (agent as { session: { header: { cwd: string } } }).session.header.cwd = ws;
     const ticket = svc.setTicket(agent, { title: "Probe" });
     const proposal = svc.requestAllowlist(agent, { ticketId: ticket.id, paths: ["src"] });
-    // A second agent (another session) tries to resolve A's request.
-    const other = harness.createAgent
-      ? (harness as any).createAgent()
-      : (harness as unknown as { service: any }).service
-      ? undefined
-      : undefined;
-    void other;
     // A genuinely distinct agent (asAgent() returns the SAME object, so
     // mutating its session.id corrupted the owner — the first cut of this
     // test did exactly that and its "request survives" assertion failed).

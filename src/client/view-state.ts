@@ -4,7 +4,7 @@
  */
 
 import { STATE_CHECKLIST_ORDER } from "./board-logic";
-import type { FilterState, SelectionResolution } from "./board-logic";
+import type { FilterState, SelectionCandidate, SelectionResolution } from "./board-logic";
 import type { CommentRecord, EvidenceRow } from "../kernel/types";
 // NOTE: TicketView is imported further down, beside the merge store it was
 // added for. One import of it is enough (a second is a duplicate-identifier
@@ -368,15 +368,28 @@ export function setSelection(sessionId: string, key: string | null): void {
  * `absent: true` -- the panel already says it is showing a row the board
  * does not currently carry.
  */
-const heldTickets = new Map<string, TicketView>();
+const heldTickets = new Map<string, SelectionCandidate>();
 
-/** The row one session last had resolved, or null when it never did. */
-export function getHeldTicket(sessionId: string): TicketView | null {
-  return heldTickets.get(sessionId) ?? null;
+/**
+ * The row one session last had resolved, or null when it never did.
+ *
+ * The store is typed by the CALLER's row shape: the invariant is that it
+ * holds exactly what that session's resolver produced (recordResolution is
+ * the only writer), so the cast inside is honest -- the generic keeps the
+ * store composable with resolveSelection over ANY row type the board uses
+ * (the view's TicketView, the tests' minimal Row).
+ */
+export function getHeldTicket<T extends SelectionCandidate = SelectionCandidate>(
+  sessionId: string,
+): T | null {
+  return (heldTickets.get(sessionId) as T | undefined) ?? null;
 }
 
 /** Remember (or clear) the last resolved row of one session. */
-export function setHeldTicket(sessionId: string, ticket: TicketView | null): void {
+export function setHeldTicket<T extends SelectionCandidate>(
+  sessionId: string,
+  ticket: T | null,
+): void {
   if (ticket === null) heldTickets.delete(sessionId);
   else heldTickets.set(sessionId, ticket);
 }
@@ -393,11 +406,11 @@ export function setHeldTicket(sessionId: string, ticket: TicketView | null): voi
  * is exactly what the view does, so a test of that composition tests the
  * shipped path.
  */
-export function holdInput(
+export function holdInput<T extends SelectionCandidate>(
   sessionId: string,
-  refValue: TicketView | null,
-): TicketView | null {
-  return refValue ?? getHeldTicket(sessionId);
+  refValue: T | null,
+): T | null {
+  return refValue ?? getHeldTicket<T>(sessionId);
 }
 
 /**
@@ -416,10 +429,10 @@ export function holdInput(
  *    the resolver holds instead. "gone" therefore means nothing was ever
  *    stored, and clearing would be a no-op that only invites the bug back.
  */
-export function recordResolution(
+export function recordResolution<T extends SelectionCandidate>(
   sessionId: string,
-  reason: SelectionResolution<TicketView>["reason"],
-  ticket: TicketView | null,
+  reason: SelectionResolution<T>["reason"],
+  ticket: T | null,
 ): void {
   if (reason === "resolved" || reason === "reanchored") {
     if (ticket !== null) setHeldTicket(sessionId, ticket);

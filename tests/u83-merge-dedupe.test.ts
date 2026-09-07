@@ -45,9 +45,11 @@ function row(
     gateFraction: null,
     gatePresent: null,
     gateTotal: null,
-    updatedAt: 0,
     workspaceKey: WS,
     foreign: true,
+    // updatedAt comes only from `over` — its type makes the key REQUIRED
+    // in the spread, so an explicit default here would be TS2783 (always
+    // overwritten) noise.
     ...over,
   } as BoardTicketView;
 }
