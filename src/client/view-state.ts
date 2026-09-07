@@ -4,8 +4,11 @@
  */
 
 import { STATE_CHECKLIST_ORDER } from "./board-logic";
-import type { FilterState } from "./board-logic";
+import type { FilterState, SelectionResolution } from "./board-logic";
 import type { CommentRecord, EvidenceRow } from "../kernel/types";
+// NOTE: TicketView is imported further down, beside the merge store it was
+// added for. One import of it is enough (a second is a duplicate-identifier
+// error), and the held-ticket store above uses that same type.
 
 /** The applied filter state of one session. */
 export type AppliedState = FilterState;
@@ -334,6 +337,95 @@ export function setSelection(sessionId: string, key: string | null): void {
       // propagate into the caller's render.
     }
   }
+}
+
+// ---- the held-ticket store (#100, fourth fix) ----
+
+/**
+ * The last RESOLVED ticket ROW of one session, OUTSIDE React state.
+ *
+ * The remount that #100 traced destroys every useRef alongside every
+ * useState. The selection key survived it (module store, above), but the
+ * HELD ticket -- `lastSelected` in the view, the resolver's `previous`
+ * input -- did not: a remount-wiped ref meant resolveSelection received
+ * null for `previous`, so a transient row miss after a remount read as
+ * "gone" and ejected the reader anyway.
+ *
+ * WHY A ROW AND NOT AN IDENTITY STRING. The third fix stored the durable
+ * identity (`workspaceKey:slug`) and had the view re-derive the row from
+ * the current board. The independent review failed it, correctly and at
+ * the root: `resolveSelection`'s hold branch RETURNS `previous` as the
+ * displayed ticket, so its input must be a row OBJECT. Re-deriving that
+ * row from the current board is impossible in precisely the case the fix
+ * exists for -- the row transiently ABSENT from that board -- so the hold
+ * still collapsed to "gone" and still ejected the reader.
+ *
+ * The earlier objection to a row snapshot ("it would age badly in module
+ * scope") does not survive contact with what this replaces: the REF was
+ * already a row snapshot from an earlier render, and this store is that
+ * ref with a longer life. Aging is bounded because every render where the
+ * row IS present overwrites it, and a held row is displayed with
+ * `absent: true` -- the panel already says it is showing a row the board
+ * does not currently carry.
+ */
+const heldTickets = new Map<string, TicketView>();
+
+/** The row one session last had resolved, or null when it never did. */
+export function getHeldTicket(sessionId: string): TicketView | null {
+  return heldTickets.get(sessionId) ?? null;
+}
+
+/** Remember (or clear) the last resolved row of one session. */
+export function setHeldTicket(sessionId: string, ticket: TicketView | null): void {
+  if (ticket === null) heldTickets.delete(sessionId);
+  else heldTickets.set(sessionId, ticket);
+}
+
+/**
+ * The resolver's `previous` input: the live ref when it survived, the
+ * durable store when a remount wiped it.
+ *
+ * This is the whole seam, and it is a function rather than an inline `??`
+ * in the view so it can be unit tested against the REAL resolver. The
+ * review that failed the third fix found its two headline tests could not
+ * fail under any change to the view, because they re-implemented the
+ * derivation instead of importing it. Composing this with resolveSelection
+ * is exactly what the view does, so a test of that composition tests the
+ * shipped path.
+ */
+export function holdInput(
+  sessionId: string,
+  refValue: TicketView | null,
+): TicketView | null {
+  return refValue ?? getHeldTicket(sessionId);
+}
+
+/**
+ * Apply one resolution to the durable store. The view calls this on every
+ * render; the RULES live here so they are testable and stated once.
+ *
+ *  - resolved / reanchored: remember the row that is on the board now.
+ *  - held: leave it exactly as it is. The stored row IS the held row, and
+ *    the hold is the case the store exists for.
+ *  - none: clear. A selection is ended by the USER (closeDetail writes a
+ *    null selection), which is the only thing that may forget a ticket.
+ *  - gone: leave it. The third fix cleared here, and the review named that
+ *    as the mechanism destroying the durable state at the exact moment it
+ *    was needed. It is also unreachable with a stored row: `holdInput`
+ *    returns that row, so a non-null store makes `previous` non-null and
+ *    the resolver holds instead. "gone" therefore means nothing was ever
+ *    stored, and clearing would be a no-op that only invites the bug back.
+ */
+export function recordResolution(
+  sessionId: string,
+  reason: SelectionResolution<TicketView>["reason"],
+  ticket: TicketView | null,
+): void {
+  if (reason === "resolved" || reason === "reanchored") {
+    if (ticket !== null) setHeldTicket(sessionId, ticket);
+    return;
+  }
+  if (reason === "none") setHeldTicket(sessionId, null);
 }
 
 // ---- the ticket title index (#73) ----

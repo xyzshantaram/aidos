@@ -18,11 +18,15 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { asBoardKey, boardKeyOf, resolveSelection } from "../src/client/board-logic";
+import { asBoardKey, boardKeyOf, fullTicketId, resolveSelection } from "../src/client/board-logic";
 import {
+  getHeldTicket,
   getSelection,
+  holdInput,
+  recordResolution,
   reportCount,
   setCountCallback,
+  setHeldTicket,
   setRemountSuppressed,
   setSelection,
 } from "../src/client/view-state";
@@ -211,6 +215,135 @@ describe("#100 a row whose board key changes keeps the panel open", () => {
   });
 });
 
+describe("#100 fourth fix: the held ROW survives the remount that wipes the ref", () => {
+  /*
+   * THE REMOUNT FINGERPRINT from the user's second log: a foreign key
+   * selected, the ref null (remount-wiped), the row transiently missing.
+   *
+   * These tests drive the SHIPPED composition -- holdInput feeding the real
+   * resolveSelection -- rather than re-implementing the derivation beside
+   * it. The third fix's tests did the latter and the independent review
+   * failed them for it: they inlined a copy of the lookup over an array
+   * that CONTAINED the row, so they passed while the shipped code ejected
+   * the reader, and deleting the entire view-side fix left them green.
+   */
+  it("the transient miss after a remount is held-absent, not ejected", () => {
+    const session = "sess-fingerprint";
+    const foreignRow = foreign(12, "a-ticket", "sess-other");
+    const key = boardKeyOf(foreignRow);
+
+    // Render 1: the row is on the board. The view resolves and records.
+    const first = resolveSelection([foreignRow], key, holdInput(session, null));
+    recordResolution(session, first.reason, first.ticket);
+    expect(first.reason).toBe("resolved");
+
+    // A remount lands (badge count change): THIS mount's ref is null. The
+    // merge re-pull that triggered it transiently omits the row, so the
+    // board is empty this render -- the exact case the ticket exists for.
+    const out = resolveSelection([], key, holdInput(session, null));
+    expect(out.reason).toBe("held");
+    expect(out.absent).toBe(true);
+    // The reader is still looking at their ticket, not at the grid.
+    expect(out.ticket).toBe(foreignRow);
+  });
+
+  it("holdInput prefers the live ref and falls back to the store", () => {
+    const session = "sess-holdinput";
+    const stored = own(12, "stored-row");
+    const live = own(13, "live-row");
+    setHeldTicket(session, stored);
+    // The ref survived: it wins, because it is this render's fresher row.
+    expect(holdInput(session, live)).toBe(live);
+    // The ref was wiped by a remount: the store carries the hold.
+    expect(holdInput(session, null)).toBe(stored);
+  });
+
+  it("a miss NEVER clears the store, so a second remount is still covered", () => {
+    const session = "sess-nodestroy";
+    const row = own(12, "a-ticket");
+    const key = boardKeyOf(row);
+    const first = resolveSelection([row], key, holdInput(session, null));
+    recordResolution(session, first.reason, first.ticket);
+
+    // Two consecutive missing-row renders, each with a wiped ref. The third
+    // fix cleared the store on the first one and ejected on the second.
+    for (const _ of [1, 2]) {
+      const out = resolveSelection([], key, holdInput(session, null));
+      recordResolution(session, out.reason, out.ticket);
+      expect(out.reason).toBe("held");
+    }
+    expect(getHeldTicket(session)).toBe(row);
+  });
+
+  it("closing the detail panel clears the store, so nothing is resurrected", () => {
+    const session = "sess-close";
+    const row = own(12, "a-ticket");
+    const first = resolveSelection([row], boardKeyOf(row), holdInput(session, null));
+    recordResolution(session, first.reason, first.ticket);
+    // closeDetail writes a null selection: the resolver reports "none".
+    const closed = resolveSelection([row], null, holdInput(session, null));
+    recordResolution(session, closed.reason, closed.ticket);
+    expect(closed.reason).toBe("none");
+    expect(getHeldTicket(session)).toBeNull();
+  });
+
+  it("gone is only for NEVER-resolved selections", () => {
+    // A selection the reader never had open (a deep link to a ticket that
+    // never loaded) has nothing in the store, so holdInput yields null and
+    // the resolver correctly reports gone. The store cannot invent a hold.
+    const session = "sess-never";
+    const out = resolveSelection([], asBoardKey("sess-other:44"), holdInput(session, null));
+    expect(out.reason).toBe("gone");
+    expect(out.ticket).toBeNull();
+  });
+});
+
+describe("#100 the held-row store (view-state)", () => {
+  it("stores and clears the row per session", () => {
+    const row = own(12, "a-ticket");
+    setHeldTicket("sess-h1", row);
+    expect(getHeldTicket("sess-h1")).toBe(row);
+    setHeldTicket("sess-h1", null);
+    expect(getHeldTicket("sess-h1")).toBeNull();
+  });
+
+  it("keeps sessions separate", () => {
+    const one = own(1, "one");
+    const two = own(2, "two");
+    setHeldTicket("sess-ha", one);
+    setHeldTicket("sess-hb", two);
+    expect(getHeldTicket("sess-ha")).toBe(one);
+    expect(getHeldTicket("sess-hb")).toBe(two);
+  });
+
+  it("returns null for a session that never held anything", () => {
+    expect(getHeldTicket("sess-hnever")).toBeNull();
+  });
+
+  it("records resolved and reanchored, holds through held, clears only on none", () => {
+    const session = "sess-rules";
+    const row = own(12, "a-ticket");
+    const moved = own(12, "a-ticket");
+
+    recordResolution(session, "resolved", row);
+    expect(getHeldTicket(session)).toBe(row);
+
+    recordResolution(session, "reanchored", moved);
+    expect(getHeldTicket(session)).toBe(moved);
+
+    // held passes the SAME row back; the store must not be disturbed.
+    recordResolution(session, "held", moved);
+    expect(getHeldTicket(session)).toBe(moved);
+
+    // gone must not destroy the durable row -- the third fix's defect.
+    recordResolution(session, "gone", null);
+    expect(getHeldTicket(session)).toBe(moved);
+
+    recordResolution(session, "none", null);
+    expect(getHeldTicket(session)).toBeNull();
+  });
+});
+
 describe("#100 the hold cannot be re-gated on a flag the caller gets wrong", () => {
   const logic = readFileSync(
     new URL("../src/client/board-logic.ts", import.meta.url),
@@ -258,6 +391,35 @@ describe("#100 the hold cannot be re-gated on a flag the caller gets wrong", () 
     // absent row produces a NOTICE rather than a close.
     expect(view).toContain("resolution.absent");
     expect(view).toContain("aidos-detail-absent");
+  });
+
+  it("the view feeds the resolver through holdInput and writes back", () => {
+    /*
+     * WIRING, asserted as source text, and honest about what that is worth.
+     *
+     * The independent review of the third fix found its headline tests
+     * could not fail under ANY change to the view: they re-implemented the
+     * derivation, so reverting the entire view-side change left the suite
+     * green. The behavioural tests above now drive the real composition
+     * (holdInput -> resolveSelection -> recordResolution), which is the
+     * substantive repair; this is the second half, guarding that the VIEW
+     * still uses that composition rather than reaching past it.
+     *
+     * A source-text assertion cannot prove the view renders correctly --
+     * only a browser can. It CAN fail when someone deletes the wiring, and
+     * that is the mutation the review actually caught.
+     */
+    const call = view.slice(view.indexOf("resolveSelection("));
+    const args = call.slice(0, call.indexOf(");"));
+    // The hold's input comes from the store-backed seam, never from the
+    // bare ref (which any remount wipes).
+    expect(args).toContain("holdInput(sessionId, lastSelected.current)");
+    // And every resolution is written back through the rules.
+    expect(view).toContain("recordResolution(sessionId, resolution.reason, resolution.ticket)");
+    // The third fix's re-derivation from the current board is GONE: it
+    // cannot produce a row that is absent from that board, which is the
+    // only case the hold exists for.
+    expect(view).not.toContain("getHeldIdentity");
   });
 });
 

@@ -40,7 +40,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getMerge, getPulledVersion, getSelection, isMergePulling, onSelectionChanged, publishTicketTitles, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
+import { getHeldTicket, getMerge, getPulledVersion, getSelection, holdInput, isMergePulling, onSelectionChanged, publishTicketTitles, recordResolution, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -818,8 +818,25 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * already false on exactly the render that lands the new board -- which is
    * the render that used to eject the reader. Passing it was worse than
    * useless, because it made the hold look covered while it was not.
+   *
+   * #100 FOURTH fix, and the whole of the remount repair: the resolver's
+   * `previous` comes from holdInput, which falls back to the module store
+   * when THIS mount's ref is null. The third fix stored a durable identity
+   * and re-derived the row from `rawTickets` here; the review failed it
+   * because that re-derivation cannot produce a row that is absent from
+   * `rawTickets`, which is the only case the hold exists for. The store
+   * carries the row itself now, so a remount-wiped ref costs nothing.
    */
-  const resolution = resolveSelection(rawTickets, selectedKey, lastSelected.current);
+  const resolution = resolveSelection(
+    rawTickets,
+    selectedKey,
+    holdInput(sessionId, lastSelected.current),
+  );
+  // Write-through. The RULES live in recordResolution (view-state) so they
+  // are stated once and unit tested: notably, a miss NEVER clears the store
+  // -- clearing on "gone" is what destroyed the durable state in the third
+  // fix, at the exact moment it was needed.
+  recordResolution(sessionId, resolution.reason, resolution.ticket);
 
   /*
    * #100 INSTRUMENTATION. Logs every render where a selection EXISTS, so the
@@ -841,7 +858,12 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const lastLogged = react.useRef<string>("");
   const shape =
     `${resolution.reason}|sel=${selectedKey ?? "-"}|rows=${rawTickets.length}` +
-    `|own=${ownRows.length}|foreign=${foreignRows.length}|ref=${lastSelected.current === null ? "null" : "held"}`;
+    `|own=${ownRows.length}|foreign=${foreignRows.length}` +
+    `|ref=${lastSelected.current === null ? "null" : "held"}` +
+    // #100 fourth fix: the store is the half that survives a remount, so the
+    // log must show BOTH. "ref=null|store=held" is a post-remount render that
+    // the hold now covers; "ref=null|store=null" is a genuinely fresh selection.
+    `|store=${getHeldTicket(sessionId) === null ? "null" : "held"}`;
   if (shape !== lastLogged.current && (selectedKey !== null || lastSelected.current !== null)) {
     lastLogged.current = shape;
     const noisy = resolution.reason === "gone" || resolution.reason === "held";
@@ -851,7 +873,14 @@ function ProjectionReader(props: ProjectionReaderProps) {
   // The ref is the only state this owns; every DECISION lives in the pure
   // resolver, so there is exactly one implementation of it (the duplicate
   // implementations in this file are what produced eleven wrong-ticket bugs).
-  if (resolution.reason === "resolved" || resolution.reason === "reanchored") {
+  if (
+    resolution.reason === "resolved" ||
+    resolution.reason === "reanchored" ||
+    resolution.reason === "held"
+  ) {
+    // "held" adopts the row too: after a remount the ref is null and the row
+    // came from the store, so adopting it keeps THIS mount's ref warm rather
+    // than reaching into the module store on every subsequent render.
     lastSelected.current = resolution.ticket;
   } else if (resolution.reason === "none" || resolution.reason === "gone") {
     lastSelected.current = null;
