@@ -730,7 +730,45 @@ export function evidenceKindCounts(
  * pixel-identical chips. The hash does distinguish ID badges, and even
  * there only 7 times in 8, since the palette holds 8 hues.
  */
+/*
+ * #139: the key CANNOT be inverted, so a label learned from the real path
+ * wins over one guessed from the key.
+ *
+ * `workspaceKeyFromPath` is dsh's own `projectKey` transform: `/` becomes
+ * `-`, and a literal `-` in a directory name passes through UNCHANGED
+ * (`src/kernel/slug.ts:40` puts `-` in the safe set). So
+ * `/home/sid/repos/dotfiles-ai` and a hypothetical
+ * `/home/sid/repos/dotfiles/ai` produce the identical key, and splitting on
+ * `-` cannot tell them apart. That is why `dotfiles-ai` rendered as `ai`:
+ * not a bug in the split, a bug in asking the split to do the impossible.
+ *
+ * The host knows every session's real cwd, so it sends the basename with
+ * the rows. This map remembers what it sent. The guess below stays as the
+ * fallback for a key we were never told about (a closed session on another
+ * machine, an old row), because a short wrong-ish label still beats
+ * printing the whole encoded path.
+ *
+ * Lives HERE rather than in view-state to avoid an import cycle:
+ * view-state already imports this module.
+ */
+const knownWorkspaceLabels = new Map<string, string>();
+
+/** Record the authoritative label for one workspace key (host-supplied). */
+export function rememberWorkspaceLabel(workspaceKey: string, label: string): void {
+  const trimmed = label.trim();
+  // An empty label would replace a usable guess with nothing.
+  if (workspaceKey === "" || trimmed === "") return;
+  knownWorkspaceLabels.set(workspaceKey, trimmed);
+}
+
+/** TEST-ONLY: forget every learned label, so tests cannot leak into each other. */
+export function __resetWorkspaceLabelsForTests(): void {
+  knownWorkspaceLabels.clear();
+}
+
 export function workspaceLabel(workspaceKey: string): string {
+  const known = knownWorkspaceLabels.get(workspaceKey);
+  if (known !== undefined) return known;
   const parts = workspaceKey.split("-").filter((part) => part !== "");
   return parts.length === 0 ? workspaceKey : parts[parts.length - 1];
 }

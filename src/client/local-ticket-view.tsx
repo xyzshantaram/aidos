@@ -30,7 +30,7 @@ import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
-import { boardKeyOf, resolveSelection } from "./board-logic";
+import { boardKeyOf, rememberWorkspaceLabel, resolveSelection } from "./board-logic";
 import { ModalShell } from "./ui";
 import { agentAskCount, queuePollMs } from "./human-queue";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
@@ -309,6 +309,21 @@ function ProjectionReader(props: ProjectionReaderProps) {
     const pull = async function () {
       try {
         const result = await callAidosRemote("workspaceTickets", {}, sessionId);
+        /*
+         * #139: learn the real directory name of every workspace this merge
+         * touched, BEFORE the rows render. The workspace key cannot be
+         * inverted (a literal `-` in a directory name is indistinguishable
+         * from a path separator once encoded), so a label guessed from the
+         * key rendered `dotfiles-ai` as `ai`. The host sends the answer
+         * because only it holds each session's cwd.
+         */
+        const labels = (result as unknown as { workspaceLabels?: Record<string, string> })
+          .workspaceLabels;
+        if (labels !== undefined) {
+          for (const [key, label] of Object.entries(labels)) {
+            rememberWorkspaceLabel(key, label);
+          }
+        }
         // Write the module cache even when this mount was torn down
         // mid-pull: the remount skips re-pulling for the same version, so
         // the cache write is what delivers the merge across the remount.

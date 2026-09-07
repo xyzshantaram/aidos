@@ -1653,9 +1653,39 @@ registerAidosSessionEventTypes(ctx);
     tickets: BoardTicketView[];
     evidence: Record<string, EvidenceRow[]>;
     comments: Record<string, CommentRecord[]>;
+    /**
+     * #139: workspace key -> that workspace's real directory name.
+     *
+     * The key CANNOT be inverted. `workspaceKeyFromPath` is dsh's own
+     * `projectKey` transform: `/` becomes `-`, and a literal `-` in a
+     * directory name passes through unchanged (src/kernel/slug.ts:40 keeps
+     * `-` in the safe set). So `/home/sid/repos/dotfiles-ai` and a
+     * hypothetical `/home/sid/repos/dotfiles/ai` encode identically, and
+     * the client's split-on-dash rendered the workspace as "ai".
+     *
+     * The host is the only side holding the answer, because it holds every
+     * session's cwd. Derived at READ time from the sessions in this merge,
+     * so nothing stored has to be migrated and an old ticket gets a correct
+     * label as soon as its session is visible.
+     */
+    workspaceLabels: Record<string, string>;
   }> {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
+    /*
+     * #139: the label map, filled as each session is visited below. A
+     * session whose cwd we cannot see contributes nothing, and the client
+     * falls back to its guess for that key rather than showing a blank.
+     */
+    const workspaceLabels: Record<string, string> = {};
+    const learnLabel = (sessionLike: { header?: { cwd?: string } }): void => {
+      const cwd = sessionLike.header?.cwd;
+      if (typeof cwd !== "string" || cwd === "") return;
+      const label = basename(cwd);
+      if (label === "") return;
+      workspaceLabels[workspaceKeyFromPath(cwd)] = label;
+    };
+    learnLabel(agent.session as unknown as { header?: { cwd?: string } });
     const ownViews = ticketsProjection(cache.state, this._resolvedConfig);
     const ownSort = (a: TicketView, b: TicketView) =>
       a.phase - b.phase || a.order - b.order || a.id - b.id;
@@ -1675,6 +1705,7 @@ registerAidosSessionEventTypes(ctx);
     const liveIds = new Set<string>();
     for (const session of liveSessions) {
       liveIds.add(session.id);
+      learnLabel(session as unknown as { header?: { cwd?: string } });
       const state = this._cache(session).state;
       this._sync(session, this._caches.get(session)!);
       const views = ticketsProjection(state, this._resolvedConfig);
@@ -1753,11 +1784,11 @@ registerAidosSessionEventTypes(ctx);
       );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-      return { tickets: out, evidence: keptEvidence, comments: keptComments };
+      return { tickets: out, evidence: keptEvidence, comments: keptComments, workspaceLabels };
     }
 
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-    return { tickets, evidence, comments };
+    return { tickets, evidence, comments, workspaceLabels };
   }
 
   /**

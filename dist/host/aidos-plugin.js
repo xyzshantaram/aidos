@@ -27848,6 +27848,15 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   async workspaceTickets(agent, args) {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
+    const workspaceLabels = {};
+    const learnLabel = (sessionLike) => {
+      const cwd = sessionLike.header?.cwd;
+      if (typeof cwd !== "string" || cwd === "") return;
+      const label = basename(cwd);
+      if (label === "") return;
+      workspaceLabels[workspaceKeyFromPath(cwd)] = label;
+    };
+    learnLabel(agent.session);
     const ownViews = ticketsProjection(cache.state, this._resolvedConfig);
     const ownSort = (a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id;
     const tickets = [];
@@ -27863,6 +27872,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const liveIds = /* @__PURE__ */ new Set();
     for (const session of liveSessions) {
       liveIds.add(session.id);
+      learnLabel(session);
       const state = this._cache(session).state;
       this._sync(session, this._caches.get(session));
       const views = ticketsProjection(state, this._resolvedConfig);
@@ -27922,10 +27932,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-      return { tickets: out, evidence: keptEvidence, comments: keptComments };
+      return { tickets: out, evidence: keptEvidence, comments: keptComments, workspaceLabels };
     }
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-    return { tickets, evidence, comments };
+    return { tickets, evidence, comments, workspaceLabels };
   }
   /**
    * The agent the write should run against. A numeric ticketId (or a plain
