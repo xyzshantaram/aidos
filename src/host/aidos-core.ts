@@ -1515,16 +1515,27 @@ registerAidosSessionEventTypes(ctx);
      * a dispatch can actually carry its ticket (see #136).
      */
     const reader = this._boardAgent(agent);
-    const cache = this._cache(reader.session);
-    this._sync(reader.session, cache);
+    /*
+     * #157 review (2026-09-08): the union read ONE session's cache — the
+     * dispatching board's — while workspaceTickets merges every live
+     * session on the workspace. A sibling front's in-progress ticket was
+     * invisible to the write boundary, so its allowlisted paths refused
+     * for exactly the agent working on them. Collect from the dispatching
+     * board AND the live workspace sessions; `seen` dedupes where they
+     * overlap (they always do for a depth-0 writer).
+     */
     const union: string[] = [];
     const seen = new Set<string>();
-    for (const snapshot of cache.state.tickets.values()) {
-      if (snapshot.state !== "in_progress") continue;
-      for (const entry of snapshot.allowlist) {
-        if (!seen.has(entry)) {
-          seen.add(entry);
-          union.push(entry);
+    for (const session of [reader.session, ...this._liveWorkspaceSessions(agent)]) {
+      const cache = this._cache(session);
+      this._sync(session, cache);
+      for (const snapshot of cache.state.tickets.values()) {
+        if (snapshot.state !== "in_progress") continue;
+        for (const entry of snapshot.allowlist) {
+          if (!seen.has(entry)) {
+            seen.add(entry);
+            union.push(entry);
+          }
         }
       }
     }
@@ -3726,8 +3737,18 @@ registerAidosSessionEventTypes(ctx);
       }
       this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
     } catch (error) {
+      /*
+       * #101: fail LOUDLY, and tell the truth about the consequence. The
+       * old message said subagents "fall back to the shared tree" — they
+       * cannot: the write boundary blocks subagents from the shared tree,
+       * so a failed creation leaves a dispatched subagent unable to write
+       * any repository path. Saying otherwise steered the orchestrator
+       * toward a remedy that does not exist. Creation is retried on the
+       * next move to in_progress (prune-before-add makes that
+       * self-healing).
+       */
       this.ctx.logger?.warn?.(
-        `aidos: could not create the worktree for ticket ${ticketId} at ${path}; subagents will fall back to the shared tree: ${error instanceof Error ? error.message : String(error)}`,
+        `aidos: worktree creation FAILED for ticket ${ticketId} at ${path} — subagents dispatched for it cannot write repository paths until one exists; retried on the next move to in_progress: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

@@ -75,19 +75,47 @@ describe("#157 the union comes from the dispatching board", () => {
     expect(childUnion).toContain("src/host");
   });
 
-  it("a top-level session with a FORK parent is not rerouted", () => {
+  it("a top-level session with a FORK parent shares the WORKSPACE union, not the parent's board", () => {
     /*
-     * The same distinction #146 drew for reads. A forked session is a peer
-     * with its own board, not a child working someone else's ticket, and
-     * handing it the parent's union would widen a real session's write
-     * scope silently.
+     * Reversed 2026-09-08 by the #157 review: the union's unit is the
+     * WORKSPACE (#84's merge), so every session on it — fork included —
+     * sees the merged in-progress union. What a fork still does not get
+     * is board-REROUTING: _boardAgent keeps a fork on its own board, and
+     * a session on a DIFFERENT workspace sees nothing at all. The old
+     * assertion (fork union === []) encoded the single-session read this
+     * ticket replaced.
      */
     const harness = riggedHarness();
     front(harness, ["src/client"]);
     const fork = harness.makeAgent({ depth: 0, id: "session-fork" });
     (fork.session.header as { parentSession?: string }).parentSession = harness.agent.session.id;
+    expect(harness.service.allowlistUnion(fork as never)).toEqual(["src/client"]);
 
-    expect(harness.service.allowlistUnion(fork as never)).toEqual([]);
+    const stranger = harness.makeAgent({ depth: 0, id: "session-stranger" });
+    (stranger.session.header as { cwd?: string }).cwd = "/tmp/elsewhere";
+    expect(harness.service.allowlistUnion(stranger as never)).toEqual([]);
+  });
+
+  it("the union merges every live session on the workspace (#157 review)", () => {
+    /*
+     * The review's finding: the union read ONE session's cache while
+     * workspaceTickets merges every live session — so a parallel front's
+     * in-progress ticket was invisible to the write boundary and its own
+     * allowlisted paths refused for exactly the agent working them.
+     */
+    const harness = riggedHarness();
+    front(harness, ["src/client"]);
+    const sibling = harness.makeAgent({ depth: 0, id: "session-sibling" });
+    const ticket = harness.service.setTicket(sibling as never, { title: "Sibling front" });
+    harness.seedEvidence(sibling, ticket.id, "builtin:user_signoff");
+    harness.service.agentMoveTicket(sibling as never, { ticketId: ticket.id, to: "in_progress" });
+    harness.seedEvidence(sibling, ticket.id, "builtin:file_allowlist", { paths: ["src/tools"] });
+    harness.service.userSetTicket(sibling as never, { ticketId: ticket.id, allowlist: ["src/tools"] });
+
+    const child = childOf(harness, harness.agent);
+    const union = harness.service.allowlistUnion(child as never);
+    expect(union).toContain("src/client");
+    expect(union).toContain("src/tools");
   });
 
   it("an empty parent board still yields an empty union, not a pass", () => {
@@ -107,16 +135,71 @@ describe("#157 /tmp/dsh is writable, so the refusal's own advice can be followed
      * refused exactly that path, because it is outside the workspace and
      * therefore outside every allowlist — so the instruction could not be
      * followed and a front had nowhere to work.
+     *
+     * Since the #157 review the id must be REAL: the worktree of a ticket
+     * that is not in progress is refused below.
      */
+    const harness = riggedHarness();
+    const id = front(harness, ["src/client"]);
+    const child = childOf(harness, harness.agent);
+    const reason = writeBoundaryReason(
+      asContext(harness.ctx),
+      child as never,
+      `${WORKTREE_ROOT}/--srv-proj-cli--/${id}/packages/tokens/src/index.ts`,
+    );
+    expect(reason).toBeUndefined();
+  });
+
+  it("refuses the worktree of a ticket that is NOT in progress", () => {
+    /*
+     * The review's finding: the blanket /tmp/dsh exemption granted every
+     * front write access to every OTHER front's worktree. A worktree is
+     * writable only while its ticket is in progress on the dispatching
+     * board — parked or done means not yours.
+     */
+    const harness = riggedHarness();
+    front(harness, ["src/client"]);
+    const agent = harness.asAgent();
+    const parked = harness.service.setTicket(agent, { title: "Parked front" });
+    harness.seedEvidence(harness.agent, parked.id, "builtin:user_signoff");
+    const child = childOf(harness, harness.agent);
+    const reason = writeBoundaryReason(
+      asContext(harness.ctx),
+      child as never,
+      `${WORKTREE_ROOT}/--srv-proj-cli--/${parked.id}/src/index.ts`,
+    );
+    expect(reason).toBeDefined();
+    expect(reason).toContain(`ticket #${parked.id}`);
+    expect(reason).toContain("not in progress");
+  });
+
+  it("refuses a worktree id that exists on no board at all", () => {
     const harness = riggedHarness();
     front(harness, ["src/client"]);
     const child = childOf(harness, harness.agent);
     const reason = writeBoundaryReason(
       asContext(harness.ctx),
       child as never,
-      `${WORKTREE_ROOT}/--srv-proj-cli--/86/packages/tokens/src/index.ts`,
+      `${WORKTREE_ROOT}/--srv-proj-cli--/999/anything.ts`,
     );
-    expect(reason).toBeUndefined();
+    expect(reason).toBeDefined();
+    expect(reason).toContain("#999");
+  });
+
+  it("a sibling front's IN-PROGRESS worktree is writable — the board is the trust unit", () => {
+    // The scoping is about ownership, not isolation: every in-progress
+    // ticket on the dispatching board is fair game, exactly as the union
+    // already treats its allowlisted paths.
+    const harness = riggedHarness();
+    const other = front(harness, ["src/host"]);
+    const child = childOf(harness, harness.agent);
+    expect(
+      writeBoundaryReason(
+        asContext(harness.ctx),
+        child as never,
+        `${WORKTREE_ROOT}/--srv-proj-cli--/${other}/src/host/x.ts`,
+      ),
+    ).toBeUndefined();
   });
 
   it("allows the artifact area the refusal also names", () => {

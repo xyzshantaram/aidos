@@ -93,9 +93,10 @@ export class FsWriteRefused extends Error {
 
 /**
  * The write-boundary decision. Returns a refusal reason for a target path
- * that no in-progress ticket allowlist covers, naming the in-progress ticket
- * whose allowlist would need to cover it, or the absence of any in-progress
- * ticket. Returns undefined to allow the write.
+ * that no in-progress ticket allowlist covers — listing the in-progress
+ * candidates and leaving the ownership judgement to the caller (#159: a
+ * confidently named single ticket was the defect, not the remedy) — or
+ * undefined to allow the write.
  */
 export function writeBoundaryReason(
   ctx: Context,
@@ -140,8 +141,39 @@ export function writeBoundaryReason(
    * artifacts, and splitting hairs between two subdirectories of it would
    * reproduce the same "it told me to and then refused" failure one level
    * down.
+   *
+   * AMENDED 2026-09-08 (#157 review): the artifact area stays wholly open,
+   * but the WORKTREE roots do not. Exempting them wholesale handed every
+   * front write access to every OTHER front's worktree — the blanket
+   * exemption granted what no allowlist ever did. A worktree is writable
+   * only while its ticket is in progress on the board that dispatches the
+   * writer.
    */
-  if (isUnder(DSH_TMP_ROOT, path)) return undefined;
+  const progressIds = new Set<number>();
+  try {
+    if (ctx.aidos) {
+      for (const row of ctx.aidos.getTickets(agent)) {
+        if (row.state === "in_progress") progressIds.add(row.id);
+      }
+    }
+  } catch {
+    /* Board unreadable: keep the old open behaviour rather than refusing
+     * every worktree because a read failed. */
+  }
+  if (isUnder(DSH_TMP_ROOT, path)) {
+    if (isUnder(WORKTREE_ROOT, path)) {
+      const segments = path.slice(WORKTREE_ROOT.length + 1).split("/");
+      const ticketId = Number(segments[1]);
+      if (Number.isInteger(ticketId) && ticketId > 0 && !progressIds.has(ticketId)) {
+        return (
+          `write to ${path} is refused: it is the worktree of ticket #${ticketId}, which is ` +
+          "not in progress on your board, so it is not yours to write. Use your own ticket's " +
+          `worktree under ${WORKTREE_ROOT}/<workspaceKey>/<ticketId>, or ${DSH_TMP_ROOT} for artifacts.`
+        );
+      }
+    }
+    return undefined;
+  }
   const cwd = agent.session?.header?.cwd;
   /*
    * #101: a SUBAGENT may not write the shared working tree at all.
@@ -185,7 +217,11 @@ export function writeBoundaryReason(
     `aidos: write-boundary path=${path} cwd=${cwd ?? "none"} union=${JSON.stringify(union)}`,
   );
   if (pathAllowed(path, union, cwd)) return undefined;
-  // Name the in-progress ticket whose allowlist would need to cover it.
+  /*
+   * List the candidates; do NOT name "the" ticket. When no in-progress
+   * allowlist covers the path, any single id would be a guess dressed as
+   * fact — the #159 defect. The caller decides ownership.
+   */
   let rows: TicketView[] = [];
   try {
     rows = ctx.aidos ? ctx.aidos.getTickets(agent) : [];
@@ -229,15 +265,17 @@ export function writeBoundaryReason(
     /*
      * No ticket id, deliberately. A subagent cannot act on one: it cannot
      * widen any allowlist from here, and naming a number invites it to try
-     * or to report the wrong ticket to the orchestrator.
+     * or to report the wrong ticket to the orchestrator. It IS told who
+     * can act (#159 review): the parent requests, the subagent reports.
      */
     return (
       `write to ${path} is outside every in-progress ticket's allowlist. ` +
       "A subagent cannot widen an allowlist (request_allowlist refuses subagents and " +
       "approvals auto-reject here), so do not try: " +
       elsewhere +
-      " If this path genuinely needs to change, put it in your report and let the " +
-      "orchestrator decide."
+      " If this path genuinely needs to change, put it in your report: your PARENT " +
+      "must request the allowlist for it — that is the ask to make, and the " +
+      "orchestrator is the one who can act on it."
     );
   }
   if (rows.length === 0) {
@@ -248,7 +286,16 @@ export function writeBoundaryReason(
   }
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
-    return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
+    /*
+     * #159 review: this branch previously handed the orchestrator nothing
+     * actionable — tickets exist, none is in progress, no remedy named.
+     * The two moves the reader can actually make are the message now.
+     */
+    return (
+      `write to ${path} is outside the allowlist union; no in-progress ticket allowlist ` +
+      "covers it (tickets exist, but none is in progress). Move the ticket this work " +
+      "belongs to in progress and request its allowlist, or write under the scratch root."
+    );
   }
   /*
    * The ORCHESTRATOR's version. It can act, so it gets the route — but it

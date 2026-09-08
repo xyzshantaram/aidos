@@ -117,13 +117,16 @@ describe("#159 a subagent is not told to do the impossible", () => {
      * The trap #157 fixed, asserted from the other side: a refusal that
      * recommends a path the SAME guard refuses teaches the reader that the
      * messages cannot be trusted. This proves the advice is followable
-     * rather than merely well-worded.
+     * rather than merely well-worded. The worktree segment must be a REAL
+     * in-progress ticket id — since the #157 review, a worktree belonging
+     * to any other ticket is refused.
      */
     const harness = riggedHarness();
+    const id = front(harness, ["src/client"]);
     const child = childOf(harness, harness.agent);
     const context = asContext(harness.ctx);
     for (const recommended of [
-      "/tmp/dsh/aidos/--srv-proj-cli--/12/src/index.ts",
+      `/tmp/dsh/aidos/--srv-proj-cli--/${id}/src/index.ts`,
       "/tmp/dsh/report.md",
     ]) {
       expect(
@@ -131,6 +134,18 @@ describe("#159 a subagent is not told to do the impossible", () => {
         `${recommended} is recommended by the refusal and must be writable`,
       ).toBeUndefined();
     }
+  });
+
+  it("tells the subagent WHO can widen the allowlist: the parent", () => {
+    /*
+     * #159 review: "let the orchestrator decide" named the decider but not
+     * the ask. The subagent's one actionable move is a report that says
+     * what to request — and the parent is the one who can request it.
+     */
+    const harness = riggedHarness();
+    front(harness, ["src/client"]);
+    const message = refusalFor(harness, childOf(harness, harness.agent));
+    expect(message).toMatch(/PARENT must request the allowlist/i);
   });
 });
 
@@ -170,5 +185,21 @@ describe("#159 the orchestrator gets a remedy it can perform", () => {
     const harness = riggedHarness();
     const message = refusalFor(harness, harness.asAgent());
     expect(message).toMatch(/board is empty/);
+  });
+
+  it("when tickets exist but none is in progress, the remedy names both moves", () => {
+    /*
+     * #159 review: this branch previously handed the orchestrator nothing
+     * actionable — no request_allowlist, no scratch fallback. The two
+     * moves the reader can actually make are the message now.
+     */
+    const harness = riggedHarness();
+    const agent = harness.asAgent();
+    const ticket = harness.service.setTicket(agent, { title: "Parked" });
+    harness.seedEvidence(harness.agent, ticket.id, "builtin:user_signoff");
+    const message = refusalFor(harness, harness.asAgent());
+    expect(message).toMatch(/none is in progress/i);
+    expect(message).toMatch(/move the ticket .* in progress/i);
+    expect(message).toMatch(/request its allowlist/);
   });
 });
