@@ -117,9 +117,23 @@ function currentSourceDigest(): string {
   }
   for (const file of NON_SRC_INPUTS) {
     const path = join(ROOT, file);
-    // Absence contributes a value rather than throwing: a tarball checkout
-    // without a lockfile must still run the suite.
-    parts.push(`${file}\n${sha256(existsSync(path) ? readFileSync(path, "utf8") : " absent")}`);
+    /*
+     * Absence contributes a value rather than throwing: a tarball checkout
+     * without a lockfile must still run the suite.
+     *
+     * #148 round 3 — the sentinel is "\u0000absent", a NUL, matching
+     * build.mjs exactly. It used to be a SPACE here and a NUL there, which
+     * is the deliberate-duplication design working precisely as advertised
+     * and, until now, silently: the two rules disagreed for any absent
+     * build input, and the only reason no test caught it is that every
+     * input happens to exist in this checkout. It would have fired first
+     * for whoever ran the suite from a tarball — i.e. someone with no way
+     * to tell a real drift from this bug. A NUL rather than a space because
+     * no file's contents can collide with it.
+     */
+    parts.push(
+      `${file}\n${sha256(existsSync(path) ? readFileSync(path, "utf8") : "\u0000absent")}`,
+    );
   }
   return sha256(parts.join("\n"));
 }
@@ -254,7 +268,7 @@ describe("#148 the shipped bundles match their sources", () => {
           if (file === dropped) continue;
           const path = join(ROOT, file);
           parts.push(
-            `${file}\n${sha256(existsSync(path) ? readFileSync(path, "utf8") : " absent")}`,
+            `${file}\n${sha256(existsSync(path) ? readFileSync(path, "utf8") : "\u0000absent")}`,
           );
         }
         return sha256(parts.join("\n"));

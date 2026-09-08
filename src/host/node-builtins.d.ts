@@ -12,6 +12,13 @@
  * A merge pass that adds @types/node can delete this file.
  */
 
+/** #158: one entry of a directory listing, enough to tell a directory apart. */
+interface AidosDirent {
+  name: string;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
 declare module "fs" {
   export function readFileSync(path: string, encoding: string): string;
   export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
@@ -22,6 +29,12 @@ declare module "fs" {
   export function symlinkSync(target: string, path: string, type?: string): void;
   /** #120: a successful plan import deletes the plan file. */
   export function unlinkSync(path: string): void;
+  /**
+   * #158: preparation finds every directory in the main checkout that has a
+   * node_modules, so a pnpm workspace gets one link per package without
+   * aidos knowing anything about that repository's layout.
+   */
+  export function readdirSync(path: string, options: { withFileTypes: true }): AidosDirent[];
 }
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
@@ -33,6 +46,8 @@ declare module "node:fs" {
   export function symlinkSync(target: string, path: string, type?: string): void;
   /** #120: a successful plan import deletes the plan file. */
   export function unlinkSync(path: string): void;
+  /** #158: see the "fs" declaration above. */
+  export function readdirSync(path: string, options: { withFileTypes: true }): AidosDirent[];
 }
 declare module "path" {
   export function isAbsolute(path: string): boolean;

@@ -21,11 +21,30 @@ coverage/
 # the source change. These files are not by-products — they are the product,
 # and src/ is only their input.
 #
-# This is enforced, not remembered: build.mjs records a digest of every
-# source plus its own recipe in lib/build-manifest.json, and
-# tests/u148-bundle-freshness.test.ts fails the normal suite run when the
-# two sides disagree in either direction. It exists because the rule WAS
-# only remembered, and the shipped client bundle silently fell twelve
-# commits behind src/ — four tickets' worth of work absent from the artifact
-# consumers install, while every test stayed green.
+# This is enforced, not remembered, at TWO points that fail independently:
+#
+#   1. A PRE-COMMIT HOOK refuses the commit. build.mjs writes it, and
+#      package.json runs build.mjs as `prepare`, so a fresh clone gets the
+#      hook from its first `pnpm install` — no clone has to remember, which
+#      is the whole point. It judges the INDEX (what you are committing),
+#      not the working tree, so an unstaged rebuild cannot talk it out of a
+#      refusal. Measured at ~100ms for the full check and ~50ms when the
+#      commit touches nothing the bundles are built from.
+#
+#      Deliberately committing source WITHOUT its rebuild (splitting a large
+#      change, say)? Two documented ways out, both named in the refusal:
+#          AIDOS_SKIP_BUNDLE_HOOK=1 git commit ...   # this check only
+#          git commit --no-verify                    # every hook
+#
+#   2. THE SUITE still checks it. tests/u148-bundle-freshness.test.ts fails
+#      the normal run when the two sides disagree in either direction, and
+#      tests/u148-precommit-hook.test.ts drives the hook itself. This is the
+#      belt to the hook's braces: it catches a clone that never installed,
+#      and every use of the bypasses above.
+#
+# Both exist because the rule WAS only remembered, and the shipped client
+# bundle silently fell twelve commits behind src/ — four tickets' worth of
+# work absent from the artifact consumers install, while every test stayed
+# green. The first fix caught it only on the next suite run, i.e. after the
+# bad commit already existed; the hook is the correction to that.
 

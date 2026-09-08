@@ -142,7 +142,22 @@ describe("the write union", () => {
     expect(union).toEqual(["src/", "docs/"]);
     expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/src/a.ts")).toBeUndefined();
     expect(writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/docs/b.md")).toBeUndefined();
-    const outside = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "lib/c.ts");
+    /*
+     * #158: ABSOLUTE, like the two assertions above it.
+     *
+     * As the bare relative "lib/c.ts" this resolved against the process's
+     * cwd, so the answer depended on where the suite was run. Inside a
+     * per-ticket worktree — which lives under /tmp/dsh, a root the boundary
+     * exempts by #157 — it resolved into the exempt tree and the boundary
+     * correctly returned undefined, failing this test for a reason that has
+     * nothing to do with allowlist unions. A worktree in which the suite
+     * fails is exactly the unusable front #158 is about.
+     */
+    const outside = writeBoundaryReason(
+      asContext(harness.ctx),
+      harness.asAgent(),
+      "/srv/proj/cli/lib/c.ts",
+    );
     expect(typeof outside).toBe("string");
   });
 

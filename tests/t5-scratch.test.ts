@@ -476,8 +476,26 @@ describe("the allowlist exemption", () => {
   });
 
   it("a project write still refuses outside the union", () => {
+    /*
+     * #158: the path is ABSOLUTE and rooted in the harness's project.
+     *
+     * It used to be the bare relative "docs/b.md", and a relative path is
+     * resolved against the process's cwd — so this test's answer depended on
+     * WHERE the suite was run from. Run inside a per-ticket worktree (which
+     * lives under /tmp/dsh, a root the boundary exempts by #157), "docs/b.md"
+     * resolved into the exempt tree, the boundary correctly returned
+     * undefined, and the test failed for a reason that had nothing to do with
+     * allowlists. That is precisely the "reports a build error that belongs
+     * to no ticket" failure #158 was filed about, met in the suite rather
+     * than in a build. The other assertions in this file were already
+     * absolute; this one was the odd one out.
+     */
     const harness = inProgressHarness();
-    const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "docs/b.md");
+    const reason = writeBoundaryReason(
+      asContext(harness.ctx),
+      harness.asAgent(),
+      "/srv/proj/cli/docs/b.md",
+    );
     expect(reason).toMatch(/allowlist/);
   });
 

@@ -26,12 +26,25 @@ import "@deepseek-ai/dsh-session-projection";
 import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
-import { existsSync, mkdirSync, readFileSync, symlinkSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import {
+  PREPARE_TIMEOUT_MS,
+  discoverNodeModulesDirs,
+  nodeModulesLinkPlan,
+  parseWorktreePrepare,
+  stalenessVerdict,
   worktreeAddArgs,
   worktreePathFor,
+  worktreeRefreshArgs,
   worktreeRemoveArgs,
 } from "../kernel/worktree";
 
@@ -3790,34 +3803,57 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
-   * #101: create the ticket's worktree, best effort.
+   * #101/#158: make the ticket's worktree EXIST AND BE USABLE, best effort.
    *
-   * Every failure is logged and swallowed. This is called from a move that
-   * has already been committed, so throwing here would report a failed move
-   * that in fact succeeded -- strictly worse than no worktree.
+   * Every failure is logged and swallowed rather than thrown. This is called
+   * from a move that has already been committed, so throwing here would
+   * report a failed move that in fact succeeded -- strictly worse than no
+   * worktree.
+   *
+   * #158 is what "usable" had to grow into. A worktree an agent cannot build
+   * in is not a working front: the agent discovers that the tree is broken,
+   * repairs it in whatever way occurs to it, and spends its opening minutes
+   * on setup instead of the ticket -- or, if it does not think of the repair,
+   * reports a build error that belongs to no ticket at all. Preparation is
+   * the one place that can be solved once, so it now covers all four steps
+   * an agent was doing by hand:
+   *
+   *   1. create OR REFRESH the checkout (an existing stale one used to fail
+   *      the add and be silently left behind);
+   *   2. link node_modules for every package, not only the root;
+   *   3. run whatever the workspace DECLARED it needs pre-built;
+   *   4. say so, loudly, at preparation time when any of that failed.
+   *
+   * Step 4 is the difference between this and the old behaviour. Swallowing
+   * to a host log line meant the failure surfaced as the agent's mid-task
+   * build error -- terminal at the most expensive possible moment, the same
+   * shape as #157. The problems collected here go to the session as well as
+   * the log, so the orchestrator learns the tree is unusable BEFORE it
+   * dispatches into it.
    */
   private async _ensureWorktree(agent: Agent, ticketId: number): Promise<void> {
-    const workspaceKey = workspaceKeyFromPath(this._workspacePath(agent));
+    const workspace = this._workspacePath(agent);
+    const workspaceKey = workspaceKeyFromPath(workspace);
     const path = worktreePathFor(workspaceKey, ticketId);
+    const problems: string[] = [];
     try {
       mkdirSync(dirname(path), { recursive: true });
-      for (const args of worktreeAddArgs(path)) {
-        await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
-      }
       /*
-       * node_modules is gitignored, so a fresh worktree CANNOT RUN THE
-       * SUITE. Every reviewer was already working around this by hand --
-       * which is the tell that creation should do it.
-       *
-       * A symlink rather than an install: an install per ticket would cost
-       * minutes and gigabytes, and the dependencies are identical by
-       * construction because the worktree is a checkout of the same commit.
+       * An EXISTING worktree is refreshed rather than re-added. `worktree
+       * add` on a live path fails, and #101's catch turned that into a log
+       * line -- so a tree cut ten commits ago was handed to the next agent
+       * unchanged, with nothing anywhere saying it was old. Both aidos
+       * worktrees in the session that found this ticket were stale that way.
        */
-      const source = join(this._workspacePath(agent), "node_modules");
-      if (existsSync(source) && !existsSync(join(path, "node_modules"))) {
-        symlinkSync(source, join(path, "node_modules"), "dir");
+      if (existsSync(join(path, ".git"))) {
+        await this._refreshWorktree(agent, ticketId, path, problems);
+      } else {
+        for (const args of worktreeAddArgs(path)) {
+          await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
+        }
       }
-      this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
+      this._linkNodeModules(workspace, path, problems);
+      await this._runDeclaredPrepare(workspace, path, problems);
     } catch (error) {
       /*
        * #101: fail LOUDLY, and tell the truth about the consequence. The
@@ -3829,10 +3865,255 @@ registerAidosSessionEventTypes(ctx);
        * next move to in_progress (prune-before-add makes that
        * self-healing).
        */
-      this.ctx.logger?.warn?.(
-        `aidos: worktree creation FAILED for ticket ${ticketId} at ${path} — subagents dispatched for it cannot write repository paths until one exists; retried on the next move to in_progress: ${error instanceof Error ? error.message : String(error)}`,
+      problems.push(
+        `the checkout itself could not be created: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    this._reportWorktreePreparation(agent, ticketId, path, problems);
+  }
+
+  /**
+   * #158: one report per preparation, to the session and not only the log.
+   *
+   * "Failure to prepare is loud at preparation time, not at the agent's
+   * first build" is a criterion, and a `logger.warn` does not satisfy it.
+   *
+   * That is MEASURED, not assumed. #158's prior investigation ended by
+   * handing forward one open question -- whether thursday's worktree failed
+   * because of the monorepo shape or because `worktree add`/the symlink
+   * threw and was swallowed -- and said the two were distinguishable from
+   * the host log. They are not. There is NO host log: no `.log` file exists
+   * anywhere under the dsh home, and the string `aidos: worktree` appears in
+   * ZERO persisted session records across every thursday session. A
+   * `logger.warn` here goes to the host process's console and is gone.
+   *
+   * So the swallowed warning was never merely "hard to find" -- the evidence
+   * was never recorded at all, which is why that question can no longer be
+   * answered for the tree that prompted this ticket. Meanwhile 4 of the 9
+   * thursday worktrees on this machine have no root node_modules whatever,
+   * so the swallowed-failure path is not rare and not hypothetical.
+   *
+   * The injection queue is the channel the orchestrator actually reads, so a
+   * failed preparation lands there and stays in the session record.
+   *
+   * Success stays quiet (info only). A line in the session for every
+   * successful move to in_progress would be noise, and noise is how a
+   * channel stops being read -- which would cost exactly the failures this
+   * is here to surface.
+   */
+  private _reportWorktreePreparation(
+    agent: Agent,
+    ticketId: number,
+    path: string,
+    problems: string[],
+  ): void {
+    if (problems.length === 0) {
+      this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
+      return;
+    }
+    const detail = problems.map((problem) => `- ${problem}`).join("\n");
+    this.ctx.logger?.warn?.(
+      `aidos: worktree preparation FAILED for ticket ${ticketId} at ${path} — a subagent ` +
+        `dispatched for it may be unable to build or write repository paths; retried on the ` +
+        `next move to in_progress:\n${detail}`,
+    );
+    this._queueInjection(
+      agent.session,
+      `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} — ` +
+        `**worktree preparation failed** at ${_mdCode(path)}. A subagent dispatched for this ` +
+        `ticket may not be able to build or test there. Retried on the next move to ` +
+        `in_progress.\n${detail}`,
+    );
+  }
+
+  /**
+   * #158: bring an existing worktree onto the workspace's current commit.
+   *
+   * The verdict itself is a pure function in the kernel (`stalenessVerdict`)
+   * because the interesting part is the RULE -- refresh a clean tree,
+   * never touch a dirty one -- and a rule that can only be exercised by
+   * creating real worktrees is a rule nobody tests.
+   */
+  private async _refreshWorktree(
+    agent: Agent,
+    ticketId: number,
+    path: string,
+    problems: string[],
+  ): Promise<void> {
+    let workspaceHead: string;
+    let worktreeHead: string;
+    let dirty: boolean;
+    try {
+      workspaceHead = (await this._gitInWorkspace(agent, ["rev-parse", "HEAD"])).trim();
+      worktreeHead = (await this._gitIn(path, ["rev-parse", "HEAD"])).trim();
+      dirty = (await this._gitIn(path, ["status", "--porcelain"])).trim() !== "";
+    } catch (error) {
+      problems.push(
+        `the existing worktree could not be inspected, so whether it is stale is unknown: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+
+    const verdict = stalenessVerdict(workspaceHead, worktreeHead, dirty);
+    if (verdict.kind === "current") return;
+    if (verdict.kind === "stranded") {
+      /*
+       * Reported, not repaired -- and reported PLAINLY, which the criterion
+       * asks for by name: it must not present as "unprepared" and send the
+       * next agent down the same repair path. So the message says it is
+       * stale, by how much, why it was left alone, and what to run.
+       */
+      problems.push(
+        `it is STALE: checked out at ${verdict.from.slice(0, 8)} while the workspace is at ` +
+          `${verdict.to.slice(0, 8)}, and ${verdict.note}. Either finish with those changes ` +
+          `or run: git -C ${path} checkout --detach ${verdict.to.slice(0, 8)}`,
+      );
+      return;
+    }
+    try {
+      for (const args of worktreeRefreshArgs(verdict.to)) {
+        await this._gitIn(path, args, WORKTREE_TIMEOUT_MS);
+      }
+      this.ctx.logger?.info?.(
+        `aidos: worktree for ticket ${ticketId} refreshed ${verdict.from.slice(0, 8)} → ${verdict.to.slice(0, 8)}`,
+      );
+    } catch (error) {
+      problems.push(
+        `it is stale at ${verdict.from.slice(0, 8)} (workspace is at ${verdict.to.slice(0, 8)}) ` +
+          `and the refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * #158: every directory in the main checkout that has a node_modules,
+   * repo-relative, `""` for the root.
+   *
+   * A pnpm workspace gives each package its own node_modules symlink farm,
+   * so linking only the root leaves `packages/*` unresolvable and the tree
+   * still does not build -- which is half of what this ticket was filed for.
+   * Discovered by walking rather than declared, because a declaration would
+   * make every workspace repeat what is already visible on disk, and
+   * hardcoding `packages/*` would bake one repository's layout into aidos.
+   *
+   * The walk is bounded: it never descends into a node_modules or a dotted
+   * directory, and stops at depth 3. That covers `packages/<name>`,
+   * `apps/<name>` layouts and their one-deeper variants; an unbounded walk
+   * of a large monorepo on every move to in_progress would be a real cost
+   * for a vanishing case.
+   */
+  private _dirsWithNodeModules(root: string): string[] {
+    return discoverNodeModulesDirs({
+      hasNodeModules: (prefix) => existsSync(join(root, prefix, "node_modules")),
+      childDirectories: (prefix) => {
+        try {
+          return readdirSync(join(root, prefix), { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name);
+        } catch {
+          // An unreadable directory is skipped rather than fatal: one
+          // permission problem three levels down must not cost the whole
+          // preparation.
+          return [];
+        }
+      },
+    });
+  }
+
+  /**
+   * #158: mirror the main checkout's node_modules into the worktree.
+   *
+   * SYMLINK, NOT INSTALL. The decision and its cross-contamination cost are
+   * recorded in kernel/worktree.ts rather than repeated here; the short of
+   * it is that an install per ticket costs minutes and gigabytes for a
+   * dependency set that is identical by construction, and the price is that
+   * node_modules becomes shared mutable state between the worktree and the
+   * main checkout.
+   *
+   * A link that already exists is left alone: re-linking would be pointless,
+   * and REPLACING one would be actively wrong if a workspace had chosen to
+   * install into its worktree for real.
+   */
+  private _linkNodeModules(workspace: string, path: string, problems: string[]): void {
+    const plan = nodeModulesLinkPlan(workspace, path, this._dirsWithNodeModules(workspace));
+    for (const link of plan) {
+      try {
+        if (!existsSync(link.from) || existsSync(link.to)) continue;
+        mkdirSync(dirname(link.to), { recursive: true });
+        symlinkSync(link.from, link.to, "dir");
+      } catch (error) {
+        problems.push(
+          `node_modules could not be linked at ${link.to}, so that package will not resolve ` +
+            `its dependencies: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * #158: run whatever the WORKSPACE declared makes its checkout buildable.
+   *
+   * Declared, never inferred. `packages/tokens` is a thursday concern and
+   * must not be baked into aidos, so the workspace names its own commands in
+   * its package.json (`aidos.worktree.prepare`) and a repository with
+   * nothing to pre-build is a clean no-op -- aidos itself declares nothing
+   * and this does nothing for it.
+   *
+   * No shell, ever: execFile with a fixed argument list, the same rule #78
+   * set for git. A declaration therefore cannot grow a pipeline or a `;`.
+   *
+   * The commands run IN THE WORKTREE, which matters more than it looks: a
+   * declared build writes its output into the tree being prepared, not into
+   * the main checkout. What it can still reach is node_modules, through the
+   * link above -- a workspace whose prepare command installs is choosing to
+   * mutate the shared tree, and the kernel comment says so.
+   */
+  private async _runDeclaredPrepare(
+    workspace: string,
+    path: string,
+    problems: string[],
+  ): Promise<void> {
+    let packageJson: string | undefined;
+    try {
+      packageJson = readFileSync(join(workspace, "package.json"), "utf8");
+    } catch {
+      // No package.json at all is a perfectly ordinary repository, not a
+      // failure: nothing was declared, so there is nothing to run.
+      return;
+    }
+    const spec = parseWorktreePrepare(packageJson);
+    for (const problem of spec.problems) {
+      problems.push(`the workspace's aidos.worktree.prepare declaration is unusable: ${problem}`);
+    }
+    for (const command of spec.commands) {
+      const [file, ...args] = command as [string, ...string[]];
+      try {
+        await this._execIn(path, file, args, PREPARE_TIMEOUT_MS);
+      } catch (error) {
+        problems.push(
+          `the declared prepare command \`${command.join(" ")}\` failed, so the workspace's ` +
+            `own packages may not compile here: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        // Stop at the first failure: prepare steps are ordered (build the
+        // token package, then whatever depends on it), so running the rest
+        // produces a cascade of errors that hide the one that matters.
+        return;
+      }
+    }
+  }
+
+  /**
+   * #158: run one non-git command in a directory. execFile, no shell, fixed
+   * argument list -- the same contract `_gitRawIn` has kept since #78.
+   */
+  private _execIn(cwd: string, file: string, args: string[], timeoutMs: number): Promise<string> {
+    return new Promise((resolvePromise, rejectPromise) => {
+      execFile(file, args, { cwd, timeout: timeoutMs }, (error, stdout) => {
+        if (error) rejectPromise(error);
+        else resolvePromise(stdout);
+      });
+    });
   }
 
   /** #101: remove the ticket's worktree, best effort. */

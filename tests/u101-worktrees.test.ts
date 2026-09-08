@@ -138,9 +138,18 @@ describe("#101 the worktree follows the ticket's state", () => {
      * tell that creation should do it. A symlink rather than an install: the
      * dependencies are identical by construction, because the worktree is a
      * checkout of the same commit.
+     *
+     * #158 kept the decision and widened its reach: the link is now driven
+     * by a PLAN (`nodeModulesLinkPlan`) covering every package that has a
+     * node_modules, not just the root, because a root-only link leaves a
+     * pnpm workspace's packages unresolvable and the tree still unbuildable.
+     * So the assertion moved from the old local variable to the symlink call
+     * itself — asserting that the link is still a SYMLINK and still exists,
+     * which is what this test was ever about.
      */
     expect(core).toContain("node_modules");
-    expect(core).toContain("symlinkSync(source");
+    expect(core).toContain("symlinkSync(link.from");
+    expect(core).toContain("nodeModulesLinkPlan");
   });
 });
 
