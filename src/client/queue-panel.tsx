@@ -17,10 +17,13 @@ import { AllowlistIcon, MarkDoneIcon, SignoffIcon, VerifyIcon } from "./icons";
 
 import {
   dismissArmStep,
-  groupQueueByState,
+  groupQueueByTab,
+  defaultQueueTab,
   humanQueue,
   unmatchedNominations,
   QUEUE_SORT_LABELS,
+  QUEUE_TAB_EMPTY,
+  QUEUE_TAB_ICON_ACTION,
 } from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
@@ -34,6 +37,8 @@ import type {
   PendingApprovalLike,
   QueueEntry,
   QueueSortKey,
+  QueueTab,
+  QueueTabId,
 } from "./human-queue";
 import type { RunOutcome, Step } from "./approval-runner";
 import type { ActionId } from "./action-visibility";
@@ -227,6 +232,20 @@ export function QueuePanel(props: QueuePanelProps) {
   const [sortKey, setSortKey] = react.useState<QueueSortKey>("suggested");
 
   /*
+   * #169: which TAB is showing. Null means "no explicit choice" and follows
+   * the default — the first tab with work — so the modal opens on a tab
+   * that HAS asks rather than on whatever sorts first. A choice, once made,
+   * sticks: answering the last ask on a tab leaves that (now empty) tab
+   * showing its own empty message rather than yanking the reader elsewhere.
+   *
+   * This is PLAIN useState, not the module store the runner uses, on
+   * purpose: a tab switch is an in-place re-render, not a remount, so
+   * nothing here is destroyed by it — and the runner's key lives outside
+   * React precisely so the switch cannot touch it either.
+   */
+  const [activeTab, setActiveTab] = react.useState<QueueTabId | null>(null);
+
+  /*
    * #141: which Dismiss is ARMED, by nomination id.
    *
    * The tool card's reject is a two-step (first click arms, second confirms)
@@ -279,6 +298,24 @@ export function QueuePanel(props: QueuePanelProps) {
    * the board thinks is outstanding.
    */
   const visible = entries.filter((entry) => !answered.has(entryKey(entry)));
+
+  /*
+   * #169: the tabs part the FILTERED list, for the same reason #137's
+   * groups did — a count that still includes answered asks contradicts the
+   * rows beneath it. Answering an ask hides it from its tab at once and
+   * decrements only that tab's count; the other tabs never re-derive.
+   *
+   * Every tab is always present (groupQueueByTab returns all three), so an
+   * empty tab renders its tab with a zero count and its own empty message
+   * rather than vanishing.
+   */
+  const tabs = groupQueueByTab(visible);
+  const resolvedTab = activeTab ?? defaultQueueTab(visible);
+  const active: QueueTab = tabs.find((tab) => tab.id === resolvedTab) ?? {
+    id: resolvedTab,
+    label: resolvedTab,
+    entries: [],
+  };
 
   /*
    * The runner's entry, re-derived from THIS render's queue. Derived from
@@ -367,19 +404,43 @@ export function QueuePanel(props: QueuePanelProps) {
         </ul>
       ) : null}
       {/*
-        * #137: grouped by ticket state, in WORKDOWN order — sign off, then
-        * approve, then verify. Read top to bottom, the queue is the order
-        * you would actually work it. The heading carries the state, which
-        * is why the strips below it no longer repeat it (showState={false}).
+        * #169: TABS, not stacked sections — a LEFT-ALIGNED TOP BAR. The ask
+        * list is the wide thing in this modal, and a sidebar would spend
+        * horizontal space the rows need for titles and reasons. Every tab
+        * wears the action's icon (the same one its rows wear collapsed, via
+        * ACTION_ICONS and QUEUE_TAB_ICON_ACTION), its label, and its count.
+        *
+        * The strips below a tab drop the state for the same reason #137's
+        * headings carried it: once the tab says what the job is, repeating
+        * it on every row is noise (showState={false}).
         */}
-      {groupQueueByState(visible).map((group) => (
-        <div className="aidos-queue-group" key={group.state}>
-          <h3 className="aidos-queue-group-heading">
-            {group.label}
-            <span className="aidos-queue-group-count">{group.entries.length}</span>
-          </h3>
-          <ul className="aidos-ticket-strips">
-            {group.entries.map((entry) => (
+      <div className="aidos-queue-tabs" role="tablist" aria-label="Queue">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={tab.id === active.id}
+            className={
+              "aidos-queue-tab" + (tab.id === active.id ? " aidos-queue-tab-active" : "")
+            }
+            onClick={() => {
+              setActiveTab(tab.id);
+            }}
+          >
+            <span className="aidos-queue-tab-icon" aria-hidden="true">
+              {ACTION_ICONS[QUEUE_TAB_ICON_ACTION[tab.id]]?.icon}
+            </span>
+            <span className="aidos-queue-tab-label">{tab.label}</span>
+            <span className="aidos-queue-tab-count">{tab.entries.length}</span>
+          </button>
+        ))}
+      </div>
+      {active.entries.length === 0 ? (
+        <p className="aidos-queue-empty">{QUEUE_TAB_EMPTY[active.id]}</p>
+      ) : (
+        <ul className="aidos-ticket-strips" role="tabpanel">
+          {active.entries.map((entry) => (
           <TicketStrip
             showState={false}
             key={entryKey(entry)}
@@ -482,10 +543,9 @@ export function QueuePanel(props: QueuePanelProps) {
               </>
             }
           />
-            ))}
-          </ul>
-        </div>
-      ))}
+          ))}
+        </ul>
+      )}
       {/*
         * #123: VERIFY IS NOT A RUNNER STEP.
         *

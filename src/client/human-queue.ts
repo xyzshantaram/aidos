@@ -346,57 +346,103 @@ export function agentAskCount(entries: readonly QueueEntry[]): number {
 }
 
 /**
- * #137: the queue, grouped by the ticket's state.
+ * #169: the queue, parted into TABS by ask — sign off, approvals, verify.
  *
- * **The order is the WORKDOWN order, and that is the whole point** (user's
- * design): open first (sign off unstarted work), then in-progress (approve
- * the files that work needs), then awaiting-verification (verify what is
- * finished). Read top to bottom, the queue is the order you would actually
- * work it, rather than a flat list sorted by something else.
+ * This REPLACES #137's grouping by ticket state. The workdown ORDER #137
+ * established survives (sign off first, then approvals, then verify), but
+ * the sections are gone: each job gets a tab carrying its own count, and
+ * the modal opens on the tab that has work.
  *
- * Grouping also RETIRES the parenthesised state on each strip: once the
- * heading says "Open", repeating "(Open)" on every row underneath is noise
- * that costs the title its horizontal space.
+ * The partition keys on the ASK, not on the ticket's state:
  *
- * A state that has no entries contributes NO heading — an empty section is
- * a promise of work that is not there. Any state outside the three (a done
- * ticket that somehow carries an ask) lands in a trailing group rather than
- * being dropped, because silently losing a queue row is worse than showing
- * one in an odd place.
+ *  - an entry that IS a pending approval card (`approvalId` set) is an
+ *    approval, whatever ticket it rides on. The agent is BLOCKED on it,
+ *    which is what makes it a different job from a gate ask.
+ *  - a `signoff` gate ask is sign-off. Nothing is proven yet; the decision
+ *    is permission to start.
+ *  - everything else is verification: `verify` and `mark-done` are both
+ *    checks on FINISHED work (the queue already collapses verify into
+ *    mark-done once the row exists — see derivedQueue). Keying on
+ *    `approvalId` first and `signoff` second makes the function TOTAL: an
+ *    action id nobody has invented yet still lands somewhere rather than
+ *    vanishing from the queue, which is the loss this module never permits.
  */
-export const QUEUE_GROUP_ORDER = ["open", "in_progress", "awaiting_verification"] as const;
+export type QueueTabId = "signoff" | "approvals" | "verify";
 
-/** The heading each group carries, in the user's words for the work. */
-export const QUEUE_GROUP_LABELS: Record<string, string> = {
-  open: "Sign off",
-  in_progress: "Approve",
-  awaiting_verification: "Verify",
-  other: "Other",
+/** Tab order, in the workdown order #137 established. */
+export const QUEUE_TAB_ORDER: readonly QueueTabId[] = ["signoff", "approvals", "verify"];
+
+/** The word each tab carries, in the user's language for the work. */
+export const QUEUE_TAB_LABELS: Record<QueueTabId, string> = {
+  signoff: "Sign off",
+  approvals: "Approvals",
+  verify: "Verify",
 };
 
-export interface QueueGroup {
-  /** The ticket state this group holds, or "other" for anything unexpected. */
-  state: string;
-  /** The heading text. */
+/**
+ * What an empty tab says. In its OWN terms — "no approvals" is a finished
+ * job, while the whole-queue "nothing is waiting on you" must only appear
+ * when every tab is empty.
+ */
+export const QUEUE_TAB_EMPTY: Record<QueueTabId, string> = {
+  signoff: "No sign-offs waiting. Nothing needs permission to start.",
+  approvals: "No approvals waiting. The agent is not blocked on you.",
+  verify: "Nothing to verify. No finished work is waiting for a check.",
+};
+
+/**
+ * Which collapsed-row icon each tab wears (#169's "same object at two
+ * scales"): the tab shows the action's own icon — the one the panel's
+ * ACTION_ICONS gives that ask's rows — so the tab and the rows beneath it
+ * read as one thing. Approvals wear the allowlist icon, the checklist the
+ * blocked rows wear.
+ */
+export const QUEUE_TAB_ICON_ACTION: Record<QueueTabId, string> = {
+  signoff: "signoff",
+  approvals: "allowlist",
+  verify: "verify",
+};
+
+export function queueTabOf(entry: QueueEntry): QueueTabId {
+  if (entry.approvalId !== undefined) return "approvals";
+  if (entry.actionId === "signoff") return "signoff";
+  return "verify";
+}
+
+export interface QueueTab {
+  /** Which job this tab holds. */
+  id: QueueTabId;
+  /** The tab's label. */
   label: string;
+  /** This tab's asks, in the order they were given. */
   entries: QueueEntry[];
 }
 
-export function groupQueueByState(entries: readonly QueueEntry[]): QueueGroup[] {
-  const groups: QueueGroup[] = [];
-  for (const state of QUEUE_GROUP_ORDER) {
-    const matching = entries.filter((entry) => entry.ticket.state === state);
-    // No empty headings: a section with nothing under it reads as work that
-    // vanished.
-    if (matching.length === 0) continue;
-    groups.push({ state, label: QUEUE_GROUP_LABELS[state] ?? state, entries: matching });
+/**
+ * Part every entry into exactly one tab, in tab order. ALL three tabs are
+ * always returned — an empty tab renders its tab with a count of zero and
+ * its own empty message rather than disappearing, because a finished job
+ * that vanishes looks like a job that was never there.
+ */
+export function groupQueueByTab(entries: readonly QueueEntry[]): QueueTab[] {
+  return QUEUE_TAB_ORDER.map((id) => ({
+    id,
+    label: QUEUE_TAB_LABELS[id] as string,
+    entries: entries.filter((entry) => queueTabOf(entry) === id),
+  }));
+}
+
+/**
+ * The tab the modal opens on: the first tab in workdown order that HAS
+ * work. An empty tab is never the landing tab while another has asks; when
+ * every tab is empty the answer is the first tab, whose empty message the
+ * whole-queue message replaces anyway.
+ */
+export function defaultQueueTab(entries: readonly QueueEntry[]): QueueTabId {
+  for (const id of QUEUE_TAB_ORDER) {
+    if (entries.some((entry) => queueTabOf(entry) === id)) return id;
   }
-  const known = new Set<string>(QUEUE_GROUP_ORDER);
-  const rest = entries.filter((entry) => !known.has(entry.ticket.state));
-  if (rest.length > 0) {
-    groups.push({ state: "other", label: QUEUE_GROUP_LABELS.other as string, entries: rest });
-  }
-  return groups;
+  return QUEUE_TAB_ORDER[0] as QueueTabId;
 }
 
 /**

@@ -2423,33 +2423,62 @@
   padding: 0;
 }
 
-/* #137: the queue's state groups. The heading carries the state, so the
-   strips below it drop the parenthesised copy they used to repeat. */
-.aidos-queue-group + .aidos-queue-group {
-  /* Separation between sections, not around every row: the groups are the
-     structure, and spacing is what says so without a rule line. */
-  margin-top: 14px;
-}
-
-.aidos-queue-group-heading {
+/* #169: the queue's tabs — a LEFT-ALIGNED TOP BAR, not a sidebar. The ask
+   list is the wide thing in this modal, and a sidebar would spend the
+   horizontal space the rows need for titles and reasons. Every tab wears
+   the action's icon, its label, and its count, so the size of each job is
+   visible before entering it. */
+.aidos-queue-tabs {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 6px 2px;
-  /* Deliberately quiet: this is a label for the rows beneath it, not a
-     title competing with them. Same size as the strip meta. */
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-secondary);
+  justify-content: flex-start;
+  gap: 4px;
 }
 
-.aidos-queue-group-count {
-  /* How many asks are in this section, so the size of each piece of work
-     is visible before you start reading rows. */
+.aidos-queue-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.aidos-queue-tab:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+}
+
+.aidos-queue-tab-active {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--text-secondary) 30%, transparent);
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+}
+
+.aidos-queue-tab-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.aidos-queue-tab-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.aidos-queue-tab-count {
+  /* How many asks are in this tab, so the size of each job is visible
+     before entering it. */
   font-weight: 400;
   color: var(--text-muted, var(--text-secondary));
+}
+
+.aidos-queue-tab-active .aidos-queue-tab-count {
+  color: var(--text-secondary);
 }
 
 .aidos-ticket-strip {

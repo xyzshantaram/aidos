@@ -581,14 +581,15 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
     // answered asks contradicts the rows beneath it.
     expect(panel).toContain("if (visible.length === 0)");
     /*
-     * #137 put the rows behind a grouping step, so the rendered list is
-     * `groupQueueByState(visible)` rather than `visible` mapped directly.
-     * The rule this test protects is unchanged and still the important one:
-     * the rows come from the FILTERED list, so an answered ask cannot
-     * survive on screen. What must never appear is the raw `entries`.
+     * #137 put the rows behind a grouping step, and #169 replaced it with
+     * a tab partition — so the rendered list is `groupQueueByTab(visible)`
+     * rather than `visible` mapped directly. The rule this test protects
+     * is unchanged and still the important one: the rows come from the
+     * FILTERED list, so an answered ask cannot survive on screen. What
+     * must never appear is the raw `entries`.
      */
-    expect(panel).toContain("groupQueueByState(visible)");
-    expect(panel).not.toContain("groupQueueByState(entries)");
+    expect(panel).toContain("groupQueueByTab(visible)");
+    expect(panel).not.toContain("groupQueueByTab(entries)");
     expect(panel).not.toContain("{entries.map((entry)");
   });
 
