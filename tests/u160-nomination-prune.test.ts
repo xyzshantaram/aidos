@@ -94,20 +94,37 @@ describe("#160 a fulfilled nomination stops existing", () => {
   });
 
   it("does not wedge the cap on a ticket that no longer exists", () => {
-    // A nomination pointing at nothing can never be acted on OR dismissed
-    // through the queue, so leaving it in the count is a permanent leak.
+    /*
+     * A nomination pointing at nothing can never be acted on OR dismissed
+     * through the queue, so leaving it in the count is a permanent leak.
+     *
+     * The deleted ticket is produced INSIDE the session that holds the
+     * nomination (review finding on the first cut, 2026-09-08): the original
+     * version checked a FRESH harness, which proved session isolation and
+     * left the `snapshot === undefined` branch in _liveNominations
+     * unexecuted. There is no delete tool yet, so the ticket is dropped
+     * from the folded state directly — the same private-access approach as
+     * the c5 distinct-ids test's not-yet-implemented-delete simulation —
+     * which is exactly the state that folded log would be in if a delete
+     * had happened.
+     */
     const { harness, agent } = setup();
     const id = openTicket(harness);
     harness.service.suggestActions(agent, {
       suggestions: [{ ticketId: id, actionId: "signoff", reason: "will vanish" }],
     });
-    // Nominations are session-scoped and the store is keyed by ticket id;
-    // a fresh harness session stands in for "that ticket is not on this
-    // board", which is the condition the prune actually tests.
-    const other = createHarness();
-    other.installService();
-    apply(asContext(other.ctx), {});
-    expect(other.service.actionNominations(other.asAgent())).toHaveLength(0);
+    expect(harness.service.actionNominations(agent)).toHaveLength(1);
+
+    const caches = (harness.service as unknown as {
+      _caches: Map<unknown, { state: { tickets: Map<number, unknown> } }>;
+    })._caches;
+    const cache = caches.get(
+      (agent as unknown as { session: unknown }).session,
+    );
+    expect(cache).toBeDefined();
+    cache?.state.tickets.delete(id);
+
+    expect(harness.service.actionNominations(agent)).toHaveLength(0);
   });
 
   it("does NOT prune a nomination that is still asking", () => {
