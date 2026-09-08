@@ -25489,7 +25489,12 @@ function worktreePrepareConfigPath(scratchRoot) {
   return scratchRoot.replace(/\/+$/, "") + "/" + WORKTREE_PREPARE_CONFIG;
 }
 function parseWorktreePrepareConfig(configText) {
-  const empty = { declared: false, commands: [], problems: [] };
+  const empty = {
+    declared: false,
+    commands: [],
+    notes: [],
+    problems: []
+  };
   if (configText === void 0 || configText.trim() === "") return empty;
   let parsed;
   try {
@@ -25498,18 +25503,21 @@ function parseWorktreePrepareConfig(configText) {
     return {
       declared: false,
       commands: [],
+      notes: [],
       problems: [
         `${WORKTREE_PREPARE_CONFIG} is not valid JSON: ${error51 instanceof Error ? error51.message : String(error51)}`
       ]
     };
   }
   const root = parsed;
+  const notes = Array.isArray(root?.notes) ? root.notes.filter((n) => typeof n === "string" && n !== "") : [];
   const declaration = root?.prepare;
-  if (declaration === void 0) return empty;
+  if (declaration === void 0) return { ...empty, notes, declared: notes.length > 0 };
   if (!Array.isArray(declaration)) {
     return {
       declared: true,
       commands: [],
+      notes,
       problems: [`${WORKTREE_PREPARE_CONFIG}: "prepare" must be an array of commands`]
     };
   }
@@ -25530,7 +25538,7 @@ function parseWorktreePrepareConfig(configText) {
     }
     problems.push(`prepare[${index}] must be a string or an array of strings`);
   }
-  return { declared: true, commands, problems };
+  return { declared: true, commands, notes, problems };
 }
 function stalenessVerdict(workspaceHead, worktreeHead, worktreeIsDirty) {
   if (workspaceHead === worktreeHead) return { kind: "current" };
@@ -29525,7 +29533,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     try {
       configPath = worktreePrepareConfigPath(scratchRootForAgent(agent));
     } catch {
-      return { configPath: null, spec: { declared: false, commands: [], problems: [] } };
+      return {
+        configPath: null,
+        spec: { declared: false, commands: [], notes: [], problems: [] }
+      };
     }
     let text;
     try {
@@ -29577,7 +29588,16 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (problems.length === 0) {
         this._queueInjection(
           agent.session,
-          `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} \u2014 worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} linked; **it has not been prepared**. ` + (spec.declared ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} (${spec.commands.length} command(s)) \u2014 RUN IT there and confirm the tree builds before dispatching into it.` : `No preparation recipe is recorded for this workspace yet. Work out what makes it build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} so later dispatches reuse it.`)
+          `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} \u2014 worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} linked; **it has not been prepared**. ` + (spec.declared ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)}: ` + (spec.commands.length > 0 ? `${spec.commands.length} command(s) to RUN there before dispatching into it. ` : `nothing to run. `) + /*
+           * The notes ride the report itself rather than being left
+           * in a file nobody opens. aidos's own answer is entirely a
+           * note -- no build step, but pnpm needs a flag or the tree
+           * looks broken -- so a report that named only commands
+           * would have said "nothing to run" and left the next front
+           * to rediscover the trap.
+           */
+          (spec.notes.length > 0 ? `
+${spec.notes.map((note) => `- ${note}`).join("\n")}` : "") : `No preparation recipe is recorded for this workspace yet. Work out what makes it build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} so later dispatches reuse it.`)
         );
         return;
       }

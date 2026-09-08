@@ -293,6 +293,22 @@ export interface WorktreePrepareSpec {
   declared: boolean;
   /** Commands to run in the worktree root, argv-first, never through a shell. */
   commands: string[][];
+  /**
+   * Things the next agent must KNOW rather than run.
+   *
+   * Added 2026-09-08 by the first real use of this file, which found the
+   * format could not express its own workspace's answer. aidos needs no
+   * build step at all -- a fresh worktree ran the entire suite untouched --
+   * but `pnpm <script>` dies in one with `[ERR_SQLITE_ERROR] unable to open
+   * database file`, because pnpm's pre-script dependency check cannot reach
+   * its store through a symlinked node_modules. Nothing to RUN, and yet the
+   * tree looks broken to anyone who does not know the flag.
+   *
+   * A commands-only format would have recorded `prepare: []` for aidos and
+   * thrown that finding away, sending the next front down the same dead
+   * end -- the exact waste #158 exists to stop.
+   */
+  notes: string[];
   /** A recipe that was present but unusable, for a loud report. */
   problems: string[];
 }
@@ -346,7 +362,12 @@ export function worktreePrepareConfigPath(scratchRoot: string): string {
  * as a clean no-op.
  */
 export function parseWorktreePrepareConfig(configText: string | undefined): WorktreePrepareSpec {
-  const empty: WorktreePrepareSpec = { declared: false, commands: [], problems: [] };
+  const empty: WorktreePrepareSpec = {
+    declared: false,
+    commands: [],
+    notes: [],
+    problems: [],
+  };
   if (configText === undefined || configText.trim() === "") return empty;
 
   let parsed: unknown;
@@ -356,19 +377,29 @@ export function parseWorktreePrepareConfig(configText: string | undefined): Work
     return {
       declared: false,
       commands: [],
+      notes: [],
       problems: [
         `${WORKTREE_PREPARE_CONFIG} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
       ],
     };
   }
 
-  const root = parsed as { prepare?: unknown } | null;
+  const root = parsed as { prepare?: unknown; notes?: unknown } | null;
+  /*
+   * Notes are read WHETHER OR NOT there is anything to run: "nothing to
+   * build, but invoke it like this" is a complete and common answer, and
+   * dropping it because `prepare` is absent would lose the finding.
+   */
+  const notes = Array.isArray(root?.notes)
+    ? (root.notes as unknown[]).filter((n): n is string => typeof n === "string" && n !== "")
+    : [];
   const declaration = root?.prepare;
-  if (declaration === undefined) return empty;
+  if (declaration === undefined) return { ...empty, notes, declared: notes.length > 0 };
   if (!Array.isArray(declaration)) {
     return {
       declared: true,
       commands: [],
+      notes,
       problems: [`${WORKTREE_PREPARE_CONFIG}: "prepare" must be an array of commands`],
     };
   }
@@ -390,7 +421,7 @@ export function parseWorktreePrepareConfig(configText: string | undefined): Work
     }
     problems.push(`prepare[${index}] must be a string or an array of strings`);
   }
-  return { declared: true, commands, problems };
+  return { declared: true, commands, notes, problems };
 }
 
 /** What preparation decided to do about a worktree that already existed. */

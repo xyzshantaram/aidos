@@ -3963,7 +3963,10 @@ registerAidosSessionEventTypes(ctx);
     try {
       configPath = worktreePrepareConfigPath(scratchRootForAgent(agent));
     } catch {
-      return { configPath: null, spec: { declared: false, commands: [], problems: [] } };
+      return {
+        configPath: null,
+        spec: { declared: false, commands: [], notes: [], problems: [] },
+      };
     }
     let text: string | undefined;
     try {
@@ -4038,9 +4041,21 @@ registerAidosSessionEventTypes(ctx);
             `worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} ` +
             `linked; **it has not been prepared**. ` +
             (spec.declared
-              ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} ` +
-                `(${spec.commands.length} command(s)) — RUN IT there and confirm the tree builds before ` +
-                `dispatching into it.`
+              ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)}: ` +
+                (spec.commands.length > 0
+                  ? `${spec.commands.length} command(s) to RUN there before dispatching into it. `
+                  : `nothing to run. `) +
+                /*
+                 * The notes ride the report itself rather than being left
+                 * in a file nobody opens. aidos's own answer is entirely a
+                 * note -- no build step, but pnpm needs a flag or the tree
+                 * looks broken -- so a report that named only commands
+                 * would have said "nothing to run" and left the next front
+                 * to rediscover the trap.
+                 */
+                (spec.notes.length > 0
+                  ? `\n${spec.notes.map((note) => `- ${note}`).join("\n")}`
+                  : "")
               : `No preparation recipe is recorded for this workspace yet. Work out what makes it ` +
                 `build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} ` +
                 `so later dispatches reuse it.`),

@@ -205,11 +205,13 @@ describe("#158 the preparation recipe is aidos's own memory, in scratch", () => 
     expect(parseWorktreePrepareConfig(undefined)).toEqual({
       declared: false,
       commands: [],
+      notes: [],
       problems: [],
     });
     expect(parseWorktreePrepareConfig(JSON.stringify({ note: "written by hand" }))).toEqual({
       declared: false,
       commands: [],
+      notes: [],
       problems: [],
     });
   });
@@ -289,7 +291,7 @@ describe("#158 the preparation recipe is aidos's own memory, in scratch", () => 
       parseWorktreePrepareConfig(
         JSON.stringify({ aidos: { worktree: { prepare: [["pnpm", "build"]] } } }),
       ),
-    ).toEqual({ declared: false, commands: [], problems: [] });
+    ).toEqual({ declared: false, commands: [], notes: [], problems: [] });
     expect(kernel).not.toContain("worktree?: { prepare");
     expect(core).not.toContain("_runDeclaredPrepare");
     expect(core).not.toContain("PREPARE_TIMEOUT_MS");
@@ -394,5 +396,60 @@ describe("#158 the host wires preparation into the move, and says so loudly", ()
     // #101's reasoning stands: the move is already committed, so throwing
     // here would report a failed move that in fact succeeded.
     expect(core).toContain("void this._ensureWorktree(agent, ticketId);");
+  });
+});
+
+/**
+ * The NOTES field, added 2026-09-08 by the first real use of this file.
+ *
+ * The format could not express its own workspace's answer. aidos needs no
+ * build step -- a fresh worktree ran the entire suite untouched -- but
+ * `pnpm <script>` dies in one with `[ERR_SQLITE_ERROR] unable to open
+ * database file`, because pnpm's pre-script dependency check cannot reach
+ * its store through a symlinked node_modules. Nothing to RUN, and yet the
+ * tree looks broken to anyone who does not know the flag.
+ *
+ * A commands-only recipe would have recorded `prepare: []` and thrown that
+ * finding away, sending the next front down the same dead end -- which is
+ * the waste this ticket exists to stop.
+ */
+describe("#158 a recipe can say KNOW THIS, not only RUN THIS", () => {
+  it("keeps notes even when there is nothing to run", () => {
+    const spec = parseWorktreePrepareConfig(
+      JSON.stringify({ prepare: [], notes: ["use pnpm --config.verify-deps-before-run=false"] }),
+    );
+    expect(spec.declared).toBe(true);
+    expect(spec.commands).toEqual([]);
+    expect(spec.notes).toEqual(["use pnpm --config.verify-deps-before-run=false"]);
+  });
+
+  it("counts a notes-only recipe as DECLARED", () => {
+    /*
+     * The distinction that makes the field worth having: "somebody worked
+     * this workspace out and the answer was a caveat" must not read as
+     * "nobody has looked at this yet".
+     */
+    const spec = parseWorktreePrepareConfig(JSON.stringify({ notes: ["commit from the worktree"] }));
+    expect(spec.declared).toBe(true);
+    expect(spec.notes).toEqual(["commit from the worktree"]);
+  });
+
+  it("still reports NOT YET KNOWN for a file with neither", () => {
+    expect(parseWorktreePrepareConfig(JSON.stringify({ _comment: "hi" })).declared).toBe(false);
+  });
+
+  it("ignores a malformed notes value instead of failing the recipe", () => {
+    // Rule 5's spirit: an unusable extra must not cost the usable parts.
+    const spec = parseWorktreePrepareConfig(
+      JSON.stringify({ prepare: [["pnpm", "build"]], notes: "not a list" }),
+    );
+    expect(spec.commands).toEqual([["pnpm", "build"]]);
+    expect(spec.notes).toEqual([]);
+  });
+
+  it("puts the notes in the REPORT, not only in the file", () => {
+    // A note nobody reads is the host log all over again (#158's own
+    // finding: logger.warn was never persisted anywhere).
+    expect(core).toContain("spec.notes.length > 0");
   });
 });
