@@ -27689,16 +27689,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent) {
     const reader = this._boardAgent(agent);
-    const cache = this._cache(reader.session);
-    this._sync(reader.session, cache);
     const union2 = [];
     const seen = /* @__PURE__ */ new Set();
-    for (const snapshot of cache.state.tickets.values()) {
-      if (snapshot.state !== "in_progress") continue;
-      for (const entry of snapshot.allowlist) {
-        if (!seen.has(entry)) {
-          seen.add(entry);
-          union2.push(entry);
+    for (const session of [reader.session, ...this._liveWorkspaceSessions(agent)]) {
+      const cache = this._cache(session);
+      this._sync(session, cache);
+      for (const snapshot of cache.state.tickets.values()) {
+        if (snapshot.state !== "in_progress") continue;
+        for (const entry of snapshot.allowlist) {
+          if (!seen.has(entry)) {
+            seen.add(entry);
+            union2.push(entry);
+          }
         }
       }
     }
@@ -29163,7 +29165,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
     } catch (error51) {
       this.ctx.logger?.warn?.(
-        `aidos: could not create the worktree for ticket ${ticketId} at ${path}; subagents will fall back to the shared tree: ${error51 instanceof Error ? error51.message : String(error51)}`
+        `aidos: worktree creation FAILED for ticket ${ticketId} at ${path} \u2014 subagents dispatched for it cannot write repository paths until one exists; retried on the next move to in_progress: ${error51 instanceof Error ? error51.message : String(error51)}`
       );
     }
   }

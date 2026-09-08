@@ -41,8 +41,20 @@ const WRITE_TOOLS = [
   "suggest_actions",
 ] as const;
 
-/** The board tools that only READ it: allowed at every depth (#146). */
-const READ_TOOLS = ["get_tickets", "get_ticket", "plan", "plan_meta"] as const;
+/**
+ * The board tools that only READ it: allowed at every depth (#146).
+ *
+ * `get_evidence` (#164) joined this list when it shipped: a reviewer
+ * subagent needs the FULL payload of the review it is answering, which is
+ * exactly the read the depth guard must not refuse.
+ */
+const READ_TOOLS = [
+  "get_tickets",
+  "get_ticket",
+  "get_evidence",
+  "plan",
+  "plan_meta",
+] as const;
 
 describe("the delegation-depth guard", () => {
   function guardHarness() {

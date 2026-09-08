@@ -28171,16 +28171,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent) {
     const reader = this._boardAgent(agent);
-    const cache = this._cache(reader.session);
-    this._sync(reader.session, cache);
     const union2 = [];
     const seen = /* @__PURE__ */ new Set();
-    for (const snapshot of cache.state.tickets.values()) {
-      if (snapshot.state !== "in_progress") continue;
-      for (const entry of snapshot.allowlist) {
-        if (!seen.has(entry)) {
-          seen.add(entry);
-          union2.push(entry);
+    for (const session of [reader.session, ...this._liveWorkspaceSessions(agent)]) {
+      const cache = this._cache(session);
+      this._sync(session, cache);
+      for (const snapshot of cache.state.tickets.values()) {
+        if (snapshot.state !== "in_progress") continue;
+        for (const entry of snapshot.allowlist) {
+          if (!seen.has(entry)) {
+            seen.add(entry);
+            union2.push(entry);
+          }
         }
       }
     }
@@ -29645,7 +29647,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
     } catch (error51) {
       this.ctx.logger?.warn?.(
-        `aidos: could not create the worktree for ticket ${ticketId} at ${path}; subagents will fall back to the shared tree: ${error51 instanceof Error ? error51.message : String(error51)}`
+        `aidos: worktree creation FAILED for ticket ${ticketId} at ${path} \u2014 subagents dispatched for it cannot write repository paths until one exists; retried on the next move to in_progress: ${error51 instanceof Error ? error51.message : String(error51)}`
       );
     }
   }
@@ -30327,7 +30329,25 @@ function writeBoundaryReason(ctx, agent, path) {
   } catch (error51) {
     ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
-  if (isUnder(DSH_TMP_ROOT, path)) return void 0;
+  const progressIds = /* @__PURE__ */ new Set();
+  try {
+    if (ctx.aidos) {
+      for (const row of ctx.aidos.getTickets(agent)) {
+        if (row.state === "in_progress") progressIds.add(row.id);
+      }
+    }
+  } catch {
+  }
+  if (isUnder(DSH_TMP_ROOT, path)) {
+    if (isUnder(WORKTREE_ROOT, path)) {
+      const segments = path.slice(WORKTREE_ROOT.length + 1).split("/");
+      const ticketId = Number(segments[1]);
+      if (Number.isInteger(ticketId) && ticketId > 0 && !progressIds.has(ticketId)) {
+        return `write to ${path} is refused: it is the worktree of ticket #${ticketId}, which is not in progress on your board, so it is not yours to write. Use your own ticket's worktree under ${WORKTREE_ROOT}/<workspaceKey>/<ticketId>, or ${DSH_TMP_ROOT} for artifacts.`;
+      }
+    }
+    return void 0;
+  }
   const cwd = agent.session?.header?.cwd;
   if (delegationDepthOf4(agent) !== 0 && cwd !== void 0 && isUnder(cwd, path)) {
     const workspaceKey = workspaceKeyFromPath(cwd);
@@ -30349,14 +30369,14 @@ function writeBoundaryReason(ctx, agent, path) {
   const subagent = delegationDepthOf4(agent) !== 0;
   const elsewhere = `You may write your ticket's worktree under ${WORKTREE_ROOT}/<workspaceKey>/<ticketId>, the scratch root, or ${DSH_TMP_ROOT} for larger artifacts.`;
   if (subagent) {
-    return `write to ${path} is outside every in-progress ticket's allowlist. A subagent cannot widen an allowlist (request_allowlist refuses subagents and approvals auto-reject here), so do not try: ` + elsewhere + " If this path genuinely needs to change, put it in your report and let the orchestrator decide.";
+    return `write to ${path} is outside every in-progress ticket's allowlist. A subagent cannot widen an allowlist (request_allowlist refuses subagents and approvals auto-reject here), so do not try: ` + elsewhere + " If this path genuinely needs to change, put it in your report: your PARENT must request the allowlist for it \u2014 that is the ask to make, and the orchestrator is the one who can act on it.";
   }
   if (rows.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it (board is empty \u2014 create and sign off a ticket, or write under scratch)`;
   }
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
-    return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
+    return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it (tickets exist, but none is in progress). Move the ticket this work belongs to in progress and request its allowlist, or write under the scratch root.`;
   }
   const ids = inProgress.map((row) => `#${row.id}`).join(", ");
   return `write to ${path} is outside the allowlist union; no in-progress ticket covers it. In progress right now: ${ids}. Call request_allowlist on the ticket this work belongs to, or write under the scratch root.`;
@@ -30699,7 +30719,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
 function registerGetTickets(ctx) {
   registerBoardTool(
     ctx,
@@ -30824,7 +30844,7 @@ function registerGetTicket(ctx) {
     "read",
     defineTool2({
       name: "get_ticket",
-      description: "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, plus its evidence rows and comments. The companion to get_tickets, which returns compact summary rows by default - read the board to find what you need, then read the one ticket you are about to work on. Accepts a composite '<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
+      description: "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, plus its evidence rows (each with a stable index) and comments. get_evidence fetches any row's full payload by that index. The companion to get_tickets, which returns compact summary rows by default - read the board to find what you need, then read the one ticket you are about to work on. Accepts a composite '<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
       parameters: {
         ticketId: {
           type: "integer",
@@ -30846,6 +30866,9 @@ function registerGetTicket(ctx) {
                 type: "object",
                 additionalProperties: false,
                 properties: {
+                  /* #164: the stable address of this row — get_evidence
+                     fetches the full payload by it. */
+                  index: { type: "integer", required: true },
                   kind: { type: "string", required: true },
                   author: { type: "string", required: true },
                   at: { type: "number", required: true },
@@ -30868,7 +30891,8 @@ function registerGetTicket(ctx) {
             // BOUNDED on purpose (#92): a payload can be a whole reviewer
             // report. The agent gets kind, author, when, and a short excerpt;
             // the full payload lives in the evidence viewer.
-            evidence: result.evidence.map((row) => ({
+            evidence: result.evidence.map((row, index) => ({
+              index,
               kind: row.kind,
               author: row.author,
               at: row.at,
@@ -30886,6 +30910,110 @@ function registerGetTicket(ctx) {
       presentCall: (a) => {
         const req = a;
         return present("Read ticket", "read", req.ticketId, ["#" + req.ticketId]);
+      }
+    })
+  );
+}
+function registerGetEvidence(ctx) {
+  registerBoardTool(
+    ctx,
+    "read",
+    defineTool2({
+      name: "get_evidence",
+      description: "Fetch full evidence records for a ticket \u2014 kind, author, when, and the COMPLETE payload, untruncated (#164). get_ticket shows only bounded excerpts (#92); read the board, then read the one record you need here. Without index: every row, in the same order get_ticket lists them. With index: exactly that row. comments: true also returns full comment bodies (get_ticket returns only the count). Accepts a composite '<sourceSessionId>:<ticketId>' like get_ticket.",
+      parameters: {
+        ticketId: {
+          type: "integer",
+          description: "The ticket whose evidence to fetch. A composite id may be passed as a string.",
+          required: true
+        },
+        index: {
+          type: "integer",
+          description: "One evidence row, addressed by the stable index get_ticket shows. Absent = every row."
+        },
+        comments: {
+          type: "boolean",
+          description: "Also return full comment bodies. Default false \u2014 a long thread is #92's to bound."
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticketId: { type: "integer", required: true },
+            evidence: {
+              type: "array",
+              required: true,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  index: { type: "integer", required: true },
+                  kind: { type: "string", required: true },
+                  author: { type: "string", required: true },
+                  at: { type: "number", required: true },
+                  payload: {
+                    oneOf: [{ type: "object", additionalProperties: true }, { type: "null" }],
+                    required: true
+                  }
+                }
+              }
+            },
+            comments: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  author: { type: "string", required: true },
+                  at: { type: "number", required: true },
+                  body: { type: "string", required: true }
+                }
+              }
+            }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent2(exec);
+        try {
+          const result = ctx.aidos.getTicket(agent, { ticketId: args.ticketId });
+          let rows = result.evidence.map((row, index) => ({
+            index,
+            kind: row.kind,
+            author: row.author,
+            at: row.at,
+            payload: row.payload ?? null
+          }));
+          if (args.index !== void 0) {
+            if (args.index < 0 || args.index >= rows.length) {
+              throw new Error(
+                `evidence index ${args.index} does not exist; the ticket has ${rows.length} evidence row(s), addressed 0-${Math.max(rows.length - 1, 0)}`
+              );
+            }
+            rows = [rows[args.index]];
+          }
+          const out = { ok: true, ticketId: result.ticket.id, evidence: rows };
+          if (args.comments === true) {
+            out.comments = result.comments.map((comment) => ({
+              author: comment.author,
+              at: comment.at,
+              body: comment.text
+            }));
+          }
+          return out;
+        } catch (error51) {
+          refusal(error51);
+        }
+      },
+      presentCall: (args) => {
+        const detail = [];
+        if (args.index !== void 0) detail.push("row " + args.index);
+        if (args.comments === true) detail.push("with comments");
+        return present("Read evidence", "read", args.ticketId, detail);
       }
     })
   );
@@ -31451,6 +31579,7 @@ function apply(ctx, config2) {
   registerRequestAllowlist(ctx);
   registerSuggestActions(ctx);
   registerGetTicket(ctx);
+  registerGetEvidence(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);
