@@ -34,6 +34,10 @@ import { asContext, createHarness, type FakeAgent } from "./b1-harness";
 const WRITE_TOOLS = [
   "set_ticket",
   "attach_evidence",
+  // #178: resolves a hash through git show host-side, so the agent may
+  // author it -- but it still WRITES the board, so the depth guard refuses
+  // it for a subagent exactly like every other write.
+  "attach_commit",
   "move_ticket",
   "plan_import",
   "plan_meta_set",

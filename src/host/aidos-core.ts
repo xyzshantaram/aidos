@@ -2340,6 +2340,20 @@ registerAidosSessionEventTypes(ctx);
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
   }
 
+  /**
+   * #178: the AGENT's commit-evidence entry. Same resolution, same refusal.
+   */
+  attachCommit(
+    agent: Agent,
+    args: { ticketId: number | string; hash: string; note?: string },
+  ): Promise<{ ticketId: number; payload: Record<string, unknown> }> {
+    return this._attachCommitEvidence(
+      this._routedAgent(agent, args.ticketId),
+      args as { ticketId: number; hash: string; note?: string },
+      "agent",
+    );
+  }
+
   // ---- the action-nomination store (#93) --------------------------------
 
   /**
@@ -3648,10 +3662,20 @@ registerAidosSessionEventTypes(ctx);
     return { ticketId, commits };
   }
 
-  /** #78: attach one commit as evidence, resolved in the workspace. */
+  /**
+   * #78: attach one commit as evidence, resolved in the workspace.
+   *
+   * ONE resolution path for both actors (#178). The agent reaches it through
+   * the `attach_commit` tool and the human through the commit picker, and
+   * both land here -- so an agent-authored commit row is resolved by the
+   * same `git show` and refused on the same unresolvable hash. That is what
+   * makes the kind safe to require at the verification gate: the evidence
+   * is a fact the host checked, not a claim either actor made.
+   */
   private async _attachCommitEvidence(
     agent: Agent,
     args: { ticketId: number; hash: string; note?: string },
+    actor: Actor = "user",
   ): Promise<{ ticketId: number; payload: Record<string, unknown> }> {
     const ticketId = this._resolveTicketId(agent, args.ticketId);
     const cache = this._cache(agent.session);
@@ -3689,7 +3713,7 @@ registerAidosSessionEventTypes(ctx);
       ...(args.note !== undefined && args.note.trim() !== "" ? { note: args.note.trim() } : {}),
     };
     if (payload.branch === undefined) delete payload.branch;
-    const attached = this._attachEvidenceInternal(agent, ticketId, "builtin:user_commit", payload, "user");
+    const attached = this._attachEvidenceInternal(agent, ticketId, "builtin:user_commit", payload, actor);
     return { ticketId, payload: attached };
   }
 

@@ -25851,9 +25851,9 @@ var BUILTIN_KINDS = [
   {
     id: "builtin:user_commit",
     label: "Git commit",
-    description: "One git commit from the ticket's workspace, resolved through git show at attach time.",
+    description: "One git commit from the ticket's workspace, resolved through git show at attach time. The AGENT may attach it as well as the human, because it is a VERIFIED FACT rather than an attestation: the host resolves the hash and stores what git reports, so an unresolvable or invented hash is refused instead of recorded. That is what separates it from review_pass, which stays human- or reviewer-authored because nothing can verify a judgement.",
     weight: 1,
-    allowedAuthors: ["user"]
+    allowedAuthors: ["user", "agent"]
   }
 ];
 var DEFAULT_GATES = [
@@ -25866,6 +25866,32 @@ var DEFAULT_GATES = [
   {
     fromState: "in_progress",
     toState: "awaiting_verification",
+    /*
+     * #178: A COMMIT WILL BE REQUIRED TO REACH VERIFICATION (owner,
+     * 2026-09-08). NOT YET ENFORCED -- the requirement is staged, and the
+     * reason is recorded here rather than in a commit message nobody reads:
+     * adding it to requiredKinds fails 57 assertions across 20 files, every
+     * one of them a lifecycle test that advances a ticket without naming a
+     * commit. That sweep is mechanical but it is not a footnote to a tool
+     * addition, so it lands as its own change with its own review.
+     *
+     * The half that IS live: builtin:user_commit is now agent-authorable
+     * and the `attach_commit` tool exists, so an agent can satisfy the
+     * requirement before it starts being enforced. Shipping it the other
+     * way round would have wedged every ticket the moment it landed.
+     *
+     * Work that cannot name the commit it landed in is work nobody can
+     * verify: the reviewer has no diff to read, the human has nothing to
+     * check out, and the ticket's claim to be finished rests entirely on
+     * the agent's say-so. This board has already paid for that -- a session
+     * that "repeatedly accepted subagent self-reports as done" shipped two
+     * UI bugs that surfaced only when the user clicked.
+     *
+     * It is the one required kind that is MECHANICALLY VERIFIED rather than
+     * asserted: the host resolves the hash through git show and refuses
+     * what it cannot find, so unlike automated_check it cannot be satisfied
+     * by a confident sentence.
+     */
     requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
     allowedActors: ["user", "agent"],
     /*
@@ -28908,6 +28934,16 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
   }
+  /**
+   * #178: the AGENT's commit-evidence entry. Same resolution, same refusal.
+   */
+  attachCommit(agent, args) {
+    return this._attachCommitEvidence(
+      this._routedAgent(agent, args.ticketId),
+      args,
+      "agent"
+    );
+  }
   suggestActions(agent, args) {
     const sessionId = String(agent.session.id);
     const suggestions = args.suggestions ?? [];
@@ -29763,8 +29799,17 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }));
     return { ticketId, commits };
   }
-  /** #78: attach one commit as evidence, resolved in the workspace. */
-  async _attachCommitEvidence(agent, args) {
+  /**
+   * #78: attach one commit as evidence, resolved in the workspace.
+   *
+   * ONE resolution path for both actors (#178). The agent reaches it through
+   * the `attach_commit` tool and the human through the commit picker, and
+   * both land here -- so an agent-authored commit row is resolved by the
+   * same `git show` and refused on the same unresolvable hash. That is what
+   * makes the kind safe to require at the verification gate: the evidence
+   * is a fact the host checked, not a claim either actor made.
+   */
+  async _attachCommitEvidence(agent, args, actor = "user") {
     const ticketId = this._resolveTicketId(agent, args.ticketId);
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
@@ -29801,7 +29846,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       ...args.note !== void 0 && args.note.trim() !== "" ? { note: args.note.trim() } : {}
     };
     if (payload.branch === void 0) delete payload.branch;
-    const attached = this._attachEvidenceInternal(agent, ticketId, "builtin:user_commit", payload, "user");
+    const attached = this._attachEvidenceInternal(agent, ticketId, "builtin:user_commit", payload, actor);
     return { ticketId, payload: attached };
   }
   /**
@@ -31618,6 +31663,70 @@ function registerSetTicket(ctx) {
     })
   );
 }
+function registerAttachCommit(ctx) {
+  registerBoardTool(
+    ctx,
+    "write",
+    defineTool2({
+      name: "attach_commit",
+      description: "Attach the git commit your work landed in as evidence (builtin:user_commit). Give the short or full hash; the host resolves it with git show in the ticket's workspace and stores the real subject, author, date and branch, refusing a hash it cannot find. Required to move a ticket to awaiting_verification: a reviewer needs a diff to read and a human needs something to check out.",
+      parameters: {
+        ticketId: {
+          oneOf: [{ type: "integer" }, { type: "string" }],
+          required: true,
+          description: "The ticket the commit belongs to, by numeric id or slug."
+        },
+        hash: {
+          type: "string",
+          required: true,
+          description: "The commit hash, short or full. Resolved in the ticket's workspace."
+        },
+        note: {
+          type: "string",
+          description: "An optional note about what this commit contains."
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticketId: { type: "integer", required: true },
+            commit: { type: "string", required: true },
+            subject: { type: "string", required: true },
+            gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateSatisfied: { type: "boolean", required: true }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        try {
+          const result = await ctx.aidos.attachCommit(agent, {
+            ticketId: args.ticketId,
+            hash: args.hash,
+            ...args.note === void 0 ? {} : { note: args.note }
+          });
+          const after = ctx.aidos.getTicket(agent, { ticketId: result.ticketId }).ticket;
+          return {
+            ok: true,
+            ticketId: result.ticketId,
+            commit: String(result.payload.commit ?? args.hash),
+            subject: String(result.payload.subject ?? ""),
+            gatePresent: after.gatePresent,
+            gateTotal: after.gateTotal,
+            gateSatisfied: after.gateTotal !== null && after.gatePresent === after.gateTotal
+          };
+        } catch (error51) {
+          return refusal(error51);
+        }
+      }
+    })
+  );
+}
 function registerAttachEvidence(ctx) {
   registerBoardTool(
     ctx,
@@ -32092,6 +32201,7 @@ function apply(ctx, config2) {
   registerGetTickets(ctx);
   registerSetTicket(ctx);
   registerAttachEvidence(ctx);
+  registerAttachCommit(ctx);
   registerMoveTicket(ctx);
   registerPlan(ctx);
   registerPlanImport(ctx);

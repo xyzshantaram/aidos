@@ -120,9 +120,14 @@ const MIRROR_BUILTIN_KINDS: KindDef[] = [
   {
     id: "builtin:user_commit",
     label: "Git commit",
-    description: "One git commit from the ticket's workspace, resolved through git show at attach time.",
+    description:
+      "One git commit from the ticket's workspace, resolved through git show at attach time. " +
+      "The AGENT may attach it as well as the human, because it is a VERIFIED FACT rather than " +
+      "an attestation: the host resolves the hash and stores what git reports, so an unresolvable " +
+      "or invented hash is refused instead of recorded. That is what separates it from " +
+      "review_pass, which stays human- or reviewer-authored because nothing can verify a judgement.",
     weight: 1.0,
-    allowedAuthors: ["user"],
+    allowedAuthors: ["user", "agent"],
   },
 ];
 

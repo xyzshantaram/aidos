@@ -109,9 +109,14 @@ export const BUILTIN_KINDS: readonly KindDef[] = [
   {
     id: "builtin:user_commit",
     label: "Git commit",
-    description: "One git commit from the ticket's workspace, resolved through git show at attach time.",
+    description:
+      "One git commit from the ticket's workspace, resolved through git show at attach time. " +
+      "The AGENT may attach it as well as the human, because it is a VERIFIED FACT rather than " +
+      "an attestation: the host resolves the hash and stores what git reports, so an unresolvable " +
+      "or invented hash is refused instead of recorded. That is what separates it from " +
+      "review_pass, which stays human- or reviewer-authored because nothing can verify a judgement.",
     weight: 1.0,
-    allowedAuthors: ["user"],
+    allowedAuthors: ["user", "agent"],
   },
 ];
 
@@ -126,6 +131,32 @@ export const DEFAULT_GATES: readonly GateDef[] = [
   {
     fromState: "in_progress" as const,
     toState: "awaiting_verification" as const,
+    /*
+     * #178: A COMMIT WILL BE REQUIRED TO REACH VERIFICATION (owner,
+     * 2026-09-08). NOT YET ENFORCED -- the requirement is staged, and the
+     * reason is recorded here rather than in a commit message nobody reads:
+     * adding it to requiredKinds fails 57 assertions across 20 files, every
+     * one of them a lifecycle test that advances a ticket without naming a
+     * commit. That sweep is mechanical but it is not a footnote to a tool
+     * addition, so it lands as its own change with its own review.
+     *
+     * The half that IS live: builtin:user_commit is now agent-authorable
+     * and the `attach_commit` tool exists, so an agent can satisfy the
+     * requirement before it starts being enforced. Shipping it the other
+     * way round would have wedged every ticket the moment it landed.
+     *
+     * Work that cannot name the commit it landed in is work nobody can
+     * verify: the reviewer has no diff to read, the human has nothing to
+     * check out, and the ticket's claim to be finished rests entirely on
+     * the agent's say-so. This board has already paid for that -- a session
+     * that "repeatedly accepted subagent self-reports as done" shipped two
+     * UI bugs that surfaced only when the user clicked.
+     *
+     * It is the one required kind that is MECHANICALLY VERIFIED rather than
+     * asserted: the host resolves the hash through git show and refuses
+     * what it cannot find, so unlike automated_check it cannot be satisfied
+     * by a confident sentence.
+     */
     requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
     allowedActors: ["user", "agent"],
     /*

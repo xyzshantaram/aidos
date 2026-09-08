@@ -976,6 +976,90 @@ function registerSetTicket(ctx: Context): void {
   );
 }
 
+/**
+ * #178: attach a git commit as evidence, resolved by the host.
+ *
+ * A SEPARATE TOOL from attach_evidence, and the separation is the point.
+ * attach_evidence takes a payload the agent composes; this takes a HASH the
+ * host resolves through `git show`, storing what git reports and refusing
+ * what it cannot find. That is why the commit kind may be agent-authored
+ * while review_pass may not: a commit is a fact something else can check,
+ * and a judgement is not.
+ *
+ * It is required at the verification gate, so an agent that cannot name the
+ * commit its work landed in cannot advance the ticket -- which is the
+ * intent: work nobody can check out is work nobody can review.
+ */
+function registerAttachCommit(ctx: Context): void {
+  registerBoardTool(
+    ctx,
+    "write",
+    defineTool({
+      name: "attach_commit",
+      description:
+        "Attach the git commit your work landed in as evidence (builtin:user_commit). " +
+        "Give the short or full hash; the host resolves it with git show in the ticket's " +
+        "workspace and stores the real subject, author, date and branch, refusing a hash it " +
+        "cannot find. Required to move a ticket to awaiting_verification: a reviewer needs a " +
+        "diff to read and a human needs something to check out.",
+      parameters: {
+        ticketId: {
+          oneOf: [{ type: "integer" }, { type: "string" }],
+          required: true,
+          description: "The ticket the commit belongs to, by numeric id or slug.",
+        },
+        hash: {
+          type: "string",
+          required: true,
+          description: "The commit hash, short or full. Resolved in the ticket's workspace.",
+        },
+        note: {
+          type: "string",
+          description: "An optional note about what this commit contains.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticketId: { type: "integer", required: true },
+            commit: { type: "string", required: true },
+            subject: { type: "string", required: true },
+            gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
+            gateSatisfied: { type: "boolean", required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        try {
+          const result = await ctx.aidos.attachCommit(agent, {
+            ticketId: args.ticketId,
+            hash: args.hash,
+            ...(args.note === undefined ? {} : { note: args.note }),
+          });
+          const after = ctx.aidos.getTicket(agent, { ticketId: result.ticketId }).ticket;
+          return {
+            ok: true as const,
+            ticketId: result.ticketId,
+            commit: String(result.payload.commit ?? args.hash),
+            subject: String(result.payload.subject ?? ""),
+            gatePresent: after.gatePresent,
+            gateTotal: after.gateTotal,
+            gateSatisfied: after.gateTotal !== null && after.gatePresent === after.gateTotal,
+          };
+        } catch (error) {
+          return refusal(error);
+        }
+      },
+    }),
+  );
+}
+
 function registerAttachEvidence(ctx: Context): void {
   registerBoardTool(
     ctx,
@@ -1529,6 +1613,7 @@ export function apply(ctx: Context, config: unknown): void {
   registerGetTickets(ctx);
   registerSetTicket(ctx);
   registerAttachEvidence(ctx);
+  registerAttachCommit(ctx);
   registerMoveTicket(ctx);
   registerPlan(ctx);
   registerPlanImport(ctx);

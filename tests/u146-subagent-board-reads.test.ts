@@ -91,6 +91,7 @@ describe("#146 the access class is declared by each tool, not by a list", () => 
       "plan_meta",
     ]);
     expect(boardToolNames("write")).toEqual([
+      "attach_commit",
       "attach_evidence",
       "move_ticket",
       "plan_import",
@@ -205,6 +206,9 @@ describe("#146 the writes still refuse", () => {
 
     for (const [name, args] of [
       ["attach_evidence", { ticketId: ticket.id, kind: "review_pass" }],
+      // #178: agent-authorable, host-resolved -- and still refused for a
+      // subagent, which is what this file exists to prove.
+      ["attach_commit", { ticketId: ticket.id, hash: "abc1234" }],
       ["move_ticket", { ticketId: ticket.id, to: "in_progress" }],
       ["suggest_actions", { suggestions: [{ ticketId: ticket.id, actionId: "signoff", reason: "x" }] }],
       /*
@@ -234,6 +238,7 @@ describe("#146 the writes still refuse", () => {
       "a write tool was declared without a body-refusal test in this file",
     ).toEqual(
       [
+        "attach_commit",
         "attach_evidence",
         "move_ticket",
         "plan_import",
