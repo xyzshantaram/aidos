@@ -26965,6 +26965,11 @@ function _renderTicket(ticket) {
   return lines;
 }
 
+// src/kernel/board-key.ts
+function boardKeyText(row) {
+  return row.foreign === true && row.sourceSessionId !== void 0 ? row.sourceSessionId + ":" + String(row.id) : String(row.id);
+}
+
 // src/kernel/helpers.ts
 function deepClone(value) {
   return structuredClone(value);
@@ -28016,8 +28021,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean, created };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -28513,7 +28518,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     const deduped = dedupeBoardRows(tickets);
     if (deduped.reports.length > 0) {
-      const keyOf = (row) => row.foreign ? row.sourceSessionId + ":" + row.id : String(row.id);
+      const keyOf = (row) => boardKeyText(row);
       const keptEvidence = {};
       const keptComments = {};
       for (const row of deduped.rows) {
@@ -28705,21 +28710,50 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
       return { resolved: `refused: ${detail}` };
     }
-    const paths = revalidated.paths;
+    const paths = this._grantAllowlistPaths(agent, pending.ticketId, revalidated.paths);
+    return { resolved: `approved: ${paths.join(", ")}` };
+  }
+  /**
+   * Attach an approved allowlist and merge it into the ticket's field.
+   *
+   * Extracted from resolveApproval for #98 (signoff and allowlist are ONE
+   * decision, so the signoff run collects the paths and lands them by the
+   * same route). The caller has already validated: this method performs
+   * only the two writes and the merge, so an allowlist granted while
+   * signing off is indistinguishable on the board from one granted through
+   * an approval card — same user-authored row, same coverage gate, same
+   * field. Two entry points, one implementation; a second copy of this
+   * merge is how #112 happened.
+   */
+  _grantAllowlistPaths(agent, ticketId, paths) {
     this.userAttachEvidence(agent, {
-      ticketId: pending.ticketId,
+      ticketId,
       kind: "builtin:file_allowlist",
       payload: { paths }
     });
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    const covered = this._coveredAllowlistPaths(cache.state.evidence, pending.ticketId);
-    const stillGranted = (cache.state.tickets.get(pending.ticketId)?.allowlist ?? []).filter(
+    const covered = this._coveredAllowlistPaths(cache.state.evidence, ticketId);
+    const stillGranted = (cache.state.tickets.get(ticketId)?.allowlist ?? []).filter(
       (path) => covered.has(path)
     );
     const merged = [...stillGranted, ...paths];
-    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: merged });
-    return { resolved: `approved: ${paths.join(", ")}` };
+    this.userSetTicket(agent, { ticketId, allowlist: merged });
+    return paths;
+  }
+  userGrantAllowlist(agent, args) {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const raw = Array.isArray(args.paths) ? args.paths : [];
+    if (raw.length === 0) return { granted: [] };
+    const cwd = routed.session?.header?.cwd ?? "";
+    const validated = validateAllowlistPaths(cwd, raw);
+    if (!validated.ok) {
+      throw new Error(
+        "allowlist refused: " + validated.bad.map((b) => `${b.path} (${b.reason})`).join("; ")
+      );
+    }
+    return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
   }
   suggestActions(agent, args) {
     const sessionId = String(agent.session.id);
@@ -30176,6 +30210,7 @@ __decorateElement(_init, 1, "requestAllowlist", _requestAllowlist_dec, AidosServ
 __decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);
 __decorateElement(_init, 1, "pendingApprovals", _pendingApprovals_dec, AidosService);
 __decorateElement(_init, 1, "resolveApproval", _resolveApproval_dec, AidosService);
+__decorateElement(_init, 1, "userGrantAllowlist", _userGrantAllowlist_dec, AidosService);
 __decorateElement(_init, 1, "suggestActions", _suggestActions_dec, AidosService);
 __decorateElement(_init, 1, "actionNominations", _actionNominations_dec, AidosService);
 __decorateElement(_init, 1, "dismissNomination", _dismissNomination_dec, AidosService);

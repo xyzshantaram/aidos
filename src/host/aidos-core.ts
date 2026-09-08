@@ -53,6 +53,7 @@ import { parsePlan, renderPlan } from "../plan/plan";
 import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
+import { boardKeyText } from "../kernel/board-key";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
@@ -1882,8 +1883,16 @@ registerAidosSessionEventTypes(ctx);
      */
     const deduped = dedupeBoardRows(tickets);
     if (deduped.reports.length > 0) {
-      const keyOf = (row: BoardTicketView): string =>
-        row.foreign ? row.sourceSessionId + ":" + row.id : String(row.id);
+      /*
+       * ONE rule, imported. This was an inline copy of the client's
+       * boardKeyOf, so the two planes agreed by coincidence: the host
+       * writes the evidence and comment maps under this key and the client
+       * reads them back, and a divergence would orphan a row's evidence
+       * while the board went on rendering it. See kernel/board-key.ts —
+       * the bare id is a DISPLAY form for a local single-workspace
+       * context, never an address.
+       */
+      const keyOf = (row: BoardTicketView): string => boardKeyText(row);
       const keptEvidence: Record<string, EvidenceRow[]> = {};
       const keptComments: Record<string, CommentRecord[]> = {};
       for (const row of deduped.rows) {
@@ -2181,9 +2190,29 @@ registerAidosSessionEventTypes(ctx);
       );
       return { resolved: `refused: ${detail}` };
     }
-    const paths = revalidated.paths;
+    const paths = this._grantAllowlistPaths(agent, pending.ticketId, revalidated.paths);
+    return { resolved: `approved: ${paths.join(", ")}` };
+  }
+
+  /**
+   * Attach an approved allowlist and merge it into the ticket's field.
+   *
+   * Extracted from resolveApproval for #98 (signoff and allowlist are ONE
+   * decision, so the signoff run collects the paths and lands them by the
+   * same route). The caller has already validated: this method performs
+   * only the two writes and the merge, so an allowlist granted while
+   * signing off is indistinguishable on the board from one granted through
+   * an approval card — same user-authored row, same coverage gate, same
+   * field. Two entry points, one implementation; a second copy of this
+   * merge is how #112 happened.
+   */
+  private _grantAllowlistPaths(
+    agent: Agent,
+    ticketId: TicketId | number,
+    paths: string[],
+  ): string[] {
     this.userAttachEvidence(agent, {
-      ticketId: pending.ticketId,
+      ticketId,
       kind: "builtin:file_allowlist",
       payload: { paths },
     });
@@ -2230,13 +2259,66 @@ registerAidosSessionEventTypes(ctx);
      * given (round 1 wrapped this in a Set and the review proved it inert --
      * removing it left the suite green). Dedup has ONE owner.
      */
-    const covered = this._coveredAllowlistPaths(cache.state.evidence, pending.ticketId as TicketId);
-    const stillGranted = (cache.state.tickets.get(pending.ticketId)?.allowlist ?? []).filter(
+    const covered = this._coveredAllowlistPaths(cache.state.evidence, ticketId as TicketId);
+    const stillGranted = (cache.state.tickets.get(ticketId)?.allowlist ?? []).filter(
       (path) => covered.has(path),
     );
     const merged = [...stillGranted, ...paths];
-    this.userSetTicket(agent, { ticketId: pending.ticketId, allowlist: merged });
-    return { resolved: `approved: ${paths.join(", ")}` };
+    this.userSetTicket(agent, { ticketId, allowlist: merged });
+    return paths;
+  }
+
+  /**
+   * #98: the BOARD surface for granting an allowlist without an approval
+   * card — the signoff run's second step.
+   *
+   * Observed live: five signoffs meant five separate allowlist cards, ten
+   * interactions for five decisions, because signoff alone grants write
+   * access to NOTHING (the union is empty until a file_allowlist row
+   * exists) so the agent's first act after every signoff was to ask again.
+   *
+   * An EMPTY list is legal and writes nothing: a human may sign off now and
+   * scope the files later, which is exactly today's behaviour. The point is
+   * to remove the forced second round-trip, not to make the allowlist
+   * mandatory.
+   */
+  @Remote("userGrantAllowlist")
+  userGrantAllowlist(
+    agent: Agent,
+    args: { ticketId: TicketId | number | string; paths: string[] },
+  ): { granted: string[] } {
+    /*
+     * Routed exactly as every other user write is: a composite
+     * `sourceSessionId:id` sends the writes to the OWNING session, and a
+     * bare number stays here. #93's finding — a plain number made the
+     * router return the caller unchanged, so signing off foreign #12 wrote
+     * to own #12 — is why this goes through the same helper rather than
+     * resolving the id itself.
+     */
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const raw = Array.isArray(args.paths) ? args.paths : [];
+    if (raw.length === 0) return { granted: [] };
+    /*
+     * Validated HERE as well as at the approval card: this entry point
+     * takes paths straight from a textarea, so containment and existence
+     * are re-checked at grant time. The refusal names every bad path, the
+     * way #51's does.
+     */
+    /*
+     * The OWNING session's cwd, not the caller's: containment is judged
+     * against the workspace the ticket lives in, or a foreign grant is
+     * validated against the wrong root.
+     */
+    const cwd = routed.session?.header?.cwd ?? "";
+    const validated = validateAllowlistPaths(cwd, raw);
+    if (!validated.ok) {
+      throw new Error(
+        "allowlist refused: " +
+          validated.bad.map((b) => `${b.path} (${b.reason})`).join("; "),
+      );
+    }
+    return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
   }
 
   // ---- the action-nomination store (#93) --------------------------------

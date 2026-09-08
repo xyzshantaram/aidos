@@ -71,6 +71,16 @@ export interface QueueEntry {
   approvalId?: string;
   /** The paths the agent proposed, for an allowlist approval. */
   approvalPaths?: string[];
+  /**
+   * #98: paths the agent proposed WITH THE NOMINATION, so a signoff ask can
+   * read "sign off #92, and here are the files I want" as one card.
+   *
+   * Distinct from `approvalPaths` deliberately: that belongs to a pending
+   * approval the agent is BLOCKED on, this is a suggestion riding a gate
+   * ask nobody is waiting on. Collapsing the two would make a suggestion
+   * look like a block.
+   */
+  proposedPaths?: string[];
 }
 
 /**

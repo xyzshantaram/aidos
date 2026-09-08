@@ -18,6 +18,7 @@ import { compareTicketViews, filterTicketViews } from "../kernel/projections";
  */
 
 import { BUILTIN_KINDS, DEFAULT_GATES } from "../kernel/constants";
+import { boardKeyText } from "../kernel/board-key";
 import { STATE_ORDER } from "../kernel/types";
 import type { TicketState } from "../kernel/types";
 
@@ -75,11 +76,14 @@ export function asBoardKey(value: string): BoardKey {
  * ticket with that number. Anything addressing a board row uses this.
  */
 export function boardKeyOf(ticket: BoardKeyed): BoardKey {
-  return (
-    ticket.foreign === true && ticket.sourceSessionId !== undefined
-      ? ticket.sourceSessionId + ":" + ticket.id
-      : String(ticket.id)
-  ) as BoardKey;
+  /*
+   * The RULE lives in kernel/board-key.ts, because the host derives the
+   * same key when it writes the evidence and comment maps this addresses.
+   * This function keeps only the client's brand. A key written by one copy
+   * of the rule and read by another is the precise bug the canonical id
+   * exists to make impossible — and the host did hold a second copy.
+   */
+  return boardKeyText(ticket) as BoardKey;
 }
 
 /** The ticket fields the board logic reads. TicketView satisfies this. */

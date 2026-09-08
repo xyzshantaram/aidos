@@ -109,14 +109,49 @@ function stepsFor(entry: QueueEntry): Step[] {
       },
     ];
   }
-  return [
-    {
-      kind: "confirm",
-      title: titles[entry.actionId] ?? entry.label,
-      prompt: prompts[entry.actionId],
-      noteLabel: "Note (optional)",
-    },
-  ];
+  const confirm: Step = {
+    kind: "confirm",
+    title: titles[entry.actionId] ?? entry.label,
+    prompt: prompts[entry.actionId],
+    noteLabel: "Note (optional)",
+  };
+  /*
+   * #98: SIGNOFF AND ALLOWLIST ARE ONE DECISION.
+   *
+   * Observed live: five signoffs meant five more allowlist cards — ten
+   * interactions for five decisions — because signoff on its own grants
+   * write access to NOTHING. It moves the ticket to in_progress, which
+   * unlocks the write tools, and the boundary then refuses every path
+   * because the union is empty until a file_allowlist row exists. So the
+   * agent's first act after every signoff was to ask again. The board had
+   * split one decision ("you may work on this, here") into two.
+   *
+   * The second step is SKIPPABLE and starts empty when the agent proposed
+   * nothing: a human may legitimately sign off now and scope the files
+   * later, which leaves the ticket exactly as it is today. The point is to
+   * remove the forced round-trip, not to make the allowlist mandatory.
+   */
+  if (entry.actionId === "signoff") {
+    return [
+      confirm,
+      {
+        kind: "path-list",
+        title: "Files the agent may write for " + entry.ticket.title,
+        prompt:
+          "Signoff alone grants write access to nothing. Name the files and " +
+          "directories the agent may write while it works — or leave this " +
+          "empty and scope them later.",
+        label: "Paths (one per line, optional)",
+        /*
+         * Pre-filled from what the agent proposed WITH the nomination, and
+         * otherwise from whatever the ticket already carries, so the common
+         * case is a glance and a click rather than typing paths by hand.
+         */
+        paths: entry.proposedPaths ?? entry.ticket.allowlist ?? [],
+      },
+    ];
+  }
+  return [confirm];
 }
 
 /**
