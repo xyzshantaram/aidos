@@ -353,6 +353,53 @@ export function ticketEvidence(
     .filter((row) => row.kind !== "");
 }
 
+/**
+ * The FULL evidence records a get_evidence result carries (#164).
+ *
+ * Deliberately not `ticketEvidence`: that one reads get_ticket's bounded
+ * `excerpt` string (#92), and re-truncating here would discard the only
+ * thing this tool exists to deliver. The payload rides through whole so the
+ * card can render it with the same view the detail panel uses — a review
+ * read in the conversation should look like the review on the board, not
+ * like a JSON dump.
+ */
+export function evidenceRecords(
+  result: Record<string, unknown> | null,
+): Array<{
+  index: number;
+  kind: string;
+  author: string;
+  at?: number;
+  payload: Record<string, unknown>;
+}> {
+  return asArray(result?.evidence)
+    .map((row) => asRecord(row))
+    .filter((row): row is Record<string, unknown> => row !== null)
+    .map((row, position) => ({
+      index: typeof row.index === "number" ? row.index : position,
+      kind: asText(row.kind) ?? "",
+      author: asText(row.author) ?? "agent",
+      at: typeof row.at === "number" ? row.at : undefined,
+      payload: asRecord(row.payload) ?? {},
+    }))
+    .filter((row) => row.kind !== "");
+}
+
+/** The full comment bodies a get_evidence result carries when asked. */
+export function evidenceComments(
+  result: Record<string, unknown> | null,
+): Array<{ author: string; at?: number; body: string }> {
+  return asArray(result?.comments)
+    .map((row) => asRecord(row))
+    .filter((row): row is Record<string, unknown> => row !== null)
+    .map((row) => ({
+      author: asText(row.author) ?? "user",
+      at: typeof row.at === "number" ? row.at : undefined,
+      body: asText(row.body) ?? "",
+    }))
+    .filter((row) => row.body !== "");
+}
+
 /** The rows a board read returned, as `#id · state · title` lines. */
 export function ticketLines(result: Record<string, unknown> | null): TicketLine[] {
   return asArray(result?.tickets)

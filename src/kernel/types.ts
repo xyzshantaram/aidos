@@ -142,6 +142,16 @@ export interface GateDef {
 export interface AidosConfig {
   kinds: KindDef[];
   gates: GateDef[];
+  /**
+   * #136: the chain NAME reviews are dispatched on, never a model.
+   *
+   * A name, resolved by the harness at dispatch against the live profile,
+   * which is why switching profiles changes the models with no edit here.
+   * Defaults to DEFAULT_REVIEW_CHAIN ("frontier") — as a config default
+   * only. No chain name is hardcoded anywhere else, and the chain once
+   * literally named `partner` no longer exists.
+   */
+  reviewChain?: string;
   /** Ticket events inject a digest into the live agent's inbox (#63). */
   injectEnabled?: boolean;
   /** Debounce window for the injection digest, milliseconds. */
@@ -221,6 +231,15 @@ export class GateRefused extends Error {
   readonly toState: TicketState | null;
   readonly actor: Actor | null;
   readonly noGate: boolean;
+  /**
+   * #136: reviews that were DISCOUNTED for this decision, one reason each.
+   *
+   * Without this a ticket carrying a visible review_pass refuses for
+   * "missing evidence kinds: builtin:review_pass", and the human reads a
+   * refusal that contradicts what the board shows them. The reason names
+   * the chain finding instead.
+   */
+  readonly discountedReviews: string[];
 
   constructor(options: {
     missingKinds?: string[];
@@ -229,6 +248,7 @@ export class GateRefused extends Error {
     toState?: TicketState | null;
     actor?: Actor | null;
     noGate?: boolean;
+    discountedReviews?: string[];
   }) {
     const missingKinds = options.missingKinds ?? [];
     const allowedActors = options.allowedActors ?? [];
@@ -236,6 +256,7 @@ export class GateRefused extends Error {
     const toState = options.toState ?? null;
     const actor = options.actor ?? null;
     const noGate = options.noGate ?? false;
+    const discountedReviews = options.discountedReviews ?? [];
     let where = "";
     if (fromState !== null && toState !== null) {
       where = ` for ${fromState} -> ${toState}`;
@@ -255,6 +276,9 @@ export class GateRefused extends Error {
       if (allowedActors.length > 0) {
         parts.push(`allowed actors: ${allowedActors.join(", ")}`);
       }
+      if (discountedReviews.length > 0) {
+        parts.push(`discounted review(s): ${discountedReviews.join("; ")}`);
+      }
       detail = parts.join(" ") || "this gate permits no actor";
     }
     super(`Gate refused${where}${who}: ${detail}`);
@@ -264,6 +288,7 @@ export class GateRefused extends Error {
     this.toState = toState;
     this.actor = actor;
     this.noGate = noGate;
+    this.discountedReviews = discountedReviews;
   }
 }
 

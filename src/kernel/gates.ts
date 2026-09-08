@@ -5,8 +5,25 @@
 
 import { STATE_ORDER } from "./types";
 import { GateRefused } from "./types";
+import {
+  DEFAULT_REVIEW_CHAIN,
+  isInvalidatedReview,
+  judgeReviewRow,
+} from "./review-provenance";
 import type { EvidenceRow } from "./types";
 import type { AidosConfig, Actor, TicketSnapshot, TicketState } from "./types";
+
+/**
+ * The configured review chain NAME, or the default.
+ *
+ * A default in ONE place: every other reference reads the config. The name
+ * is never resolved to models here — the harness does that at dispatch,
+ * against the live profile.
+ */
+export function reviewChainOf(config: { reviewChain?: string }): string {
+  const configured = config.reviewChain;
+  return configured === undefined || configured === "" ? DEFAULT_REVIEW_CHAIN : configured;
+}
 
 /**
  * Say whether one transition is legal. The legal moves are the forward
@@ -69,6 +86,16 @@ export function checkGate(
   evidence: readonly EvidenceRow[],
   toState: TicketState,
   actor: Actor,
+  /*
+   * #136: the host's provenance reader, injected rather than imported.
+   *
+   * The gate stays a PURE function of its arguments — the harness service
+   * lives on the host plane and this module is used by the client bundle
+   * too. Absent (every existing caller), nothing changes: no row is
+   * dropped, and a review that cannot be judged counts exactly as it
+   * counts today. That is the required degradation, not a shortcut.
+   */
+  reviewProvenance?: (sessionId: string) => unknown,
 ): void {
   const fromState = ticket.state;
 
@@ -98,7 +125,21 @@ export function checkGate(
   }
 
   const attached = new Set<string>();
+  const invalidated: string[] = [];
   for (const row of evidence) {
+    /*
+     * #136: an INVALIDATED review does not count. That is the single
+     * strongest consequence this mechanism has, and it fires only on
+     * positive data (the harness recorded that the run left its declared
+     * chain, or ran on a chain that is not the review chain). Missing or
+     * unreadable provenance leaves the row counting as it always has.
+     */
+    if (isInvalidatedReview(row, reviewChainOf(config), reviewProvenance)) {
+      invalidated.push(
+        judgeReviewRow(row, reviewChainOf(config), reviewProvenance).reason,
+      );
+      continue;
+    }
     attached.add(row.kind);
   }
   const missing = gate.requiredKinds.filter((kind) => isMissing(gate, attached, kind));
@@ -112,6 +153,7 @@ export function checkGate(
       fromState,
       toState,
       actor,
+      discountedReviews: invalidated,
     });
   }
 }

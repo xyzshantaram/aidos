@@ -7,6 +7,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { registerAidosService } from "./aidos-core";
+import { configuredReviewChain, registerPartnerReview } from "./partner-review";
 
 export const inject = [
   "agents",
@@ -16,8 +17,17 @@ export const inject = [
   "workspaceRegistry",
 ] as const;
 
-/** Schemastery config for the aidos-core service. */
-export const Config = z.object({});
+/**
+ * Schemastery config for the aidos-core service.
+ *
+ * `reviewChain` is a chain NAME (#136), defaulting to "frontier". It is
+ * never a model id: the harness resolves the name at dispatch against the
+ * live profile, which is the whole point of naming a chain instead of
+ * pinning a model.
+ */
+export const Config = z.object({
+  reviewChain: z.string().default("frontier"),
+});
 
 /**
  * Mount the service on the host plane, unconditionally.
@@ -39,6 +49,18 @@ export const Config = z.object({});
  * ./session-events and the dsh-llm-fallbacks precedent).
  */
 export function apply(ctx: Context, config: unknown): () => void {
+  /*
+   * #136: the reviewer type registers here, and is INERT when the harness
+   * has no subagentTypes service — which is the case today. Guarded rather
+   * than injected on purpose: `inject` would park the whole aidos service
+   * until a service that may never arrive appears, and the board must mount
+   * regardless. Disposed with the plugin, so it unregisters cleanly.
+   */
+  const unregisterReviewer = registerPartnerReview(
+    ctx,
+    configuredReviewChain(config),
+  );
+  ctx.effect(() => unregisterReviewer);
   // Registering the aidos event types with the host session reader happens in
   // the AidosService constructor (see aidos-core.ts / session-events.ts); the
   // service mounts here, before any lazy session load. The persistence read

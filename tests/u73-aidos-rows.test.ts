@@ -52,6 +52,14 @@ function registeredAidosToolNames(): string[] {
   const AIDOS = new Set([
     "get_tickets",
     "get_ticket",
+    /*
+     * #164's read. It shipped with no client row, so the one tool whose
+     * entire purpose is the UNTRUNCATED payload rendered as the raw JSON
+     * fallback — precisely the failure the two assertions below exist to
+     * catch, missed because this set is the hardcoded list the header
+     * claims not to be. Keep it in step with the aidos tool registry.
+     */
+    "get_evidence",
     "set_ticket",
     "attach_evidence",
     "move_ticket",

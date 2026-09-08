@@ -10983,6 +10983,15 @@ var GateRefused = class extends Error {
   toState;
   actor;
   noGate;
+  /**
+   * #136: reviews that were DISCOUNTED for this decision, one reason each.
+   *
+   * Without this a ticket carrying a visible review_pass refuses for
+   * "missing evidence kinds: builtin:review_pass", and the human reads a
+   * refusal that contradicts what the board shows them. The reason names
+   * the chain finding instead.
+   */
+  discountedReviews;
   constructor(options2) {
     const missingKinds = options2.missingKinds ?? [];
     const allowedActors = options2.allowedActors ?? [];
@@ -10990,6 +10999,7 @@ var GateRefused = class extends Error {
     const toState = options2.toState ?? null;
     const actor = options2.actor ?? null;
     const noGate = options2.noGate ?? false;
+    const discountedReviews = options2.discountedReviews ?? [];
     let where = "";
     if (fromState !== null && toState !== null) {
       where = ` for ${fromState} -> ${toState}`;
@@ -11009,6 +11019,9 @@ var GateRefused = class extends Error {
       if (allowedActors.length > 0) {
         parts.push(`allowed actors: ${allowedActors.join(", ")}`);
       }
+      if (discountedReviews.length > 0) {
+        parts.push(`discounted review(s): ${discountedReviews.join("; ")}`);
+      }
       detail = parts.join(" ") || "this gate permits no actor";
     }
     super(`Gate refused${where}${who}: ${detail}`);
@@ -11018,6 +11031,7 @@ var GateRefused = class extends Error {
     this.toState = toState;
     this.actor = actor;
     this.noGate = noGate;
+    this.discountedReviews = discountedReviews;
   }
 };
 var UnknownKind = class extends Error {
@@ -25799,7 +25813,78 @@ var DEFAULT_CONFIG = {
 };
 var PLAN_CONTEXT_LIMIT = 2e3;
 
+// src/kernel/review-provenance.ts
+var DEFAULT_REVIEW_CHAIN = "frontier";
+function isRecordLike(value) {
+  return typeof value === "object" && value !== null;
+}
+function judgeReviewProvenance(record2, configuredChain) {
+  if (!isRecordLike(record2)) {
+    return {
+      standing: "unverified",
+      reason: "no chain provenance for this review run (the service is absent, the record was never written, or the row predates stamping) \u2014 proceeding as unverified, which is what missing data means"
+    };
+  }
+  const chain = typeof record2.chain === "string" ? record2.chain : void 0;
+  const contained = record2.contained;
+  if (typeof contained !== "boolean") {
+    return {
+      standing: "unverified",
+      reason: "the chain provenance record is malformed (no boolean `contained`), so it says nothing either way",
+      ...chain === void 0 ? {} : { chain }
+    };
+  }
+  if (!contained) {
+    return {
+      standing: "invalidated",
+      reason: "this review ran outside the chain it declared" + (chain === void 0 ? "" : " (" + chain + ")") + " \u2014 the result is invalid and the review should be re-run",
+      ...chain === void 0 ? {} : { chain }
+    };
+  }
+  if (chain !== configuredChain) {
+    return {
+      standing: "invalidated",
+      reason: "this review ran on chain " + (chain === void 0 ? "(unnamed)" : chain) + ", not the configured review chain " + configuredChain + " \u2014 the result is invalid and the review should be re-run",
+      ...chain === void 0 ? {} : { chain }
+    };
+  }
+  return {
+    standing: "verified",
+    reason: "every model that served this review belonged to chain " + chain,
+    chain
+  };
+}
+function reviewSessionIdOf(row) {
+  const payload = row.payload ?? {};
+  const stamp = payload.stamp;
+  if (isRecordLike(stamp) && typeof stamp.sessionId === "string" && stamp.sessionId !== "") {
+    return stamp.sessionId;
+  }
+  return void 0;
+}
+function judgeReviewRow(row, configuredChain, lookup) {
+  const sessionId = reviewSessionIdOf(row);
+  if (sessionId === void 0 || lookup === void 0) {
+    return judgeReviewProvenance(void 0, configuredChain);
+  }
+  let record2;
+  try {
+    record2 = lookup(sessionId);
+  } catch {
+    return judgeReviewProvenance(void 0, configuredChain);
+  }
+  return judgeReviewProvenance(record2, configuredChain);
+}
+function isInvalidatedReview(row, configuredChain, lookup) {
+  if (row.kind !== "builtin:review_pass") return false;
+  return judgeReviewRow(row, configuredChain, lookup).standing === "invalidated";
+}
+
 // src/kernel/gates.ts
+function reviewChainOf(config2) {
+  const configured = config2.reviewChain;
+  return configured === void 0 || configured === "" ? DEFAULT_REVIEW_CHAIN : configured;
+}
 function isLegalTransition(fromState, toState) {
   if (fromState === toState) {
     return true;
@@ -25817,7 +25902,7 @@ function isMissing(gate, attached, kind) {
   const excuse = gate.excusedBy?.[kind];
   return excuse === void 0 || !attached.has(excuse);
 }
-function checkGate(config2, ticket, evidence, toState, actor) {
+function checkGate(config2, ticket, evidence, toState, actor, reviewProvenance) {
   const fromState = ticket.state;
   if (!isLegalTransition(fromState, toState)) {
     throw new GateRefused({
@@ -25839,7 +25924,14 @@ function checkGate(config2, ticket, evidence, toState, actor) {
     });
   }
   const attached = /* @__PURE__ */ new Set();
+  const invalidated = [];
   for (const row of evidence) {
+    if (isInvalidatedReview(row, reviewChainOf(config2), reviewProvenance)) {
+      invalidated.push(
+        judgeReviewRow(row, reviewChainOf(config2), reviewProvenance).reason
+      );
+      continue;
+    }
     attached.add(row.kind);
   }
   const missing = gate.requiredKinds.filter((kind) => isMissing(gate, attached, kind));
@@ -25849,7 +25941,8 @@ function checkGate(config2, ticket, evidence, toState, actor) {
       allowedActors: gate.allowedActors,
       fromState,
       toState,
-      actor
+      actor,
+      discountedReviews: invalidated
     });
   }
 }

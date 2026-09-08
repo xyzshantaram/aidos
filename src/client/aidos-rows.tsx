@@ -61,6 +61,8 @@ import {
   planMetaFacts,
   suggestionLines,
   ticketEvidence,
+  evidenceRecords,
+  evidenceComments,
   ticketCaptionOf,
   ticketFacts,
   ticketFromProjection,
@@ -1359,10 +1361,96 @@ export function PlanMetaSetRow(props: AidosViewProps) {
   );
 }
 
+/**
+ * #164 read as a CARD, not as raw JSON.
+ *
+ * get_evidence shipped with no row here, so the one tool whose entire
+ * purpose is the untruncated payload rendered as the generic JSON fallback
+ * — the least readable surface on the board, for the most valuable read.
+ * A review fetched in the conversation now looks like the review on the
+ * ticket: the same EvidenceStrip, the same payload view, the same
+ * screenshot handling, because it is the same component.
+ */
+export function GetEvidenceRow(props: AidosViewProps) {
+  const { args, state, result, resultText, ticketId, errorText, errorSummary } =
+    useAidosRow(props);
+  const records = evidenceRecords(result);
+  const comments = evidenceComments(result);
+  /*
+   * The summary says WHAT WAS ASKED FOR, in the grammar the other reads
+   * use: one addressed row reads differently from "every row", and the
+   * collapsed line is where that distinction has to survive.
+   */
+  const index = typeof args?.index === "number" ? args.index : null;
+  const label = ticketLabel(props.sessionId, ticketId) ?? "ticket";
+  const summary =
+    index === null
+      ? label + " · evidence"
+      : label + " · evidence [" + String(index) + "]";
+
+  const body =
+    errorText !== null && errorText !== ""
+      ? errorBody(errorText)
+      : records.length === 0 && comments.length === 0
+        ? (result === null ? fallbackBody(resultText) : null)
+        : (
+            <>
+              <ul className="aidos-evidence-list">
+                {records.map((row) => (
+                  <EvidenceStrip
+                    key={String(row.index) + ":" + row.kind}
+                    row={{
+                      kind: row.kind,
+                      /*
+                       * The WHOLE payload, not an excerpt: the strip's own
+                       * payload view then renders notes, paths, commits and
+                       * screenshots exactly as the detail panel does.
+                       */
+                      payload: row.payload,
+                      author: row.author as "agent" | "user",
+                      at: row.at,
+                    }}
+                  />
+                ))}
+              </ul>
+              {/*
+                * The comment anatomy is the detail panel's, class for class
+                * (#82's lesson: three hand-ports of a look failed in a row,
+                * because approximating a design from memory does not
+                * converge). Inventing `aidos-comment-row` here would have
+                * shipped class names with no CSS behind them.
+                */}
+              {comments.map((comment, position) => (
+                <div className="aidos-comment" key={position}>
+                  <div>
+                    <span className="aidos-evidence-author">{comment.author}</span>
+                  </div>
+                  <p className="aidos-detail-body">{comment.body}</p>
+                </div>
+              ))}
+            </>
+          );
+
+  return (
+    <AidosRow
+      icon={<CompassIcon />}
+      title="Read evidence"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+      ticketId={ticketId}
+      sessionId={props.sessionId}
+      useProjection={props.useProjection}
+    />
+  );
+}
+
 /** Tool name -> row, for the slot registrations in index.ts. */
 export const AIDOS_ROWS: ReadonlyArray<[string, (props: AidosViewProps) => react.ReactElement]> = [
   ["get_tickets", GetTicketsRow],
   ["get_ticket", GetTicketRow],
+  ["get_evidence", GetEvidenceRow],
   ["set_ticket", SetTicketRow],
   ["attach_evidence", AttachEvidenceRow],
   ["move_ticket", MoveTicketRow],

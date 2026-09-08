@@ -92,9 +92,17 @@
         provider: spawn
         toolName: subagent
         backgroundMode: continuable
-      agentOptions:
-        provider: command-code
-        model: meta/muse-spark-1.3-contributor
+        # INSIDE config, not beside it. agentOptions is declared in the tool's
+        # Config schema and read as config.agentOptions when the start request
+        # is built; at row level nothing reads it, so a sibling key is a pin
+        # that silently does nothing and every subagent inherits the PARENT's
+        # provider/model. Observed live: subagents running the orchestrator
+        # head with no failover at all, because the failover layer only engages
+        # when a request's (provider, model) matches a rung of that agent's
+        # chain — and the inherited orchestrator model is a rung of none.
+        agentOptions:
+          provider: command-code
+          model: meta/muse-spark-1.3-contributor
 
     - id: tool-subagent-fork
       name: '@deepseek-ai/dsh-tool-subagent'
@@ -102,9 +110,10 @@
         provider: fork
         toolName: subagent_fork
         backgroundMode: continuable
-      agentOptions:
-        provider: command-code
-        model: meta/muse-spark-1.3-contributor
+        # Same fix as tool-subagent above, same reason.
+        agentOptions:
+          provider: command-code
+          model: meta/muse-spark-1.3-contributor
 
     - id: workflow-worker-thread
       name: '@deepseek-ai/dsh-workflow-worker-thread'
