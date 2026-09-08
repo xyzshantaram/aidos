@@ -32,6 +32,11 @@ import react from "react";
 import { renderMarkdownSafe } from "./safe-markdown";
 
 import { EvidenceStrip } from "./evidence-strip";
+import {
+  InlineAllowlistApproval,
+  InlineTicketAction,
+  isInlineActionId,
+} from "./inline-actions";
 import { TicketStrip } from "./ticket-strip";
 import { ModalShell } from "./ui";
 import {
@@ -1149,7 +1154,29 @@ export function RequestAllowlistRow(props: AidosViewProps) {
       ? errorBody(errorText)
       : paths.length === 0
         ? null
-        : <Facts facts={paths} />;
+        : (
+            <>
+              <Facts facts={paths} />
+              {/*
+                * APPROVE IT FROM HERE. The agent is BLOCKED on this card —
+                * of the three inline actions this is the one with a
+                * waiting process behind it — so sending the human to the
+                * board to answer is the worst round-trip of the set.
+                *
+                * The whole surface is the board's own AllowlistRequestCard,
+                * which polls for the pending request itself: it shows the
+                * editable paths while the ask is outstanding and renders
+                * nothing once answered, so a card scrolled back to later
+                * does not offer a button that would refuse.
+                */}
+              {props.sessionId !== undefined && ticketId !== null ? (
+                <InlineAllowlistApproval
+                  sessionId={props.sessionId}
+                  boardKey={String(ticketId)}
+                />
+              ) : null}
+            </>
+          );
   return (
     <AidosRow
       icon={<AllowlistIcon />}
@@ -1202,6 +1229,24 @@ export function SuggestActionsRow(props: AidosViewProps) {
                     * joins the shared grammar.
                     */}
                   <ListValue fact={expandableFact("reason", line.reason)} />
+                  {/*
+                    * INLINE ACTION: answer the ask where it was made.
+                    *
+                    * suggest_actions exists so the agent never writes a
+                    * queue in prose — but the card still sent the human to
+                    * the board to act on it, which is the same round-trip
+                    * one layer along. The button LAUNCHES the board's own
+                    * flow (inline-actions.tsx); it reimplements no write,
+                    * because a third copy of signoff is exactly what #98
+                    * and #123 cost.
+                    */}
+                  {props.sessionId !== undefined && isInlineActionId(line.actionId) ? (
+                    <InlineTicketAction
+                      sessionId={props.sessionId}
+                      boardKey={String(line.ticketId)}
+                      actionId={line.actionId}
+                    />
+                  ) : null}
                 </li>
               ))}
             </ul>

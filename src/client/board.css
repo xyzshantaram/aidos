@@ -1918,6 +1918,16 @@
   font-size: 0.75rem;
 }
 
+/* The allowlist approval, rendered inside its own tool card. It sits under
+   the path table with a rule above it, so the card reads as "here is what
+   I asked for" then "here is where you answer" rather than as one
+   undifferentiated block. */
+.aidos-inline-approval {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
 .aidos-merge-spinner {
   width: 14px;
   height: 14px;

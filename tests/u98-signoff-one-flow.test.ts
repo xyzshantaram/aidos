@@ -56,7 +56,10 @@ const SURFACES: ReadonlyArray<[string, string]> = [
   ["allowlist-editor.tsx", read("allowlist-editor.tsx")],
   ["send-back-modal.tsx", read("send-back-modal.tsx")],
   ["allowlist-request-card.tsx", read("allowlist-request-card.tsx")],
+  ["inline-actions.tsx", read("inline-actions.tsx")],
 ];
+
+const inlineActions = read("inline-actions.tsx");
 
 /**
  * The files that WRITE one evidence kind, named rather than counted.
@@ -149,5 +152,54 @@ describe("#123 verify has ONE implementation, and the queue reuses it", () => {
   it("the queue opens that modal rather than a lookalike step", () => {
     expect(queuePanel).toContain("<VerifyModal");
     expect(queuePanel).toContain("<SignoffDialog");
+  });
+});
+
+/**
+ * The inline tool-call actions (user, 2026-09-08) are a THIRD ENTRY POINT
+ * to the same flows, which is precisely the shape that has now cost four
+ * rounds. They are safe only because they launch and never write.
+ */
+describe("inline chat actions launch the board's flows and implement none", () => {
+  it("performs no board write of its own", () => {
+    /*
+     * The load-bearing assertion of the whole feature. A single
+     * callAidosRemote here would make chat a competing implementation of
+     * signoff/verify/approve -- the exact way "signoff carries the
+     * allowlist" became true in one place and false in another.
+     */
+    // Matched on CALL syntax, not on mentions: the header names these
+    // remotes to explain why it must not call them, and a test that cannot
+    // tell prose from code cries wolf and gets deleted.
+    expect(inlineActions).not.toContain("callAidosRemote(");
+    expect(inlineActions).not.toContain('"userAttachEvidence"');
+    expect(inlineActions).not.toContain('"userMoveTicket"');
+    expect(inlineActions).not.toContain('"resolveApproval"');
+    expect(inlineActions).not.toContain('"userGrantAllowlist"');
+  });
+
+  it("opens the SAME components the board opens", () => {
+    expect(inlineActions).toContain("<SignoffDialog");
+    expect(inlineActions).toContain("<VerifyModal");
+    expect(inlineActions).toContain("<AllowlistRequestCard");
+  });
+
+  it("refuses to grow a mark-done modal it cannot honestly show", () => {
+    /*
+     * MarkDoneModal needs the ticket row and its evidence to show what is
+     * being closed; a tool card has neither. The alternative -- a bare move
+     * from the chat card -- would be the third implementation. Opening the
+     * ticket is the honest answer, and this pins it.
+     */
+    expect(inlineActions).toContain('"mark-done": "Open on board"');
+    expect(inlineActions).toContain("setSelection(props.sessionId, props.boardKey)");
+    expect(inlineActions).not.toContain("<MarkDoneModal");
+  });
+
+  it("addresses tickets by BOARD KEY, not by a bare id", () => {
+    // #93: a bare number makes a foreign ticket resolve to the caller's own
+    // row with that id, so an action in chat would write to the wrong board.
+    expect(inlineActions).toContain("boardKey");
+    expect(inlineActions).not.toContain("ticketId: props.ticketId");
   });
 });
