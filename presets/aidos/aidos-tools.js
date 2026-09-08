@@ -27117,6 +27117,47 @@ function boardKeyText(row) {
   return row.foreign === true && row.sourceSessionId !== void 0 ? row.sourceSessionId + ":" + String(row.id) : String(row.id);
 }
 
+// src/kernel/next-step.ts
+var SUPPLIER = {
+  "builtin:user_signoff": "which only you can give",
+  "builtin:user_verified": "which only you can give",
+  "builtin:review_pass": "which only an independent review supplies",
+  "builtin:automated_check": "which is the agent's own record of a check it ran",
+  "builtin:user_commit": "which the host resolves from a real commit hash (attach_commit)",
+  "builtin:file_allowlist": "which an approved allowlist writes"
+};
+function forwardGate(config2, from) {
+  return config2.gates.find((gate) => gate.fromState === from && gate.toState !== from);
+}
+function nameKind(kind) {
+  const short = kind.replace(/^builtin:/, "");
+  const who = SUPPLIER[kind];
+  return who === void 0 ? short : short + " (" + who + ")";
+}
+function nextStep(config2, ticket, attached) {
+  if (ticket.state === "done") return void 0;
+  const gate = forwardGate(config2, ticket.state);
+  const missing = gate === void 0 ? [] : gate.requiredKinds.filter((kind) => isMissing(gate, attached, kind));
+  if (ticket.state === "open") {
+    const hasCriteria = (ticket.criteria ?? "").trim() !== "";
+    const hasAllowlist = (ticket.allowlist ?? []).length > 0;
+    if (!hasCriteria) {
+      return "this ticket has no criteria yet: state what will be built, how each part is tested, and what it is NOT addressing, then propose the files it needs \u2014 signoff can grant them in the same step";
+    }
+    if (!hasAllowlist) {
+      return "propose the files this ticket needs (request_allowlist): signoff on its own grants write access to nothing, and the boundary then refuses every write";
+    }
+    return missing.length === 0 ? void 0 : "ready for " + missing.map(nameKind).join(" and ");
+  }
+  if (missing.length === 0) {
+    if (ticket.state === "in_progress") {
+      return "the gate is satisfied: move it to awaiting_verification";
+    }
+    return void 0;
+  }
+  return "still needs " + missing.map(nameKind).join(" and ");
+}
+
 // src/kernel/digest.ts
 var DIGEST_SEPARATOR = " \u2014 ";
 function coalesceDigestLines(lines) {
@@ -28933,6 +28974,28 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
     }
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
+  }
+  /**
+   * #174: what this ticket needs next — THE single derivation.
+   *
+   * Lives on the service rather than in the tool layer because it has two
+   * consumers: every board tool result, and the digest lines about gate or
+   * evidence changes. Two copies of a rule drift, and this one drifting
+   * means the board telling the agent to attach evidence its own gate no
+   * longer wants — which teaches the agent to ignore the field, and then
+   * the channel is spent.
+   *
+   * Never throws: a ticket that cannot be read has no next step, and a piece
+   * of guidance must never be the reason a tool call or a digest fails.
+   */
+  nextStepFor(agent, ticketId) {
+    try {
+      const read = this.getTicket(this._routedAgent(agent, ticketId), { ticketId });
+      const attached = new Set(read.evidence.map((row) => row.kind));
+      return nextStep(this._resolvedConfig, read.ticket, attached);
+    } catch {
+      return void 0;
+    }
   }
   /**
    * #178: the AGENT's commit-evidence entry. Same resolution, same refusal.
@@ -31697,7 +31760,13 @@ function registerAttachCommit(ctx) {
             subject: { type: "string", required: true },
             gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
-            gateSatisfied: { type: "boolean", required: true }
+            gateSatisfied: { type: "boolean", required: true },
+            /*
+             * #174: what the ticket needs NOW, derived from the gate the
+             * board just re-evaluated. Absent when it needs nothing, so a
+             * reader can branch on it rather than parsing an empty string.
+             */
+            nextStep: { type: "string" }
           }
         },
         render: renderJson2
@@ -31718,7 +31787,11 @@ function registerAttachCommit(ctx) {
             subject: String(result.payload.subject ?? ""),
             gatePresent: after.gatePresent,
             gateTotal: after.gateTotal,
-            gateSatisfied: after.gateTotal !== null && after.gatePresent === after.gateTotal
+            gateSatisfied: after.gateTotal !== null && after.gatePresent === after.gateTotal,
+            ...(function() {
+              const step = ctx.aidos.nextStepFor(agent, after.id);
+              return step === void 0 ? {} : { nextStep: step };
+            })()
           };
         } catch (error51) {
           return refusal(error51);
@@ -31759,6 +31832,12 @@ function registerAttachEvidence(ctx) {
             gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateSatisfied: { type: "boolean", required: true },
+            /*
+             * #174: what the ticket needs NOW, derived from the gate the
+             * board just re-evaluated. Absent when it needs nothing, so a
+             * reader can branch on it rather than parsing an empty string.
+             */
+            nextStep: { type: "string" },
             confidenceScore: { type: "number", required: true }
           }
         },
@@ -31784,7 +31863,18 @@ function registerAttachEvidence(ctx) {
             gatePresent: after.gatePresent,
             gateTotal: after.gateTotal,
             gateSatisfied: after.gateTotal !== null && after.gatePresent !== null ? after.gatePresent >= after.gateTotal : false,
-            confidenceScore: after.confidenceScore
+            confidenceScore: after.confidenceScore,
+            /*
+             * #174: attaching evidence is the moment the gate MOVES, so it is
+             * the moment the next step is most worth stating — including the
+             * case that costs the most, where the row just attached was the
+             * last one missing and the ticket is now sitting finished in
+             * in_progress where nobody will review it.
+             */
+            ...(function() {
+              const step = ctx.aidos.nextStepFor(agent, after.id);
+              return step === void 0 ? {} : { nextStep: step };
+            })()
           };
         } catch (error51) {
           refusal(error51, { kind: args.kind });

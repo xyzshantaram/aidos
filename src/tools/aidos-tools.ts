@@ -1030,6 +1030,12 @@ function registerAttachCommit(ctx: Context): void {
             gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateSatisfied: { type: "boolean", required: true },
+            /*
+             * #174: what the ticket needs NOW, derived from the gate the
+             * board just re-evaluated. Absent when it needs nothing, so a
+             * reader can branch on it rather than parsing an empty string.
+             */
+            nextStep: { type: "string" },
           },
         },
         render: renderJson,
@@ -1051,6 +1057,10 @@ function registerAttachCommit(ctx: Context): void {
             gatePresent: after.gatePresent,
             gateTotal: after.gateTotal,
             gateSatisfied: after.gateTotal !== null && after.gatePresent === after.gateTotal,
+            ...(function () {
+              const step = ctx.aidos.nextStepFor(agent, after.id);
+              return step === undefined ? {} : { nextStep: step };
+            })(),
           };
         } catch (error) {
           return refusal(error);
@@ -1093,6 +1103,12 @@ function registerAttachEvidence(ctx: Context): void {
             gatePresent: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             gateSatisfied: { type: "boolean", required: true },
+            /*
+             * #174: what the ticket needs NOW, derived from the gate the
+             * board just re-evaluated. Absent when it needs nothing, so a
+             * reader can branch on it rather than parsing an empty string.
+             */
+            nextStep: { type: "string" },
             confidenceScore: { type: "number", required: true },
           },
         },
@@ -1128,6 +1144,17 @@ function registerAttachEvidence(ctx: Context): void {
                 ? after.gatePresent >= after.gateTotal
                 : false,
             confidenceScore: after.confidenceScore,
+            /*
+             * #174: attaching evidence is the moment the gate MOVES, so it is
+             * the moment the next step is most worth stating — including the
+             * case that costs the most, where the row just attached was the
+             * last one missing and the ticket is now sitting finished in
+             * in_progress where nobody will review it.
+             */
+            ...(function () {
+              const step = ctx.aidos.nextStepFor(agent, after.id);
+              return step === undefined ? {} : { nextStep: step };
+            })(),
           };
         } catch (error) {
           refusal(error, { kind: args.kind });

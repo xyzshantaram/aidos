@@ -72,6 +72,7 @@ import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { boardKeyText } from "../kernel/board-key";
+import { nextStep } from "../kernel/next-step";
 import { DIGEST_SEPARATOR, coalesceDigestLines } from "../kernel/digest";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
@@ -2338,6 +2339,29 @@ registerAidosSessionEventTypes(ctx);
       );
     }
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
+  }
+
+  /**
+   * #174: what this ticket needs next — THE single derivation.
+   *
+   * Lives on the service rather than in the tool layer because it has two
+   * consumers: every board tool result, and the digest lines about gate or
+   * evidence changes. Two copies of a rule drift, and this one drifting
+   * means the board telling the agent to attach evidence its own gate no
+   * longer wants — which teaches the agent to ignore the field, and then
+   * the channel is spent.
+   *
+   * Never throws: a ticket that cannot be read has no next step, and a piece
+   * of guidance must never be the reason a tool call or a digest fails.
+   */
+  nextStepFor(agent: Agent, ticketId: number | string): string | undefined {
+    try {
+      const read = this.getTicket(this._routedAgent(agent, ticketId), { ticketId });
+      const attached = new Set(read.evidence.map((row) => row.kind));
+      return nextStep(this._resolvedConfig, read.ticket, attached);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
