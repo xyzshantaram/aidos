@@ -8,7 +8,7 @@
 
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { workspaceKeyFromPath } from "../kernel/slug";
-import { WORKTREE_ROOT } from "../kernel/worktree";
+import { DSH_TMP_ROOT, WORKTREE_ROOT } from "../kernel/worktree";
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import type { FsTarget } from "@deepseek-ai/dsh-fs";
@@ -117,6 +117,31 @@ export function writeBoundaryReason(
     ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error instanceof Error ? error.message : String(error)}`);
     // No scratch root (no cwd) → skip the exemption, fall through to union.
   }
+  /*
+   * #157: /tmp/dsh is exempt too — the per-ticket worktrees AND the
+   * artifact area.
+   *
+   * The subagent refusal below sends the reader here in as many words:
+   * "work in this ticket's worktree under /tmp/dsh/aidos/<key>/<ticketId>,
+   * or in the scratch root; put larger artifacts in /tmp/dsh". Until now
+   * the boundary then refused those very paths, because they sit outside
+   * the workspace and therefore outside every allowlist. A guard that
+   * directs a reader somewhere and refuses it there is worse than one that
+   * simply says no: the reader follows the instruction, fails again, and
+   * learns that the messages cannot be trusted.
+   *
+   * It is also what makes per-ticket worktrees usable at all. A front is
+   * SUPPOSED to work in its worktree — #101 forbids the shared tree
+   * precisely so that it does — and a front that cannot write its own
+   * worktree has nowhere to work.
+   *
+   * Deliberately the whole of /tmp/dsh rather than only WORKTREE_ROOT:
+   * /tmp/dsh is the sanctioned area the refusal already names for
+   * artifacts, and splitting hairs between two subdirectories of it would
+   * reproduce the same "it told me to and then refused" failure one level
+   * down.
+   */
+  if (isUnder(DSH_TMP_ROOT, path)) return undefined;
   const cwd = agent.session?.header?.cwd;
   /*
    * #101: a SUBAGENT may not write the shared working tree at all.

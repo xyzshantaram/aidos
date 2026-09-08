@@ -31,6 +31,19 @@
 export const WORKTREE_ROOT = "/tmp/dsh/aidos";
 
 /**
+ * The sanctioned temp area as a whole: worktrees live under it, and so do
+ * the larger artifacts a subagent is told to leave outside the workspace.
+ *
+ * #157 made this an exemption in the write boundary. The subagent refusal
+ * names this directory as where to work instead, and until that ticket the
+ * boundary refused it too — so the instruction could not be followed. It is
+ * the whole of /tmp/dsh rather than just WORKTREE_ROOT because the refusal
+ * names both uses, and a boundary that allowed one and refused the other
+ * would recreate the same trap one level down.
+ */
+export const DSH_TMP_ROOT = "/tmp/dsh";
+
+/**
  * One ticket's worktree directory: `/tmp/dsh/aidos/<workspaceKey>/<id>`.
  *
  * Keyed by workspace first so several workspaces can be open at once without

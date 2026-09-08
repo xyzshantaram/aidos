@@ -27677,8 +27677,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
     const union2 = [];
     const seen = /* @__PURE__ */ new Set();
     for (const snapshot of cache.state.tickets.values()) {

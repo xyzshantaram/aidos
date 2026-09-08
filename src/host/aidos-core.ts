@@ -1454,8 +1454,28 @@ registerAidosSessionEventTypes(ctx);
 
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent: Agent): string[] {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
+    /*
+     * #157: read the DISPATCHING board, the same hop #146 gave the read
+     * tools.
+     *
+     * This resolved against `agent.session` — for a subagent, its own
+     * session, which holds no tickets. The union was therefore EMPTY for
+     * every dispatched front, so every workspace write failed no matter
+     * whose allowlist covered it, and the refusal named an arbitrary
+     * ticket (the first in-progress row of the parent's board) because
+     * getTickets DOES route. That mismatch is the bug: #146 routed the
+     * reads and left this write path on the child.
+     *
+     * Consequence, stated plainly and accepted on the ticket: a subagent
+     * inherits the orchestrator's whole union, so a front dispatched for
+     * one ticket can write another in-progress ticket's paths. That is the
+     * latitude the orchestrator already has, #101 still forbids the shared
+     * tree, and a per-dispatch binding is the tighter design to build when
+     * a dispatch can actually carry its ticket (see #136).
+     */
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
     const union: string[] = [];
     const seen = new Set<string>();
     for (const snapshot of cache.state.tickets.values()) {

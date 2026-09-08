@@ -10916,6 +10916,7 @@ import { delegationDepthOf as delegationDepthOf5 } from "@deepseek-ai/dsh-subage
 
 // src/kernel/worktree.ts
 var WORKTREE_ROOT = "/tmp/dsh/aidos";
+var DSH_TMP_ROOT = "/tmp/dsh";
 function worktreePathFor(workspaceKey, ticketId) {
   return `${WORKTREE_ROOT}/${workspaceKey}/${ticketId}`;
 }
@@ -28158,8 +28159,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /** The union of the in-progress tickets' allowlists (the write boundary). */
   allowlistUnion(agent) {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
+    const reader = this._boardAgent(agent);
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
     const union2 = [];
     const seen = /* @__PURE__ */ new Set();
     for (const snapshot of cache.state.tickets.values()) {
@@ -30267,6 +30269,7 @@ function writeBoundaryReason(ctx, agent, path) {
   } catch (error51) {
     ctx.logger?.warn?.(`aidos: scratch root unavailable in writeBoundaryReason: ${error51 instanceof Error ? error51.message : String(error51)}`);
   }
+  if (isUnder(DSH_TMP_ROOT, path)) return void 0;
   const cwd = agent.session?.header?.cwd;
   if (delegationDepthOf4(agent) !== 0 && cwd !== void 0 && isUnder(cwd, path)) {
     const workspaceKey = workspaceKeyFromPath(cwd);
