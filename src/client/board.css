@@ -1106,9 +1106,16 @@
 .aidos-tile-meta {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
   min-width: 0;
+}
+
+/* The id chip, copies chip, and pending-actions flag sit together on the
+   left; the state chip pins itself to the far edge. space-between spread
+   the row's children to its two ends, which misaligned the approval flag
+   whenever the row held three or more chips. */
+.aidos-tile-meta [class*="aidos-chip-state-"] {
+  margin-left: auto;
 }
 
 .aidos-tile-chips {
