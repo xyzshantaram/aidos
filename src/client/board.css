@@ -2942,9 +2942,24 @@
   line-height: 1.25rem;
 }
 
+/*
+ * THE ACTION-ROW RULE (#142, settling the #135 review note "button should
+ * be right-aligned").
+ *
+ * EVERY action row on an aidos card packs its controls to the BOTTOM-RIGHT:
+ * justify-content: flex-end, on its own row under the content it acts on.
+ * It is one rule rather than a nudge to one button because the placement
+ * was already inconsistent by one card -- the queue's action row
+ * (.aidos-ticket-strip-actionrow) and the vendored approval-actions row in
+ * tool-render both pack right, and this row did not, so
+ * the same class of control sat two ways in the same transcript. Right is
+ * the side the harness already chose, and a reader who learns where the
+ * commit button lives should not have to relearn it per card.
+ */
 .aidos-ticket-peek-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 0.75rem;
   padding-top: 0.5rem;
@@ -2961,8 +2976,11 @@
   gap: 0.375rem;
 }
 
+/* The activation notice sits UNDER the action row, not inside it: it is a
+   status line, not a control, and the action-row rule above is about
+   controls (#142). */
 .aidos-ticket-peek-note {
-  margin: 0;
+  margin: 0.375rem 0.25rem 0;
   color: var(--dsw-alias-label-tertiary, var(--text-secondary));
   font-size: 0.75rem;
   line-height: 1rem;
@@ -3159,6 +3177,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* #142: a list cell holding an EXPANDABLE value releases its own one-line
+   clamp -- the clamp moves to .aidos-tool-fact-clipped inside it, so the
+   "Show more" button is not cut off with the text it belongs to. The
+   expander markup itself is the facts table's, not a second one. */
+.aidos-tool-list-value {
+  overflow: visible;
+  white-space: normal;
+}
+
+.aidos-tool-fact-value {
+  display: block;
+  min-width: 0;
 }
 
 /*

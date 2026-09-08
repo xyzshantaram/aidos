@@ -48,11 +48,16 @@ import {
 import { asBoardKey } from "./board-logic";
 import { setSelection, ticketTitle } from "./view-state";
 import {
-  allowlistPaths,
+  allowlistFacts,
   boardQuerySummary,
+  expandableFact,
+  factText,
   findTicketsTabButton,
+  moveFacts,
   planBlocksWritten,
+  planImportFacts,
   planImportSummary,
+  planMetaFacts,
   suggestionLines,
   ticketEvidence,
   ticketCaptionOf,
@@ -60,7 +65,6 @@ import {
   ticketFromProjection,
   ticketTables,
   writtenFields,
-  oneLine,
   type Fact,
   type TicketTable,
 } from "./aidos-row-data";
@@ -366,6 +370,21 @@ function AidosRow(props: RowProps) {
                 * (single-view screen, strip absent), the ticket is already
                 * selected, so opening the tab by hand lands on it.
                 */}
+              {/*
+                * #142 (from the #135 review, "button should be
+                * right-aligned"): ONE alignment rule for every action row
+                * on an aidos card -- actions pack to the BOTTOM-RIGHT. The
+                * queue's action row and the vendored
+                * `.tool-render-approval-actions` already did; this one did
+                * not, so the same class of control sat two different ways
+                * one card apart. The rule is stated in board.css beside the
+                * declaration that implements it.
+                *
+                * The activation NOTICE is not an action, so it no longer
+                * rides inside the action row: a status line dragged to the
+                * right by a rule about buttons reads as a caption for the
+                * button rather than as the answer to the click.
+                */}
               <div className="aidos-ticket-peek-actions">
                 {canSelect ? (
                   <button
@@ -388,12 +407,12 @@ function AidosRow(props: RowProps) {
                     <PopOutIcon /> Open on board
                   </button>
                 ) : null}
-                {activationNotice !== null ? (
-                  <p className="aidos-ticket-peek-note" role="status">
-                    {activationNotice}
-                  </p>
-                ) : null}
               </div>
+              {activationNotice !== null ? (
+                <p className="aidos-ticket-peek-note" role="status">
+                  {activationNotice}
+                </p>
+              ) : null}
             </>
           ) : (
             <p className="aidos-ticket-peek-empty">
@@ -420,8 +439,14 @@ function Facts({ facts }: { facts: Fact[] }) {
   if (facts.length === 0) return null;
   return (
     <dl className="aidos-tool-facts">
-      {facts.map((fact) => (
-        <react.Fragment key={fact.label}>
+      {facts.map((fact, index) => (
+        /*
+         * #142: the index rides the key because a label is no longer
+         * unique. The allowlist table repeats "will be created" once per
+         * path, and a duplicate React key silently drops rows -- which on
+         * an approval card would hide a path the user is about to grant.
+         */
+        <react.Fragment key={fact.label + ":" + index}>
           <dt>{fact.label}</dt>
           <FactValue fact={fact} />
         </react.Fragment>
@@ -452,7 +477,6 @@ function Facts({ facts }: { facts: Fact[] }) {
  * teaches the reader that the control lies, everywhere in the UI.
  */
 function FactValue({ fact }: { fact: Fact }) {
-  const [expanded, setExpanded] = react.useState(false);
   const expandable = fact.full !== undefined && fact.full !== "";
   if (!expandable) {
     return (
@@ -461,8 +485,42 @@ function FactValue({ fact }: { fact: Fact }) {
       </dd>
     );
   }
+  return <ExpandableValue fact={fact} as="dd" />;
+}
+
+/**
+ * One expandable value, in whatever element its container needs.
+ *
+ * #142: the expander used to live inside `FactValue`, which renders a
+ * `<dd>` -- so the only way for another body shape to offer "show more" was
+ * to write a second one, and the pass exists to stop exactly that. The
+ * markup is the same either way; only the wrapper element differs (`dd`
+ * inside the facts grid, `span` inside a list row, where a stray `dd` would
+ * be invalid HTML).
+ */
+function ExpandableValue({ fact, as }: { fact: Fact; as: "dd" | "span" }) {
+  /*
+   * THE COLLAPSED DEFAULT, DECIDED HERE AND NOWHERE ELSE (#142).
+   *
+   * Show-more defaults COLLAPSED: a card is scanned far more often than it
+   * is read, and a body that opens every long value back into a wall is the
+   * thing the one-line rule exists to prevent.
+   *
+   * The ONE exception is a field this CALL changed -- `fact.open`, set by
+   * `writtenFields` for the arguments a set_ticket or plan_meta_set call
+   * actually wrote. The user asked for those without a second click, and
+   * they are the card's whole subject rather than context it read in
+   * passing. Untouched context (a ticket read, a gate, a move's states)
+   * stays collapsed. This is the one place the two behaviours legitimately
+   * coexist, so it is the one place the choice is made.
+   */
+  const [expanded, setExpanded] = react.useState(fact.open === true);
+  const Wrapper = as;
   return (
-    <dd data-expanded={expanded ? true : undefined}>
+    <Wrapper
+      className={as === "span" ? "aidos-tool-fact-value" : undefined}
+      data-expanded={expanded ? true : undefined}
+    >
       {expanded ? (
         <ExpandedFact fact={fact} />
       ) : (
@@ -483,7 +541,35 @@ function FactValue({ fact }: { fact: Fact }) {
       >
         {expanded ? "Show less" : "Show more"}
       </button>
-    </dd>
+    </Wrapper>
+  );
+}
+
+/**
+ * A value inside a LIST row, expandable when there is more to see.
+ *
+ * #142's rule is that a card never shows a truncated value the reader
+ * cannot open, whichever body shape it uses. A short value keeps the plain
+ * clipped span it always had -- an expander that reveals nothing teaches the
+ * reader the control lies.
+ */
+function ListValue({ fact }: { fact: Fact }) {
+  if (fact.full === undefined || fact.full === "") {
+    return (
+      <span className="aidos-tool-list-text" title={fact.value} data-dsh-tip="">
+        {fact.value}
+      </span>
+    );
+  }
+  return (
+    /*
+     * The clipping moves INWARD when the value can expand: the list cell's
+     * own one-line clamp would cut the "Show more" button off with the text
+     * it belongs to, so the cell releases it and the inner value keeps it.
+     */
+    <span className="aidos-tool-list-text aidos-tool-list-value">
+      <ExpandableValue fact={fact} as="span" />
+    </span>
   );
 }
 
@@ -641,7 +727,13 @@ export function errorBody(errorText: string | null): react.ReactNode | null {
   const facts: Fact[] = [];
   if (envelope.code !== null) facts.push({ label: "code", value: envelope.code });
   for (const [key, value] of Object.entries(envelope.extra)) {
-    facts.push({ label: key, value: oneLine(value) });
+    /*
+     * #142: through the expander like every other value. A refusal's extra
+     * fields are the interesting part -- the missing evidence kinds, the
+     * allowlist union it was checked against -- and they are exactly the
+     * structured values that flattening destroys.
+     */
+    facts.push(expandableFact(key, factText(value)));
   }
   if (envelope.message === null && facts.length === 0) {
     return <TextBody text={errorText} isError={true} />;
@@ -766,7 +858,15 @@ export function MoveTicketRow(props: AidosViewProps) {
    * the whole gate model is "you cannot move because X is missing". It was
    * previously one truncated line with nothing to expand.
    */
-  const facts = ticketFacts(result);
+  /*
+   * #142: `ticketFacts` reads `result.ticket`, which move_ticket does not
+   * return -- so a SUCCESSFUL move rendered an empty table and an inert
+   * chevron, while only a refusal had anything to expand. The transition
+   * the result does carry (`fromState`/`toState`) is the record of the
+   * call, so the card shows it. Both readers are kept: a future result that
+   * does carry a ticket still expands into it.
+   */
+  const facts = [...moveFacts(result), ...ticketFacts(result)];
   const body =
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
@@ -974,35 +1074,27 @@ export function GetTicketsRow(props: AidosViewProps) {
 
 export function RequestAllowlistRow(props: AidosViewProps) {
   const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
-  const paths = allowlistPaths(args, result);
+  const paths = allowlistFacts(args, result);
   const label = ticketLabel(props.sessionId, ticketId);
   const summary =
     (label ?? "allowlist") + " · " + paths.length + (paths.length === 1 ? " path" : " paths");
   /*
-   * Each path says whether approving it CREATES it (#104). That distinction
-   * is the informed half of informed consent: approving a path that exists
-   * grants write access to what is there, and approving one that does not
-   * also brings it into being.
+   * #142: THE PENDING LIST IS A TABLE. It was the last card answering
+   * "label: value about a ticket" with a bespoke `<ul>` and its own tag
+   * span, so the same data class had two grammars one card apart -- and a
+   * path longer than the card was cut by CSS with nothing to click.
+   *
+   * Each path still says whether approving it CREATES it (#104), now as the
+   * fact's LABEL: that distinction is the informed half of informed
+   * consent -- approving a path that exists grants write access to what is
+   * there, and approving one that does not also brings it into being.
    */
   const body =
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
       : paths.length === 0
         ? null
-        : (
-            <ul className="aidos-tool-list">
-              {paths.map((entry) => (
-                <li key={entry.path}>
-                  <span className="aidos-tool-list-text">{entry.path}</span>
-                  {entry.created ? (
-                    <span className="aidos-tool-list-tag" title="Does not exist yet; approving creates it" data-dsh-tip="">
-                      will be created
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          );
+        : <Facts facts={paths} />;
   return (
     <AidosRow
       icon={<AllowlistIcon />}
@@ -1044,9 +1136,17 @@ export function SuggestActionsRow(props: AidosViewProps) {
                 <li key={line.ticketId + ":" + line.actionId}>
                   <span className="aidos-tool-list-key">#{line.ticketId}</span>
                   <span className="aidos-tool-list-tag">{line.actionId}</span>
-                  <span className="aidos-tool-list-text" title={line.reason} data-dsh-tip="">
-                    {line.reason}
-                  </span>
+                  {/*
+                    * #142: the REASON is a value on a card, so it expands
+                    * like every other one. It is also the longest thing
+                    * here and the only part worth reading -- a nomination
+                    * whose reason is clipped at the card edge with no way
+                    * to open it is the "dumb summary" the pass exists to
+                    * remove. The card stays a LIST (the user's ruling was
+                    * that not everything becomes a table); only the value
+                    * joins the shared grammar.
+                    */}
+                  <ListValue fact={expandableFact("reason", line.reason)} />
                 </li>
               ))}
             </ul>
@@ -1104,24 +1204,17 @@ export function PlanImportRow(props: AidosViewProps) {
    * count it created is the fact that matters -- and a parse error names the
    * line, which is why the error body is worth expanding.
    */
-  const facts: Fact[] = [];
-  const imported = result?.imported ?? result?.count;
-  if (typeof imported === "number") facts.push({ label: "Imported", value: String(imported) });
-  if (typeof result?.projectId === "number") {
-    facts.push({ label: "Project", value: String(result.projectId) });
-  }
   /*
    * #120: the deletion outcome is a fact of the import, and a FAILURE is
    * the fact that matters most -- the tickets landed but the file the
    * import was supposed to consume is still on disk.
+   *
+   * #142: built by a reader in aidos-row-data, like every other card's
+   * facts, so the rule that every value goes through the expander is
+   * enforced in one testable place instead of inline in a component.
    */
-  const deleted = result?.deleted;
-  if (typeof deleted === "boolean") {
-    facts.push({ label: "Plan file", value: deleted ? "deleted" : "KEPT" });
-  }
-  if (typeof result?.deletionError === "string" && result.deletionError !== "") {
-    facts.push({ label: "Deletion error", value: result.deletionError });
-  }
+  const imported = result?.imported ?? result?.count;
+  const facts = planImportFacts(result);
   const body =
     errorText !== null && errorText !== ""
       ? errorBody(errorText)
@@ -1159,19 +1252,12 @@ export function PlanMetaRow(props: AidosViewProps) {
   const { args, state, result, resultText, errorText, errorSummary } = useAidosRow(props);
   const summary =
     args?.projectId === undefined ? "the plan blocks" : "project " + String(args.projectId);
-  const facts: Fact[] = [];
-  for (const block of ["frontmatter", "preamble"]) {
-    const value = result?.[block];
-    if (typeof value === "string") {
-      facts.push({ label: block, value: value === "" ? "(empty)" : value });
-    }
-  }
-  if (Array.isArray(result?.contextSections)) {
-    facts.push({
-      label: "contextSections",
-      value: String((result.contextSections as unknown[]).length),
-    });
-  }
+  /*
+   * #142: the plan blocks through the shared reader. This card used to drop
+   * a whole frontmatter document into its cell RAW -- not one-lined, not
+   * expandable -- the only value on any aidos card that skipped both.
+   */
+  const facts = planMetaFacts(result);
   const body =
     errorText !== null && errorText !== ""
       ? errorBody(errorText)

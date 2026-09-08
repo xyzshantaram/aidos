@@ -25,6 +25,7 @@ import {
 import { AIDOS_ROWS, errorBody, selectTitle } from "../src/client/aidos-rows";
 import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
 import {
+  allowlistFacts,
   boardQuerySummary,
   expandableFact,
   findTicketsTabButton,
@@ -547,10 +548,17 @@ describe("#73 every row can be expanded", () => {
   });
 
   it("expands an allowlist request into its paths", () => {
-    expect(rows).toContain("allowlistPaths(args, result)");
-    // #104: which paths approving would CREATE is the informed half of
-    // informed consent.
-    expect(rows).toContain("will be created");
+    /*
+     * #142 moved this card's bespoke <ul> onto the shared facts table, so
+     * the row now asks the data module for FACTS. The path data itself is
+     * unchanged -- and #104's "which paths approving would CREATE" survives
+     * the move as the fact's label, asserted against `allowlistFacts` in
+     * the #142 suite rather than by grepping this component for the word.
+     */
+    expect(rows).toContain("allowlistFacts(args, result)");
+    expect(allowlistFacts({ paths: ["a/b"] }, { created: ["a/b"] })[0].label).toBe(
+      "will be created",
+    );
   });
 
   it("expands a nomination into its REASONS, not just a count", () => {

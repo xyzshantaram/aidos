@@ -34,6 +34,16 @@ export interface Fact {
   value: string;
   full?: string;
   markdown?: boolean;
+  /**
+   * #142: this fact starts EXPANDED.
+   *
+   * The settled rule is "show-more defaults COLLAPSED, except a field this
+   * CALL actually changed". Only the producer can tell the two apart -- the
+   * label `criteria` is the edit itself on a set_ticket card and untouched
+   * context on a read -- so the exception rides the data and is honoured in
+   * exactly one place (FactValue), rather than being re-decided per card.
+   */
+  open?: boolean;
 }
 
 /** One ticket line in a board-read body. */
@@ -107,6 +117,26 @@ export function oneLine(value: unknown, max = 120): string {
 }
 
 /**
+ * #142: ANY value as the source text of an expandable fact.
+ *
+ * `oneLine` alone is not enough for a fact built from an arbitrary argument:
+ * it returns the already-flattened line, and `expandableFact` needs the
+ * ORIGINAL to decide whether flattening lost anything. A string is its own
+ * source; anything else is pretty-printed, so the expander reveals the
+ * structure the one-line form destroyed (an allowlist array, a nested
+ * payload) instead of the same squashed string again.
+ */
+export function factText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
  * One fact that can expand IN PLACE to its untruncated text.
  *
  * User direction (2026-09-05): "every ellipsized strip should have a show
@@ -125,7 +155,7 @@ export function oneLine(value: unknown, max = 120): string {
 export function expandableFact(
   label: string,
   text: string,
-  options?: { max?: number; markdown?: boolean },
+  options?: { max?: number; markdown?: boolean; open?: boolean },
 ): Fact {
   const value = oneLine(text, options?.max);
   const trimmed = text.trim();
@@ -148,12 +178,19 @@ export function expandableFact(
    */
   const cut = trimmed !== value;
   const structural = /\n/.test(trimmed);
+  /*
+   * `open` is dropped along with `full`: a fact with nothing more to show
+   * has no expanded state to start in, and claiming one would make the
+   * "changed field" rule look like it did something on a fact where it
+   * cannot.
+   */
   if (!cut && !structural) return { label, value };
   return {
     label,
     value,
     full: trimmed,
     ...(options?.markdown === true ? { markdown: true } : {}),
+    ...(options?.open === true ? { open: true } : {}),
   };
 }
 
@@ -196,13 +233,18 @@ export function ticketFacts(result: Record<string, unknown> | null): Fact[] {
   if (body !== null && body.trim() !== "") {
     facts.push(expandableFact("Body", body, { markdown: true }));
   }
+  /*
+   * #142: a joined list is a FLATTENED value, so it expands like any other.
+   * A twelve-path allowlist is cut at the same 120 characters a description
+   * is, and before this the rest was simply gone from the card.
+   */
   const allowlist = asArray(ticket.allowlist);
   if (allowlist.length > 0) {
-    facts.push({ label: "Allowlist", value: allowlist.map((p) => String(p)).join(" · ") });
+    facts.push(expandableFact("Allowlist", allowlist.map((p) => String(p)).join(" · ")));
   }
   const dependsOn = asArray(ticket.dependsOn);
   if (dependsOn.length > 0) {
-    facts.push({ label: "Depends on", value: dependsOn.map((d) => String(d)).join(" · ") });
+    facts.push(expandableFact("Depends on", dependsOn.map((d) => String(d)).join(" · ")));
   }
   const comments = result?.commentCount;
   if (typeof comments === "number" && comments > 0) {
@@ -395,13 +437,37 @@ export function boardQuerySummary(args: Record<string, unknown> | null): string 
  */
 const SET_TICKET_ADDRESSING = new Set(["ticketId", "projectId"]);
 
+/**
+ * #142: the edit card's fields go through `expandableFact`, like every
+ * other card's do.
+ *
+ * This function was the ONE outlier in the consistency pass: it called
+ * `oneLine` directly, so a written description was cut at 120 characters
+ * with no way to see the rest -- on the card whose entire job is to show
+ * what an otherwise invisible edit wrote. Its siblings (ticketFacts,
+ * ticketTableOf) had used the expander since #73.
+ *
+ * `open: true` is the one place the collapsed default is waived, per the
+ * settled rule: these fields are what this CALL changed, not context it
+ * happened to read, and the user asked to see them without a second click.
+ * `markdown` for the prose fields for the same reason ticketFacts marks
+ * them: a description rendered as literal asterisks is the defect the
+ * digest was fixed for.
+ */
+const MARKDOWN_FIELDS = new Set(["description", "body"]);
+
 export function writtenFields(args: Record<string, unknown> | null): Fact[] {
   if (args === null) return [];
   const facts: Fact[] = [];
   for (const [key, value] of Object.entries(args)) {
     if (SET_TICKET_ADDRESSING.has(key)) continue;
     if (value === undefined) continue;
-    facts.push({ label: key, value: oneLine(value) });
+    facts.push(
+      expandableFact(key, factText(value), {
+        open: true,
+        ...(MARKDOWN_FIELDS.has(key) ? { markdown: true } : {}),
+      }),
+    );
   }
   return facts;
 }
@@ -423,6 +489,99 @@ export function allowlistPaths(
     const path = String(p);
     return { path, created: created.has(path) };
   });
+}
+
+/**
+ * #142: THE PENDING LIST, AS A TABLE.
+ *
+ * The pending allowlist request was the one card that answered "label:
+ * value about a ticket" with a bespoke `<ul>` -- its own list chrome, its
+ * own tag span, and no expander, so a path longer than the card was cut by
+ * CSS with nothing to click. The user's ruling was "make the pending list a
+ * table", and this is that table: the same `Facts` grid every other card
+ * body uses.
+ *
+ * The STATUS is the label and the PATH is the value, not the other way
+ * round. A `dt` is nowrap and sized to its content, so a long path in the
+ * label column would blow the grid out and could never expand; as the value
+ * it clips to one line and offers its full form like any other fact. The
+ * "will be created" wording is kept verbatim from the list it replaces --
+ * it is #104's informed half of informed consent, not decoration.
+ */
+export function allowlistFacts(
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+): Fact[] {
+  return allowlistPaths(args, result).map((entry) =>
+    expandableFact(entry.created ? "will be created" : "exists", entry.path),
+  );
+}
+
+/**
+ * #142: what a MOVE did, as facts.
+ *
+ * move_ticket is one of the cards that renders a facts table, but its table
+ * was only ever populated from `result.ticket` -- a field the tool does not
+ * return -- so a SUCCESSFUL move had an empty body and no chevron at all,
+ * while a refused one expanded into its reason. The result carries
+ * `fromState`/`toState`; the transition is the whole record of the call, so
+ * the card shows it rather than being a dumb summary.
+ */
+export function moveFacts(result: Record<string, unknown> | null): Fact[] {
+  const from = asText(result?.fromState);
+  const to = asText(result?.toState);
+  if (from === null || to === null) return [];
+  return [
+    { label: "From", value: from },
+    { label: "To", value: to },
+  ];
+}
+
+/**
+ * #142: the plan blocks a `plan_meta` read returned.
+ *
+ * Lifted out of the component with the rest of the readers, and put through
+ * the expander: a frontmatter block is a multi-line YAML document, and the
+ * card used to drop it into the cell RAW -- neither one-lined nor
+ * expandable, the only value on any aidos card that was not.
+ */
+export function planMetaFacts(result: Record<string, unknown> | null): Fact[] {
+  const facts: Fact[] = [];
+  for (const block of ["frontmatter", "preamble"]) {
+    const value = result?.[block];
+    if (typeof value === "string") {
+      facts.push(value === "" ? { label: block, value: "(empty)" } : expandableFact(block, value));
+    }
+  }
+  const sections = result?.contextSections;
+  if (Array.isArray(sections)) {
+    facts.push({ label: "contextSections", value: String(sections.length) });
+  }
+  return facts;
+}
+
+/**
+ * #142: what an import did, as facts.
+ *
+ * #120's deletion outcome and its error message keep their meaning; the
+ * error is the one long value here, so it expands like every other.
+ */
+export function planImportFacts(result: Record<string, unknown> | null): Fact[] {
+  const facts: Fact[] = [];
+  const imported = result?.imported ?? result?.count;
+  if (typeof imported === "number") facts.push({ label: "Imported", value: String(imported) });
+  if (typeof result?.projectId === "number") {
+    facts.push({ label: "Project", value: String(result.projectId) });
+  }
+  const deleted = result?.deleted;
+  if (typeof deleted === "boolean") {
+    facts.push({ label: "Plan file", value: deleted ? "deleted" : "KEPT" });
+  }
+  const deletionError = result?.deletionError;
+  if (typeof deletionError === "string" && deletionError !== "") {
+    facts.push(expandableFact("Deletion error", deletionError));
+  }
+  return facts;
 }
 
 /** The nominations a suggest_actions call made. */
