@@ -56,6 +56,46 @@ const SORT_OPTIONS: { key: AppliedState["sortKey"]; label: string }[] = [
   { key: "alpha", label: "Alphabetical" },
 ];
 
+/**
+ * How long the panel waits before a change lands, in milliseconds.
+ *
+ * Exported so the rule is a value a test can read rather than a number
+ * buried in a setTimeout. "A second or two" was the brief: long enough to
+ * absorb a burst of clicks, short enough that nobody starts looking for the
+ * button that used to be there.
+ */
+export const FILTER_APPLY_DELAY_MS = 1200;
+
+/**
+ * What replaced the Apply button: the panel's own account of itself.
+ *
+ * Three states, and the middle one is the reason this exists. PENDING says
+ * a change is coming, so a board that has not updated yet is never mistaken
+ * for one that is stuck -- with no button to press, that ambiguity is the
+ * whole risk of auto-applying. DIRTY-but-not-pending means a staged change
+ * whose settle was cancelled (the panel was reopened, say), which earns a
+ * plain word rather than an animation. Otherwise the board matches the
+ * filters and the panel says nothing at all.
+ */
+function FilterApplyStatus(props: { pending: boolean; dirty: boolean }) {
+  if (props.pending) {
+    return (
+      <span className="aidos-filter-status" aria-live="polite">
+        <span className="aidos-merge-spinner" />
+        <span>Filtering…</span>
+      </span>
+    );
+  }
+  if (props.dirty) {
+    return (
+      <span className="aidos-filter-status" aria-live="polite">
+        <span>Not applied yet</span>
+      </span>
+    );
+  }
+  return <span className="aidos-filter-status" />;
+}
+
 export function FilterPanel(props: FilterPanelProps) {
   const sessionId = props.sessionId;
   const stagedRef = react.useRef(getStagedState(sessionId));
@@ -63,11 +103,49 @@ export function FilterPanel(props: FilterPanelProps) {
   const [searchInput, setSearchInput] = react.useState(stagedRef.current.search);
   const [focused, setFocused] = react.useState(false);
   const debounceRef = react.useRef<number | null>(null);
+  /*
+   * THE FILTER APPLIES ITSELF (user, 2026-09-08). There is no Apply button:
+   * a change lands on its own after a short settle, and the panel says so
+   * while it waits.
+   *
+   * The settle is not zero on purpose. Applying on every keystroke and
+   * every checkbox re-filters and re-renders the whole board mid-gesture,
+   * which is worse than a button for anyone who ticks three states in a
+   * row. A second or two is long enough to absorb a burst of clicks and
+   * short enough that nobody reaches for a button that is not there.
+   *
+   * The SPINNER is the other half of dropping the button, and it is not
+   * decoration: without a button, an interface that has not updated yet is
+   * indistinguishable from one that is stuck. The spinner says "your click
+   * landed, the board is about to change".
+   */
+  const applyRef = react.useRef<number | null>(null);
+  const [applyPending, setApplyPending] = react.useState(false);
+
+  /** Schedule the staged state to land, replacing any pending settle. */
+  function scheduleApply(next: AppliedState) {
+    if (applyRef.current !== null) window.clearTimeout(applyRef.current);
+    setApplyPending(true);
+    applyRef.current = window.setTimeout(function () {
+      applyRef.current = null;
+      setApplyPending(false);
+      props.onApply(next);
+    }, FILTER_APPLY_DELAY_MS);
+  }
+
+  /** Land the staged state NOW, cancelling any settle. For explicit acts. */
+  function applyNow(next: AppliedState) {
+    if (applyRef.current !== null) window.clearTimeout(applyRef.current);
+    applyRef.current = null;
+    setApplyPending(false);
+    props.onApply(next);
+  }
 
   function updateStaged(next: AppliedState) {
     stagedRef.current = next;
     setStaged(next);
     setStagedState(sessionId, next);
+    scheduleApply(next);
   }
 
   function updateSearch(value: string) {
@@ -91,6 +169,14 @@ export function FilterPanel(props: FilterPanelProps) {
   react.useEffect(function () {
     return function () {
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+      /*
+       * A pending settle dies with the panel. Firing onApply from a
+       * cleanup would push a filter change into a parent that is unmounting
+       * or has already moved on -- and the staged state is durable
+       * (setStagedState), so nothing is lost: reopening the panel shows the
+       * same staging and applies it on the next touch.
+       */
+      if (applyRef.current !== null) window.clearTimeout(applyRef.current);
     };
   }, []);
 
@@ -116,13 +202,20 @@ export function FilterPanel(props: FilterPanelProps) {
     updateStaged({ ...staged, projectIds });
   }
 
-  function apply() {
-    props.onApply(staged);
-  }
-
   function reset() {
+    /*
+     * Reset lands IMMEDIATELY. It is an explicit "put it back", not part of
+     * a burst of adjustments, so making the user watch a spinner for it
+     * would be ceremony. It still writes the staged store first, so the
+     * cleared state is what a reopened panel shows.
+     */
     setSearchInput("");
-    updateStaged(cloneAppliedState(DEFAULT_APPLIED));
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    const cleared = cloneAppliedState(DEFAULT_APPLIED);
+    stagedRef.current = cleared;
+    setStaged(cleared);
+    setStagedState(sessionId, cleared);
+    applyNow(cleared);
   }
 
   const projectRows =
@@ -271,12 +364,7 @@ export function FilterPanel(props: FilterPanelProps) {
 
   const actionRows = (
     <div className="aidos-actions-row">
-      <button
-        className={dirty ? "aidos-btn aidos-btn-dot" : "aidos-btn"}
-        onClick={apply}
-      >
-        Apply
-      </button>
+      <FilterApplyStatus pending={applyPending} dirty={dirty} />
       <button className="aidos-btn" onClick={reset}>
         Reset
       </button>
@@ -413,12 +501,7 @@ export function FilterPanel(props: FilterPanelProps) {
             </div>
           ) : null}
         </div>
-        <button
-          className={dirty ? "aidos-btn aidos-btn-dot" : "aidos-btn"}
-          onClick={apply}
-        >
-          Apply
-        </button>
+        <FilterApplyStatus pending={applyPending} dirty={dirty} />
         <button className="aidos-btn" onClick={reset}>
           Reset
         </button>

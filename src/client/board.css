@@ -1904,6 +1904,20 @@
   font-size: 12px;
 }
 
+/* The filter panel's self-report, where the Apply button used to be
+   (2026-09-08). It holds the row's height whether or not it has anything
+   to say, so the Reset button beside it does not jump when a filter
+   settles -- a control that moves under the cursor is worse than the
+   button that was removed. */
+.aidos-filter-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 2rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 .aidos-merge-spinner {
   width: 14px;
   height: 14px;
