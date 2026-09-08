@@ -46,6 +46,19 @@ export interface EvidenceStripProps {
   criterionLabel?: string;
   /** Clears the row's criterion link (the ⨯-adjacent unlink affordance). */
   onUnlink?: () => void;
+  /**
+   * #136: what chain this review ran on, when the host could tell.
+   *
+   * PROGRESSIVELY DEGRADING BY DESIGN, and the absent case is the important
+   * one: `undefined` and `"unverified"` render NOTHING. Every review row
+   * that exists today is unstamped, so today this feature is invisible and
+   * no old row acquires a mark, a downgrade or a migration. A row created
+   * once the harness stamps runs gains the check; a row the harness says
+   * ran off its declared chain gains a warning.
+   */
+  standing?: "verified" | "unverified" | "invalidated";
+  /** The one-line reason, shown as the badge's tooltip. */
+  standingReason?: string;
 }
 
 export function EvidenceStrip(props: EvidenceStripProps) {
@@ -63,6 +76,22 @@ export function EvidenceStrip(props: EvidenceStripProps) {
         >
           <span className="aidos-chip-key">{kindKeyword(row.kind)}</span>
         </span>
+        {props.standing === "verified" || props.standing === "invalidated" ? (
+          <span
+            className={
+              "aidos-review-standing aidos-review-standing-" + props.standing
+            }
+            title={props.standingReason ?? ""}
+            data-dsh-tip=""
+            aria-label={
+              props.standing === "verified"
+                ? "This review ran through the configured reviewer chain"
+                : "This review did not run on the chain it declared"
+            }
+          >
+            {props.standing === "verified" ? "\u2713" : "\u26a0"}
+          </span>
+        ) : null}
         <span className="aidos-evidence-strip-body">
           {excerpt !== null ? (
             <span className="aidos-evidence-strip-excerpt">{excerpt}</span>

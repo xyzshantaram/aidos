@@ -26651,6 +26651,79 @@ function foldAidosEvents(state, event) {
   }
 }
 
+// src/host/partner-review.ts
+var PARTNER_REVIEW_TYPE = "partner_review";
+var REVIEWER_PERSONA = "You are a review partner. You review the DIFF and the ticket's criteria from the board; the worker's own report is context only, never the thing you review. Answer explicitly, per ticket, which criteria have NO corresponding diff hunk: omission is the defect class this exists to catch, and a diff-only reading is structurally blind to it. Your deliverable is the review document at the path in your brief \u2014 not a summary message, which would invite the orchestrator to review the summary instead of the work.";
+var REVIEWER_DENY = [
+  "set_ticket",
+  "attach_evidence",
+  "move_ticket",
+  "plan_import",
+  "plan_meta_set",
+  "request_allowlist",
+  "suggest_actions",
+  "subagent",
+  "subagent_fork",
+  "ralph",
+  "workflow"
+];
+function serviceOf(ctx, name) {
+  try {
+    return ctx.get(name);
+  } catch {
+    return void 0;
+  }
+}
+function registerPartnerReview(ctx, reviewChain) {
+  const service = serviceOf(ctx, "subagentTypes");
+  if (service === void 0 || typeof service.register !== "function") {
+    return () => {
+    };
+  }
+  try {
+    const dispose = service.register({
+      name: PARTNER_REVIEW_TYPE,
+      description: "Dispatch an independent review of ticket work on the configured review chain. The reviewer reads the board and the diff, and writes a batch-review document; it cannot write to the board itself.",
+      /*
+       * A NAME, never a model. The harness resolves it at dispatch against
+       * the live profile, so switching profiles changes the models with no
+       * edit here. An unknown name is a hard error at dispatch on the
+       * harness side — surfaced, never silently downgraded to the parent's
+       * model.
+       */
+      chain: reviewChain,
+      toolFilter: { deny: REVIEWER_DENY },
+      persona: REVIEWER_PERSONA,
+      maxDepth: 1
+    });
+    return typeof dispose === "function" ? dispose : () => {
+    };
+  } catch {
+    return () => {
+    };
+  }
+}
+function reviewProvenanceReader(ctx) {
+  const service = serviceOf(ctx, "chainProvenance");
+  if (service === void 0 || typeof service.forSession !== "function") {
+    return void 0;
+  }
+  return (sessionId) => {
+    try {
+      return service.forSession(sessionId);
+    } catch {
+      return void 0;
+    }
+  };
+}
+function configuredReviewChain(config2) {
+  if (typeof config2 === "object" && config2 !== null) {
+    const value = config2.reviewChain;
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return DEFAULT_REVIEW_CHAIN;
+}
+
 // src/kernel/projections.ts
 function confidenceScoreOf(config2, evidence) {
   const weights = /* @__PURE__ */ new Map();
@@ -27630,8 +27703,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean, created };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -28507,6 +28580,28 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   userAttachEvidence(agent, args) {
     return this._attachEvidence(this._routedAgent(agent, args.ticketId), args, "user");
+  }
+  reviewStandings(agent, args) {
+    const chain = reviewChainOf(this._resolvedConfig);
+    const lookup = reviewProvenanceReader(this.ctx);
+    let evidence = [];
+    try {
+      evidence = this.getTicket(this._routedAgent(agent, args.ticketId), {
+        ticketId: args.ticketId
+      }).evidence;
+    } catch {
+      return { chain, rows: [] };
+    }
+    const rows = evidence.filter((row) => row.kind === "builtin:review_pass" || row.kind === "builtin:review_fail").map((row) => {
+      const judgement = judgeReviewRow(row, chain, lookup);
+      return {
+        at: row.at,
+        kind: row.kind,
+        standing: judgement.standing,
+        reason: judgement.reason
+      };
+    });
+    return { chain, rows };
   }
   userDetachEvidence(agent, args) {
     return this._detachEvidence(this._routedAgent(agent, args.ticketId), args);
@@ -30036,6 +30131,7 @@ __decorateElement(_init, 1, "actionNominations", _actionNominations_dec, AidosSe
 __decorateElement(_init, 1, "dismissNomination", _dismissNomination_dec, AidosService);
 __decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
+__decorateElement(_init, 1, "reviewStandings", _reviewStandings_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userLinkEvidence", _userLinkEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userRecentCommits", _userRecentCommits_dec, AidosService);
@@ -30066,66 +30162,6 @@ function registerAidosService(ctx, config2) {
     }
     void service;
   };
-}
-
-// src/host/partner-review.ts
-var PARTNER_REVIEW_TYPE = "partner_review";
-var REVIEWER_PERSONA = "You are a review partner. You review the DIFF and the ticket's criteria from the board; the worker's own report is context only, never the thing you review. Answer explicitly, per ticket, which criteria have NO corresponding diff hunk: omission is the defect class this exists to catch, and a diff-only reading is structurally blind to it. Your deliverable is the review document at the path in your brief \u2014 not a summary message, which would invite the orchestrator to review the summary instead of the work.";
-var REVIEWER_DENY = [
-  "set_ticket",
-  "attach_evidence",
-  "move_ticket",
-  "plan_import",
-  "plan_meta_set",
-  "request_allowlist",
-  "suggest_actions",
-  "subagent",
-  "subagent_fork",
-  "ralph",
-  "workflow"
-];
-function serviceOf(ctx, name) {
-  try {
-    return ctx.get(name);
-  } catch {
-    return void 0;
-  }
-}
-function registerPartnerReview(ctx, reviewChain) {
-  const service = serviceOf(ctx, "subagentTypes");
-  if (service === void 0 || typeof service.register !== "function") {
-    return () => {
-    };
-  }
-  try {
-    const dispose = service.register({
-      name: PARTNER_REVIEW_TYPE,
-      description: "Dispatch an independent review of ticket work on the configured review chain. The reviewer reads the board and the diff, and writes a batch-review document; it cannot write to the board itself.",
-      /*
-       * A NAME, never a model. The harness resolves it at dispatch against
-       * the live profile, so switching profiles changes the models with no
-       * edit here. An unknown name is a hard error at dispatch on the
-       * harness side — surfaced, never silently downgraded to the parent's
-       * model.
-       */
-      chain: reviewChain,
-      toolFilter: { deny: REVIEWER_DENY },
-      persona: REVIEWER_PERSONA,
-      maxDepth: 1
-    });
-    return typeof dispose === "function" ? dispose : () => {
-    };
-  } catch {
-    return () => {
-    };
-  }
-}
-function configuredReviewChain(config2) {
-  if (typeof config2 === "object" && config2 !== null) {
-    const value = config2.reviewChain;
-    if (typeof value === "string" && value !== "") return value;
-  }
-  return DEFAULT_REVIEW_CHAIN;
 }
 
 // src/host/aidos-plugin.ts

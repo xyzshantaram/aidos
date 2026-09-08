@@ -309,3 +309,88 @@ describe("Task A: the subagent model pin is inside config, where it is read", ()
     });
   }
 });
+
+/**
+ * #136, the HUMAN-VISIBLE half (user direction, 2026-09-08): "new reviews
+ * made after the fix gain a verified checkmark with a tooltip saying that
+ * this review ran through the configured reviewer chain, and nothing
+ * changes about old review evidence."
+ *
+ * So the mark must be a pure ADDITION, arriving with stamping and never
+ * re-labelling what already exists — and it must reach a human without
+ * reaching the model, which the contract states plainly: provenance never
+ * appears as a tool, a prompt section, or tool-result text.
+ */
+describe("#136 the verified mark degrades progressively and stays out of model context", () => {
+  const strip = readFileSync(
+    new URL("../src/client/evidence-strip.tsx", import.meta.url).pathname,
+    "utf8",
+  );
+  const panel = readFileSync(
+    new URL("../src/client/detail-panel.tsx", import.meta.url).pathname,
+    "utf8",
+  );
+  const tools = readFileSync(
+    new URL("../src/tools/aidos-tools.ts", import.meta.url).pathname,
+    "utf8",
+  );
+  const core = readFileSync(
+    new URL("../src/host/aidos-core.ts", import.meta.url).pathname,
+    "utf8",
+  );
+
+  it("renders NOTHING for a row the harness never stamped", () => {
+    /*
+     * The whole progressive-degradation requirement in one assertion: only
+     * "verified" and "invalidated" draw anything, so an unstamped legacy
+     * row -- which is every review row that exists today -- looks exactly
+     * as it always has.
+     */
+    expect(strip).toContain(
+      'props.standing === "verified" || props.standing === "invalidated"',
+    );
+  });
+
+  it("judges an unstamped legacy row as unverified, never as a finding", () => {
+    const judgement = judgeReviewRow(
+      { kind: "builtin:review_pass", payload: { note: "PASS" } },
+      "frontier",
+      () => ({ chain: "frontier", contained: true }),
+    );
+    expect(judgement.standing).toBe("unverified");
+    expect(judgement.reason).toMatch(/predates stamping|never written|absent/);
+  });
+
+  it("gives the verified mark a tooltip that names the chain", () => {
+    const judgement = judgeReviewRow(
+      { kind: "builtin:review_pass", payload: { stamp: { sessionId: REVIEW_SESSION } } },
+      "frontier",
+      () => ({ chain: "frontier", contained: true, rungsDeclared: [], rungsUsed: [] }),
+    );
+    expect(judgement.standing).toBe("verified");
+    expect(judgement.reason).toContain("frontier");
+    // The strip shows exactly that string, so the tooltip is the reason.
+    expect(strip).toContain("props.standingReason");
+  });
+
+  it("reaches the board through a REMOTE, and no tool exposes it", () => {
+    /*
+     * "provenance never reaches model context: no tool, prompt section, or
+     * tool-result text exposes it; human visibility is board/UI only."
+     * A Remote is callable by the client and not by the model, which is
+     * why the standing rides one.
+     */
+    expect(core).toContain('@Remote("reviewStandings")');
+    expect(panel).toContain('callAidosRemote("reviewStandings"');
+    expect(tools).not.toContain("reviewStandings");
+    expect(tools).not.toContain("chainProvenance");
+    expect(tools).not.toContain("judgeReviewRow");
+  });
+
+  it("never lets the decoration break the panel it decorates", () => {
+    // A failed fetch clears the marks and renders the evidence anyway: a
+    // badge must not be the reason a human cannot read their evidence.
+    expect(panel).toContain(".catch(() => {");
+    expect(panel).toContain("if (alive) setStandings({});");
+  });
+});

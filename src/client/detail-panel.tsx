@@ -714,6 +714,50 @@ function EvidencePanel(props: {
   /** Called after a link/unlink so the owner refreshes. */
   onLinked: () => void;
 }) {
+  /*
+   * #136: which reviews ran on the configured reviewer chain.
+   *
+   * A Remote, never a tool: provenance must not reach model context, and
+   * the board is the sanctioned place for a human to see it.
+   *
+   * DEGRADES TO INVISIBLE. The harness stamping does not exist yet, so this
+   * answers `unverified` for every row today and nothing renders. Nothing
+   * about existing review evidence changes — no mark, no downgrade, no
+   * migration — and a failed fetch is swallowed on purpose: a decoration
+   * must never be the reason an evidence panel does not render.
+   */
+  const [standings, setStandings] = react.useState<
+    Record<string, { standing: string; reason: string }>
+  >({});
+  react.useEffect(
+    function () {
+      let alive = true;
+      callAidosRemote("reviewStandings", { ticketId: props.ticketIdKey }, props.agentId)
+        .then((out) => {
+          if (!alive) return;
+          const rows = (
+            out as unknown as {
+              rows?: Array<{ at: number; kind: string; standing: string; reason: string }>;
+            } | null
+          )?.rows;
+          const next: Record<string, { standing: string; reason: string }> = {};
+          for (const row of Array.isArray(rows) ? rows : []) {
+            next[String(row.at) + ":" + row.kind] = {
+              standing: row.standing,
+              reason: row.reason,
+            };
+          }
+          setStandings(next);
+        })
+        .catch(() => {
+          if (alive) setStandings({});
+        });
+      return () => {
+        alive = false;
+      };
+    },
+    [props.ticketIdKey, props.agentId, props.evidence.length],
+  );
   return (
     <details
       className="aidos-panel"
@@ -745,6 +789,14 @@ function EvidencePanel(props: {
                     ? row.payload.criteria
                     : undefined
                 }
+                standing={
+                  standings[String(row.at) + ":" + row.kind]?.standing as
+                    | "verified"
+                    | "unverified"
+                    | "invalidated"
+                    | undefined
+                }
+                standingReason={standings[String(row.at) + ":" + row.kind]?.reason}
               />
             ))}
           </ul>

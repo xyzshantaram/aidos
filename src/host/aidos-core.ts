@@ -54,6 +54,9 @@ import {
 const WORKTREE_TIMEOUT_MS = 120000;
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
+import { reviewChainOf } from "../kernel/gates";
+import { judgeReviewRow } from "../kernel/review-provenance";
+import { reviewProvenanceReader } from "./partner-review";
 import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
 import { checkGate, isLegalTransition } from "../kernel/gates";
 import {
@@ -2594,6 +2597,66 @@ registerAidosSessionEventTypes(ctx);
   @Remote("userAttachEvidence")
   userAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
     return this._attachEvidence(this._routedAgent(agent, args.ticketId), args, "user");
+  }
+
+  /**
+   * #136: what chain each review row ran on, for the BOARD ONLY.
+   *
+   * A Remote and deliberately not a tool. The contract is explicit that
+   * provenance must never reach model context — no tool, no prompt section,
+   * no tool-result text — and that a human who needs to see it sees it on
+   * the board or in the UI. A Remote is exactly that: the client calls it,
+   * the model cannot.
+   *
+   * PROGRESSIVE DEGRADATION, which is the whole shape of this feature. The
+   * harness services do not exist yet, so today every row answers
+   * `unverified` and the UI shows nothing at all. Rows created once
+   * stamping lands answer `verified` and gain the check. NOTHING happens to
+   * rows that already exist: an unstamped legacy `review_pass` judges as
+   * `unverified`, keeps satisfying the gate exactly as it does today, and
+   * is never marked, downgraded or migrated. That was decided in writing —
+   * no migration, no backfill, no grandfather flag — and the accepted risk
+   * (an old self-reviewed pass stays valid forever) is stated there rather
+   * than quietly re-litigated here.
+   *
+   * Only `invalidated` is a finding, and it needs positive evidence: the
+   * harness saying a model outside the declared chain served the run.
+   */
+  @Remote("reviewStandings")
+  reviewStandings(
+    agent: Agent,
+    args: { ticketId: number | string },
+  ): {
+    chain: string;
+    rows: Array<{ at: number; kind: string; standing: string; reason: string }>;
+  } {
+    const chain = reviewChainOf(this._resolvedConfig);
+    const lookup = reviewProvenanceReader(this.ctx);
+    let evidence: readonly EvidenceRow[] = [];
+    try {
+      evidence = this.getTicket(this._routedAgent(agent, args.ticketId), {
+        ticketId: args.ticketId,
+      }).evidence;
+    } catch {
+      /*
+       * A ticket that cannot be read is not a provenance finding. The board
+       * asks this for decoration; it must never be the reason a panel
+       * fails to render.
+       */
+      return { chain, rows: [] };
+    }
+    const rows = evidence
+      .filter((row) => row.kind === "builtin:review_pass" || row.kind === "builtin:review_fail")
+      .map((row) => {
+        const judgement = judgeReviewRow(row, chain, lookup);
+        return {
+          at: row.at,
+          kind: row.kind,
+          standing: judgement.standing,
+          reason: judgement.reason,
+        };
+      });
+    return { chain, rows };
   }
 
   /**

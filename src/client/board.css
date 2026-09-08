@@ -595,6 +595,32 @@
   --chip-hue: var(--badge-hue-1);
 }
 
+/* #136: the review-provenance mark on an evidence strip.
+
+   A MARK, not a chip. It sits beside the kind chip and says one thing:
+   this review ran through the configured reviewer chain. It appears ONLY
+   when the harness stamped the run, so every review row that exists today
+   renders exactly as it always has — the feature arrives with new reviews
+   rather than re-labelling old ones.
+
+   Verified carries no fill: at strip scale a coloured pill competes with
+   the kind chip, and "the review ran where it was sent" is the
+   unremarkable case. The off-chain warning keeps the error tint, because a
+   misrouted review that looks identical to a correct one is worth exactly
+   one colour. (Same reasoning as tool-render's approval verdict badge.) */
+.aidos-review-standing {
+  flex: none;
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: help;
+}
+.aidos-review-standing-verified {
+  color: var(--text-secondary);
+}
+.aidos-review-standing-invalidated {
+  color: var(--danger, #e5534b);
+}
+
 /* A kind chip splits when it carries a count: the keyword keeps the kind
    color, and the count segment inverts it. The chip drops its own inline
    padding so the count segment reaches the chip edge. */
