@@ -163,19 +163,41 @@ describe("#123 verify has ONE implementation, and the queue reuses it", () => {
 describe("inline chat actions launch the board's flows and implement none", () => {
   it("performs no board write of its own", () => {
     /*
-     * The load-bearing assertion of the whole feature. A single
-     * callAidosRemote here would make chat a competing implementation of
-     * signoff/verify/approve -- the exact way "signoff carries the
-     * allowlist" became true in one place and false in another.
+     * The load-bearing assertion of the whole feature. A write remote here
+     * would make chat a competing implementation of signoff/verify/approve
+     * -- the exact way "signoff carries the allowlist" became true in one
+     * place and false in another.
+     *
+     * #177: matched on the WRITE remotes BY NAME, not on every remote call.
+     * The first cut forbade `callAidosRemote(` outright, which was the right
+     * rule for writes and too strong for reads: a tool card is a receipt
+     * for arguments the agent gave hours ago, so it must ASK the board
+     * whether its action still applies (via the `workspaceTickets` READ and
+     * the shared `actionsFor`) before opening a flow -- otherwise a stale
+     * Sign off writes a duplicate user_signoff row and only then discovers
+     * the move is refused. Forbidding all remotes would force the choice
+     * between deleting this guard and leaving that bug; naming the writes
+     * keeps the guard AND lets the legitimate read land.
      */
-    // Matched on CALL syntax, not on mentions: the header names these
+    // Matched on QUOTED names, not on mentions: the header names these
     // remotes to explain why it must not call them, and a test that cannot
     // tell prose from code cries wolf and gets deleted.
-    expect(inlineActions).not.toContain("callAidosRemote(");
     expect(inlineActions).not.toContain('"userAttachEvidence"');
     expect(inlineActions).not.toContain('"userMoveTicket"');
     expect(inlineActions).not.toContain('"resolveApproval"');
     expect(inlineActions).not.toContain('"userGrantAllowlist"');
+  });
+
+  it("asks the board before it acts, through the board's own decider", () => {
+    /*
+     * #177: the READ half of the rule above. The card resolves its ticket
+     * from the board and checks availability with the SAME `actionsFor`
+     * the action bar and the queue derive from, so card and queue agree by
+     * construction rather than by coincidence -- and the refusal path
+     * writes nothing, because no write remote is reachable from this file.
+     */
+    expect(inlineActions).toContain('"workspaceTickets"');
+    expect(inlineActions).toContain("actionsFor");
   });
 
   it("opens the SAME components the board opens", () => {

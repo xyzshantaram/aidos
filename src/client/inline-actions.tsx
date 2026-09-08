@@ -30,11 +30,35 @@
  * from tool-render. A second look for the same gesture, one card apart, is
  * what #82's header records three failed attempts at: the classes are
  * reused rather than approximated.
+ *
+ * ## #177: the card ASKS before it acts
+ *
+ * A tool card is a RECEIPT for a call that may be hours old: it renders its
+ * buttons straight from the call's arguments, so it offers whatever the
+ * agent once asked for, forever -- including a Sign off for a ticket that
+ * has since moved. Clicking it used to open the dialog straight away, and
+ * the dialog's attach-first ordering (correct for a VALID signoff, because
+ * the gate needs the row before the move) then wrote a duplicate
+ * user_signoff row before the move was refused. The write happened BEFORE
+ * anything checked, and the row is user-authored and append-only, so the
+ * junk stayed on the ticket.
+ *
+ * So the button resolves the ticket from the board FIRST, runs the SAME
+ * `actionsFor` availability the board uses, and refuses with the reason --
+ * writing nothing -- when the action no longer applies. Card and queue
+ * agree by construction rather than by coincidence. The one remote this
+ * file may make is the `workspaceTickets` READ below; the write remotes
+ * stay forbidden by the #171 uniqueness test.
  */
 import react from "react";
 
+import type { TicketView } from "../kernel/projections";
+import { actionsFor } from "./action-visibility";
+import type { EvidenceKinds } from "./action-visibility";
 import { AllowlistRequestCard } from "./allowlist-request-card";
+import { boardKeyOf } from "./board-logic";
 import { VerifyModal } from "./evidence-attach";
+import { callAidosRemote, AidosRemoteError } from "./remote";
 import { SignoffDialog } from "./signoff-dialog";
 import { setSelection, ticketTitle } from "./view-state";
 import { showToast } from "./toast-store";
@@ -54,6 +78,79 @@ export function isInlineActionId(value: string): value is InlineActionId {
 }
 
 /**
+ * #177: the availability verdict for one inline action, as a refusal reason
+ * or null when the action still applies.
+ *
+ * This is `actionsFor` -- the SAME function the board's action bar and the
+ * queue derive from -- looked up for the card's action. A card and the queue
+ * can never disagree about whether an action applies, because there is one
+ * decider, not two that happen to match.
+ *
+ * Pure, so the stale-card test can drive the exact reported sequence
+ * through the function the button itself calls rather than by
+ * re-implementing the state rule beside it.
+ */
+export function refusalForInlineAction(
+  ticket: TicketView,
+  evidenceKinds: EvidenceKinds,
+  actionId: InlineActionId,
+): string | null {
+  if (actionId === "mark-done") return null;
+  const found = actionsFor(ticket, evidenceKinds).find(
+    (action) => action.id === actionId,
+  );
+  if (found === undefined) return "unknown action " + actionId;
+  if (found.unavailableReason === undefined) return null;
+  return found.label + " is not available — " + found.unavailableReason;
+}
+
+/** One board row as the `workspaceTickets` READ hands it to the client. */
+interface BoardRowLike {
+  id: number | string;
+  foreign?: boolean;
+  sourceSessionId?: string;
+  state: string;
+}
+
+/** One evidence row as the `workspaceTickets` READ hands it to the client. */
+interface EvidenceRowLike {
+  kind?: unknown;
+}
+
+/**
+ * #177: resolve the card's ticket from the board and check the action is
+ * still available, BEFORE any flow opens.
+ *
+ * Returns the refusal reason when the action no longer applies (or the
+ * ticket is not on this board), null when the dialog may open. Makes
+ * exactly ONE remote call -- the `workspaceTickets` READ -- so the refusal
+ * path writes nothing: no evidence row, no move, no grant.
+ */
+export async function checkInlineActionAvailable(
+  sessionId: string,
+  boardKey: string,
+  actionId: InlineActionId,
+): Promise<string | null> {
+  if (actionId === "mark-done") return null;
+  const result = (await callAidosRemote("workspaceTickets", {}, sessionId)) as unknown as {
+    tickets?: BoardRowLike[];
+    evidence?: Record<string, EvidenceRowLike[]>;
+  } | BoardRowLike[];
+  const tickets = Array.isArray(result) ? result : (result.tickets ?? []);
+  const evidence = Array.isArray(result) ? {} : (result.evidence ?? {});
+  const row = tickets.find((ticket) => boardKeyOf(ticket) === boardKey) ?? null;
+  if (row === null) {
+    return (
+      "#" + boardKey + " is not on this board (it may belong to another session)"
+    );
+  }
+  const kinds = (evidence[boardKey] ?? [])
+    .map((entry) => entry.kind)
+    .filter((kind): kind is string => typeof kind === "string");
+  return refusalForInlineAction(row as unknown as TicketView, kinds, actionId);
+}
+
+/**
  * One nomination's action, answerable in place.
  *
  * `boardKey` is THE address (#93: a bare number makes a foreign ticket
@@ -68,6 +165,7 @@ export function InlineTicketAction(props: {
   title?: string;
 }) {
   const [open, setOpen] = react.useState<null | "signoff" | "verify">(null);
+  const [checking, setChecking] = react.useState(false);
 
   function activate() {
     if (props.actionId === "mark-done") {
@@ -80,7 +178,32 @@ export function InlineTicketAction(props: {
       showToast("Opened " + props.boardKey + " on the board", "info");
       return;
     }
-    setOpen(props.actionId);
+    /*
+     * #177: ASK before acting. The card is a receipt for arguments the
+     * agent gave hours ago; the ticket may have moved since. Resolve from
+     * the board and refuse with the reason when the action no longer
+     * applies -- writing nothing -- and only then open the dialog.
+     */
+    if (checking) return;
+    const action = props.actionId;
+    setChecking(true);
+    void checkInlineActionAvailable(props.sessionId, props.boardKey, action)
+      .then((refusal) => {
+        if (refusal !== null) {
+          showToast(refusal, "refusal");
+          return;
+        }
+        setOpen(action);
+      })
+      .catch((error: unknown) => {
+        showToast(
+          error instanceof AidosRemoteError ? error.message : String(error),
+          "refusal",
+        );
+      })
+      .finally(() => {
+        setChecking(false);
+      });
   }
 
   const label = LABELS[props.actionId];
@@ -92,9 +215,10 @@ export function InlineTicketAction(props: {
       <button
         type="button"
         className="tool-render-approval-btn tool-render-approval-approve"
+        disabled={checking}
         onClick={activate}
       >
-        {label}
+        {checking ? "Checking…" : label}
       </button>
       {open === "signoff" ? (
         <SignoffDialog
