@@ -48,6 +48,18 @@ describe("no agent path to done", () => {
     for (const kind of AGENT_AUTHORABLE_KINDS) {
       successJson(await harness.runTool("attach_evidence", { ticketId, kind }));
     }
+    /*
+     * #178: the commit row is SEEDED, like the signoff above. The
+     * attach_evidence tool refuses builtin:user_commit -- a commit row is a
+     * resolved fact, never a composed payload, for every actor -- and the
+     * resolving attach_commit tool needs a real git workspace. The resolving
+     * path is proven by the #178 gate tests; this helper only needs the
+     * ticket IN awaiting_verification.
+     */
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit", {
+      commit: "seeded-setup-row",
+      subject: "setup scaffolding, not a resolved commit",
+    });
     successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
   }
 

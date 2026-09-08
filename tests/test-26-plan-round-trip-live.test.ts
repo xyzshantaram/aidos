@@ -288,6 +288,7 @@ describe("plan round trip live", () => {
         kind: "builtin:review_pass",
       })
     );
+    harness.seedEvidence(harness.agent, ticket2Id, "builtin:user_commit");
     successJson(await harness.runTool("move_ticket", { ticketId: ticket2Id, to: "awaiting_verification" }));
     
     // Create a new ticket and drive it through all states the agent can reach,
@@ -310,6 +311,7 @@ describe("plan round trip live", () => {
         kind: "builtin:review_pass",
       })
     );
+    harness.seedEvidence(harness.agent, newTicketId, "builtin:user_commit");
     successJson(await harness.runTool("move_ticket", { ticketId: newTicketId, to: "awaiting_verification" }));
 
     // Export and verify marks for reachable states and the done claim from import

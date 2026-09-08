@@ -181,6 +181,7 @@ describe("#160 a fulfilled nomination stops existing", () => {
     signOff(harness, id);
     harness.seedEvidence(harness.agent, id, "builtin:automated_check");
     harness.seedEvidence(harness.agent, id, "builtin:review_pass");
+    harness.seedEvidence(harness.agent, id, "builtin:user_commit");
     harness.service.agentMoveTicket(agent, { ticketId: id, to: "awaiting_verification" });
 
     // The signoff ask is spent; a verify ask on the same ticket is live.

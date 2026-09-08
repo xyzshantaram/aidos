@@ -57,6 +57,21 @@ function driveToAwaitingVerification(harness: Harness): number {
   for (const kind of AGENT_AUTHORABLE) {
     service.agentAttachEvidence(agent, { ticketId: ticket, kind });
   }
+  /*
+   * #178: the commit row is SEEDED, not attached through the service. The
+   * generic attach path refuses builtin:user_commit for every actor -- a
+   * composed payload would be a confident sentence, which is exactly what
+   * the commit requirement exists to reject -- and the resolving path
+   * (attach_commit) needs a real git workspace this helper does not have.
+   * The resolving path itself is proven by the #178 gate tests; this helper
+   * only needs the ticket IN awaiting_verification, and the seeded row
+   * still makes the test's claim stronger: even with the commit present,
+   * there is no agent path to done.
+   */
+  harness.seedEvidence(harness.agent, ticket, "builtin:user_commit", {
+    commit: "seeded-setup-row",
+    subject: "setup scaffolding, not a resolved commit",
+  });
   service.userMoveTicket(agent, { ticketId: ticket, to: "awaiting_verification" });
   return ticket;
 }
@@ -84,6 +99,9 @@ describe("no agent path to done", () => {
     for (const kind of AGENT_AUTHORABLE) {
       expect(attached.has(kind)).toBe(true);
     }
+    // #178: the seeded commit row is really there -- the tests below prove
+    // there is no agent path to done even WITH the commit present.
+    expect(attached.has("builtin:user_commit")).toBe(true);
   });
 
   it("done is refused with every agent kind attached", () => {

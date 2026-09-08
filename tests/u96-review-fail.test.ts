@@ -166,6 +166,16 @@ describe("#96 review_fail cannot move a ticket through the gate", () => {
         payload: { verdict: "REVIEW PASS" },
       }),
     );
+    /*
+     * #178: the commit rides along as a seeded row. The gate under test here
+     * is review_fail-contributes-nothing: with check excused by the pass
+     * (#107) and the commit present, the move must succeed -- proving the
+     * FAIL row never blocked anything -- while BOTH rows stay in history.
+     */
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit", {
+      commit: "seeded-setup-row",
+      subject: "setup scaffolding, not a resolved commit",
+    });
     successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
 
     const read = successJson(await harness.runTool("get_ticket", { ticketId }));

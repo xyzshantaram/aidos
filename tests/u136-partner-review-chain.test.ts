@@ -49,6 +49,20 @@ const reviewRow = (sessionId: string | undefined = REVIEW_SESSION): EvidenceRow 
   payload: sessionId === undefined ? {} : { stamp: { sessionId } },
 });
 
+/*
+ * #178: every moveToAwaiting call below carries a commit row, so every
+ * assertion stays about PROVENANCE -- the file's subject -- rather than the
+ * commit requirement. Without it, every "gate opens" assertion would fail on
+ * the commit, and every "gate refuses" assertion would refuse for two
+ * reasons instead of the one under test.
+ */
+const commitRow = (): EvidenceRow => ({
+  kind: "builtin:user_commit",
+  author: "agent",
+  at: 3,
+  payload: { commit: "abc1234", subject: "the change" },
+});
+
 const record = (over: Record<string, unknown> = {}) => ({
   type: PARTNER_REVIEW_TYPE,
   chain: DEFAULT_REVIEW_CHAIN,
@@ -84,7 +98,7 @@ describe("#136 chain containment", () => {
     const judged = judgeReviewProvenance(record(), DEFAULT_REVIEW_CHAIN);
     expect(judged.standing).toBe("verified");
     expect(judged.chain).toBe(DEFAULT_REVIEW_CHAIN);
-    expect(moveToAwaiting([reviewRow()], () => record())).toBeNull();
+    expect(moveToAwaiting([reviewRow(), commitRow()], () => record())).toBeNull();
   });
 
   it("a run that failed over OUTSIDE its declared chain has its result invalidated", () => {
@@ -92,7 +106,7 @@ describe("#136 chain containment", () => {
     expect(judged.standing).toBe("invalidated");
     expect(judged.reason).toMatch(/re-run/);
 
-    const refusal = moveToAwaiting([reviewRow()], () => record({ contained: false }));
+    const refusal = moveToAwaiting([reviewRow(), commitRow()], () => record({ contained: false }));
     expect(refusal, "an invalidated review must not satisfy the gate").not.toBeNull();
     expect(refusal?.missingKinds).toContain("builtin:review_pass");
     /*
@@ -117,9 +131,9 @@ describe("#136 chain containment", () => {
       expect(judged.standing, String(absent)).toBe("unverified");
     }
     // The gate itself: no reader at all is exactly today's behaviour.
-    expect(moveToAwaiting([reviewRow()], undefined)).toBeNull();
+    expect(moveToAwaiting([reviewRow(), commitRow()], undefined)).toBeNull();
     // A reader that returns nothing for this session is the dropped-write case.
-    expect(moveToAwaiting([reviewRow()], () => undefined)).toBeNull();
+    expect(moveToAwaiting([reviewRow(), commitRow()], () => undefined)).toBeNull();
   });
 
   it("a reader that THROWS degrades to unverified rather than out of the gate", () => {
@@ -129,8 +143,8 @@ describe("#136 chain containment", () => {
     expect(judgeReviewRow(reviewRow(), DEFAULT_REVIEW_CHAIN, thrower).standing).toBe(
       "unverified",
     );
-    expect(() => moveToAwaiting([reviewRow()], thrower)).not.toThrow();
-    expect(moveToAwaiting([reviewRow()], thrower)).toBeNull();
+    expect(() => moveToAwaiting([reviewRow(), commitRow()], thrower)).not.toThrow();
+    expect(moveToAwaiting([reviewRow(), commitRow()], thrower)).toBeNull();
   });
 
   it("a LEGACY unstamped review_pass keeps satisfying the gate — no migration, by decision", () => {
@@ -145,7 +159,7 @@ describe("#136 chain containment", () => {
       at: 1,
       payload: { note: "PASS, all six criteria MET" },
     };
-    expect(moveToAwaiting([legacy], () => record({ contained: false }))).toBeNull();
+    expect(moveToAwaiting([legacy, commitRow()], () => record({ contained: false }))).toBeNull();
   });
 
   it("only a review_pass can be discounted: no other kind is touched", () => {
@@ -156,7 +170,7 @@ describe("#136 chain containment", () => {
       payload: { stamp: { sessionId: REVIEW_SESSION } },
     };
     // An off-chain record for the same session must not drop the check row.
-    const refusal = moveToAwaiting([check], () => record({ contained: false }));
+    const refusal = moveToAwaiting([check, commitRow()], () => record({ contained: false }));
     expect(refusal?.missingKinds ?? []).not.toContain("builtin:automated_check");
   });
 });

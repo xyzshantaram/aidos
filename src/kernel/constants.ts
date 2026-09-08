@@ -156,8 +156,17 @@ export const DEFAULT_GATES: readonly GateDef[] = [
      * asserted: the host resolves the hash through git show and refuses
      * what it cannot find, so unlike automated_check it cannot be satisfied
      * by a confident sentence.
+     *
+     * The commit is NOT excusable by review_pass or automated_check, and
+     * that is deliberate, not an omission from the excusedBy map below.
+     * Excusal is only legitimate between two kinds making the SAME claim at
+     * different strengths -- review_pass excuses automated_check because a
+     * review is stronger evidence that the thing runs. A commit makes a
+     * DIFFERENT claim: that a diff exists to read. Accepting a review or a
+     * check in place of a commit would be the gate accepting an answer to a
+     * question it never asked.
      */
-    requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
+    requiredKinds: ["builtin:automated_check", "builtin:review_pass", "builtin:user_commit"],
     allowedActors: ["user", "agent"],
     /*
      * #107: an accepted review excuses the machine check.

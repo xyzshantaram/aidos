@@ -25891,8 +25891,17 @@ var DEFAULT_GATES = [
      * asserted: the host resolves the hash through git show and refuses
      * what it cannot find, so unlike automated_check it cannot be satisfied
      * by a confident sentence.
+     *
+     * The commit is NOT excusable by review_pass or automated_check, and
+     * that is deliberate, not an omission from the excusedBy map below.
+     * Excusal is only legitimate between two kinds making the SAME claim at
+     * different strengths -- review_pass excuses automated_check because a
+     * review is stronger evidence that the thing runs. A commit makes a
+     * DIFFERENT claim: that a diff exists to read. Accepting a review or a
+     * check in place of a commit would be the gate accepting an answer to a
+     * question it never asked.
      */
-    requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
+    requiredKinds: ["builtin:automated_check", "builtin:review_pass", "builtin:user_commit"],
     allowedActors: ["user", "agent"],
     /*
      * #107: an accepted review excuses the machine check.
@@ -29841,6 +29850,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (!def.allowedAuthors.includes(actor)) {
       throw new EvidenceAuthorRefused(args.kind, actor);
     }
+    if (def.id === "builtin:user_commit") {
+      throw new BadPayloadError(
+        "builtin:user_commit must be attached through the commit flow (the attach_commit tool or the commit picker) so the hash is resolved by git show; a composed payload is refused"
+      );
+    }
     const payload = args.payload ?? {};
     if (!isPlainRecord(payload)) {
       throw new BadPayloadError("the payload must be a JSON object");
@@ -31971,7 +31985,7 @@ function registerAttachEvidence(ctx) {
     "write",
     defineTool2({
       name: "attach_evidence",
-      description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_fail, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them. review_pass means a reviewer ACCEPTED the change and is the gate key; a FAILING review is review_fail, which satisfies no gate.",
+      description: "Attach one piece of agent-authored evidence to a ticket. Only the agent-allowed kinds are offered: automated_check, review_pass, review_fail, review_note, agent_report (each resolves to its builtin: kind). The human-only kinds user_signoff and user_verified refuse: a human must supply them. review_pass means a reviewer ACCEPTED the change and is the gate key; a FAILING review is review_fail, which satisfies no gate. user_commit is refused HERE even though the agent may author it: a commit is evidence only because the host resolved it, so it goes through attach_commit, which takes a hash and verifies it with git show.",
       parameters: {
         ticketId: { oneOf: [{ type: "integer" }, { type: "string" }], required: true, description: "The ticket that receives the evidence, by numeric id or slug." },
         kind: {

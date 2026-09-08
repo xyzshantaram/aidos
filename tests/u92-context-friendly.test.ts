@@ -222,6 +222,10 @@ describe("#92 write results are compact", () => {
     const made = json(await harness.runTool("set_ticket", { title: "Gate" }));
     harness.seedEvidence(harness.agent, made.ticketId, "builtin:user_signoff");
     await harness.runTool("move_ticket", { ticketId: made.ticketId, to: "in_progress" });
+    // #178: the commit is seeded so the gate CAN close below -- this test is
+    // about the gateSatisfied REPORTING, not the gate's contents, and with an
+    // unsatisfiable gate there would be nothing to report.
+    harness.seedEvidence(harness.agent, made.ticketId, "builtin:user_commit");
     const first = json(
       await harness.runTool("attach_evidence", {
         ticketId: made.ticketId,

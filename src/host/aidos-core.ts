@@ -3586,6 +3586,23 @@ registerAidosSessionEventTypes(ctx);
     if (!def.allowedAuthors.includes(actor)) {
       throw new EvidenceAuthorRefused(args.kind, actor);
     }
+    /*
+     * #178: a commit row is a VERIFIED FACT, not a composed claim, so it
+     * never enters through the generic path -- for either actor. The only
+     * producer is _attachCommitEvidence (the attach_commit tool for the
+     * agent, the commit picker for the human), which resolves the hash
+     * through git show and refuses what it cannot find. Allowing a composed
+     * payload here would let the commit requirement be satisfied by a
+     * confident sentence, which is exactly what the requirement exists to
+     * reject -- and would make this required kind weaker than the check it
+     * sits beside, not stronger.
+     */
+    if (def.id === "builtin:user_commit") {
+      throw new BadPayloadError(
+        "builtin:user_commit must be attached through the commit flow (the attach_commit tool or the " +
+          "commit picker) so the hash is resolved by git show; a composed payload is refused",
+      );
+    }
     const payload = args.payload ?? {};
     if (!isPlainRecord(payload)) {
       throw new BadPayloadError("the payload must be a JSON object");

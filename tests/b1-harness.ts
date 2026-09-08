@@ -65,7 +65,20 @@ export const SIX_TOOLS = [
   "plan_import",
 ] as const;
 
-/** The five builtin kinds the agent may author, from the B0 constant table. */
+/**
+ * The builtin kinds the agent may author THROUGH THE GENERIC ATTACH PATH.
+ *
+ * Five, not six, and the gap is deliberate. #178 made
+ * `builtin:user_commit` agent-authorable, but it does not belong in this
+ * list: a commit is evidence only because the HOST resolved it with git
+ * show, so the generic path refuses it for both actors and it travels
+ * through `attach_commit` instead.
+ *
+ * Conflating "the agent may author it" with "the agent may hand it over as
+ * a payload" is exactly what would let a fabricated hash satisfy the
+ * verification gate — which was possible until #178's guard, and was proven
+ * by probe rather than assumed.
+ */
 export const AGENT_AUTHORABLE_KINDS = [
   "builtin:automated_check",
   "builtin:after_shot",

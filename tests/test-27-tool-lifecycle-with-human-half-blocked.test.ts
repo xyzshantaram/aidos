@@ -51,6 +51,17 @@ describe("lifecycle with the human half blocked", () => {
     successJson(
       await harness.runTool("attach_evidence", { ticketId, kind: "builtin:review_pass" }),
     );
+    /*
+     * #178: the commit rides along as a seeded row, like the signoff above.
+     * The attach_evidence tool refuses builtin:user_commit -- a commit row is
+     * a resolved fact, never a composed payload -- and the resolving
+     * attach_commit tool needs a real git workspace. The resolving path is
+     * proven by the #178 gate tests.
+     */
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit", {
+      commit: "seeded-setup-row",
+      subject: "setup scaffolding, not a resolved commit",
+    });
     successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
   }
 
@@ -109,7 +120,15 @@ describe("lifecycle with the human half blocked", () => {
      * expensive evidence stays mandatory -- just not in THIS file, which is
      * a net coverage reduction here rather than the like-for-like swap the
      * old comment implied.
+     *
+     * #178: the review still excuses the check but not the commit, so the
+     * commit is seeded here too -- and the move still proves the #107 excuse
+     * (no check is attached anywhere in this test).
      */
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit", {
+      commit: "seeded-setup-row",
+      subject: "setup scaffolding, not a resolved commit",
+    });
     successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
     expect(await stateOf()).toBe("awaiting_verification");
   });

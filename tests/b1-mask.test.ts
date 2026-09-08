@@ -98,6 +98,7 @@ describe("the state-gated masks", () => {
     moveToInProgress(harness, ticket.id);
     harness.seedEvidence(harness.agent, ticket.id, "builtin:automated_check");
     harness.seedEvidence(harness.agent, ticket.id, "builtin:review_pass");
+    harness.seedEvidence(harness.agent, ticket.id, "builtin:user_commit");
     harness.service.agentMoveTicket(harness.asAgent(), {
       ticketId: ticket.id,
       to: "awaiting_verification",
@@ -119,6 +120,7 @@ describe("the state-gated masks", () => {
       store.moveTicket(ticket, "in_progress", "user");
       store.attachEvidence(ticket, "builtin:automated_check", {}, "user");
       store.attachEvidence(ticket, "builtin:review_pass", {}, "user");
+      store.attachEvidence(ticket, "builtin:user_commit", {}, "user");
       store.moveTicket(ticket, "awaiting_verification", "user");
       store.attachEvidence(ticket, "builtin:user_verified", {}, "user");
       store.moveTicket(ticket, "done", "user");

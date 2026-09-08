@@ -52,6 +52,9 @@ describe("refusal shape at the tool layer", () => {
     successJson(
       await harness.runTool("attach_evidence", { ticketId, kind: "builtin:review_pass" }),
     );
+    // #178: the commit rides along as a seeded row -- attach_evidence refuses
+    // builtin:user_commit, and this test is about the done-gate refusal shape.
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit");
     successJson(await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }));
 
     const refusal = failureJson(

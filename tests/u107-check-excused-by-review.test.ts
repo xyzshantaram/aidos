@@ -31,6 +31,7 @@ import { gateProgressOf } from "../src/kernel/projections";
 const CHECK = "builtin:automated_check";
 const PASS = "builtin:review_pass";
 const FAIL = "builtin:review_fail";
+const COMMIT = "builtin:user_commit";
 
 const SUBMIT = DEFAULT_GATES.find(
   (gate) => gate.fromState === "in_progress" && gate.toState === "awaiting_verification",
@@ -43,12 +44,14 @@ function missingFor(attached: string[]): string[] {
 }
 
 describe("#107 the submit gate", () => {
-  it("still passes with BOTH, unchanged", () => {
-    expect(missingFor([CHECK, PASS])).toEqual([]);
+  it("still passes with ALL THREE, unchanged", () => {
+    expect(missingFor([CHECK, PASS, COMMIT])).toEqual([]);
   });
 
   it("passes with a review and NO check: the ask", () => {
-    expect(missingFor([PASS])).toEqual([]);
+    // #107's ask survives #178 intact: the review still excuses the check.
+    // The commit is a separate claim and stays missing until attached.
+    expect(missingFor([PASS, COMMIT])).toEqual([]);
   });
 
   it("still REFUSES a check with no review, naming review_pass", () => {
@@ -58,24 +61,48 @@ describe("#107 the submit gate", () => {
      * reverse. Excusing the expensive evidence with the cheap one would
      * hollow out the only thing that stops the agent marking its own
      * homework.
+     *
+     * #178: the commit joins the missing list without disturbing the
+     * directionality -- a check plus a commit still names review_pass.
      */
-    expect(missingFor([CHECK])).toEqual([PASS]);
+    expect(missingFor([CHECK, COMMIT])).toEqual([PASS]);
   });
 
-  it("refuses an empty evidence list, naming both", () => {
-    expect(missingFor([])).toEqual([CHECK, PASS]);
+  it("refuses an empty evidence list, naming all three", () => {
+    expect(missingFor([])).toEqual([CHECK, PASS, COMMIT]);
+  });
+});
+
+describe("#178 the commit is excused by nothing", () => {
+  /*
+   * Excusal is only legitimate between two kinds making the SAME claim at
+   * different strengths -- review_pass excuses automated_check because a
+   * review is stronger evidence that the thing runs. A commit makes a
+   * DIFFERENT claim: that a diff exists to read. Neither a review (judgement)
+   * nor a check (a run) proves there is a commit, so neither may excuse it.
+   */
+  it("a review and a check together still leave the commit missing", () => {
+    expect(missingFor([CHECK, PASS])).toEqual([COMMIT]);
+  });
+
+  it("a review alone excuses the check but not the commit", () => {
+    expect(missingFor([PASS])).toEqual([COMMIT]);
+  });
+
+  it("a check alone excuses nothing and leaves review and commit missing", () => {
+    expect(missingFor([CHECK])).toEqual([PASS, COMMIT]);
   });
 });
 
 describe("#107 review_fail never satisfies and never excuses", () => {
   it("a check plus a FAILED review is still refused", () => {
-    expect(missingFor([CHECK, FAIL])).toEqual([PASS]);
+    expect(missingFor([CHECK, FAIL, COMMIT])).toEqual([PASS]);
   });
 
   it("a failed review alone excuses nothing", () => {
     // If review_fail could excuse the check, a FAILING review would move a
     // ticket forward -- the catastrophic case #96 was designed to prevent.
-    expect(missingFor([FAIL])).toEqual([CHECK, PASS]);
+    expect(missingFor([FAIL])).toEqual([CHECK, PASS, COMMIT]);
   });
 
   it("the excuse names an exact kind id, never a prefix", () => {
@@ -86,8 +113,8 @@ describe("#107 review_fail never satisfies and never excuses", () => {
      * here may reintroduce that: a kind that merely starts with the excuse's
      * id must not excuse.
      */
-    expect(missingFor(["builtin:review_pass_lookalike"])).toEqual([CHECK, PASS]);
-    expect(missingFor([PASS + ":fail"])).toEqual([CHECK, PASS]);
+    expect(missingFor(["builtin:review_pass_lookalike", COMMIT])).toEqual([CHECK, PASS]);
+    expect(missingFor([PASS + ":fail", COMMIT])).toEqual([CHECK, PASS]);
   });
 });
 
@@ -132,16 +159,16 @@ describe("#107 the board's gate FRACTION agrees with the gate", () => {
   }
 
   it("counts an EXCUSED kind as present", () => {
-    const gate = fractionFor([PASS]);
-    expect(gate.present).toBe(2);
-    expect(gate.total).toBe(2);
+    const gate = fractionFor([PASS, COMMIT]);
+    expect(gate.present).toBe(3);
+    expect(gate.total).toBe(3);
     expect(gate.fraction).toBe(1);
   });
 
   it("does not inflate when the excuse is absent", () => {
-    const gate = fractionFor([CHECK]);
-    expect(gate.present).toBe(1);
-    expect(gate.fraction).toBe(0.5);
+    const gate = fractionFor([CHECK, COMMIT]);
+    expect(gate.present).toBe(2);
+    expect(gate.fraction).toBe(2 / 3);
   });
 
   it("a failed review does not raise the fraction", () => {

@@ -141,11 +141,13 @@ const MIRROR_DEFAULT_GATES: GateDef[] = [
   {
     fromState: "in_progress",
     toState: "awaiting_verification",
-    requiredKinds: ["builtin:automated_check", "builtin:review_pass"],
+    requiredKinds: ["builtin:automated_check", "builtin:review_pass", "builtin:user_commit"],
     allowedActors: ["user", "agent"],
     // #107: an accepted review excuses the machine check. Directional --
     // review_pass excuses automated_check and never the reverse, so the
     // expensive evidence stays mandatory.
+    // #178: the commit is required and excused by NOTHING -- a review proves
+    // judgement and a check proves a run, neither proves a diff exists.
     excusedBy: { "builtin:automated_check": "builtin:review_pass" },
   },
   {

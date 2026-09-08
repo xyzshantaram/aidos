@@ -47,6 +47,7 @@ describe("refusal shape", () => {
     store.moveTicket(ticket, "in_progress", "user");
     store.attachEvidence(ticket, "builtin:automated_check", {}, "agent");
     store.attachEvidence(ticket, "builtin:review_pass", {}, "agent");
+    store.attachEvidence(ticket, "builtin:user_commit", {}, "agent");
     store.moveTicket(ticket, "awaiting_verification", "user");
 
     const refusal = expectGateRefused(() =>

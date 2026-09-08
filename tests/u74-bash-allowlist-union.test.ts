@@ -100,6 +100,7 @@ describe("#74 bashContext publishes the write boundary", () => {
     const id = ticketInProgress(harness, ["src/client"]);
     harness.seedEvidence(harness.agent, id, "builtin:automated_check");
     harness.seedEvidence(harness.agent, id, "builtin:review_pass");
+    harness.seedEvidence(harness.agent, id, "builtin:user_commit");
     harness.service.agentMoveTicket(agent, { ticketId: id, to: "awaiting_verification" });
     expect(harness.service.bashContext(agent).allowlist).toEqual([]);
   });

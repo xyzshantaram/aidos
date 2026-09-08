@@ -33,6 +33,21 @@ function stateOf(harness: Harness, ticketId: number): string | null {
     .find((row) => row.id === ticketId)?.state ?? null;
 }
 
+/*
+ * #178: the commit rides along as a seeded row. The generic service path
+ * refuses builtin:user_commit for every actor -- a composed payload would be
+ * a confident sentence, which is exactly what the commit requirement exists
+ * to reject -- and the resolving path (attach_commit) needs a real git
+ * workspace. The resolving path is proven by the #178 gate tests; these
+ * lifecycle tests only need the ticket able to move.
+ */
+function seedCommit(harness: Harness, ticketId: number): void {
+  harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit", {
+    commit: "seeded-setup-row",
+    subject: "setup scaffolding, not a resolved commit",
+  });
+}
+
 describe("lifecycle with the human half blocked", () => {
   it("a new ticket starts open", () => {
     const { harness, ticketId } = freshHarness();
@@ -88,6 +103,7 @@ describe("lifecycle with the human half blocked", () => {
     harness.service.agentMoveTicket(agent, { ticketId, to: "in_progress" });
     harness.service.agentAttachEvidence(agent, { ticketId, kind: "builtin:automated_check" });
     harness.service.agentAttachEvidence(agent, { ticketId, kind: "builtin:review_pass" });
+    seedCommit(harness, ticketId);
     harness.service.agentMoveTicket(agent, { ticketId, to: "awaiting_verification" });
     expect(stateOf(harness, ticketId)).toBe("awaiting_verification");
   });
@@ -120,7 +136,12 @@ describe("lifecycle with the human half blocked", () => {
      * expensive evidence stays mandatory -- just not in THIS file, which is
      * a net coverage reduction here rather than the like-for-like swap the
      * old comment implied.
+     *
+     * #178: the review still excuses the check, but not the commit -- so the
+     * commit is seeded below, and the move still proves the #107 excuse (no
+     * check is attached anywhere in this test).
      */
+    seedCommit(harness, ticketId);
     harness.service.agentMoveTicket(agent, { ticketId, to: "awaiting_verification" });
     expect(stateOf(harness, ticketId)).toBe("awaiting_verification");
   });
@@ -136,6 +157,7 @@ describe("lifecycle with the human half blocked", () => {
     harness.service.agentMoveTicket(agent, { ticketId, to: "in_progress" });
     harness.service.agentAttachEvidence(agent, { ticketId, kind: "builtin:automated_check" });
     harness.service.agentAttachEvidence(agent, { ticketId, kind: "builtin:review_pass" });
+    seedCommit(harness, ticketId);
     harness.service.agentMoveTicket(agent, { ticketId, to: "awaiting_verification" });
 
     const refusal = expectGateRefused(() =>

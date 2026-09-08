@@ -44,6 +44,7 @@ function reachAwaitingVerification(harness: Harness) {
   harness.service.agentMoveTicket(harness.asAgent(), { ticketId: ticket.id, to: "in_progress" });
   harness.seedEvidence(harness.agent, ticket.id, "builtin:automated_check");
   harness.seedEvidence(harness.agent, ticket.id, "builtin:review_pass");
+  harness.seedEvidence(harness.agent, ticket.id, "builtin:user_commit");
   harness.service.agentMoveTicket(harness.asAgent(), {
     ticketId: ticket.id,
     to: "awaiting_verification",
