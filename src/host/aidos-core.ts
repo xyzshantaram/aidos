@@ -2342,6 +2342,24 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
+   * #174: the digest's half of the next step.
+   *
+   * A suffix rather than a separate line, and it rides the INSTRUCTION side
+   * of the separator deliberately: two tickets that received the same
+   * evidence AND need the same thing next coalesce into one line, while two
+   * that now need different things stay apart. That is the honest grouping
+   * -- the guidance is what the reader acts on, so lines that differ in it
+   * are genuinely different lines.
+   *
+   * Empty string when the ticket needs nothing, so an ordinary edit does not
+   * grow a trailing marker.
+   */
+  private _nextStepSuffix(agent: Agent, ticketId: number | string): string {
+    const step = this.nextStepFor(agent, ticketId);
+    return step === undefined ? "" : ` \u2014 next: ${step}`;
+  }
+
+  /**
    * #174: what this ticket needs next — THE single derivation.
    *
    * Lives on the service rather than in the tool layer because it has two
@@ -3835,7 +3853,8 @@ registerAidosSessionEventTypes(ctx);
     const what = linked ? "linked to a criterion" : "unlinked from its criterion";
     this._queueInjection(
       agent.session,
-      `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(rowKind)} ${what} by user`,
+      `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(rowKind)} ${what} by user` +
+        this._nextStepSuffix(agent, ticketId),
     );
   }
 
@@ -3898,7 +3917,8 @@ registerAidosSessionEventTypes(ctx);
     if (_isUserAction(actor)) {
       this._queueInjection(
         agent.session,
-        `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}`,
+        `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}` +
+          this._nextStepSuffix(agent, ticketId),
       );
     }
     /*

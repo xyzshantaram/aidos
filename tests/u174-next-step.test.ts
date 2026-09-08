@@ -9,6 +9,8 @@
  * rather than the wording.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CONFIG } from "../src/kernel/constants";
@@ -153,5 +155,51 @@ describe("#174 an OPEN ticket is told what signoff cannot fix later", () => {
     const step = nextStep(DEFAULT_CONFIG, ticket("open"), attached()) ?? "";
     expect(step).toContain("ready for");
     expect(step).toContain("user_signoff");
+  });
+});
+
+/**
+ * The digest is the SECOND consumer, and the reason this derivation lives on
+ * the service rather than in the tool layer.
+ *
+ * Two copies of a rule drift, and this one drifting means the board telling
+ * the agent to attach evidence its own gate no longer wants — which teaches
+ * the agent to skip the field, at which point the channel is spent.
+ */
+describe("#174 one derivation, two consumers", () => {
+  const core = readFileSync(
+    new URL("../src/host/aidos-core.ts", import.meta.url).pathname,
+    "utf8",
+  );
+  const tools = readFileSync(
+    new URL("../src/tools/aidos-tools.ts", import.meta.url).pathname,
+    "utf8",
+  );
+
+  it("computes the step in ONE place that both consumers call", () => {
+    // The kernel function is imported once, by the service; the tools and the
+    // digest both go through nextStepFor rather than importing it themselves.
+    expect(core).toContain("nextStepFor");
+    expect(tools).toContain("ctx.aidos.nextStepFor(");
+    expect(tools).not.toContain('from "../kernel/next-step"');
+  });
+
+  it("rides the digest's INSTRUCTION side, so grouping stays honest", () => {
+    /*
+     * Coalescing (#174's neighbour) merges lines with identical
+     * instructions. Putting the step there means two tickets that received
+     * the same evidence AND now need the same thing merge, while two that
+     * need different things stay apart — which is the correct grouping,
+     * because the guidance is what the reader acts on.
+     */
+    expect(core).toContain("_nextStepSuffix");
+    expect(core).toContain("evidence ${_mdCode(rowKind)} ${what} by user` +");
+  });
+
+  it("never lets guidance break the write it annotates", () => {
+    // nextStepFor swallows a failed read: a ticket that cannot be resolved
+    // has no next step, and a decoration must never fail an attach or a move.
+    const body = core.slice(core.indexOf("nextStepFor(agent: Agent"));
+    expect(body.slice(0, 500)).toContain("catch");
   });
 });
