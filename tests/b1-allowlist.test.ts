@@ -45,18 +45,33 @@ describe("the write union", () => {
     expect(reason).toBeUndefined();
   });
 
-  it("a write outside the union refuses and names the ticket", () => {
+  it("a write outside the union refuses, and does not pretend one ticket owns the path", () => {
+    /*
+     * #159 changed what this message may claim. It used to say "outside
+     * the allowlist of in-progress ticket 1; extend that ticket's
+     * allowlist" — but ticket 1 was `inProgress[0]`, an arbitrary row that
+     * has nothing to do with the path, and following that instruction
+     * would widen an unrelated ticket's write scope.
+     *
+     * The orchestrator now gets the honest version: no ticket covers this,
+     * here is what IS in progress, decide which one this work belongs to.
+     */
     const { harness } = harnessWithInProgress(["src/"]);
     const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/docs/b.md");
     expect(typeof reason).toBe("string");
-    expect(reason).toMatch(/in-progress ticket 1/);
+    expect(reason).toMatch(/no in-progress ticket covers it/);
+    expect(reason).toMatch(/#1/);
+    expect(reason).toMatch(/request_allowlist/);
+    // The retired claim must not come back: it named a ticket as though it
+    // governed the path.
+    expect(reason).not.toMatch(/allowlist of in-progress ticket/);
   });
 
   it("an edit outside the union refuses the same way", () => {
     const { harness } = harnessWithInProgress(["src/"]);
     const reason = writeBoundaryReason(asContext(harness.ctx), harness.asAgent(), "/srv/proj/cli/docs/b.md");
     expect(typeof reason).toBe("string");
-    expect(reason).toMatch(/in-progress ticket 1/);
+    expect(reason).toMatch(/no in-progress ticket covers it/);
   });
 
   it("the guard registers prepended on both fs waterfall events", () => {
@@ -83,7 +98,7 @@ describe("the write union", () => {
         nextCalled = true;
         return undefined;
       };
-      expect(() => record.listener(target, actor, next)).toThrow(/in-progress ticket 1/);
+      expect(() => record.listener(target, actor, next)).toThrow(/no in-progress ticket covers it/);
       expect(nextCalled).toBe(false);
     }
   });

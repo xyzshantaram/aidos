@@ -198,15 +198,71 @@ export function writeBoundaryReason(
   // write is outside the union when there is no in_progress ticket to
   // cover it. Do not pass through — an empty aidos board is not a
   // standard session.
+  /*
+   * #159: the refusal is written for WHOEVER IS READING IT.
+   *
+   * The old message said: "outside the allowlist of in-progress ticket 77;
+   * extend that ticket's allowlist to cover this path". Three things were
+   * wrong at once, and a subagent hit all three:
+   *
+   *  1. The remedy was IMPOSSIBLE for the reader. request_allowlist refuses
+   *     subagents and approvals auto-reject in a subagent session, so the
+   *     message named the one action that reader definitively cannot take,
+   *     and never named the one it should (report and stop).
+   *  2. The ticket was WRONG. It was `inProgress[0]` — the first row of the
+   *     board, unrelated to the work. Following the instruction literally
+   *     would have widened an UNRELATED ticket's write scope, so the
+   *     message actively directed the reader into a mistake.
+   *  3. It arrived at the most expensive moment: mid-task, after the reader
+   *     had read, planned and started.
+   *
+   * A refusal that misdirects is worse than one that only says no, because
+   * it is specific enough to be obeyed. So: never name a ticket unless it
+   * is genuinely the one that governs the path, and address the remedy to
+   * the actor who can perform it.
+   */
+  const subagent = delegationDepthOf(agent) !== 0;
+  const elsewhere =
+    `You may write your ticket's worktree under ${WORKTREE_ROOT}/<workspaceKey>/<ticketId>, ` +
+    `the scratch root, or ${DSH_TMP_ROOT} for larger artifacts.`;
+  if (subagent) {
+    /*
+     * No ticket id, deliberately. A subagent cannot act on one: it cannot
+     * widen any allowlist from here, and naming a number invites it to try
+     * or to report the wrong ticket to the orchestrator.
+     */
+    return (
+      `write to ${path} is outside every in-progress ticket's allowlist. ` +
+      "A subagent cannot widen an allowlist (request_allowlist refuses subagents and " +
+      "approvals auto-reject here), so do not try: " +
+      elsewhere +
+      " If this path genuinely needs to change, put it in your report and let the " +
+      "orchestrator decide."
+    );
+  }
   if (rows.length === 0) {
-    return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it (board is empty \u2014 create and sign off a ticket, or write under scratch)`;
+    return (
+      `write to ${path} is outside the allowlist union; no in-progress ticket allowlist ` +
+      "covers it (board is empty \u2014 create and sign off a ticket, or write under scratch)"
+    );
   }
   const inProgress = rows.filter((row) => row.state === "in_progress");
   if (inProgress.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
   }
-  const ticket = inProgress[0];
-  return `write to ${path} is outside the allowlist of in-progress ticket ${ticket.id}; extend that ticket's allowlist to cover this path`;
+  /*
+   * The ORCHESTRATOR's version. It can act, so it gets the route — but it
+   * is still not told a ticket id, because no in-progress ticket's
+   * allowlist covers this path (that is why we are here) and the old
+   * message's confident arbitrary number is exactly the defect. Which
+   * ticket SHOULD own the path is a judgement only the caller can make.
+   */
+  const ids = inProgress.map((row) => `#${row.id}`).join(", ");
+  return (
+    `write to ${path} is outside the allowlist union; no in-progress ticket covers it. ` +
+    `In progress right now: ${ids}. Call request_allowlist on the ticket this work belongs ` +
+    "to, or write under the scratch root."
+  );
 }
 
 /**

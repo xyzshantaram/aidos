@@ -30288,6 +30288,11 @@ function writeBoundaryReason(ctx, agent, path) {
     ctx.logger?.warn?.(`aidos: getTickets failed in writeBoundaryReason: ${error51 instanceof Error ? error51.message : String(error51)}`);
     rows = [];
   }
+  const subagent = delegationDepthOf4(agent) !== 0;
+  const elsewhere = `You may write your ticket's worktree under ${WORKTREE_ROOT}/<workspaceKey>/<ticketId>, the scratch root, or ${DSH_TMP_ROOT} for larger artifacts.`;
+  if (subagent) {
+    return `write to ${path} is outside every in-progress ticket's allowlist. A subagent cannot widen an allowlist (request_allowlist refuses subagents and approvals auto-reject here), so do not try: ` + elsewhere + " If this path genuinely needs to change, put it in your report and let the orchestrator decide.";
+  }
   if (rows.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it (board is empty \u2014 create and sign off a ticket, or write under scratch)`;
   }
@@ -30295,8 +30300,8 @@ function writeBoundaryReason(ctx, agent, path) {
   if (inProgress.length === 0) {
     return `write to ${path} is outside the allowlist union; no in-progress ticket allowlist covers it`;
   }
-  const ticket = inProgress[0];
-  return `write to ${path} is outside the allowlist of in-progress ticket ${ticket.id}; extend that ticket's allowlist to cover this path`;
+  const ids = inProgress.map((row) => `#${row.id}`).join(", ");
+  return `write to ${path} is outside the allowlist union; no in-progress ticket covers it. In progress right now: ${ids}. Call request_allowlist on the ticket this work belongs to, or write under the scratch root.`;
 }
 function fsIntentListener(ctx, target, actor, next) {
   const agent = actor?.agent;
