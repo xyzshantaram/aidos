@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { asBoardKey, boardKeyOf, fullTicketId, resolveSelection } from "../src/client/board-logic";
+import { asBoardKey, boardKeyOf, fullTicketId, resolveDeepLinkRow, resolveSelection } from "../src/client/board-logic";
 import {
   clearDetailModals,
   getHeldTicket,
@@ -925,5 +925,74 @@ describe("#100 round 3: the approval runner survives the remount", () => {
     const setter = queue.slice(queue.indexOf("const setRunning = function (entry: QueueEntry | null)"));
     const body = setter.slice(0, setter.indexOf("};"));
     expect(body.indexOf("setRunningApproval(")).toBeLessThan(body.indexOf("setRunningKey("));
+  });
+});
+
+/**
+ * #100 ROUND 4 (user, after the restart: "#100 issue persists", with a log
+ * showing ProjectionReader UNMOUNTING and the board remounting).
+ *
+ * Rounds 1-3 hardened the resolver and moved the selection into a module
+ * store. Both were right and neither was enough, because the store lives in
+ * memory: it survives a REMOUNT and dies with the PAGE. The `?ticket=` param
+ * is the only channel that crosses a reload -- and the unmount cleanup was
+ * deleting it, which round 3's own comment called "a strong suspect" and
+ * then left in place.
+ *
+ * So the param stays, and it carries a BOARD KEY. That is what makes
+ * keeping it safe: the old strip existed to stop a param leaking into the
+ * next session, and a key cannot leak -- it names one ticket in one
+ * workspace, and resolves to nothing anywhere else.
+ */
+describe("#100 round 4: the deep link survives a reload and cannot cross a workspace", () => {
+  const own = { id: 12, foreign: false } as const;
+  const foreign = { id: 12, foreign: true, sourceSessionId: "sess-B" } as const;
+
+  it("resolves a foreign key to the FOREIGN row, never to this board's #12", () => {
+    /*
+     * The leak the strip was defending against, now defended by the param's
+     * content instead: both rows are numbered 12, and only the key tells
+     * them apart.
+     */
+    expect(resolveDeepLinkRow("sess-B:12", [own, foreign])).toBe(foreign);
+    expect(resolveDeepLinkRow("12", [own, foreign])).toBe(own);
+  });
+
+  it("resolves to NOTHING when the key belongs to a board that is not loaded", () => {
+    // A session switch carries the param along. It must select nothing here
+    // rather than opening the same-numbered local ticket.
+    expect(resolveDeepLinkRow("sess-C:12", [own])).toBeNull();
+    expect(resolveDeepLinkRow("sess-C:12", [])).toBeNull();
+  });
+
+  it("still honours a bare-id link written by the previous build", () => {
+    // Old links keep working, and a bare id matches a foreign row by that
+    // row's own identity rather than by an address it does not have.
+    expect(resolveDeepLinkRow("12", [foreign])).toBe(foreign);
+    expect(resolveDeepLinkRow("99", [own, foreign])).toBeNull();
+  });
+
+  it("treats an absent or empty param as no link at all", () => {
+    expect(resolveDeepLinkRow(null, [own])).toBeNull();
+    expect(resolveDeepLinkRow("", [own])).toBeNull();
+    expect(resolveDeepLinkRow("not-a-key", [own])).toBeNull();
+  });
+
+  it("the unmount KEEPS the param, and only the user clears it", () => {
+    /*
+     * Source assertions, deliberately, and only for the thing a pure
+     * function cannot reach: whether the shipped cleanup still deletes the
+     * param. The rule this pins is the one that regressed twice.
+     */
+    const view = readFileSync(
+      new URL("../src/client/local-ticket-view.tsx", import.meta.url).pathname,
+      "utf8",
+    );
+    const cleanup = view.slice(view.indexOf("ProjectionReader UNMOUNTING"));
+    expect(cleanup.slice(0, 400)).not.toContain("setTicketParam(null)");
+    // closeDetail -- the user ending the selection -- still clears both.
+    expect(view).toContain("setSelectedKey(null);\n    setTicketParam(null);");
+    // And selecting writes the KEY, so a foreign ticket is restorable too.
+    expect(view).toContain("setTicketParam(key);");
   });
 });

@@ -86,6 +86,38 @@ export function boardKeyOf(ticket: BoardKeyed): BoardKey {
   return boardKeyText(ticket) as BoardKey;
 }
 
+/**
+ * The row a `?ticket=` deep link names, resolved against the board that is
+ * actually loaded — or null when it names nothing here.
+ *
+ * #100 round 4. The param is the ONLY selection channel that survives a
+ * page reload (the module store is in-memory), so the unmount stopped
+ * erasing it. That made the param outlive a session switch, and this
+ * function is what keeps that safe: a BOARD KEY names one ticket in one
+ * workspace, so a key from another session resolves to nothing here rather
+ * than to this board's row with the same number.
+ *
+ * The numeric fallback is for links written before the param carried a key.
+ * It is matched against each row's OWN key, so a foreign row still resolves
+ * correctly instead of being addressed by a bare id that is not its
+ * address.
+ *
+ * Exported, and a pure function, because the two earlier #100 fixes were
+ * pinned by tests that re-implemented the derivation or grepped the source
+ * — both of which passed while the bug shipped.
+ */
+export function resolveDeepLinkRow<T extends BoardKeyed>(
+  ref: string | null,
+  rows: readonly T[],
+): T | null {
+  if (ref === null || ref === "") return null;
+  const byKey = rows.find((row) => boardKeyOf(row) === ref);
+  if (byKey !== undefined) return byKey;
+  if (!/^\d+$/.test(ref)) return null;
+  const id = Number(ref);
+  return rows.find((row) => Number(row.id) === id) ?? null;
+}
+
 /** The ticket fields the board logic reads. TicketView satisfies this. */
 interface TicketLike {
   id: number;

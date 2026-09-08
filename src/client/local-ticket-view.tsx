@@ -30,7 +30,12 @@ import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
-import { boardKeyOf, rememberWorkspaceLabel, resolveSelection } from "./board-logic";
+import {
+  boardKeyOf,
+  rememberWorkspaceLabel,
+  resolveDeepLinkRow,
+  resolveSelection,
+} from "./board-logic";
 import { ModalShell } from "./ui";
 import { agentAskCount, queuePollMs } from "./human-queue";
 import type { ModalKey } from "./view-state";
@@ -120,21 +125,31 @@ function restoreFilter(
   }
 }
 
-/** Read the ticket id from the query string. */
-function ticketIdFromSearch(search: string): number | null {
-  const match = /[?&]ticket=(\d+)/.exec(search);
+/**
+ * Read the ticket REFERENCE from the query string.
+ *
+ * #100 round 4: a BOARD KEY, not a bare id. The param is now the only
+ * channel that survives a page RELOAD -- the module store is in-memory and
+ * dies with the page -- so it has to address a ticket the way everything
+ * else does: `sourceSessionId:id` for a foreign row, the bare id for an own
+ * one (kernel/board-key.ts). A bare number still parses, so links written
+ * by the previous build keep working.
+ */
+function ticketRefFromSearch(search: string): string | null {
+  const match = /[?&]ticket=([^&#]+)/.exec(search);
   if (match === null) return null;
-  return Number(match[1]);
+  const raw = decodeURIComponent(match[1]);
+  return raw === "" ? null : raw;
 }
 
-/** Write the ticket id into the query string. Null clears it. */
-function setTicketParam(id: number | null): void {
+/** Write the ticket's board key into the query string. Null clears it. */
+function setTicketParam(key: string | null): void {
   const url = new URL(window.location.href);
-  if (id === null) {
+  if (key === null) {
     url.searchParams.delete("ticket");
     window.history.replaceState({}, "", url);
   } else {
-    url.searchParams.set("ticket", String(id));
+    url.searchParams.set("ticket", key);
     window.history.pushState({}, "", url);
   }
 }
@@ -732,37 +747,57 @@ function ProjectionReader(props: ProjectionReaderProps) {
       if (!loaded) return;
       if (deepLinkHandled.current) return;
       deepLinkHandled.current = true;
-      const id = ticketIdFromSearch(window.location.search);
-      if (id === null) return;
+      const ref = ticketRefFromSearch(window.location.search);
+      if (ref === null) return;
       /*
-       * A deep link carries a bare id, so resolve it to a ROW and key that
-       * row -- String(id) is only a valid board key for an OWN ticket, so a
-       * link to a foreign row selected nothing or the wrong card. Found by
-       * the compiler when BoardKey was branded (#93).
+       * Resolved against THIS board, by board key first.
+       *
+       * #100 round 4: this is what lets the param survive a session switch
+       * safely, and it is why the unmount no longer strips it. A key names
+       * exactly one ticket in one workspace, so carrying it into another
+       * session resolves to nothing rather than to that session's row with
+       * the same number -- which is the leak the old strip-on-unmount was
+       * defending against, at the cost of destroying the only thing that
+       * could restore the reader's ticket after a reload.
+       *
+       * The numeric fallback keeps older links working, and it is matched
+       * against the ROW's own key so a foreign row still selects correctly.
        */
-      const row = rawTickets.find((ticket) => ticket.id === id);
-      if (row !== undefined) {
+      const row = resolveDeepLinkRow(ref, rawTickets);
+      if (row !== null) {
         setSelectedKey(boardKeyOf(row));
       } else {
-        showToast("Ticket " + id + " not found", "info");
+        /*
+         * Silent: a param naming another workspace's ticket is the NORMAL
+         * case after a session switch now, not a mistake worth a toast on
+         * every board open.
+         */
+        logDebug(`#100 deep link ${ref} does not resolve on this board`);
       }
     },
     [loaded],
   );
 
   /*
-   * Strip a leftover ticket param on unmount so it cannot leak to the next
-   * session or tab.
+   * #100 ROUND 4: THE UNMOUNT NO LONGER STRIPS THE PARAM.
    *
-   * #100 INSTRUMENTATION, and this is a strong suspect in its own right.
-   * ProjectionReader is keyed on retryNonce, so ANY remount unmounts this
-   * component -- and the cleanup then wipes `?ticket=N` from the URL. The
-   * fresh mount's deep-link effect therefore finds nothing to restore, and
-   * the reader lands on the grid with no trace of what they were reading.
+   * Round 3's own comment called this a strong suspect and left it in
+   * place, and the bug survived: ProjectionReader is keyed on retryNonce,
+   * so ANY remount unmounted this component and the cleanup then wiped
+   * `?ticket=N`. Within one page life the module store covered it. Across
+   * a RELOAD it could not -- the store is in-memory and dies with the page,
+   * so the state was destroyed AND the only thing that could rebuild it was
+   * erased on the way out. That is the reported shape exactly: the view
+   * "randomly refreshes" and you are on the grid.
    *
-   * That is the exact shape of the reported bug, and no amount of care in
-   * the selection resolver can survive it: the state is destroyed AND the
-   * only thing that could rebuild it is erased on the way out.
+   * The strip existed to stop the param leaking into the next session. That
+   * job now belongs to the param's CONTENT: it carries a board key, which
+   * names one ticket in one workspace, and the deep link adopts it only if
+   * it resolves on the board being read. A leak is therefore impossible
+   * without the erasure that caused the bug.
+   *
+   * The selection is still ended by the USER alone -- closeDetail clears
+   * both the store and the param, and nothing else does.
    */
   react.useEffect(function () {
     logDebug("#100 ProjectionReader MOUNTED");
@@ -782,9 +817,8 @@ function ProjectionReader(props: ProjectionReaderProps) {
       const had = new URL(window.location.href).searchParams.has("ticket");
       logWarn(
         `#100 ProjectionReader UNMOUNTING; ticket param present=${had}` +
-          (had ? " -> STRIPPING IT (the deep link that could restore the selection)" : ""),
+          (had ? " -> KEPT (round 4: it is what restores the selection after a reload)" : ""),
       );
-      if (had) setTicketParam(null);
       // eslint-disable-next-line no-console
       console.info("[aidos] board UNMOUNT <- if you see this when opening the queue, it is a remount");
     };
@@ -847,8 +881,13 @@ function ProjectionReader(props: ProjectionReaderProps) {
     }
     logDebug(`#100 selectTicket(${key})`);
     setSelectedKey(key);
-    const numeric = Number(key);
-    setTicketParam(Number.isInteger(numeric) ? numeric : null);
+    /*
+     * The KEY, verbatim. It used to write the param only when the key
+     * parsed as a number, so a FOREIGN ticket -- `sourceSessionId:id` --
+     * got no param at all and could never be restored by a reload, on top
+     * of #100's other half.
+     */
+    setTicketParam(key);
   }
 
   function closeDetail() {
