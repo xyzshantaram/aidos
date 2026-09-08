@@ -72,6 +72,7 @@ import type { PlanTicket } from "../plan/plan";
 import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { boardKeyText } from "../kernel/board-key";
+import { DIGEST_SEPARATOR, coalesceDigestLines } from "../kernel/digest";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
@@ -3133,10 +3134,19 @@ registerAidosSessionEventTypes(ctx);
        * DEFERRED change (touches ~15 call sites and their tests); this
        * header is fixed now because it is what was reported.
        */
+      /*
+       * Repeated instructions are said ONCE (user, 2026-09-08: "board
+       * digest should not repeat the exact same worktree instruction like
+       * 50 times"). The header still counts real CHANGES, not rendered
+       * lines: four signoffs are four changes however few lines they take,
+       * and a count that shrank because the text was tidier would be a
+       * digest lying about what happened.
+       */
+      const merged = coalesceDigestLines(lines);
       const header = `aidos board update — ${lines.length} change${lines.length === 1 ? "" : "s"}`;
-      const shown = lines.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
-      if (lines.length > DIGEST_LINE_CAP) {
-        shown.push(`…and ${lines.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);
+      const shown = merged.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
+      if (merged.length > DIGEST_LINE_CAP) {
+        shown.push(`…and ${merged.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);
       }
       const text = `${header}\n\n- ${shown.join("\n- ")}`;
       const message = createUserMessage({
@@ -4035,30 +4045,34 @@ registerAidosSessionEventTypes(ctx);
         problems.push(`the recorded preparation recipe is unusable: ${problem}`);
       }
       if (problems.length === 0) {
+        /*
+         * SUBJECT carries what differs, INSTRUCTION carries what does not.
+         *
+         * That split is what lets four signoffs produce one paragraph
+         * instead of four (see coalesceDigestLines). The ticket and its
+         * worktree path are per-ticket and belong in the subject; the
+         * recipe is a property of the WORKSPACE, identical for every
+         * ticket in the flush, and repeating it once per ticket is what
+         * the user reported. Keep every interpolation on the left of the
+         * separator, or the lines stop collapsing silently.
+         */
+        const recipe =
+          configPath ?? WORKTREE_PREPARE_CONFIG;
+        const instruction = spec.declared
+          ? `bare checkouts with ${_mdCode("node_modules")} linked. The recipe at ` +
+            `${_mdCode(recipe)} applies` +
+            (spec.commands.length > 0
+              ? `: run its ${spec.commands.length} command(s) in the worktree before dispatching into it.`
+              : `: nothing to run.`) +
+            (spec.notes.length > 0
+              ? `\n${spec.notes.map((note) => `  - ${note}`).join("\n")}`
+              : "")
+          : `bare checkouts with ${_mdCode("node_modules")} linked, and NOT prepared. No recipe is ` +
+            `recorded for this workspace yet: work out what makes it build in one of them, confirm ` +
+            `it, then record it at ${_mdCode(recipe)} so later worktrees are configured automatically.`;
         this._queueInjection(
           agent.session,
-          `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} — ` +
-            `worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} ` +
-            `linked; **it has not been prepared**. ` +
-            (spec.declared
-              ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)}: ` +
-                (spec.commands.length > 0
-                  ? `${spec.commands.length} command(s) to RUN there before dispatching into it. `
-                  : `nothing to run. `) +
-                /*
-                 * The notes ride the report itself rather than being left
-                 * in a file nobody opens. aidos's own answer is entirely a
-                 * note -- no build step, but pnpm needs a flag or the tree
-                 * looks broken -- so a report that named only commands
-                 * would have said "nothing to run" and left the next front
-                 * to rediscover the trap.
-                 */
-                (spec.notes.length > 0
-                  ? `\n${spec.notes.map((note) => `- ${note}`).join("\n")}`
-                  : "")
-              : `No preparation recipe is recorded for this workspace yet. Work out what makes it ` +
-                `build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} ` +
-                `so later dispatches reuse it.`),
+          `worktree for #${ticketId} at ${_mdCode(path)}${DIGEST_SEPARATOR}${instruction}`,
         );
         return;
       }

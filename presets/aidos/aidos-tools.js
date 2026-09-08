@@ -27091,6 +27091,38 @@ function boardKeyText(row) {
   return row.foreign === true && row.sourceSessionId !== void 0 ? row.sourceSessionId + ":" + String(row.id) : String(row.id);
 }
 
+// src/kernel/digest.ts
+var DIGEST_SEPARATOR = " \u2014 ";
+function coalesceDigestLines(lines) {
+  const groups = /* @__PURE__ */ new Map();
+  const order = [];
+  const passthrough = /* @__PURE__ */ new Map();
+  lines.forEach(function(line, index) {
+    const at = line.indexOf(DIGEST_SEPARATOR);
+    if (at <= 0) {
+      passthrough.set(index, line);
+      order.push("\0line:" + index);
+      return;
+    }
+    const subject = line.slice(0, at);
+    const instruction = line.slice(at + DIGEST_SEPARATOR.length);
+    const existing = groups.get(instruction);
+    if (existing === void 0) {
+      groups.set(instruction, [subject]);
+      order.push(instruction);
+    } else {
+      existing.push(subject);
+    }
+  });
+  return order.map(function(slot) {
+    if (slot.startsWith("\0line:")) {
+      return passthrough.get(Number(slot.slice("\0line:".length))) ?? "";
+    }
+    const subjects = groups.get(slot) ?? [];
+    return subjects.join(", ") + DIGEST_SEPARATOR + slot;
+  });
+}
+
 // src/kernel/helpers.ts
 function deepClone(value) {
   return structuredClone(value);
@@ -29329,10 +29361,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     try {
       const live = this.ctx.agents?.get?.(session.id);
       if (live === void 0) return;
+      const merged = coalesceDigestLines(lines);
       const header = `aidos board update \u2014 ${lines.length} change${lines.length === 1 ? "" : "s"}`;
-      const shown = lines.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
-      if (lines.length > DIGEST_LINE_CAP) {
-        shown.push(`\u2026and ${lines.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);
+      const shown = merged.slice(0, DIGEST_LINE_CAP).map(_capDigestLine);
+      if (merged.length > DIGEST_LINE_CAP) {
+        shown.push(`\u2026and ${merged.length - DIGEST_LINE_CAP} more change(s); read the board for the rest`);
       }
       const text = `${header}
 
@@ -30017,18 +30050,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         problems.push(`the recorded preparation recipe is unusable: ${problem}`);
       }
       if (problems.length === 0) {
+        const recipe = configPath ?? WORKTREE_PREPARE_CONFIG;
+        const instruction = spec.declared ? `bare checkouts with ${_mdCode("node_modules")} linked. The recipe at ${_mdCode(recipe)} applies` + (spec.commands.length > 0 ? `: run its ${spec.commands.length} command(s) in the worktree before dispatching into it.` : `: nothing to run.`) + (spec.notes.length > 0 ? `
+${spec.notes.map((note) => `  - ${note}`).join("\n")}` : "") : `bare checkouts with ${_mdCode("node_modules")} linked, and NOT prepared. No recipe is recorded for this workspace yet: work out what makes it build in one of them, confirm it, then record it at ${_mdCode(recipe)} so later worktrees are configured automatically.`;
         this._queueInjection(
           agent.session,
-          `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} \u2014 worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} linked; **it has not been prepared**. ` + (spec.declared ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)}: ` + (spec.commands.length > 0 ? `${spec.commands.length} command(s) to RUN there before dispatching into it. ` : `nothing to run. `) + /*
-           * The notes ride the report itself rather than being left
-           * in a file nobody opens. aidos's own answer is entirely a
-           * note -- no build step, but pnpm needs a flag or the tree
-           * looks broken -- so a report that named only commands
-           * would have said "nothing to run" and left the next front
-           * to rediscover the trap.
-           */
-          (spec.notes.length > 0 ? `
-${spec.notes.map((note) => `- ${note}`).join("\n")}` : "") : `No preparation recipe is recorded for this workspace yet. Work out what makes it build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} so later dispatches reuse it.`)
+          `worktree for #${ticketId} at ${_mdCode(path)}${DIGEST_SEPARATOR}${instruction}`
         );
         return;
       }
