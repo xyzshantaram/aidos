@@ -55,6 +55,9 @@ const WRITE_TOOLS = [
 const READ_TOOLS = [
   "get_tickets",
   "get_ticket",
+  // #175: folds the durable log into what changed. A read, so a subagent
+  // recovering a missed digest sees the board it was dispatched against.
+  "digest_recent",
   "get_evidence",
   "plan",
   "plan_meta",

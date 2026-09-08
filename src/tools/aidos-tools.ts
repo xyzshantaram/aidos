@@ -531,7 +531,7 @@ const AIDOS_GUIDANCE =
   "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
   "The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. " +
-  "Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. " +
+  "Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. " +
   "So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. " +
   "Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. " +
   "The depth guard refuses a subagent's writes anyway, so the filter is a second layer. " +
@@ -766,6 +766,90 @@ function registerGetTicket(ctx: Context): void {
  * not reach them — verdicts were write-only for exactly the agents that
  * must act on them.
  */
+/**
+ * #175: what changed on the board while the agent was busy.
+ *
+ * A READ, so it is allowed at every delegation depth: a subagent asking what
+ * it missed sees the history of the board it was dispatched against.
+ *
+ * The digest is delivered, not stored -- it rides the conversation and dies
+ * with it at the next compaction -- so this exists to recover what was said.
+ * It is FOLDED from the durable event log rather than buffered, which is why
+ * it survives a restart and cannot drift from the board.
+ */
+function registerDigestRecent(ctx: Context): void {
+  registerBoardTool(
+    ctx,
+    "read",
+    defineTool({
+      name: "digest_recent",
+      description:
+        "Recent board changes for this workspace, newest first \u2014 what the board " +
+        "digest told you while you were mid-turn, or before a compaction dropped it. " +
+        "Each row names the ticket, what changed, when, and what that ticket needs " +
+        "NEXT. Covers board changes only: notices with no board event behind them " +
+        "(worktree reports, refused approvals) cannot be recovered here, and the " +
+        "result says so.",
+      parameters: {
+        limit: {
+          type: "integer",
+          description: "How many changes to return, newest first. Default 20, max 200.",
+        },
+        since: {
+          type: "number",
+          description:
+            "Only changes after this epoch-seconds timestamp. Absent = the most recent.",
+        },
+        ticketId: {
+          type: "integer",
+          description: "Only this ticket's changes. Absent = every ticket.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            changes: {
+              type: "array",
+              required: true,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  ticketId: { type: "integer", required: true },
+                  at: { type: "number", required: true },
+                  change: { type: "string", required: true },
+                  title: { type: "string" },
+                  state: { type: "string" },
+                  nextStep: { type: "string" },
+                },
+              },
+            },
+            omitted: { type: "integer", required: true },
+            covers: { type: "string", required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        try {
+          const result = ctx.aidos.recentChanges(agent, {
+            ...(args.limit === undefined ? {} : { limit: args.limit }),
+            ...(args.since === undefined ? {} : { since: args.since }),
+            ...(args.ticketId === undefined ? {} : { ticketId: args.ticketId }),
+          });
+          return { ok: true as const, ...result };
+        } catch (error) {
+          return refusal(error);
+        }
+      },
+    }),
+  );
+}
+
 function registerGetEvidence(ctx: Context): void {
   registerBoardTool(
     ctx,
@@ -1652,6 +1736,7 @@ export function apply(ctx: Context, config: unknown): void {
   registerSuggestActions(ctx);
   registerGetTicket(ctx);
   registerGetEvidence(ctx);
+  registerDigestRecent(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);

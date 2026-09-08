@@ -73,6 +73,8 @@ import { DEFAULT_CONFIG, PLAN_CONTEXT_LIMIT } from "../kernel/constants";
 import { STATE_ORDER } from "../kernel/types";
 import { boardKeyText } from "../kernel/board-key";
 import { nextStep } from "../kernel/next-step";
+import { recentBoardChanges } from "../kernel/recent-changes";
+import type { BoardChange } from "../kernel/recent-changes";
 import { DIGEST_SEPARATOR, coalesceDigestLines } from "../kernel/digest";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
@@ -2339,6 +2341,46 @@ registerAidosSessionEventTypes(ctx);
       );
     }
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
+  }
+
+  /**
+   * #175: recent board changes, folded from the durable log.
+   *
+   * Reads `session.events` -- the append-only log the board itself is folded
+   * from -- so a restart loses nothing and this can never disagree with the
+   * board. A buffer of emitted digests would have done neither.
+   *
+   * Resolved through `_boardAgent`, like every other read (#157): a subagent
+   * asking what it missed sees the history of the board it was DISPATCHED
+   * against, not of its own empty session.
+   *
+   * Each row carries its next step (#174), so recovering a missed digest
+   * recovers the guidance and not merely the fact.
+   */
+  recentChanges(
+    agent: Agent,
+    args: { limit?: number; since?: number; ticketId?: number } = {},
+  ): { changes: Array<BoardChange & { nextStep?: string }>; omitted: number; covers: string } {
+    const reader = this._boardAgent(agent);
+    const session = reader.session;
+    const folded = recentBoardChanges((session?.events ?? []) as readonly unknown[], args);
+    return {
+      changes: folded.changes.map((change) => {
+        const step = this.nextStepFor(reader, change.ticketId);
+        return step === undefined ? change : { ...change, nextStep: step };
+      }),
+      omitted: folded.omitted,
+      /*
+       * THE BOUNDARY, said out loud. Worktree reports, refused approvals and
+       * injection failures are digest lines with no log row, so no fold can
+       * return them. An agent that believes it has seen everything is worse
+       * off than one told what it is missing.
+       */
+      covers:
+        "board changes only — tickets, evidence and comments. Notices with no " +
+        "board event behind them (worktree preparation reports, refused " +
+        "approvals, injection failures) are NOT recoverable here.",
+    };
   }
 
   /**

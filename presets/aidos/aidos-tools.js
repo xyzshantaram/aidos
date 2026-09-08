@@ -27158,6 +27158,56 @@ function nextStep(config2, ticket, attached) {
   return "still needs " + missing.map(nameKind).join(" and ");
 }
 
+// src/kernel/recent-changes.ts
+function recentBoardChanges(events, options2 = {}) {
+  const limit = Math.max(1, Math.min(options2.limit ?? 20, 200));
+  const collected = [];
+  for (const raw of events) {
+    const event = raw;
+    if (typeof event?.kind !== "string") continue;
+    let change = null;
+    if (event.kind === "ticket/change") {
+      const e = event;
+      const ticket = e.ticket;
+      change = {
+        ticketId: ticket.id,
+        at: e.at,
+        title: ticket.title,
+        state: ticket.state,
+        change: e.operation === "create" ? "created" : e.operation === "move" ? "moved to " + ticket.state : "edited"
+      };
+    } else if (event.kind === "evidence/attached") {
+      const e = event;
+      const row = e.row;
+      change = {
+        ticketId: e.ticketId,
+        at: row.at,
+        change: "evidence " + row.kind + " by " + row.author
+      };
+    } else if (event.kind === "evidence/detached") {
+      const e = event;
+      change = {
+        ticketId: e.ticketId,
+        at: e.at,
+        change: "evidence detached"
+      };
+    } else if (event.kind === "comment/added") {
+      const e = event;
+      change = { ticketId: e.ticketId, at: e.at, change: "comment added" };
+    }
+    if (change === null) continue;
+    if (options2.ticketId !== void 0 && change.ticketId !== options2.ticketId) continue;
+    if (options2.since !== void 0 && !(change.at > options2.since)) continue;
+    collected.push(change);
+  }
+  collected.sort((a, b) => a.at - b.at);
+  collected.reverse();
+  return {
+    changes: collected.slice(0, limit),
+    omitted: Math.max(0, collected.length - limit)
+  };
+}
+
 // src/kernel/digest.ts
 var DIGEST_SEPARATOR = " \u2014 ";
 function coalesceDigestLines(lines) {
@@ -28974,6 +29024,39 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
     }
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
+  }
+  /**
+   * #175: recent board changes, folded from the durable log.
+   *
+   * Reads `session.events` -- the append-only log the board itself is folded
+   * from -- so a restart loses nothing and this can never disagree with the
+   * board. A buffer of emitted digests would have done neither.
+   *
+   * Resolved through `_boardAgent`, like every other read (#157): a subagent
+   * asking what it missed sees the history of the board it was DISPATCHED
+   * against, not of its own empty session.
+   *
+   * Each row carries its next step (#174), so recovering a missed digest
+   * recovers the guidance and not merely the fact.
+   */
+  recentChanges(agent, args = {}) {
+    const reader = this._boardAgent(agent);
+    const session = reader.session;
+    const folded = recentBoardChanges(session?.events ?? [], args);
+    return {
+      changes: folded.changes.map((change) => {
+        const step = this.nextStepFor(reader, change.ticketId);
+        return step === void 0 ? change : { ...change, nextStep: step };
+      }),
+      omitted: folded.omitted,
+      /*
+       * THE BOUNDARY, said out loud. Worktree reports, refused approvals and
+       * injection failures are digest lines with no log row, so no fold can
+       * return them. An agent that believes it has seen everything is worse
+       * off than one told what it is missing.
+       */
+      covers: "board changes only \u2014 tickets, evidence and comments. Notices with no board event behind them (worktree preparation reports, refused approvals, injection failures) are NOT recoverable here."
+    };
   }
   /**
    * #174: the digest's half of the next step.
@@ -31366,7 +31449,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
 function registerGetTickets(ctx) {
   registerBoardTool(
     ctx,
@@ -31557,6 +31640,71 @@ function registerGetTicket(ctx) {
       presentCall: (a) => {
         const req = a;
         return present("Read ticket", "read", req.ticketId, ["#" + req.ticketId]);
+      }
+    })
+  );
+}
+function registerDigestRecent(ctx) {
+  registerBoardTool(
+    ctx,
+    "read",
+    defineTool2({
+      name: "digest_recent",
+      description: "Recent board changes for this workspace, newest first \u2014 what the board digest told you while you were mid-turn, or before a compaction dropped it. Each row names the ticket, what changed, when, and what that ticket needs NEXT. Covers board changes only: notices with no board event behind them (worktree reports, refused approvals) cannot be recovered here, and the result says so.",
+      parameters: {
+        limit: {
+          type: "integer",
+          description: "How many changes to return, newest first. Default 20, max 200."
+        },
+        since: {
+          type: "number",
+          description: "Only changes after this epoch-seconds timestamp. Absent = the most recent."
+        },
+        ticketId: {
+          type: "integer",
+          description: "Only this ticket's changes. Absent = every ticket."
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            changes: {
+              type: "array",
+              required: true,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  ticketId: { type: "integer", required: true },
+                  at: { type: "number", required: true },
+                  change: { type: "string", required: true },
+                  title: { type: "string" },
+                  state: { type: "string" },
+                  nextStep: { type: "string" }
+                }
+              }
+            },
+            omitted: { type: "integer", required: true },
+            covers: { type: "string", required: true }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent2(exec);
+        try {
+          const result = ctx.aidos.recentChanges(agent, {
+            ...args.limit === void 0 ? {} : { limit: args.limit },
+            ...args.since === void 0 ? {} : { since: args.since },
+            ...args.ticketId === void 0 ? {} : { ticketId: args.ticketId }
+          });
+          return { ok: true, ...result };
+        } catch (error51) {
+          return refusal(error51);
+        }
       }
     })
   );
@@ -32319,6 +32467,7 @@ function apply(ctx, config2) {
   registerSuggestActions(ctx);
   registerGetTicket(ctx);
   registerGetEvidence(ctx);
+  registerDigestRecent(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);

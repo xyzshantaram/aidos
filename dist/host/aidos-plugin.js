@@ -27205,6 +27205,56 @@ function nextStep(config2, ticket, attached) {
   return "still needs " + missing.map(nameKind).join(" and ");
 }
 
+// src/kernel/recent-changes.ts
+function recentBoardChanges(events, options2 = {}) {
+  const limit = Math.max(1, Math.min(options2.limit ?? 20, 200));
+  const collected = [];
+  for (const raw of events) {
+    const event = raw;
+    if (typeof event?.kind !== "string") continue;
+    let change = null;
+    if (event.kind === "ticket/change") {
+      const e = event;
+      const ticket = e.ticket;
+      change = {
+        ticketId: ticket.id,
+        at: e.at,
+        title: ticket.title,
+        state: ticket.state,
+        change: e.operation === "create" ? "created" : e.operation === "move" ? "moved to " + ticket.state : "edited"
+      };
+    } else if (event.kind === "evidence/attached") {
+      const e = event;
+      const row = e.row;
+      change = {
+        ticketId: e.ticketId,
+        at: row.at,
+        change: "evidence " + row.kind + " by " + row.author
+      };
+    } else if (event.kind === "evidence/detached") {
+      const e = event;
+      change = {
+        ticketId: e.ticketId,
+        at: e.at,
+        change: "evidence detached"
+      };
+    } else if (event.kind === "comment/added") {
+      const e = event;
+      change = { ticketId: e.ticketId, at: e.at, change: "comment added" };
+    }
+    if (change === null) continue;
+    if (options2.ticketId !== void 0 && change.ticketId !== options2.ticketId) continue;
+    if (options2.since !== void 0 && !(change.at > options2.since)) continue;
+    collected.push(change);
+  }
+  collected.sort((a, b) => a.at - b.at);
+  collected.reverse();
+  return {
+    changes: collected.slice(0, limit),
+    omitted: Math.max(0, collected.length - limit)
+  };
+}
+
 // src/kernel/digest.ts
 var DIGEST_SEPARATOR = " \u2014 ";
 function coalesceDigestLines(lines) {
@@ -28543,6 +28593,39 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
     }
     return { granted: this._grantAllowlistPaths(routed, ticketId, validated.paths) };
+  }
+  /**
+   * #175: recent board changes, folded from the durable log.
+   *
+   * Reads `session.events` -- the append-only log the board itself is folded
+   * from -- so a restart loses nothing and this can never disagree with the
+   * board. A buffer of emitted digests would have done neither.
+   *
+   * Resolved through `_boardAgent`, like every other read (#157): a subagent
+   * asking what it missed sees the history of the board it was DISPATCHED
+   * against, not of its own empty session.
+   *
+   * Each row carries its next step (#174), so recovering a missed digest
+   * recovers the guidance and not merely the fact.
+   */
+  recentChanges(agent, args = {}) {
+    const reader = this._boardAgent(agent);
+    const session = reader.session;
+    const folded = recentBoardChanges(session?.events ?? [], args);
+    return {
+      changes: folded.changes.map((change) => {
+        const step = this.nextStepFor(reader, change.ticketId);
+        return step === void 0 ? change : { ...change, nextStep: step };
+      }),
+      omitted: folded.omitted,
+      /*
+       * THE BOUNDARY, said out loud. Worktree reports, refused approvals and
+       * injection failures are digest lines with no log row, so no fold can
+       * return them. An agent that believes it has seen everything is worse
+       * off than one told what it is missing.
+       */
+      covers: "board changes only \u2014 tickets, evidence and comments. Notices with no board event behind them (worktree preparation reports, refused approvals, injection failures) are NOT recoverable here."
+    };
   }
   /**
    * #174: the digest's half of the next step.
