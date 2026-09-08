@@ -473,6 +473,49 @@ export function writtenFields(args: Record<string, unknown> | null): Fact[] {
 }
 
 /**
+ * #144: what a move_ticket ROW SHOWS on its always-visible line.
+ *
+ * User ask (2026-09-07): the card rendered `#N — Title — state` as one
+ * string, so a long title pushed the DESTINATION off the end -- losing the
+ * one fact the card exists to report. The reader can always recover the
+ * title (it is on the ticket, and on the hover); nothing recovers a state
+ * that was never drawn.
+ *
+ * So the two are separated here: the title is a value that may be cut, and
+ * the state is a BADGE the row draws whole. The cut is done in code, not
+ * only in CSS, for two reasons: it is testable without a browser, and it
+ * holds even in a narrow column where the ellipsis alone would still be
+ * competing with the badge for the same line.
+ *
+ * `text` is the flat form the row still needs -- the hover title, and the
+ * summary a refusal or a title-less call falls back to.
+ */
+export interface MoveSummary {
+  title: string;
+  /** The destination state id, or null when the call named none. */
+  state: string | null;
+  text: string;
+}
+
+/**
+ * The title is capped WELL SHORT of a card's width so the badge beside it
+ * is never the thing that overflows. It is a backstop, not the layout: the
+ * one-line clamp in CSS does the ordinary work.
+ */
+export const MOVE_TITLE_MAX = 72;
+
+export function moveTicketSummary(
+  label: string | null,
+  to: string | null,
+  stateText?: (state: string) => string,
+): MoveSummary {
+  const title = oneLine(label ?? "move", MOVE_TITLE_MAX);
+  if (to === null || to === "") return { title, state: null, text: title };
+  const shown = stateText === undefined ? to : stateText(to);
+  return { title, state: to, text: `${title} → ${shown}` };
+}
+
+/**
  * The proposed paths, each marked with whether approving CREATES it.
  *
  * The `created` list comes from the result, so it is only known once the

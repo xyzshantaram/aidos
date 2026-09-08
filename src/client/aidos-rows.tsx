@@ -45,7 +45,7 @@ import {
   SignoffIcon,
   ToolRenderChevron,
 } from "./icons";
-import { asBoardKey } from "./board-logic";
+import { asBoardKey, badgeClass, stateLabel } from "./board-logic";
 import { setSelection, ticketTitle } from "./view-state";
 import {
   allowlistFacts,
@@ -54,6 +54,7 @@ import {
   factText,
   findTicketsTabButton,
   moveFacts,
+  moveTicketSummary,
   planBlocksWritten,
   planImportFacts,
   planImportSummary,
@@ -140,6 +141,16 @@ interface RowProps {
   /** The badge's leading glyph, exactly as the base card's badge carries one. */
   icon?: react.ReactNode;
   summary: string;
+  /**
+   * #144: the summary line as MARKUP, when text cannot carry it.
+   *
+   * `summary` stays the flat string and remains the source of truth for the
+   * hover title, the click-through label and every error path -- the node is
+   * only what the reader SEES on a settled, non-error row. A row that
+   * supplies one must render the same facts the string states, or the two
+   * drift and the tooltip starts lying about the line above it.
+   */
+  summaryNode?: react.ReactNode;
   state: RowState;
   body?: react.ReactNode | null;
   /**
@@ -194,6 +205,14 @@ function AidosRow(props: RowProps) {
    * not suppress the reason -- and only a true error wears the red attr.
    */
   const shown = rowSummary(props.state, props.summary, props.errorSummary);
+  /*
+   * #144: the rich summary is shown only when there is no REASON to show
+   * instead. An error or a refusal replaces the line entirely -- the same
+   * rule rowSummary already applies to the text -- so a card that failed
+   * never shows a cheerful destination badge in place of why it failed.
+   */
+  const rich =
+    props.summaryNode !== undefined && props.errorSummary === undefined ? props.summaryNode : null;
 
   /*
    * CLICK-THROUGH (#73 round 3).
@@ -313,7 +332,7 @@ function AidosRow(props: RowProps) {
         <span className="tool-render-sep" aria-hidden="true" />
         {select !== undefined && props.errorSummary === undefined ? (
           <span
-            className="tool-render-path"
+            className={"tool-render-path" + (rich === null ? "" : " aidos-row-summary-rich")}
             role="link"
             tabIndex={0}
             title={selectTitle(shown.text)}
@@ -326,14 +345,14 @@ function AidosRow(props: RowProps) {
               }
             }}
           >
-            {shown.text}
+            {rich ?? shown.text}
           </span>
         ) : (
           <span
-            className="tool-render-summary"
+            className={"tool-render-summary" + (rich === null ? "" : " aidos-row-summary-rich")}
             tool-render-error={shown.isError ? true : undefined}
           >
-            {shown.text}
+            {rich ?? shown.text}
           </span>
         )}
       </div>
@@ -877,11 +896,45 @@ export function MoveTicketRow(props: AidosViewProps) {
         : result === null
           ? fallbackBody(resultText)
           : null;
+  /*
+   * #144: THE DESTINATION IS ALWAYS DRAWN.
+   *
+   * The line was one string, `#N — Title → state`, and the row clips a
+   * string from the right -- so the longer the title, the more certain it
+   * was that the state fell off the end. The state is the whole point of a
+   * move card, and it is the shortest part of the line.
+   *
+   * The title is a value (it clips, and the hover and the ticket both still
+   * have it); the state is a BADGE, flex: none, so it survives whatever the
+   * title does. The badge is the ticket state chip -- badgeClass, the same
+   * classes the strips, tiles and detail panel use -- not a lookalike: a
+   * forked state colour here would be one more copy to drift, which is the
+   * mistake #82 catalogued.
+   */
+  const parts = moveTicketSummary(label, to, stateLabel);
+  const summaryNode =
+    parts.state === null ? undefined : (
+      <>
+        {/*
+          * The HOVER carries the untruncated label, so cutting the title on
+          * the line costs the reader nothing: what the badge protects, the
+          * tooltip restores.
+          */}
+        <span className="aidos-move-title" title={label ?? parts.title} data-dsh-tip="">
+          {parts.title}
+        </span>
+        <span className="aidos-move-arrow" aria-hidden="true">
+          →
+        </span>
+        <span className={badgeClass(parts.state)}>{stateLabel(parts.state)}</span>
+      </>
+    );
   return (
     <AidosRow
       icon={<ForkIcon />}
       title="Move ticket"
-      summary={to === null ? (label ?? "move") : `${label ?? ""} → ${to}`.trim()}
+      summary={parts.text}
+      summaryNode={summaryNode}
       state={state}
       body={body}
       errorSummary={errorSummary}

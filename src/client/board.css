@@ -2898,6 +2898,40 @@
 }
 
 /*
+ * #144: A SUMMARY LINE THAT IS NOT ONE STRING.
+ *
+ * A row's summary clips from the right, so anything at the end of it is
+ * what a long ticket title deletes -- and on a move card that end was the
+ * DESTINATION STATE, the one fact the card exists to report. The line
+ * becomes a flex row instead: the title is the only part allowed to shrink,
+ * and the badge beside it is flex: none (from .aidos-chip) so it is drawn
+ * whole at every width.
+ *
+ * Layout only. The badge itself is the ticket state chip -- .aidos-chip
+ * plus .aidos-chip-state-* through badgeClass -- so there is no second
+ * state-badge look defined here to drift from the first.
+ */
+.tool-render-path.aidos-row-summary-rich,
+.tool-render-summary.aidos-row-summary-rich {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.aidos-move-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidos-move-arrow {
+  flex: none;
+}
+
+/*
  * The ticket-row expand chevron, in the durable-todos todo panel's style
  * (user ask: same chevron as there). Rules mirror that plugin's
  * .durable-todos-chevron so the two cannot read as different components:
