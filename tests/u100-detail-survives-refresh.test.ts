@@ -16,7 +16,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { asBoardKey, boardKeyOf, fullTicketId, resolveSelection } from "../src/client/board-logic";
 import {
@@ -24,8 +24,12 @@ import {
   getSelection,
   holdInput,
   recordResolution,
+  __resetModalsForTests,
+  anyModalOpen,
+  isModalOpen,
   reportCount,
   setCountCallback,
+  setModalOpen,
   setHeldTicket,
   setRemountSuppressed,
   setSelection,
@@ -554,5 +558,86 @@ describe("#100 follow-up: a remount does not fire while a modal holds the tree o
     reportCount("sess-suppress3", 7); // same count: nothing changed
     setRemountSuppressed(false);
     expect(bumps).toBe(0);
+  });
+});
+
+/*
+ * ROUND 2 — the user reported it twice more: "board still unmounts if it
+ * updates while the queue is open", then "still broken".
+ *
+ * The suppression above is not wrong, it is INCOMPLETE by construction: it
+ * can only cover the remount paths it is wired into, and the independent
+ * diagnosis found a third one it never was — index.ts's visibility effect
+ * calls reconcile() straight from the sessions-store subscription with no
+ * check at all. Adding a fourth guard is the band-aid the module's own
+ * comment argues against, one path at a time, forever.
+ *
+ * So the modal flags moved OUT of React, exactly as `selectedKey` did
+ * above. These tests assert the property that makes the cause irrelevant:
+ * whatever remounts the tree, the modal state is still there to read back.
+ */
+describe("#100 round 2: a modal survives the remount, whatever caused it", () => {
+  const view = readFileSync(
+    new URL("../src/client/local-ticket-view.tsx", import.meta.url),
+    "utf8",
+  );
+
+  beforeEach(() => {
+    __resetModalsForTests();
+  });
+
+  it("a fresh mount reads the queue back OPEN", () => {
+    // The bug, in one assertion: this is what a remounted component sees.
+    setModalOpen("sess-modal", "queue", true);
+    expect(isModalOpen("sess-modal", "queue")).toBe(true);
+  });
+
+  it("closing is remembered too, so a modal cannot resurrect itself", () => {
+    setModalOpen("sess-modal", "queue", true);
+    setModalOpen("sess-modal", "queue", false);
+    expect(isModalOpen("sess-modal", "queue")).toBe(false);
+  });
+
+  it("keeps each modal separate: closing one does not close another", () => {
+    setModalOpen("sess-modal", "queue", true);
+    setModalOpen("sess-modal", "plan", true);
+    setModalOpen("sess-modal", "plan", false);
+    expect(isModalOpen("sess-modal", "queue")).toBe(true);
+    expect(isModalOpen("sess-modal", "plan")).toBe(false);
+  });
+
+  it("keeps each SESSION separate: two boards do not share a modal", () => {
+    // The #114 lesson applied here: anything keyed globally eventually
+    // shows one session's state on another's screen.
+    setModalOpen("sess-a", "queue", true);
+    expect(isModalOpen("sess-b", "queue")).toBe(false);
+  });
+
+  it("anyModalOpen is the suppression input, and follows the same store", () => {
+    expect(anyModalOpen("sess-modal")).toBe(false);
+    setModalOpen("sess-modal", "create", true);
+    expect(anyModalOpen("sess-modal")).toBe(true);
+    setModalOpen("sess-modal", "create", false);
+    expect(anyModalOpen("sess-modal")).toBe(false);
+  });
+
+  it("the view INITIALISES from the store rather than from false", () => {
+    /*
+     * The wiring half. A store nothing reads on mount is a store that does
+     * not fix the bug — the component would still start closed after every
+     * remount, which is precisely the reported symptom.
+     */
+    expect(view).toContain("react.useState(() => isModalOpen(sessionId, modal))");
+    expect(view).toContain('useStoredModal("queue")');
+    expect(view).toContain('useStoredModal("create")');
+    expect(view).toContain('useStoredModal("plan")');
+    // And none of the three may fall back to a plain useState(false).
+    expect(view).not.toContain("react.useState(false);\n  const [planOpen");
+  });
+
+  it("writes the STORE before the React state, so a lost render still records it", () => {
+    const setter = view.slice(view.indexOf("const set = function (open: boolean)"));
+    const body = setter.slice(0, setter.indexOf("};"));
+    expect(body.indexOf("setModalOpen(")).toBeLessThan(body.indexOf("setValue("));
   });
 });

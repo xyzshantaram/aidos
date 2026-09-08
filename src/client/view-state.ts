@@ -257,6 +257,21 @@ export function badgeLabel(): string {
 // remount itself is deferred while any of them holds this open. The count
 // data is never stale for a WRITE -- `reportCount` still records the real
 // count immediately -- only the visible, destructive remount waits.
+//
+// ROUND 2 (user, 2026-09-07: "board still unmounts if it updates while the
+// queue is open"; then "still broken"). The reasoning above was right about
+// the ANTI-PATTERN and wrong about the conclusion, and the independent
+// diagnosis found why: suppression can only ever cover the remount paths it
+// is wired into. It guards two (reportCount, setCurrentSession) and misses
+// a third -- index.ts's visibility effect calls reconcile() straight from
+// the sessions-store subscription with no check at all -- so a subscription
+// firing while the queue is open still destroys the tree.
+//
+// Adding a fourth guard would be the band-aid this comment already argues
+// against, one path at a time, forever. The GENERAL answer is the one #100
+// used for `selectedKey`: state that must outlive a remount lives outside
+// React. So the modal flags now live below, and the suppression stays only
+// as churn-avoidance -- it is no longer what makes the modal survive.
 let remountSuppressed = false;
 let relabelPending = false;
 
@@ -267,6 +282,55 @@ export function setRemountSuppressed(suppressed: boolean): void {
     relabelPending = false;
     if (bumpCallback !== null) bumpCallback();
   }
+}
+
+/**
+ * #100 round 2: which modals a session has open, OUTSIDE React.
+ *
+ * `queueOpen`, `createOpen` and `planOpen` were plain useState, so any
+ * remount reset them to false and the modal the human was working in simply
+ * vanished. Suppressing the remount only helps for the paths suppression
+ * knows about, and one of them (index.ts's visibility effect, which
+ * reconciles straight from the sessions-store subscription) was never
+ * wired in. This store makes the question moot: whatever remounts the tree
+ * and for whatever reason, the mount reads its modal state back.
+ *
+ * Keyed by SESSION, like every other store in this module. Two boards open
+ * on different sessions must not share a modal — and a modal left open on
+ * a session you navigate away from should still be open when you return,
+ * which is the same property the selection has.
+ */
+export type ModalKey = "queue" | "create" | "plan";
+
+const openModals = new Map<string, Set<ModalKey>>();
+
+/** Is this session's modal open? Read on mount to restore across remounts. */
+export function isModalOpen(sessionId: string, modal: ModalKey): boolean {
+  return openModals.get(sessionId)?.has(modal) === true;
+}
+
+/** Record a modal opening or closing for one session. */
+export function setModalOpen(sessionId: string, modal: ModalKey, open: boolean): void {
+  const current = openModals.get(sessionId);
+  if (open) {
+    if (current === undefined) openModals.set(sessionId, new Set([modal]));
+    else current.add(modal);
+    return;
+  }
+  if (current === undefined) return;
+  current.delete(modal);
+  // Drop the empty set rather than leaving a husk per session visited.
+  if (current.size === 0) openModals.delete(sessionId);
+}
+
+/** Whether ANY modal is open for this session (the suppression input). */
+export function anyModalOpen(sessionId: string): boolean {
+  return (openModals.get(sessionId)?.size ?? 0) > 0;
+}
+
+/** TEST-ONLY: forget every open modal, so tests cannot leak into each other. */
+export function __resetModalsForTests(): void {
+  openModals.clear();
 }
 
 // ---- the selection store (#100) ----

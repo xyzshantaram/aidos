@@ -33,6 +33,7 @@ import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { boardKeyOf, rememberWorkspaceLabel, resolveSelection } from "./board-logic";
 import { ModalShell } from "./ui";
 import { agentAskCount, queuePollMs } from "./human-queue";
+import type { ModalKey } from "./view-state";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
 import { asBoardKey, fullTicketId } from "./board-logic";
 import type { BoardKey } from "./board-logic";
@@ -41,7 +42,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { getHeldTicket, getMerge, getPulledVersion, getSelection, holdInput, isMergePulling, onSelectionChanged, publishTicketTitles, recordResolution, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
+import { isModalOpen, setModalOpen, getHeldTicket, getMerge, getPulledVersion, getSelection, holdInput, isMergePulling, onSelectionChanged, publishTicketTitles, recordResolution, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -483,9 +484,36 @@ function ProjectionReader(props: ProjectionReaderProps) {
     },
     [sessionId],
   );
-  const [createOpen, setCreateOpen] = react.useState(false);
-  const [planOpen, setPlanOpen] = react.useState(false);
-  const [queueOpen, setQueueOpen] = react.useState(false);
+  /*
+   * #100 round 2: the modal flags are BACKED BY THE MODULE STORE.
+   *
+   * They were plain useState, so any remount reset them to false and the
+   * modal the human was working in vanished — reported twice, most recently
+   * as "board still unmounts if it updates while the queue is open". The
+   * remount suppression only ever covered the paths it was wired into, and
+   * index.ts's visibility effect reconciles straight from the sessions-store
+   * subscription without consulting it. A fourth guard would be one more
+   * band-aid on a list that keeps growing.
+   *
+   * This is the move #100 already made for `selectedKey`: state that must
+   * outlive a remount does not live in React. The useState below is only a
+   * render trigger; the STORE is the truth, and it is what a fresh mount
+   * reads. Whatever remounts the tree, and for whatever reason, the modal
+   * comes back open.
+   */
+  const useStoredModal = function (modal: ModalKey): [boolean, (open: boolean) => void] {
+    const [value, setValue] = react.useState(() => isModalOpen(sessionId, modal));
+    const set = function (open: boolean): void {
+      // Store FIRST: if this render never completes -- which is exactly the
+      // remount that started all this -- the store still carries the truth.
+      setModalOpen(sessionId, modal, open);
+      setValue(open);
+    };
+    return [value, set];
+  };
+  const [createOpen, setCreateOpen] = useStoredModal("create");
+  const [planOpen, setPlanOpen] = useStoredModal("plan");
+  const [queueOpen, setQueueOpen] = useStoredModal("queue");
 
   /*
    * User-reported 2026-09-05: "opening the queue makes the board vanish."
