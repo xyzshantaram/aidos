@@ -83,7 +83,13 @@ describe("#146 the access class is declared by each tool, not by a list", () => 
 
   it("classifies the reads and the writes the way the guidance promises", () => {
     riggedHarness();
-    expect(boardToolNames("read")).toEqual(["get_ticket", "get_tickets", "plan", "plan_meta"]);
+    expect(boardToolNames("read")).toEqual([
+      "get_evidence",
+      "get_ticket",
+      "get_tickets",
+      "plan",
+      "plan_meta",
+    ]);
     expect(boardToolNames("write")).toEqual([
       "attach_evidence",
       "move_ticket",
@@ -363,7 +369,7 @@ describe("#146 the guidance tells the orchestrator the truth", () => {
      * this clause.
      */
     expect(guidanceText()).toContain(
-      "a subagent may call get_tickets, get_ticket, plan and plan_meta",
+      "a subagent may call get_tickets, get_ticket, get_evidence, plan and plan_meta",
     );
   });
 

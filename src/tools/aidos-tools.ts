@@ -531,7 +531,7 @@ const AIDOS_GUIDANCE =
   "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
   "The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. " +
-  "Its READS are not: a subagent may call get_tickets, get_ticket, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. " +
+  "Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. " +
   "So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. " +
   "Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. " +
   "The depth guard refuses a subagent's writes anyway, so the filter is a second layer. " +
@@ -679,7 +679,8 @@ function registerGetTicket(ctx: Context): void {
       name: "get_ticket",
       description:
         "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, " +
-        "plus its evidence rows and comments. The companion to get_tickets, which returns " +
+        "plus its evidence rows (each with a stable index) and comments. get_evidence " +
+        "fetches any row's full payload by that index. The companion to get_tickets, which returns " +
         "compact summary rows by default - read the board to find what you need, then read " +
         "the one ticket you are about to work on. Accepts a composite " +
         "'<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
@@ -704,6 +705,9 @@ function registerGetTicket(ctx: Context): void {
                 type: "object",
                 additionalProperties: false,
                 properties: {
+                  /* #164: the stable address of this row — get_evidence
+                     fetches the full payload by it. */
+                  index: { type: "integer", required: true },
                   kind: { type: "string", required: true },
                   author: { type: "string", required: true },
                   at: { type: "number", required: true },
@@ -726,7 +730,8 @@ function registerGetTicket(ctx: Context): void {
             // BOUNDED on purpose (#92): a payload can be a whole reviewer
             // report. The agent gets kind, author, when, and a short excerpt;
             // the full payload lives in the evidence viewer.
-            evidence: result.evidence.map((row) => ({
+            evidence: result.evidence.map((row, index) => ({
+              index,
               kind: row.kind,
               author: row.author,
               at: row.at,
@@ -744,6 +749,139 @@ function registerGetTicket(ctx: Context): void {
       presentCall: (a) => {
         const req = a as { ticketId?: number };
         return present("Read ticket", "read", req.ticketId, ["#" + req.ticketId]);
+      },
+    }),
+  );
+}
+
+/**
+ * #164: the deep evidence read. get_ticket shows bounded excerpts (#92) so a
+ * board read stays cheap; this is the on-demand second half — the COMPLETE
+ * payload of one row or every row, addressed by the same stable index
+ * get_ticket prints. Comment bodies ride the same boundary: the count lives
+ * in get_ticket, the words live here behind an explicit ask.
+ *
+ * The gap this closes was not cosmetic: review_fail payloads excerpt as a
+ * bare "FAIL", so a fix-up coder told to "read the review findings" could
+ * not reach them — verdicts were write-only for exactly the agents that
+ * must act on them.
+ */
+function registerGetEvidence(ctx: Context): void {
+  registerBoardTool(
+    ctx,
+    "read",
+    defineTool({
+      name: "get_evidence",
+      description:
+        "Fetch full evidence records for a ticket — kind, author, when, and the COMPLETE " +
+        "payload, untruncated (#164). get_ticket shows only bounded excerpts (#92); read the " +
+        "board, then read the one record you need here. Without index: every row, in the same " +
+        "order get_ticket lists them. With index: exactly that row. comments: true also returns " +
+        "full comment bodies (get_ticket returns only the count). Accepts a composite " +
+        "'<sourceSessionId>:<ticketId>' like get_ticket.",
+      parameters: {
+        ticketId: {
+          type: "integer",
+          description:
+            "The ticket whose evidence to fetch. A composite id may be passed as a string.",
+          required: true as const,
+        },
+        index: {
+          type: "integer",
+          description:
+            "One evidence row, addressed by the stable index get_ticket shows. Absent = every row.",
+        },
+        comments: {
+          type: "boolean",
+          description:
+            "Also return full comment bodies. Default false — a long thread is #92's to bound.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticketId: { type: "integer", required: true },
+            evidence: {
+              type: "array",
+              required: true,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  index: { type: "integer", required: true },
+                  kind: { type: "string", required: true },
+                  author: { type: "string", required: true },
+                  at: { type: "number", required: true },
+                  payload: {
+                    oneOf: [{ type: "object", additionalProperties: true }, { type: "null" }],
+                    required: true,
+                  },
+                },
+              },
+            },
+            comments: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  author: { type: "string", required: true },
+                  at: { type: "number", required: true },
+                  body: { type: "string", required: true },
+                },
+              },
+            },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = callingAgent(exec);
+        try {
+          const result = ctx.aidos.getTicket(agent, { ticketId: args.ticketId });
+          let rows = result.evidence.map((row, index) => ({
+            index,
+            kind: row.kind,
+            author: row.author,
+            at: row.at,
+            payload: (row.payload ?? null) as Record<string, JsonValue> | null,
+          }));
+          if (args.index !== undefined) {
+            // #159's rule: a refusal names what the reader can do with it.
+            if (args.index < 0 || args.index >= rows.length) {
+              throw new Error(
+                `evidence index ${args.index} does not exist; the ticket has ` +
+                  `${rows.length} evidence row(s), addressed 0-${Math.max(rows.length - 1, 0)}`,
+              );
+            }
+            rows = [rows[args.index]];
+          }
+          const out: {
+            ok: true;
+            ticketId: number;
+            evidence: typeof rows;
+            comments?: Array<{ author: string; at: number; body: string }>;
+          } = { ok: true, ticketId: result.ticket.id, evidence: rows };
+          if (args.comments === true) {
+            out.comments = result.comments.map((comment) => ({
+              author: comment.author,
+              at: comment.at,
+              body: comment.text,
+            }));
+          }
+          return out;
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (args) => {
+        const detail: string[] = [];
+        if (args.index !== undefined) detail.push("row " + args.index);
+        if (args.comments === true) detail.push("with comments");
+        return present("Read evidence", "read", args.ticketId, detail);
       },
     }),
   );
@@ -1401,6 +1539,7 @@ export function apply(ctx: Context, config: unknown): void {
   registerRequestAllowlist(ctx);
   registerSuggestActions(ctx);
   registerGetTicket(ctx);
+  registerGetEvidence(ctx);
   installAidosGuard(ctx);
   installAidosMask(ctx);
   installAllowlistGuard(ctx);
