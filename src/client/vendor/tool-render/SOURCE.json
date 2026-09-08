@@ -1,7 +1,7 @@
 {
   "source": "/home/sid/repos/dotfiles-ai/plugins/tool-render/src",
   "vendoredAt": "2026-09-08",
-  "upstreamCommit": "442edd374f0b3c14107b2ed3dd0207d728a50ac9",
+  "upstreamCommit": "59aa881e183b95d1041232a45c8ea8c78adccf7c",
   "upstreamCommitNote": "#141: the upstream commit these bytes were copied FROM, so a reader can diff the exact source instead of guessing from a date. The approval anatomy aidos reuses arrived in 5c7e5d5 (inline approval actions), 9697d91 (right-aligned actions + in-body verdict), 650e318 (card pinned open while an approval is pending) and 13b0e23 (comment-toggle alignment). Refreshed by the VENDOR_UPDATE re-vendor path and VERIFIED against the recorded file hashes by tests/u82-vendor-drift.test.ts.",
   "files": {
     "client.module.css": {
@@ -10,7 +10,7 @@
     },
     "text.ts": {
       "vendoredAs": "text.js",
-      "sha256": "fed7e6061c0bda6c3bc30d10027010d610cac2d82aaa67e94f7fddca123b3091",
+      "sha256": "466c6f56c5a2b42e5e34616849e1a8b47a20569fa0d78cb3d3e292caa1afb8ad",
       "note": "vendored with a .js extension: upstream is untyped, and aidos typechecks strictly. The companion text.d.ts is aidos own, NOT vendored."
     }
   }

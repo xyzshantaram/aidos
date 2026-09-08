@@ -1036,6 +1036,47 @@ export const HUMAN_NOMINATION_ACTIONS: readonly string[] = [
 ];
 
 /**
+ * #160: the ticket state each nominatable action APPLIES TO.
+ *
+ * A nomination is spent the moment its ticket leaves that state — signing
+ * off moves a ticket out of `open`, so the signoff ask is answered. This is
+ * how a fulfilled nomination is recognised without new bookkeeping: the
+ * board already knows, and asking it is cheaper and more honest than
+ * recording an "answered" flag that can itself drift.
+ *
+ * Kept in step with ACTION_STATE in src/client/human-queue.ts, which draws
+ * the same conclusion for the DISPLAY side. That the two agreed while the
+ * store did not is exactly the bug: the queue dropped fulfilled asks from
+ * the list while the cap kept counting them.
+ */
+const NOMINATION_ACTION_STATE: Record<string, string> = {
+  signoff: "open",
+  verify: "awaiting_verification",
+  "mark-done": "awaiting_verification",
+};
+
+/**
+ * Lifecycle order, so PAST can be told from NOT YET.
+ *
+ * #160 nearly shipped without this distinction and a test caught it: a
+ * `verify` nomination on an OPEN ticket is not spent, it is early. The
+ * ticket has not reached awaiting_verification yet, and when it does the
+ * nomination becomes live and useful — deleting it would throw away a
+ * forward-looking ask the agent deliberately made.
+ *
+ * Only a ticket that has moved PAST the action's state has answered it.
+ * `unmatchedNominations` in src/client/human-queue.ts draws the same line
+ * for the display side, calling the two cases "fulfilled" and
+ * "unavailable"; this is the store finally agreeing with it.
+ */
+const NOMINATION_STATE_SEQUENCE = [
+  "open",
+  "in_progress",
+  "awaiting_verification",
+  "done",
+];
+
+/**
  * One agent-to-human suggestion (#93). Session-scoped by decision: a restart
  * drops it and the queue falls back to its derived half.
  */
@@ -2236,7 +2277,17 @@ registerAidosSessionEventTypes(ctx);
      * refused, forever.
      */
     const cap = 20;
-    const mine = [...this._nominations.values()].filter((n) => n.sessionId === sessionId);
+    /*
+     * #160: count only the nominations still ASKING for something. This
+     * used to count every row in the store, including asks the human had
+     * already acted on — so in a long session the cap filled with answered
+     * work and the agent could not nominate anything, while the refusal
+     * told it that acting on one would make room. It would not have.
+     *
+     * Same function the queue reads, so the count and the list cannot
+     * drift apart again.
+     */
+    const mine = this._liveNominations(agent);
     const existingPairs = new Set(mine.map((n) => `${n.ticketId}|${n.actionId}`));
     const incomingNew = new Set(
       suggestions
@@ -2329,10 +2380,69 @@ registerAidosSessionEventTypes(ctx);
   // silently refused every client call, which is why agent nominations never
   // reached the queue.
   actionNominations(agent: Agent, args?: Record<string, never>): ActionNomination[] {
+    return this._liveNominations(agent).sort((a, b) => a.at - b.at);
+  }
+
+  /**
+   * #160: one session's nominations that are STILL ASKING for something,
+   * pruning the spent ones as it goes.
+   *
+   * **The bug this exists to end.** A nomination was removed on exactly two
+   * paths — the human dismissed it, or the agent re-nominated the same
+   * (ticket, action) pair and replaced it. Nothing removed one when its
+   * action was actually PERFORMED. Sign off a nominated ticket and the
+   * nomination lived on forever.
+   *
+   * It vanished from the QUEUE anyway, because the display derives asks
+   * from board state and a fulfilled ask no longer has an entry — so the
+   * two halves disagreed: invisible in the list, still counted by the cap.
+   * The user hit the consequence: "the ask stays in the queue even when
+   * it's been addressed and counts towards the number of open nominations",
+   * and the refusal's own advice ("the human dismisses or acts on them to
+   * make room") was false for the acting half.
+   *
+   * The cure is that the READ and the CAP now call this one function, so
+   * they cannot disagree again by construction. Pruning on read is a side
+   * effect in a read path, chosen deliberately: it is self-healing (any
+   * caller repairs the store), it needs no event wiring to keep in step
+   * with the lifecycle, and leaving spent rows in memory is what broke the
+   * cap in the first place.
+   */
+  private _liveNominations(agent: Agent): ActionNomination[] {
     const sessionId = String(agent.session.id);
-    return [...this._nominations.values()]
-      .filter((row) => row.sessionId === sessionId)
-      .sort((a, b) => a.at - b.at);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const live: ActionNomination[] = [];
+    for (const [id, nomination] of [...this._nominations]) {
+      if (nomination.sessionId !== sessionId) continue;
+      const snapshot = cache.state.tickets.get(Number(nomination.ticketId) as TicketId);
+      /*
+       * A ticket that no longer exists cannot be acted on, so its
+       * nomination is dead weight in the cap. Same for an action whose
+       * state has moved on.
+       */
+      const wanted = NOMINATION_ACTION_STATE[nomination.actionId];
+      let spent = snapshot === undefined;
+      if (!spent && snapshot !== undefined && wanted !== undefined) {
+        const wantedAt = NOMINATION_STATE_SEQUENCE.indexOf(wanted);
+        const actualAt = NOMINATION_STATE_SEQUENCE.indexOf(snapshot.state);
+        /*
+         * PAST only. A ticket that has not reached the action's state yet
+         * keeps its nomination — a verify asked for while the work is still
+         * open becomes live the moment it lands in awaiting_verification,
+         * and deleting it would discard an ask the agent made on purpose.
+         * An unknown state (-1 on either side) is left alone rather than
+         * guessed at: silently dropping a queue row is the worse error.
+         */
+        spent = wantedAt >= 0 && actualAt >= 0 && actualAt > wantedAt;
+      }
+      if (spent) {
+        this._nominations.delete(id);
+        continue;
+      }
+      live.push(nomination);
+    }
+    return live;
   }
 
   /**

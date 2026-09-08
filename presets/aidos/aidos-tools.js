@@ -27874,6 +27874,17 @@ var HUMAN_NOMINATION_ACTIONS = [
   "verify",
   "mark-done"
 ];
+var NOMINATION_ACTION_STATE = {
+  signoff: "open",
+  verify: "awaiting_verification",
+  "mark-done": "awaiting_verification"
+};
+var NOMINATION_STATE_SEQUENCE = [
+  "open",
+  "in_progress",
+  "awaiting_verification",
+  "done"
+];
 function validateAllowlistPaths(cwd, paths) {
   const base = resolve2(cwd);
   const contains = (candidate) => {
@@ -28622,7 +28633,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new Error("no suggestions given");
     }
     const cap = 20;
-    const mine = [...this._nominations.values()].filter((n) => n.sessionId === sessionId);
+    const mine = this._liveNominations(agent);
     const existingPairs = new Set(mine.map((n) => `${n.ticketId}|${n.actionId}`));
     const incomingNew = new Set(
       suggestions.map((sug) => `${Number(sug.ticketId)}|${sug.actionId}`).filter((pair) => !existingPairs.has(pair))
@@ -28684,8 +28695,55 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   // silently refused every client call, which is why agent nominations never
   // reached the queue.
   actionNominations(agent, args) {
+    return this._liveNominations(agent).sort((a, b) => a.at - b.at);
+  }
+  /**
+   * #160: one session's nominations that are STILL ASKING for something,
+   * pruning the spent ones as it goes.
+   *
+   * **The bug this exists to end.** A nomination was removed on exactly two
+   * paths — the human dismissed it, or the agent re-nominated the same
+   * (ticket, action) pair and replaced it. Nothing removed one when its
+   * action was actually PERFORMED. Sign off a nominated ticket and the
+   * nomination lived on forever.
+   *
+   * It vanished from the QUEUE anyway, because the display derives asks
+   * from board state and a fulfilled ask no longer has an entry — so the
+   * two halves disagreed: invisible in the list, still counted by the cap.
+   * The user hit the consequence: "the ask stays in the queue even when
+   * it's been addressed and counts towards the number of open nominations",
+   * and the refusal's own advice ("the human dismisses or acts on them to
+   * make room") was false for the acting half.
+   *
+   * The cure is that the READ and the CAP now call this one function, so
+   * they cannot disagree again by construction. Pruning on read is a side
+   * effect in a read path, chosen deliberately: it is self-healing (any
+   * caller repairs the store), it needs no event wiring to keep in step
+   * with the lifecycle, and leaving spent rows in memory is what broke the
+   * cap in the first place.
+   */
+  _liveNominations(agent) {
     const sessionId = String(agent.session.id);
-    return [...this._nominations.values()].filter((row) => row.sessionId === sessionId).sort((a, b) => a.at - b.at);
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const live = [];
+    for (const [id, nomination] of [...this._nominations]) {
+      if (nomination.sessionId !== sessionId) continue;
+      const snapshot = cache.state.tickets.get(Number(nomination.ticketId));
+      const wanted = NOMINATION_ACTION_STATE[nomination.actionId];
+      let spent = snapshot === void 0;
+      if (!spent && snapshot !== void 0 && wanted !== void 0) {
+        const wantedAt = NOMINATION_STATE_SEQUENCE.indexOf(wanted);
+        const actualAt = NOMINATION_STATE_SEQUENCE.indexOf(snapshot.state);
+        spent = wantedAt >= 0 && actualAt >= 0 && actualAt > wantedAt;
+      }
+      if (spent) {
+        this._nominations.delete(id);
+        continue;
+      }
+      live.push(nomination);
+    }
+    return live;
   }
   dismissNomination(agent, args) {
     const nomination = this._nominations.get(args.nominationId);
