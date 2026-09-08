@@ -25,6 +25,7 @@ import {
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { VerifyModal } from "./evidence-attach";
+import { SignoffDialog } from "./signoff-dialog";
 import { boardKeyOf } from "./board-logic";
 import { getRunningApproval, setRunningApproval } from "./view-state";
 
@@ -131,26 +132,13 @@ function stepsFor(entry: QueueEntry): Step[] {
    * later, which leaves the ticket exactly as it is today. The point is to
    * remove the forced round-trip, not to make the allowlist mandatory.
    */
-  if (entry.actionId === "signoff") {
-    return [
-      confirm,
-      {
-        kind: "path-list",
-        title: "Files the agent may write for " + entry.ticket.title,
-        prompt:
-          "Signoff alone grants write access to nothing. Name the files and " +
-          "directories the agent may write while it works — or leave this " +
-          "empty and scope them later.",
-        label: "Paths (one per line, optional)",
-        /*
-         * Pre-filled from what the agent proposed WITH the nomination, and
-         * otherwise from whatever the ticket already carries, so the common
-         * case is a glance and a click rather than typing paths by hand.
-         */
-        paths: entry.proposedPaths ?? entry.ticket.allowlist ?? [],
-      },
-    ];
-  }
+  /*
+   * NO SIGNOFF BRANCH HERE ANY MORE. The queue's signoff two-step lived in
+   * this function while the detail panel ran a note-only dialog, so the
+   * allowlist rode one entry point and not the other. Signoff now opens
+   * SignoffDialog from both (see the render below), which is the same
+   * correction #123 made for verify.
+   */
   return [confirm];
 }
 
@@ -528,6 +516,38 @@ export function QueuePanel(props: QueuePanelProps) {
           }}
           onClose={() => {
             setRunning(null);
+          }}
+        />
+      ) : running !== null &&
+        running.actionId === "signoff" &&
+        running.approvalId === undefined ? (
+        /*
+         * #98 + #123's rule: SIGNOFF IS ONE FLOW TOO.
+         *
+         * The queue grew its own two-step (confirm, then a path-list) while
+         * the detail panel's Sign off button ran a note-only dialog with no
+         * allowlist at all — so "signoff carries the allowlist" was true
+         * from one entry point and false from the other, which is exactly
+         * the divergence #123 was filed for on verify. The runner keeps
+         * mark-done and allowlist approvals, which have no richer surface
+         * to diverge from.
+         */
+        <SignoffDialog
+          open
+          ticketId={running.boardKey}
+          ticketTitle={running.ticket.title}
+          agentId={props.sessionId}
+          proposedPaths={running.proposedPaths ?? running.ticket.allowlist ?? []}
+          onClose={() => {
+            setRunning(null);
+          }}
+          onSignedOff={() => {
+            setAnswered(function (previous) {
+              const next = new Set(previous);
+              next.add(entryKey(running));
+              return next;
+            });
+            props.onRefresh?.();
           }}
         />
       ) : running !== null ? (

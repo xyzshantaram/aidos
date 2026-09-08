@@ -1291,74 +1291,18 @@ function ProjectionReader(props: ProjectionReaderProps) {
         showToast("Approved " + paths.length + " path(s)", "success");
         return;
       }
-      if (entry.actionId === "signoff") {
-        await callAidosRemote(
-          "userAttachEvidence",
-          { ticketId, kind: "builtin:user_signoff", payload },
-          sessionId,
-        );
-        /*
-         * #93 review, finding 4: signoff is two writes and cannot be atomic
-         * across two Remotes. If the MOVE fails the evidence row is already
-         * attached, so say so precisely rather than reporting a flat failure
-         * that invites the human to retry and attach a second row.
-         */
-        try {
-          await callAidosRemote(
-            "userMoveTicket",
-            { ticketId, to: "in_progress" },
-            sessionId,
-          );
-        } catch (moveError) {
-          const detail =
-            moveError instanceof Error ? moveError.message : String(moveError);
-          throw new Error(
-            `the signoff row was attached to #${ticketId}, but the move to ` +
-              `in_progress failed: ${detail} — the row is already there, so move ` +
-              `the ticket from its detail panel rather than signing off again`,
-          );
-        }
-        /*
-         * #98: THE SECOND HALF OF THE SAME DECISION.
-         *
-         * The signoff run's path-list step, landed through the host's own
-         * grant path — the same validation, the same user-authored
-         * file_allowlist row, the same merge into the ticket's field that
-         * an approval card produces. An empty list writes nothing, which
-         * is the "sign off now, scope the files later" case and exactly
-         * today's behaviour.
-         *
-         * Ordered AFTER the move on purpose: the grant is worth nothing
-         * until the ticket is in_progress, and a failure here leaves a
-         * signed-off ticket rather than a half-granted one.
-         */
-        const pathStep = outcome.values[1];
-        const paths =
-          pathStep !== undefined && pathStep.kind === "path-list" ? pathStep.paths : [];
-        if (paths.length > 0) {
-          try {
-            await callAidosRemote("userGrantAllowlist", { ticketId, paths }, sessionId);
-            showToast("Signed off · " + paths.length + " path(s) granted", "success");
-          } catch (grantError) {
-            const detail =
-              grantError instanceof Error ? grantError.message : String(grantError);
-            throw new Error(
-              `#${ticketId} was signed off and moved to in_progress, but the ` +
-                `allowlist was refused: ${detail} — the ticket is in progress ` +
-                `with no write access; set the paths from its detail panel`,
-            );
-          }
-        } else {
-          showToast("Signed off", "success");
-        }
-      } else if (entry.actionId === "verify") {
-        await callAidosRemote(
-          "userAttachEvidence",
-          { ticketId, kind: "builtin:user_verified", payload },
-          sessionId,
-        );
-        showToast("Verified", "success");
-      } else if (entry.actionId === "mark-done") {
+      /*
+       * SIGNOFF AND VERIFY ARE NOT HANDLED HERE ANY MORE.
+       *
+       * Both used to have a full write implementation in this function --
+       * a third and fourth copy beside the detail panel's dialogs -- and
+       * that is precisely how "signoff carries the allowlist" ended up true
+       * from the queue and false from the ticket. The queue now opens the
+       * SAME SignoffDialog and VerifyModal the detail panel opens (#98,
+       * #123), so those flows have exactly one implementation each and this
+       * function is left with the two asks that genuinely are one write.
+       */
+      if (entry.actionId === "mark-done") {
         await callAidosRemote("userMoveTicket", { ticketId, to: "done" }, sessionId);
         showToast("Marked done", "success");
       }
