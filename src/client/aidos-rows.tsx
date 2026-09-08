@@ -32,6 +32,8 @@ import react from "react";
 import { renderMarkdownSafe } from "./safe-markdown";
 
 import { EvidenceStrip } from "./evidence-strip";
+import { EvidenceViewer } from "./evidence-viewer";
+import type { EvidenceRowLike } from "./board-logic";
 import {
   InlineAllowlistApproval,
   InlineTicketAction,
@@ -990,6 +992,7 @@ export function GetTicketRow(props: AidosViewProps) {
   const { state, result, resultText, ticketId, errorText, errorSummary } = useAidosRow(props);
   const facts = ticketFacts(result);
   const evidence = ticketEvidence(result);
+  const evidenceViewer = useEvidenceViewer();
   /*
    * A ticket read expands into the ticket: its facts, then its evidence as
    * real strips. The evidence is the reason to read a ticket at all -- what
@@ -1024,10 +1027,19 @@ export function GetTicketRow(props: AidosViewProps) {
                         author: row.author as "agent" | "user",
                         at: row.at,
                       }}
+                      /*
+                       * The viewer here shows the EXCERPT this card was
+                       * given, because that is all get_ticket returns (#92
+                       * bounds them deliberately). It is not the full row:
+                       * get_evidence is the tool that returns those (#164),
+                       * and its card opens the whole payload.
+                       */
+                      onView={evidenceViewer.open}
                     />
                   ))}
                 </ul>
               ) : null}
+              {evidenceViewer.viewer}
             </>
           );
   return (
@@ -1421,6 +1433,7 @@ export function GetEvidenceRow(props: AidosViewProps) {
     useAidosRow(props);
   const records = evidenceRecords(result);
   const comments = evidenceComments(result);
+  const evidenceViewer = useEvidenceViewer();
   /*
    * The summary says WHAT WAS ASKED FOR, in the grammar the other reads
    * use: one addressed row reads differently from "every row", and the
@@ -1455,6 +1468,7 @@ export function GetEvidenceRow(props: AidosViewProps) {
                       author: row.author as "agent" | "user",
                       at: row.at,
                     }}
+                    onView={evidenceViewer.open}
                   />
                 ))}
               </ul>
@@ -1473,6 +1487,7 @@ export function GetEvidenceRow(props: AidosViewProps) {
                   <p className="aidos-detail-body">{comment.body}</p>
                 </div>
               ))}
+              {evidenceViewer.viewer}
             </>
           );
 
@@ -1489,6 +1504,42 @@ export function GetEvidenceRow(props: AidosViewProps) {
       useProjection={props.useProjection}
     />
   );
+}
+
+/**
+ * The evidence viewer, opened from a strip inside a TOOL CARD.
+ *
+ * User report, 2026-09-08: "inline evidence strips have no way to view the
+ * evidence." The strips already carried the affordance — `EvidenceStrip`
+ * takes an `onView` and renders the pop-out control when it gets one — and
+ * the cards simply never passed it, so a strip in a card was a dead end
+ * while the identical strip in the detail panel opened the viewer. That is
+ * #115's third clause ("evidence strips open the viewer"), and the last
+ * part of it still unbuilt.
+ *
+ * A HOOK, not three copies of the state. Three card rows show strips
+ * (attach_evidence, get_ticket, get_evidence); giving each its own
+ * `useState` and its own `<EvidenceViewer>` is the duplicate-implementation
+ * pattern #170 is auditing, in miniature — and the one that would drift is
+ * the close behaviour, which is exactly what a human notices.
+ */
+function useEvidenceViewer(): {
+  open: (row: EvidenceRowLike) => void;
+  viewer: react.ReactElement | null;
+} {
+  const [viewed, setViewed] = react.useState<EvidenceRowLike | null>(null);
+  return {
+    open: setViewed,
+    viewer:
+      viewed === null ? null : (
+        <EvidenceViewer
+          row={viewed}
+          onClose={() => {
+            setViewed(null);
+          }}
+        />
+      ),
+  };
 }
 
 /** Tool name -> row, for the slot registrations in index.ts. */
