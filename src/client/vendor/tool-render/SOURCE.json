@@ -1,12 +1,12 @@
 {
   "source": "/home/sid/repos/dotfiles-ai/plugins/tool-render/src",
-  "vendoredAt": "2026-09-07",
-  "upstreamCommit": "82a9b90857296b2fc2635fd415ed9964cd1c4165",
+  "vendoredAt": "2026-09-08",
+  "upstreamCommit": "442edd374f0b3c14107b2ed3dd0207d728a50ac9",
   "upstreamCommitNote": "#141: the upstream commit these bytes were copied FROM, so a reader can diff the exact source instead of guessing from a date. The approval anatomy aidos reuses arrived in 5c7e5d5 (inline approval actions), 9697d91 (right-aligned actions + in-body verdict), 650e318 (card pinned open while an approval is pending) and 13b0e23 (comment-toggle alignment). Refreshed by the VENDOR_UPDATE re-vendor path and VERIFIED against the recorded file hashes by tests/u82-vendor-drift.test.ts.",
   "files": {
     "client.module.css": {
       "vendoredAs": "tool-render.css",
-      "sha256": "6d5d41bebca8e01613477119d47532f7df29c8e4e2db40e9ce53ab003a690654"
+      "sha256": "b0c9ef5fc33e1dd5b01aca69ca62237832703efdb6818b5df4e32349d077c87c"
     },
     "text.ts": {
       "vendoredAs": "text.js",

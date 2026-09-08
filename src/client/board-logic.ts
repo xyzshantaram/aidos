@@ -1,3 +1,4 @@
+import { compareTicketViews, filterTicketViews } from "../kernel/projections";
 /**
  * Ticket U2a: the ticket board-logic helpers.
  *
@@ -191,45 +192,21 @@ function compareTitles(a: string, b: string): number {
  * primary key, then the tiebreak key, then the id break the tie. The
  * descending flag flips the primary and the tiebreak but never the id break.
  */
+/**
+ * Order two tickets for the board.
+ *
+ * #91: DELEGATES to the kernel's `compareTicketViews`, which held a
+ * line-for-line copy of these rules. Kept as a named export because the
+ * board calls it directly in a few places and the name carries the
+ * board's vocabulary.
+ */
 export function compareTickets<T extends TicketLike>(
   a: T,
   b: T,
   key: SortKey,
   descending: boolean,
 ): number {
-  const aHas = hasCriteria(a);
-  const bHas = hasCriteria(b);
-  if (aHas !== bHas) return aHas ? -1 : 1;
-
-  let primary = 0;
-  let tiebreak = 0;
-  switch (key) {
-    case "confidence":
-      primary = a.confidenceScore - b.confidenceScore;
-      tiebreak = (a.gateFraction ?? 0) - (b.gateFraction ?? 0);
-      break;
-    case "gates":
-      primary = (a.gateFraction ?? 0) - (b.gateFraction ?? 0);
-      tiebreak = a.confidenceScore - b.confidenceScore;
-      break;
-    case "time":
-      primary = a.updatedAt - b.updatedAt;
-      tiebreak = compareTitles(a.title, b.title);
-      break;
-    case "alpha":
-      primary = compareTitles(a.title, b.title);
-      tiebreak = a.updatedAt - b.updatedAt;
-      break;
-  }
-
-  let cmp = primary;
-  if (descending) cmp = -cmp;
-  if (cmp === 0) {
-    cmp = tiebreak;
-    if (descending) cmp = -cmp;
-  }
-  if (cmp === 0) cmp = a.id - b.id;
-  return cmp;
+  return compareTicketViews(a, b, key, descending);
 }
 
 /** True when the search term matches the ticket title or id. */
@@ -239,22 +216,33 @@ function matchesSearch<T extends TicketLike>(ticket: T, query: string): boolean 
   return String(ticket.id).includes(query);
 }
 
-/** Filter by project, state, and search, then sort the survivors. */
+/**
+ * Filter by project, state, and search, then sort the survivors.
+ *
+ * #91: DELEGATES to the kernel's `filterTicketViews`. The two used to be
+ * separate implementations of the same rules — a filter loop and a
+ * comparator each, line for line identical — which is a drift waiting to
+ * happen: a fix to the board's sort would not reach the tool's, and the
+ * `get_tickets` tool and the FilterPanel would quietly disagree about what
+ * the same query means. They cannot drift now because only one exists.
+ *
+ * The mapping preserves this function's semantics exactly:
+ *  - `stateIds` passes through, so an EMPTY selection still matches nothing
+ *    (every state unticked shows an empty board, which is what the panel
+ *    has always done — see the note on TicketFilter.stateIds);
+ *  - `projectIds: null` means "all projects" here and `undefined` there.
+ */
 export function filterTickets<T extends TicketLike>(
   tickets: readonly T[],
   filter: FilterState,
 ): T[] {
-  const stateSet = new Set<string>(filter.stateIds);
-  const projectSet = filter.projectIds === null ? null : new Set(filter.projectIds);
-  const out: T[] = [];
-  for (const ticket of tickets) {
-    if (!stateSet.has(ticket.state)) continue;
-    if (projectSet !== null && !projectSet.has(ticket.projectId)) continue;
-    if (!matchesSearch(ticket, filter.search)) continue;
-    out.push(ticket);
-  }
-  out.sort((a, b) => compareTickets(a, b, filter.sortKey, filter.descending));
-  return out;
+  return filterTicketViews(tickets, {
+    stateIds: filter.stateIds,
+    projectIds: filter.projectIds ?? undefined,
+    search: filter.search,
+    sortKey: filter.sortKey,
+    descending: filter.descending,
+  });
 }
 
 /**

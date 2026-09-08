@@ -212,9 +212,40 @@ export function commentsProjection(state: AidosState): Map<TicketId, CommentReco
 /** The sort keys shared by the board filter panel and the get_tickets tool. */
 export type TicketSortKey = "confidence" | "gates" | "time" | "alpha";
 
+/**
+ * The minimum a row must carry to be SORTED by the rules below.
+ *
+ * #91: structural rather than `TicketRow`, so the BOARD's row type — which
+ * carries extra fields like `foreign` and `sourceSessionId` — can use this
+ * one implementation instead of keeping a copy that drifts.
+ */
+export interface TicketSortable {
+  id: number;
+  title: string;
+  criteria: string;
+  confidenceScore: number;
+  gateFraction: number | null;
+  updatedAt: number;
+}
+
+/** The minimum a row must carry to be FILTERED by the rules below. */
+export interface TicketFilterable extends TicketSortable {
+  state: string;
+  projectId: number;
+}
+
 /** One full filter and sort request, mirror of the board FilterPanel. */
 export interface TicketFilter {
-  /** Absent or empty means all states. */
+  /**
+   * Absent means all states. An EMPTY array means NONE.
+   *
+   * #91 corrected this sentence rather than the code. It used to read
+   * "absent or empty means all states", which the implementation has never
+   * done: `filter.stateIds ? new Set(...) : null` turns `[]` into an empty
+   * set that matches nothing. The board depends on the real behaviour — a
+   * filter with every state unticked shows an empty board, not the whole
+   * one — so the code was right and the comment was the drift.
+   */
   stateIds?: readonly string[];
   /** Absent or null means all projects. */
   projectIds?: readonly number[] | null;
@@ -224,7 +255,7 @@ export interface TicketFilter {
   descending?: boolean;
 }
 
-function ticketHasCriteria(ticket: TicketRow): boolean {
+function ticketHasCriteria(ticket: { criteria: string }): boolean {
   return ticket.criteria.trim().length > 0;
 }
 
@@ -242,9 +273,9 @@ function compareTicketTitles(a: string, b: string): number {
  * direction; primary key, tiebreak key, then id. Descending flips the primary
  * and the tiebreak but never the id break.
  */
-export function compareTicketViews(
-  a: TicketView,
-  b: TicketView,
+export function compareTicketViews<T extends TicketSortable>(
+  a: T,
+  b: T,
   key: TicketSortKey = "confidence",
   descending = true,
 ): number {
@@ -284,21 +315,21 @@ export function compareTicketViews(
 }
 
 /** True when the search term matches the title or the id. */
-function ticketMatchesSearch(ticket: TicketRow, query: string): boolean {
+function ticketMatchesSearch(ticket: { id: number; title: string }, query: string): boolean {
   if (query === "") return true;
   if (ticket.title.toLowerCase().includes(query.toLowerCase())) return true;
   return String(ticket.id).includes(query);
 }
 
 /** Filter by state, project, and search, then sort (FilterPanel parity). */
-export function filterTicketViews(
-  views: readonly TicketView[],
+export function filterTicketViews<T extends TicketFilterable>(
+  views: readonly T[],
   filter: TicketFilter = {},
-): TicketView[] {
+): T[] {
   const stateSet = filter.stateIds ? new Set<string>(filter.stateIds) : null;
   const projectSet = filter.projectIds ? new Set<number>(filter.projectIds) : null;
   const search = filter.search ?? "";
-  const out: TicketView[] = [];
+  const out: T[] = [];
   for (const ticket of views) {
     if (stateSet !== null && !stateSet.has(ticket.state)) continue;
     if (projectSet !== null && !projectSet.has(ticket.projectId)) continue;
