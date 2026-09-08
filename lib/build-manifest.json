@@ -1,9 +1,9 @@
 {
   "note": "#148: written by build.mjs. sourceDigest covers every file under src/ plus build.mjs itself; artifacts are the files this package ships. tests/u148-bundle-freshness.test.ts fails when either side moves without the other. Regenerate with: node build.mjs",
-  "sourceDigest": "00d47135ca5c9b0591077951d4d2312543afdc31c8bb70854fb150e0e2eea584",
+  "sourceDigest": "66cfb76d905db0c860e0a80796bf9ec65ec66427a14dadd26511ec48a68869c6",
   "artifacts": {
-    "presets/aidos/aidos-tools.js": "34c1f45e4fd155572022bc796f2910e0a38d31480afaa0dfd86a09d0c07407ce",
-    "dist/host/aidos-plugin.js": "4c8dc2059ae2216a114f56e4b77c54336e4e6bcfbf030ec49e540cf4a82be7a6",
+    "presets/aidos/aidos-tools.js": "c4b295385f0d2e3ae2adb8bc8ea33411187cb5e54ba5461b98863bd3040d5354",
+    "dist/host/aidos-plugin.js": "0303264dc1556ef928236db99e660bf4af2a8f6d96a50c12b9efd2ba7eb24607",
     "lib/client.js": "97d3dbbb819118fd25cf06a0d1404bf12212125bd9c72d13f115e835e36825aa"
   }
 }

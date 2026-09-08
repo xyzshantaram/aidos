@@ -28092,17 +28092,18 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    */
   bashContext(agent) {
     const presets = this.ctx.get("agentPresets");
+    const denied = { profile: "none", scratchDir: "", workspaceRoot: "", allowlist: [] };
     if (presets === void 0) {
-      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+      return denied;
     }
     let composed;
     try {
       composed = presets.composedPreset(agent.ctx);
     } catch {
-      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+      return denied;
     }
     if (composed !== "aidos") {
-      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+      return denied;
     }
     let profile;
     if (delegationDepthOf(agent) === 0) {
@@ -28132,7 +28133,16 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       scratchDir = "";
     }
     const workspaceRoot = agent.session?.header?.cwd ?? "";
-    return { profile, scratchDir, workspaceRoot };
+    let allowlist;
+    try {
+      allowlist = this.allowlistUnion(agent);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: allowlistUnion failed in bashContext: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+      allowlist = [];
+    }
+    return { profile, scratchDir, workspaceRoot, allowlist };
   }
   /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
   subagentKind(agent) {

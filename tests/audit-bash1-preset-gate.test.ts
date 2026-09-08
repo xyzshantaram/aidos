@@ -10,7 +10,8 @@
  *
  * The fix checks `agentPresets.composedPreset(agent.ctx)` first. When the
  * composed preset is not "aidos", bashContext() returns a static
- * { profile: "none", scratchDir: "", workspaceRoot: "" } and never touches
+ * { profile: "none", scratchDir: "", workspaceRoot: "", allowlist: [] } and never
+ * touches
  * ticketStates(), scratchRootForAgent(), or subagentKind().
  */
 
@@ -39,7 +40,7 @@ describe("A-BASH1 bashContext preset gate", () => {
     provideComposedPreset(harness, "some-other-preset");
 
     const result = harness.service.bashContext(harness.asAgent());
-    expect(result).toEqual({ profile: "none", scratchDir: "", workspaceRoot: "" });
+    expect(result).toEqual({ profile: "none", scratchDir: "", workspaceRoot: "", allowlist: [] });
   });
 
   it("stays none even when the session already has an in_progress ticket", () => {
@@ -52,7 +53,7 @@ describe("A-BASH1 bashContext preset gate", () => {
     provideComposedPreset(harness, "some-other-preset");
 
     const result = harness.service.bashContext(harness.asAgent());
-    expect(result).toEqual({ profile: "none", scratchDir: "", workspaceRoot: "" });
+    expect(result).toEqual({ profile: "none", scratchDir: "", workspaceRoot: "", allowlist: [] });
   });
 
   it("resolves none for a subagent whose session does not run the aidos preset", () => {
@@ -62,7 +63,7 @@ describe("A-BASH1 bashContext preset gate", () => {
     provideComposedPreset(harness, "some-other-preset");
 
     const result = harness.service.bashContext(harness.asAgent(subagent));
-    expect(result).toEqual({ profile: "none", scratchDir: "", workspaceRoot: "" });
+    expect(result).toEqual({ profile: "none", scratchDir: "", workspaceRoot: "", allowlist: [] });
   });
 
   it("a real aidos primary agent with zero tickets still resolves planning", () => {

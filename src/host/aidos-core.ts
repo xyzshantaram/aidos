@@ -1340,23 +1340,50 @@ registerAidosSessionEventTypes(ctx);
    *  - subagent (delegation depth > 0), provider p   => `subagent-${p}`
    *    (an unknown provider falls back to "subagent-coder")
    */
-  bashContext(agent: Agent): { profile: string; scratchDir: string; workspaceRoot: string } {
+  bashContext(agent: Agent): {
+    profile: string;
+    scratchDir: string;
+    workspaceRoot: string;
+    /**
+     * #74: the union of the in-progress tickets' allowlists — the write
+     * boundary, published so bash-guard can gate write TARGETS.
+     *
+     * The fs tools have been gated by this union since #9; bash never was.
+     * `echo x >> README.md` succeeds today even when README.md is outside
+     * every in-progress allowlist, so the boundary the board enforces on
+     * `write` and `edit` is one shell redirect away from irrelevant. The
+     * guard lives in dotfiles-ai and cannot import aidos, so the union has
+     * to travel on the context bash-guard already reads.
+     *
+     * ALWAYS PRESENT, including empty. An absent field would be
+     * indistinguishable from "this build predates #74" and a guard that
+     * cannot tell those apart has to fail open, which is how the fs guard
+     * failed open before #9. Empty means exactly what it says: nothing in
+     * the workspace may be written, because no ticket is in progress.
+     *
+     * Deny-by-default is preserved: the three early returns above hand back
+     * an empty union along with profile "none", so an agent that cannot
+     * prove it composes the aidos preset gets no writable paths either.
+     */
+    allowlist: string[];
+  } {
     const presets = this.ctx.get("agentPresets") as
       | { composedPreset: (agentCtx: unknown) => string | undefined }
       | undefined;
     // Deny by default (A5): an agent that cannot prove it composes the aidos
     // preset gets no bash profile at all — same contract as isAidosAgent.
+    const denied = { profile: "none", scratchDir: "", workspaceRoot: "", allowlist: [] };
     if (presets === undefined) {
-      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+      return denied;
     }
     let composed: string | undefined;
     try {
       composed = presets.composedPreset(agent.ctx);
     } catch {
-      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+      return denied;
     }
     if (composed !== "aidos") {
-      return { profile: "none", scratchDir: "", workspaceRoot: "" };
+      return denied;
     }
     let profile: string;
     if (delegationDepthOf(agent) === 0) {
@@ -1390,7 +1417,26 @@ registerAidosSessionEventTypes(ctx);
       scratchDir = "";
     }
     const workspaceRoot = (agent.session?.header?.cwd as string | undefined) ?? "";
-    return { profile, scratchDir, workspaceRoot };
+    /*
+     * #74: the same union the fs write boundary uses, from the same method,
+     * so bash and the fs tools cannot disagree about what is writable.
+     * Computing it a second way here would be the drift #91 just removed
+     * from the filters.
+     *
+     * A failure yields an EMPTY union rather than a missing field: the
+     * write boundary's own rule is that an unknown union denies, and a
+     * guard reading this must inherit that rather than guess.
+     */
+    let allowlist: string[];
+    try {
+      allowlist = this.allowlistUnion(agent);
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: allowlistUnion failed in bashContext: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      allowlist = [];
+    }
+    return { profile, scratchDir, workspaceRoot, allowlist };
   }
 
   /** The dsh-subagent provider that spawned the agent, if it is a subagent. */
