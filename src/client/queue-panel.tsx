@@ -24,7 +24,8 @@ import {
 } from "./human-queue";
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
-import { parseCriteria, boardKeyOf } from "./board-logic";
+import { VerifyModal } from "./evidence-attach";
+import { boardKeyOf } from "./board-logic";
 import { getRunningApproval, setRunningApproval } from "./view-state";
 
 import type {
@@ -68,13 +69,15 @@ export interface QueuePanelProps {
 /** The step list an action collects before it can be performed. */
 function stepsFor(entry: QueueEntry): Step[] {
   /*
-   * The criterion picker belongs ONLY to verify. Signoff authorises work to
-   * START — nothing is proven yet, so there is no criterion to attest, and
-   * offering one invites a meaningless link. Mark-done attaches no evidence
-   * row at all (it is purely a move), so it has nothing to link either.
+   * NO CRITERION PICKER LIVES HERE ANY MORE (#123).
+   *
+   * It used to, for verify alone — and that inline `<select>` was the OLD
+   * linker the user reported. Verify now opens the detail panel's modal
+   * instead of a runner step, so the only actions that still reach this
+   * function are signoff (authorises work to START: nothing is proven yet,
+   * so there is no criterion to attest) and mark-done (a pure move that
+   * attaches no row at all). Neither has anything to link.
    */
-  const criteria =
-    entry.actionId === "verify" ? parseCriteria(entry.ticket.criteria ?? "") : [];
   const titles: Record<string, string> = {
     signoff: "Sign off on " + entry.ticket.title,
     verify: "Verify " + entry.ticket.title,
@@ -112,7 +115,6 @@ function stepsFor(entry: QueueEntry): Step[] {
       title: titles[entry.actionId] ?? entry.label,
       prompt: prompts[entry.actionId],
       noteLabel: "Note (optional)",
-      criteria: criteria.length > 0 ? criteria : undefined,
     },
   ];
 }
@@ -461,7 +463,39 @@ export function QueuePanel(props: QueuePanelProps) {
           </ul>
         </div>
       ))}
-      {running !== null ? (
+      {/*
+        * #123: VERIFY IS NOT A RUNNER STEP.
+        *
+        * A verify ask opens the SAME modal the detail panel's Verify button
+        * opens — screenshot paste and all — because the user's rule is that
+        * one label means one flow. Everything else (signoff, mark-done, an
+        * allowlist approval) keeps the runner: those genuinely are confirm
+        * steps, and the detail panel has no richer surface for them to
+        * diverge from.
+        *
+        * An APPROVAL entry is never routed here even though its actionId can
+        * look adjacent: it resolves a pending card rather than attaching
+        * evidence, and `stepsFor` gives it the path-list step.
+        */}
+      {running !== null &&
+      running.actionId === "verify" &&
+      running.approvalId === undefined ? (
+        <VerifyModal
+          ticketId={running.boardKey}
+          agentId={props.sessionId}
+          onAttached={() => {
+            setAnswered(function (previous) {
+              const next = new Set(previous);
+              next.add(entryKey(running));
+              return next;
+            });
+            props.onRefresh?.();
+          }}
+          onClose={() => {
+            setRunning(null);
+          }}
+        />
+      ) : running !== null ? (
         <ApprovalRunner
           title={running.label}
           steps={stepsFor(running)}

@@ -149,7 +149,30 @@ async function uploadImagePaste(agentId: string, file: Blob, name: string): Prom
   return attachment.path;
 }
 
-export function VerifyModal(props: { ticketId: number | string; agentId: string; onClose: () => void }) {
+/**
+ * The verify flow, owned in ONE place (#123).
+ *
+ * The user settled it: "what i expect when i click verify in the queue modal
+ * is the same two-step flow that clicking it in the detail view launches."
+ * So this component is not the detail panel's — it is the board's, and both
+ * the detail panel and the QUEUE render it. The queue used to run a
+ * lookalike built out of ApprovalRunner steps (a note field and the OLD
+ * criterion select), which is exactly the defect: two buttons with the same
+ * label attaching two different shapes of evidence depending on where the
+ * human clicked. The screenshot paste is the visible half of that
+ * difference; the payload shape is the half that reached the board.
+ *
+ * `onAttached` exists because the queue needs to distinguish a SUCCESSFUL
+ * attach (hide the answered ask) from a cancel (leave it standing) — the
+ * same rule the runner path already enforced.
+ */
+export function VerifyModal(props: {
+  ticketId: number | string;
+  agentId: string;
+  onClose: () => void;
+  /** Called after the row lands, before the modal closes. */
+  onAttached?: () => void;
+}) {
   const [note, setNote] = react.useState("");
   const [imagePath, setImagePath] = react.useState<string | null>(null);
   const [uploading, setUploading] = react.useState(false);
@@ -183,6 +206,7 @@ export function VerifyModal(props: { ticketId: number | string; agentId: string;
         props.agentId,
       );
       showToast("Verified", "success");
+      props.onAttached?.();
       props.onClose();
     } catch (error) {
       showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
