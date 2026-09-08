@@ -45,6 +45,13 @@ import { PencilIcon, TrashIcon, WarningIcon } from "./icons";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
+import {
+  getViewedEvidence,
+  isDetailModalOpen,
+  setDetailModalOpen,
+  setViewedEvidence,
+} from "./view-state";
+import type { DetailModalKey } from "./view-state";
 import type { EvidenceRowLike } from "./board-logic";
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow, CommentRecord } from "../kernel/types";
@@ -904,16 +911,64 @@ export function DetailPanel(props: DetailPanelBodyProps) {
  * actions open their modals.
  */
 export function DetailView(props: DetailViewProps) {
-  const [signoffOpen, setSignoffOpen] = react.useState(false);
-  const [verifyOpen, setVerifyOpen] = react.useState(false);
-  const [sendBackOpen, setSendBackOpen] = react.useState(false);
-  const [markDoneOpen, setMarkDoneOpen] = react.useState(false);
-  const [allowlistOpen, setAllowlistOpen] = react.useState(false);
-  const [viewingEvidence, setViewingEvidence] = react.useState<EvidenceRowLike | null>(null);
-  const [submitting, setSubmitting] = react.useState(false);
-
   const ticket = props.ticket;
   const agentId = props.agentId;
+
+  /*
+   * #100 ROUND 3: every dialog in here is BACKED BY THE MODULE STORE.
+   *
+   * All six were plain useState, which meant a remount closed them. #100
+   * round 2 made that move for the BOARD's modals (queue, create, plan) and
+   * stopped there -- but these are the ones the ticket's criterion names,
+   * and they sit one level down, so nothing round 2 did reached them. A
+   * badge re-registration still emptied the mark-done modal or the evidence
+   * viewer the reader was working in.
+   *
+   * They also had a remount of their own that no board-level store could
+   * have covered: this component is rendered with `key={selectedBoardKey}`,
+   * and a row's board key FLIPS when it goes foreign -> own. That is #100's
+   * second mechanism reaching the modals by a different road. The view now
+   * keys on the durable identity instead, and the store below makes the
+   * question moot either way.
+   *
+   * KEYED BY THE DURABLE IDENTITY, not by `ticketIdKey`: `ticketIdKey` IS
+   * the board key, i.e. the value that flips, so keying the dialogs by it
+   * would drop them on exactly the event they are here to survive.
+   *
+   * `submitting` deliberately stays in React. It is not the human's state --
+   * it guards a request already in flight, and a remount neither cancels
+   * that request nor leaves anything worth restoring.
+   */
+  const ticketKey = fullTicketId(ticket);
+  const useStoredModal = function (
+    modal: DetailModalKey,
+  ): [boolean, (open: boolean) => void] {
+    const [value, setValue] = react.useState(() => isDetailModalOpen(agentId, ticketKey, modal));
+    const set = function (open: boolean): void {
+      // Store FIRST: if this render never completes -- which is exactly the
+      // remount all of this exists for -- the store still carries the truth.
+      setDetailModalOpen(agentId, ticketKey, modal, open);
+      setValue(open);
+    };
+    return [value, set];
+  };
+  const [signoffOpen, setSignoffOpen] = useStoredModal("signoff");
+  const [verifyOpen, setVerifyOpen] = useStoredModal("verify");
+  const [sendBackOpen, setSendBackOpen] = useStoredModal("sendBack");
+  const [markDoneOpen, setMarkDoneOpen] = useStoredModal("markDone");
+  const [allowlistOpen, setAllowlistOpen] = useStoredModal("allowlist");
+  /*
+   * The evidence viewer stores a ROW, not a flag, because that is what it
+   * renders. Same rule as the modals: the store is written first.
+   */
+  const [viewingEvidence, setViewingEvidenceState] = react.useState<EvidenceRowLike | null>(
+    () => getViewedEvidence<EvidenceRowLike>(agentId, ticketKey),
+  );
+  const setViewingEvidence = function (row: EvidenceRowLike | null): void {
+    setViewedEvidence(agentId, ticketKey, row);
+    setViewingEvidenceState(row);
+  };
+  const [submitting, setSubmitting] = react.useState(false);
 
   react.useEffect(function () {
     logDebug("detail view: ticket " + ticket.id);

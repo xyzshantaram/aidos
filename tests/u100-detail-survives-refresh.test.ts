@@ -20,19 +20,26 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { asBoardKey, boardKeyOf, fullTicketId, resolveSelection } from "../src/client/board-logic";
 import {
+  clearDetailModals,
   getHeldTicket,
+  getRunningApproval,
   getSelection,
+  getViewedEvidence,
   holdInput,
+  isDetailModalOpen,
   recordResolution,
   __resetModalsForTests,
   anyModalOpen,
   isModalOpen,
   reportCount,
   setCountCallback,
+  setDetailModalOpen,
   setModalOpen,
   setHeldTicket,
   setRemountSuppressed,
+  setRunningApproval,
   setSelection,
+  setViewedEvidence,
 } from "../src/client/view-state";
 
 interface Row {
@@ -639,5 +646,284 @@ describe("#100 round 2: a modal survives the remount, whatever caused it", () =>
     const setter = view.slice(view.indexOf("const set = function (open: boolean)"));
     const body = setter.slice(0, setter.indexOf("};"));
     expect(body.indexOf("setModalOpen(")).toBeLessThan(body.indexOf("setValue("));
+  });
+});
+
+/**
+ * ROUND 3, and the gap round 2 left standing.
+ *
+ * Round 2 moved the BOARD's modals (queue, create, plan) out of React. The
+ * modals this ticket's criterion actually names -- mark-done, the evidence
+ * viewer, the approval runner -- are one level down and were untouched: all
+ * six of DetailView's dialogs were still plain `useState`, so the remount
+ * that used to close the queue still emptied the dialog the reader was
+ * typing into, and QueuePanel still lost the runner even after the queue
+ * modal around it learned to survive.
+ *
+ * DetailView also had a remount all of its own, which no board-level store
+ * could ever have covered: `key={selectedBoardKey}`. A row's board key flips
+ * when it goes foreign -> own, React rebuilds a subtree whose key changed,
+ * and the panel's own comment said so while shipping it.
+ */
+describe("#100 round 3: the detail panel's own dialogs survive the remount", () => {
+  const TICKET = WS + ":reading-a-ticket";
+  const OTHER = WS + ":some-other-ticket";
+
+  beforeEach(() => {
+    __resetModalsForTests();
+  });
+
+  it("a fresh mount reads MARK-DONE back open", () => {
+    // The bug in one assertion: this is what a remounted DetailView sees.
+    setDetailModalOpen("sess-detail", TICKET, "markDone", true);
+    expect(isDetailModalOpen("sess-detail", TICKET, "markDone")).toBe(true);
+  });
+
+  it("the evidence viewer restores the ROW, not merely a flag", () => {
+    // It renders a row, so a boolean would bring back an empty dialog --
+    // which is a different bug wearing the fix's clothes.
+    const row = { kind: "builtin:review_pass", author: "agent", at: 1 };
+    setViewedEvidence("sess-detail", TICKET, row);
+    expect(getViewedEvidence("sess-detail", TICKET)).toEqual(row);
+  });
+
+  it("closing is remembered too, so a dialog cannot resurrect itself", () => {
+    setDetailModalOpen("sess-detail", TICKET, "signoff", true);
+    setDetailModalOpen("sess-detail", TICKET, "signoff", false);
+    expect(isDetailModalOpen("sess-detail", TICKET, "signoff")).toBe(false);
+  });
+
+  it("keeps each dialog separate: closing one does not close another", () => {
+    setDetailModalOpen("sess-detail", TICKET, "markDone", true);
+    setDetailModalOpen("sess-detail", TICKET, "allowlist", true);
+    setDetailModalOpen("sess-detail", TICKET, "allowlist", false);
+    expect(isDetailModalOpen("sess-detail", TICKET, "markDone")).toBe(true);
+    expect(isDetailModalOpen("sess-detail", TICKET, "allowlist")).toBe(false);
+  });
+
+  it("keeps each TICKET separate: one ticket's dialog is not another's", () => {
+    setDetailModalOpen("sess-detail", TICKET, "verify", true);
+    expect(isDetailModalOpen("sess-detail", OTHER, "verify")).toBe(false);
+  });
+
+  it("keeps each SESSION separate: two boards do not share a dialog", () => {
+    setDetailModalOpen("sess-a", TICKET, "sendBack", true);
+    expect(isDetailModalOpen("sess-b", TICKET, "sendBack")).toBe(false);
+  });
+
+  it("clearDetailModals forgets ONE ticket, and leaves the rest alone", () => {
+    setDetailModalOpen("sess-detail", TICKET, "markDone", true);
+    setViewedEvidence("sess-detail", TICKET, { kind: "builtin:automated_check" });
+    setDetailModalOpen("sess-detail", OTHER, "markDone", true);
+    clearDetailModals("sess-detail", TICKET);
+    expect(isDetailModalOpen("sess-detail", TICKET, "markDone")).toBe(false);
+    expect(getViewedEvidence("sess-detail", TICKET)).toBeNull();
+    expect(isDetailModalOpen("sess-detail", OTHER, "markDone")).toBe(true);
+  });
+
+  it("anyModalOpen counts a DETAIL dialog, so suppression can see it", () => {
+    expect(anyModalOpen("sess-detail")).toBe(false);
+    setDetailModalOpen("sess-detail", TICKET, "markDone", true);
+    expect(anyModalOpen("sess-detail")).toBe(true);
+    setDetailModalOpen("sess-detail", TICKET, "markDone", false);
+    expect(anyModalOpen("sess-detail")).toBe(false);
+  });
+
+  it("an open evidence viewer alone keeps anyModalOpen true", () => {
+    // The viewer has no boolean of its own; a store that only counted flags
+    // would report a quiet board while a dialog was on screen.
+    setViewedEvidence("sess-detail", TICKET, { kind: "builtin:review_note" });
+    expect(anyModalOpen("sess-detail")).toBe(true);
+    setViewedEvidence("sess-detail", TICKET, null);
+    expect(anyModalOpen("sess-detail")).toBe(false);
+  });
+
+  it("returns false for a ticket whose dialogs were never touched", () => {
+    expect(isDetailModalOpen("sess-detail", TICKET, "markDone")).toBe(false);
+    expect(getViewedEvidence("sess-detail", TICKET)).toBeNull();
+  });
+
+  /**
+   * THE KEY CHOICE, tested as behaviour rather than asserted as a string.
+   *
+   * Storing the dialogs under the BOARD key would lose them on the flip
+   * foreign -> own, which is one of the two events #100 exists to survive.
+   * The durable identity does not move.
+   */
+  it("the durable identity survives the board-key flip that the board key does not", () => {
+    const asForeign = foreign(9, "reading-a-ticket", "sess-owner");
+    const asOwn = own(9, "reading-a-ticket");
+    expect(boardKeyOf(asForeign)).not.toBe(boardKeyOf(asOwn));
+    expect(fullTicketId(asForeign)).toBe(fullTicketId(asOwn));
+
+    // Opened while the row was foreign...
+    setDetailModalOpen("sess-detail", fullTicketId(asForeign), "markDone", true);
+    // ...and still open once its owner session loads and the key flips.
+    expect(isDetailModalOpen("sess-detail", fullTicketId(asOwn), "markDone")).toBe(true);
+
+    // The rejected alternative, for contrast: keyed by the board key, the
+    // same dialog is simply gone after the flip.
+    setDetailModalOpen("sess-board-key", boardKeyOf(asForeign), "markDone", true);
+    expect(isDetailModalOpen("sess-board-key", boardKeyOf(asOwn), "markDone")).toBe(false);
+  });
+
+  it("the re-anchor these dialogs must survive is a real resolution, not a hypothetical", () => {
+    // Ties the key choice to the resolver: this IS the flip, resolved.
+    const before = foreign(9, "reading-a-ticket", "sess-owner");
+    const after = own(9, "reading-a-ticket");
+    const resolution = resolveSelection([after], boardKeyOf(before), before);
+    expect(resolution.reason).toBe("reanchored");
+    expect(resolution.ticket).not.toBeNull();
+    expect(fullTicketId(resolution.ticket as Row)).toBe(fullTicketId(before));
+  });
+});
+
+/**
+ * The wiring half. A store nothing reads on mount does not fix the bug, and
+ * a panel still keyed on the board key still remounts on the flip -- the
+ * component would come back with its dialogs closed either way, which is
+ * exactly the reported symptom. A mount harness that could drive this
+ * behaviourally is ticketed as #149; until it exists these guard the seams
+ * the stores hang from, and they are named as guards rather than dressed up
+ * as behaviour.
+ */
+describe("#100 round 3: the view and the panel are wired to the stores", () => {
+  const view = readFileSync(
+    new URL("../src/client/local-ticket-view.tsx", import.meta.url),
+    "utf8",
+  );
+  const panel = readFileSync(
+    new URL("../src/client/detail-panel.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("DetailView is keyed on the durable identity, never on the board key", () => {
+    expect(view).toContain("const panelKey = selectedTicket === null ? null : fullTicketId(selectedTicket)");
+    expect(view).toContain("key={panelKey}");
+    // The revert this pins: the board key is the value that flips.
+    expect(view).not.toContain("key={selectedBoardKey}");
+  });
+
+  it("the panel INITIALISES every dialog from the store rather than from false", () => {
+    expect(panel).toContain("react.useState(() => isDetailModalOpen(agentId, ticketKey, modal))");
+    expect(panel).toContain('useStoredModal("markDone")');
+    expect(panel).toContain('useStoredModal("allowlist")');
+    expect(panel).toContain('useStoredModal("signoff")');
+    expect(panel).toContain('useStoredModal("verify")');
+    expect(panel).toContain('useStoredModal("sendBack")');
+    expect(panel).toContain("getViewedEvidence<EvidenceRowLike>(agentId, ticketKey)");
+    // None of them may fall back to a plain useState(false).
+    expect(panel).not.toContain("const [markDoneOpen, setMarkDoneOpen] = react.useState(false)");
+  });
+
+  it("the panel keys the store on the DURABLE identity, not on ticketIdKey", () => {
+    // ticketIdKey IS the board key, i.e. the value that flips.
+    expect(panel).toContain("const ticketKey = fullTicketId(ticket)");
+  });
+
+  it("the panel writes the STORE before the React state", () => {
+    const setter = panel.slice(panel.indexOf("const set = function (open: boolean)"));
+    const body = setter.slice(0, setter.indexOf("};"));
+    expect(body.indexOf("setDetailModalOpen(")).toBeLessThan(body.indexOf("setValue("));
+  });
+
+  it("the view forgets a ticket's dialogs when the READER moves, not on unmount", () => {
+    // Clearing from an unmount cleanup is the third fix's defect in a new
+    // place: a remount and a close look identical to a component.
+    const setter = view.slice(view.indexOf("const setSelectedKey = react.useCallback"));
+    const body = setter.slice(0, setter.indexOf("[sessionId],"));
+    // The WHOLE statement, not just the call: a mutation that guards the
+    // call out (`&& false`) leaves the call text sitting there intact, and a
+    // substring check would happily pass over a clear that never runs.
+    expect(body).toContain(
+      "if (leaving !== null) clearDetailModals(sessionId, fullTicketId(leaving));",
+    );
+    expect(body.indexOf("clearDetailModals(")).toBeLessThan(body.indexOf("setSelection("));
+  });
+});
+
+/**
+ * The ticket's body asks, as the second half of its fix, whether the slot API
+ * can re-read a label WITHOUT a dispose/re-register cycle. Round 3 answered
+ * it from the package's own types, and the answer is no -- but not for the
+ * reason index.ts used to give.
+ *
+ * `SlotLabel = string | (() => string)` is documented as "re-evaluated per
+ * read ... WITHOUT RE-REGISTRATION", so the label was never what needed the
+ * cycle. What needs it is the READ: `entries()` returns a reference-stable
+ * array between mutations and `subscribe` only fires on mutations, so with
+ * no mutation the header never re-renders and never calls the thunk. The
+ * public surface offers no non-mutating invalidation, and for a list entry
+ * the only mutations are register and dispose.
+ *
+ * These pin the half of that finding that lives in OUR code: the label must
+ * stay a thunk. Passing `badgeLabel()` would freeze the text at registration
+ * time -- it would keep working only because we re-register, which is
+ * precisely the dependency the body wants removed rather than deepened.
+ */
+describe("#100 round 3: the tab label is a thunk, so the churn is the API's and not ours", () => {
+  const entry = readFileSync(new URL("../src/client/index.ts", import.meta.url), "utf8");
+
+  it("registers the label as a FUNCTION REFERENCE, never a computed string", () => {
+    expect(entry).toContain("label: badgeLabel,");
+    expect(entry).not.toContain("label: badgeLabel(),");
+  });
+
+  it("still guards the re-register on the rendered label STRING", () => {
+    // Half (2) of the body's fix: re-register only when the text differs.
+    // Many counts share one label ("Tickets" for every zero), so comparing
+    // the string and not the count is what removes the churn.
+    const bump = entry.slice(entry.indexOf("setCountCallback(function ()"));
+    const body = bump.slice(0, bump.indexOf("const slots ="));
+    expect(body).toContain("const next = badgeLabel();");
+    expect(body).toContain("if (next === lastLabel) return;");
+  });
+
+  it("advances lastLabel only on a SUCCESSFUL re-register, so a failure retries", () => {
+    const bump = entry.slice(entry.indexOf("setCountCallback(function ()"));
+    const tryBlock = bump.slice(bump.indexOf("try {"), bump.indexOf("} catch"));
+    expect(tryBlock.indexOf("registration = registerTicketsTab(slots);")).toBeLessThan(
+      tryBlock.indexOf("lastLabel = next;"),
+    );
+  });
+});
+
+describe("#100 round 3: the approval runner survives the remount", () => {
+  beforeEach(() => {
+    __resetModalsForTests();
+  });
+
+  it("a fresh mount reads the running approval back", () => {
+    setRunningApproval("sess-queue", "12\u0000allowlist\u0000req-1");
+    expect(getRunningApproval("sess-queue")).toBe("12\u0000allowlist\u0000req-1");
+  });
+
+  it("clearing it is remembered, so a closed runner cannot reopen itself", () => {
+    setRunningApproval("sess-queue", "12\u0000signoff");
+    setRunningApproval("sess-queue", null);
+    expect(getRunningApproval("sess-queue")).toBeNull();
+  });
+
+  it("keeps sessions separate: one board's runner is not another's", () => {
+    setRunningApproval("sess-a", "12\u0000signoff");
+    expect(getRunningApproval("sess-b")).toBeNull();
+  });
+
+  it("reports null for a session that never opened one", () => {
+    expect(getRunningApproval("sess-never")).toBeNull();
+  });
+
+  it("the panel restores it on mount and re-derives the ENTRY from the board", () => {
+    const queue = readFileSync(
+      new URL("../src/client/queue-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(queue).toContain("react.useState<string | null>(() =>\n    getRunningApproval(props.sessionId),\n  )");
+    expect(queue).toContain("entries.find((entry) => entryKey(entry) === runningKey)");
+    // The revert this pins: the entry OBJECT held in React state.
+    expect(queue).not.toContain("react.useState<QueueEntry | null>(null)");
+    const setter = queue.slice(queue.indexOf("const setRunning = function (entry: QueueEntry | null)"));
+    const body = setter.slice(0, setter.indexOf("};"));
+    expect(body.indexOf("setRunningApproval(")).toBeLessThan(body.indexOf("setRunningKey("));
   });
 });

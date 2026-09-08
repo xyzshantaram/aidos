@@ -25,6 +25,7 @@ import {
 import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { parseCriteria, boardKeyOf } from "./board-logic";
+import { getRunningApproval, setRunningApproval } from "./view-state";
 
 import type {
   Nomination,
@@ -38,6 +39,13 @@ import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
 
 export interface QueuePanelProps {
+  /**
+   * The session this queue belongs to. Required rather than optional because
+   * the open approval runner is stored per session OUTSIDE React (#100 round
+   * 3), and every store in this codebase that was keyed globally has
+   * eventually shown one session's state on another's screen.
+   */
+  sessionId: string;
   tickets: readonly TicketView[];
   /** Keyed exactly as the board keys it, so foreign rows resolve too. */
   evidenceByTicket: Record<string, readonly EvidenceRow[]>;
@@ -164,7 +172,32 @@ export function entryKey(entry: QueueEntry): string {
 
 export function QueuePanel(props: QueuePanelProps) {
   const [openRow, setOpenRow] = react.useState<string | null>(null);
-  const [running, setRunning] = react.useState<QueueEntry | null>(null);
+  /*
+   * #100 round 3: WHICH RUNNER IS OPEN LIVES OUTSIDE REACT.
+   *
+   * This was a plain `useState<QueueEntry | null>`, so a remount closed the
+   * approval runner. Round 2 taught the queue MODAL to survive a remount and
+   * stopped there, which made the symptom worse rather than better: the
+   * queue came back open with the runner the human was halfway through
+   * simply gone, and the ask still sitting in the list unanswered.
+   *
+   * An entry KEY is stored, and the ENTRY is re-derived from this render's
+   * board. That is the right rule for THIS data and the opposite of the held
+   * ticket's: a queue entry is a pure function of the board, so re-deriving
+   * it can never fail the way re-deriving a transiently-absent ticket row
+   * does -- and if the ask stops being derived because it was answered
+   * elsewhere, the runner closing is correct rather than a bug.
+   */
+  const [runningKey, setRunningKey] = react.useState<string | null>(() =>
+    getRunningApproval(props.sessionId),
+  );
+  const setRunning = function (entry: QueueEntry | null): void {
+    const key = entry === null ? null : entryKey(entry);
+    // Store FIRST: the render that never completes is the case this exists
+    // for, and the store must carry the truth through it.
+    setRunningApproval(props.sessionId, key);
+    setRunningKey(key);
+  };
   const [working, setWorking] = react.useState(false);
   const [sortKey, setSortKey] = react.useState<QueueSortKey>("suggested");
 
@@ -221,6 +254,17 @@ export function QueuePanel(props: QueuePanelProps) {
    * the board thinks is outstanding.
    */
   const visible = entries.filter((entry) => !answered.has(entryKey(entry)));
+
+  /*
+   * The runner's entry, re-derived from THIS render's queue. Derived from
+   * `entries` rather than `visible`: hiding an answered row must not yank a
+   * modal out from under the human, and the successful-action path clears
+   * the stored key itself.
+   */
+  const running =
+    runningKey === null
+      ? null
+      : entries.find((entry) => entryKey(entry) === runningKey) ?? null;
 
   const suggested = visible.filter((e) => e.nominationReason !== undefined).length;
   // Only ASKS THAT NEED ATTENTION are surfaced. A fulfilled nomination means

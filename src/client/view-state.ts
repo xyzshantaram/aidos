@@ -323,14 +323,209 @@ export function setModalOpen(sessionId: string, modal: ModalKey, open: boolean):
   if (current.size === 0) openModals.delete(sessionId);
 }
 
-/** Whether ANY modal is open for this session (the suppression input). */
+/**
+ * Whether ANY modal is open for this session (the suppression input).
+ *
+ * Round 3: the DETAIL dialogs count too. Suppression is churn-avoidance
+ * rather than the thing holding a modal together, but a reader typing into
+ * the mark-done modal has exactly as much claim on a quiet tree as a reader
+ * with the queue open, and leaving them out made this predicate quietly
+ * disagree with its own name.
+ */
 export function anyModalOpen(sessionId: string): boolean {
-  return (openModals.get(sessionId)?.size ?? 0) > 0;
+  if ((openModals.get(sessionId)?.size ?? 0) > 0) return true;
+  return anyDetailModalOpen(sessionId);
 }
 
 /** TEST-ONLY: forget every open modal, so tests cannot leak into each other. */
 export function __resetModalsForTests(): void {
   openModals.clear();
+  detailModals.clear();
+  runningApprovals.clear();
+}
+
+// ---- the DETAIL modal store (#100 round 3) ----
+
+/**
+ * The dialogs that live INSIDE the detail panel, OUTSIDE React.
+ *
+ * ROUND 3. Round 2 moved `queueOpen`, `createOpen` and `planOpen` out of
+ * React and stopped at the BOARD level -- but the modals this ticket's
+ * criterion actually names ("mark-done, evidence viewer, approval runner")
+ * are one level down, in `DetailView`, and every one of them was still a
+ * plain `useState`: mark-done, the evidence viewer, signoff, verify,
+ * send-back and the allowlist editor. The board-level fix did nothing for
+ * them. The same remount that used to close the queue still emptied the
+ * dialog the reader was typing into.
+ *
+ * Worse, DetailView had a SECOND remount all of its own that no board-level
+ * store could ever have covered: `key={selectedBoardKey}`. A row's board key
+ * flips when it goes foreign -> own, and React tears the subtree down and
+ * builds it again when a key changes. That is #100's second mechanism
+ * arriving at the modals by a different road, and the view's own comment
+ * said so ("it remounts and any open modal is destroyed") while shipping it.
+ *
+ * So: the same answer as round 2, applied one level down. State that must
+ * outlive a remount does not live in React.
+ *
+ * SCOPED BY SESSION AND BY THE TICKET'S DURABLE IDENTITY (`workspaceKey:slug`
+ * -- `fullTicketId`), never by the board key and never by the numeric id.
+ * The board key is precisely the value that flips underneath a selection, so
+ * keying the dialogs by it would drop them on one of the two events they
+ * exist to survive; the bare id collides across sessions, which this file
+ * has already paid for twice (the badge, and the title index above).
+ */
+export type DetailModalKey = "signoff" | "verify" | "sendBack" | "markDone" | "allowlist";
+
+interface DetailModalState {
+  open: Set<DetailModalKey>;
+  /** The row the evidence viewer is showing. Null when it is closed. */
+  evidence: unknown;
+}
+
+/** session -> durable ticket id -> that ticket's open dialogs. */
+const detailModals = new Map<string, Map<string, DetailModalState>>();
+
+/** The stored dialogs of one ticket. Created on demand, and only for a write. */
+function detailEntry(
+  sessionId: string,
+  ticketId: string,
+  create: boolean,
+): DetailModalState | undefined {
+  let byTicket = detailModals.get(sessionId);
+  if (byTicket === undefined) {
+    if (!create) return undefined;
+    byTicket = new Map<string, DetailModalState>();
+    detailModals.set(sessionId, byTicket);
+  }
+  let entry = byTicket.get(ticketId);
+  if (entry === undefined) {
+    if (!create) return undefined;
+    entry = { open: new Set<DetailModalKey>(), evidence: null };
+    byTicket.set(ticketId, entry);
+  }
+  return entry;
+}
+
+/**
+ * Drop an entry that now holds nothing, so reading a hundred tickets does
+ * not leave a hundred husks -- and, more importantly, so `anyDetailModalOpen`
+ * can answer by asking whether the session has any entry AT ALL.
+ */
+function pruneDetailEntry(sessionId: string, ticketId: string): void {
+  const byTicket = detailModals.get(sessionId);
+  const entry = byTicket?.get(ticketId);
+  if (byTicket === undefined || entry === undefined) return;
+  if (entry.open.size > 0 || entry.evidence !== null) return;
+  byTicket.delete(ticketId);
+  if (byTicket.size === 0) detailModals.delete(sessionId);
+}
+
+/** Is this ticket's dialog open? Read on mount, to restore across remounts. */
+export function isDetailModalOpen(
+  sessionId: string,
+  ticketId: string,
+  modal: DetailModalKey,
+): boolean {
+  return detailEntry(sessionId, ticketId, false)?.open.has(modal) === true;
+}
+
+/** Record one of this ticket's dialogs opening or closing. */
+export function setDetailModalOpen(
+  sessionId: string,
+  ticketId: string,
+  modal: DetailModalKey,
+  open: boolean,
+): void {
+  if (open) {
+    detailEntry(sessionId, ticketId, true)?.open.add(modal);
+    return;
+  }
+  const entry = detailEntry(sessionId, ticketId, false);
+  if (entry === undefined) return;
+  entry.open.delete(modal);
+  pruneDetailEntry(sessionId, ticketId);
+}
+
+/**
+ * The row the evidence viewer is showing, or null.
+ *
+ * A ROW rather than a flag, because that is what the viewer takes -- so the
+ * row is what has to survive, exactly as with the held ticket above. It is
+ * a plain projection row the board already handed the panel, so storing it
+ * borrows no lifetime from anything React owns.
+ */
+export function getViewedEvidence<T>(sessionId: string, ticketId: string): T | null {
+  return (detailEntry(sessionId, ticketId, false)?.evidence as T | undefined) ?? null;
+}
+
+/** Remember (or clear) the row the evidence viewer is showing. */
+export function setViewedEvidence<T>(sessionId: string, ticketId: string, row: T | null): void {
+  if (row !== null) {
+    const entry = detailEntry(sessionId, ticketId, true);
+    if (entry !== undefined) entry.evidence = row;
+    return;
+  }
+  const entry = detailEntry(sessionId, ticketId, false);
+  if (entry === undefined) return;
+  entry.evidence = null;
+  pruneDetailEntry(sessionId, ticketId);
+}
+
+/**
+ * Forget every dialog of one ticket. Called when the READER changes what is
+ * open -- closing the panel, or opening a different ticket.
+ *
+ * This is the rule the selection store already follows, and it is why the
+ * clearing cannot be done from an unmount cleanup: a remount and a close are
+ * the SAME event to a component, and only the caller knows which one it was.
+ * Clearing on unmount is what the third fix did with the held identity, and
+ * the review named it as the mechanism that destroyed the durable state at
+ * the exact moment it was needed. A dialog is ended by the person who opened
+ * it, never by a refresh.
+ */
+export function clearDetailModals(sessionId: string, ticketId: string): void {
+  const byTicket = detailModals.get(sessionId);
+  if (byTicket === undefined) return;
+  byTicket.delete(ticketId);
+  if (byTicket.size === 0) detailModals.delete(sessionId);
+}
+
+/** Whether this session has any DETAIL dialog open, on any ticket. */
+function anyDetailModalOpen(sessionId: string): boolean {
+  return (detailModals.get(sessionId)?.size ?? 0) > 0;
+}
+
+// ---- the approval runner store (#100 round 3) ----
+
+/**
+ * Which queue entry has its approval runner open, per session.
+ *
+ * The runner is the third modal the criterion names, and it was the last one
+ * still held together by React alone: `QueuePanel` kept it in a `useState`,
+ * so a remount closed it even after round 2 taught the queue MODAL to
+ * survive one. The queue came back open with the runner gone -- which reads
+ * to the human as the approval they were halfway through simply vanishing.
+ *
+ * An entry KEY, not the entry object (`entryKey`, which already exists for
+ * the answered set). The entry is derived from the current board on every
+ * render, so re-deriving it here is correct AND self-healing: if the ask
+ * stops being derived because it was answered elsewhere, the runner closes,
+ * which is exactly what it should do. That is the opposite of the held
+ * ticket, whose whole problem was that its row can be transiently absent --
+ * different data, different rule, stated rather than assumed.
+ */
+const runningApprovals = new Map<string, string>();
+
+/** The queue entry key whose runner is open for this session, or null. */
+export function getRunningApproval(sessionId: string): string | null {
+  return runningApprovals.get(sessionId) ?? null;
+}
+
+/** Remember (or clear) which entry's runner is open for this session. */
+export function setRunningApproval(sessionId: string, key: string | null): void {
+  if (key === null) runningApprovals.delete(sessionId);
+  else runningApprovals.set(sessionId, key);
 }
 
 // ---- the selection store (#100) ----

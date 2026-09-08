@@ -42,7 +42,7 @@ import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
 import { callAidosRemote } from "./remote";
-import { isModalOpen, setModalOpen, getHeldTicket, getMerge, getPulledVersion, getSelection, holdInput, isMergePulling, onSelectionChanged, publishTicketTitles, recordResolution, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
+import { clearDetailModals, isModalOpen, setModalOpen, getHeldTicket, getMerge, getPulledVersion, getSelection, holdInput, isMergePulling, onSelectionChanged, publishTicketTitles, recordResolution, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
 import { ToastContainer } from "./toast";
 import type { TicketView as TicketViewType } from "../kernel/projections";
@@ -457,6 +457,23 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const selectedKey = selectedKeyRaw;
   const setSelectedKey = react.useCallback(
     function (next: BoardKey | null) {
+      /*
+       * #100 round 3: the READER changing what is open is the one event that
+       * may forget that ticket's dialogs, and this is the only place it
+       * happens -- `selectTicket` and `closeDetail` both come through here.
+       *
+       * It cannot be done from DetailView's unmount cleanup, which is the
+       * obvious-looking spot: a remount and a close are the SAME event to a
+       * component, so clearing there would wipe the dialogs on exactly the
+       * refresh they are stored to survive. That is the mistake the review
+       * caught in the third fix's held identity, in the same shape.
+       *
+       * The ticket being left is the last one RESOLVED, which the held-row
+       * store already knows -- including when it is currently held-absent,
+       * where the board itself can no longer answer.
+       */
+      const leaving = getHeldTicket<TicketViewType>(sessionId);
+      if (leaving !== null) clearDetailModals(sessionId, fullTicketId(leaving));
       setSelection(sessionId, next);
       setSelectedKeyRaw(next);
     },
@@ -1026,25 +1043,40 @@ function ProjectionReader(props: ProjectionReaderProps) {
   ) : null;
 
   /*
-   * #100 INSTRUMENTATION: log when the panel is about to render as ABSENT,
-   * and when the DetailView's key changes.
+   * #100 ROUND 3: the panel is keyed on the DURABLE IDENTITY, not the board
+   * key.
    *
-   * `key={selectedBoardKey}` REMOUNTS DetailView whenever the board key
-   * changes -- which does not eject the reader to the grid, but DOES destroy
-   * any modal open inside it (evidence viewer, allowlist editor, signoff,
-   * mark-done). So a key churn and a panel close look different in the log
-   * and feel similar to a user, and this tells them apart.
+   * The key used to be `selectedBoardKey`, which remounted DetailView
+   * whenever the board key changed. (Spelled out rather than quoted as a JSX
+   * attribute, because a test guards this file against that literal coming
+   * back.)
+   *
+   * That never ejected the reader to the grid -- the resolver
+   * re-anchors, so the same ticket kept rendering -- but React tears a
+   * subtree down and rebuilds it when a key changes, so it DID destroy every
+   * dialog open inside it: the evidence viewer, the allowlist editor,
+   * signoff, mark-done. The comment that used to live here said precisely
+   * that, and shipped it anyway.
+   *
+   * A row's board key flips foreign -> own, which is #100's own second
+   * mechanism; `workspaceKey:slug` does not flip, and it still differs
+   * between two DIFFERENT tickets, which is the only thing the key is for.
+   * So the re-anchor stops remounting and opening another ticket still does.
+   *
+   * The instrumentation below now watches the key that actually drives the
+   * remount, so a key churn and a panel close stay distinguishable in the log.
    */
+  const panelKey = selectedTicket === null ? null : fullTicketId(selectedTicket);
   const lastPanelKey = react.useRef<string | null>(null);
-  if (selectedBoardKey !== lastPanelKey.current) {
-    if (lastPanelKey.current !== null && selectedBoardKey !== null) {
+  if (panelKey !== lastPanelKey.current) {
+    if (lastPanelKey.current !== null && panelKey !== null) {
       logWarn(
-        `#100 DetailView KEY CHANGED ${lastPanelKey.current} -> ${selectedBoardKey}; it remounts and any open modal is destroyed`,
+        `#100 DetailView KEY CHANGED ${lastPanelKey.current} -> ${panelKey}; it remounts, and the dialog store is what carries the modals through`,
       );
-    } else if (lastPanelKey.current !== null && selectedBoardKey === null) {
+    } else if (lastPanelKey.current !== null && panelKey === null) {
       logWarn(`#100 detail panel CLOSING (was ${lastPanelKey.current})`);
     }
-    lastPanelKey.current = selectedBoardKey;
+    lastPanelKey.current = panelKey;
   }
 
   const detailPanel =
@@ -1052,7 +1084,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       <>
         {absentNotice}
         <DetailView
-        key={selectedBoardKey}
+        key={panelKey}
         ticket={selectedTicket}
         evidence={selectedEvidence}
         comments={selectedComments}
@@ -1274,6 +1306,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       }}
     >
       <QueuePanel
+        sessionId={sessionId}
         tickets={rawTickets}
         evidenceByTicket={rawEvidence}
         nominations={nominations}

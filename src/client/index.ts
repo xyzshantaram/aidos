@@ -1,7 +1,41 @@
 /**
  * The aidos board client plugin. Injects the stylesheet once and registers
- * the Tickets tab into the conversation.view list slot. A badge count change
- * re-registers the identical entry so the tab header re-reads badgeLabel.
+ * the Tickets tab into the conversation.view list slot. A badge label change
+ * re-registers the identical entry, which is how the tab header is made to
+ * re-render and thereby re-read badgeLabel.
+ *
+ * #100 round 3, answering the question the ticket's body left open ("check
+ * whether the slot API can re-read a label without a dispose/re-register
+ * cycle"). THE ANSWER IS NO, and the reason is worth writing down because
+ * the old wording here was wrong in a way that invited the wrong fix.
+ *
+ * The label is ALREADY a thunk. `SlotLabel = string | (() => string)`, and
+ * the slots package documents it as "re-evaluated per read so
+ * registration-time text (nav rows, tabs) follows the active locale WITHOUT
+ * RE-REGISTRATION" -- owners resolve it through `resolveSlotLabel`. So
+ * re-registration was never what makes the label re-read; `badgeLabel` is
+ * re-evaluated every time the header reads it.
+ *
+ * What re-registration actually buys is the READ ITSELF. `SlotCore.entries`
+ * returns "the cached array reference (stable between mutations -- safe as a
+ * uSES getSnapshot source)", and `subscribe` only notifies on mutations. So
+ * with no registry mutation the header's snapshot is reference-equal, it
+ * never re-renders, and a thunk nothing calls is a thunk that changes
+ * nothing. The public surface (register, isLive, entries, spec,
+ * declarationEpoch, subscribe, subscribeDeclaration, getVersion, onMutate)
+ * offers no way to invalidate a key without mutating it, and for a list
+ * entry the only mutations are register and dispose.
+ *
+ * Hence: the churn is not removable from inside aidos. It needs an upstream
+ * affordance (a label observable, or a non-structural touch(key)), which is
+ * not this plugin's to add. What IS ours is making the remount HARMLESS --
+ * the selection, the held row and every modal live in view-state.ts for
+ * exactly that reason -- and keeping the remount rare, which is the
+ * label-string guard on the badge callback below.
+ *
+ * The label is passed as `badgeLabel`, never `badgeLabel()`: calling it here
+ * would freeze the text at registration time and quietly make the entry
+ * depend on re-registration for something the thunk contract already gives.
  *
  * The tab is visible only while the current session runs the aidos preset.
  * The conversation.view tab strip is global (its entries carry no session
@@ -202,8 +236,9 @@ function registerTicketsTab(slots: SlotRegistry): () => void {
  *
  * The registration handle is shared with the badge callback: reportCount
  * fires during render on every projection update, and refreshing the tab
- * label means dispose + re-register the identical entry (the tab header only
- * re-reads the label thunk through re-registration). Registering twice
+ * label means dispose + re-register the identical entry (only a registry
+ * mutation re-renders the header, so only a mutation gets the thunk read).
+ * Registering twice
  * without disposing throws "already has an entry with id tickets", which
  * crashes the slot entry and blanks the pane.
  */
@@ -332,9 +367,12 @@ export function apply(ctx: Context): void {
   }, "aidos: tickets tab visibility");
 
   /*
-   * A badge change re-registers the entry, which is the only way the tab
-   * header re-reads the label. Dispose first, and only while the tab is
-   * visible: a hidden tab has no registration to refresh.
+   * A badge change re-registers the entry. Not because re-registration is
+   * what re-reads the label -- the label is a thunk and is re-read on every
+   * read (see the file header) -- but because a registry mutation is the
+   * only thing that makes the header RE-RENDER and thus read at all. Dispose
+   * first, and only while the tab is visible: a hidden tab has no
+   * registration to refresh.
    *
    * #100: THIS IS WHY READERS WERE EJECTED FROM A TICKET. A slot
    * re-registration UNMOUNTS AND REMOUNTS the component, destroying every
