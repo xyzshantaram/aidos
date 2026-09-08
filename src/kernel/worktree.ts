@@ -180,15 +180,12 @@ export function worktreeRemoveArgs(path: string): string[][] {
  *   as #110's lexical containment.
  */
 
-/**
- * How long one declared preparation command may run.
- *
- * Generous, because the thing being run is a real build -- the case that
- * prompted this ticket compiles a design-token package. A tight timeout
- * would turn "your workspace's build is slow" into "aidos silently gave you
- * an unusable tree", which is the failure being fixed.
+/*
+ * (A PREPARE_TIMEOUT_MS lived here while the HOST ran preparation. It was
+ * removed on 2026-09-08 with the executor itself: the orchestrator runs the
+ * recipe from its own turn, under the timeout its own tooling applies, and a
+ * timeout constant that nothing reads is a leftover pretending to be a rule.)
  */
-export const PREPARE_TIMEOUT_MS = 600000;
 
 /** One directory whose node_modules must be visible inside the worktree. */
 export interface NodeModulesLink {
@@ -290,63 +287,89 @@ export function discoverNodeModulesDirs(io: ScanIO, prefix = "", depth = 0): str
   return found;
 }
 
-/** A workspace's own declaration of what makes its checkout buildable. */
+/** What the orchestrator has recorded about making this workspace buildable. */
 export interface WorktreePrepareSpec {
-  /** Whether the workspace declared anything at all. */
+  /** Whether a preparation recipe has been recorded for this workspace yet. */
   declared: boolean;
   /** Commands to run in the worktree root, argv-first, never through a shell. */
   commands: string[][];
-  /** Declarations that were present but unusable, for a loud report. */
+  /** A recipe that was present but unusable, for a loud report. */
   problems: string[];
 }
 
+/** The scratch file that records how to make one workspace's worktree build. */
+export const WORKTREE_PREPARE_CONFIG = "worktree-prepare.json";
+
+/** Where that file lives, given the session's scratch root. */
+export function worktreePrepareConfigPath(scratchRoot: string): string {
+  return scratchRoot.replace(/\/+$/, "") + "/" + WORKTREE_PREPARE_CONFIG;
+}
+
 /**
- * Read the workspace's own preparation declaration out of its package.json.
+ * Read the recorded preparation recipe for this workspace.
  *
- * THE CRITERION: "the build step is workspace-declared rather than
- * hardcoded, so a repo with nothing to pre-build is a clean no-op and
- * thursday's packages/tokens build is not baked into aidos". So the shape
- * is:
+ * WHERE IT LIVES, AND WHY IT MOVED (2026-09-08). The first implementation
+ * read `aidos.worktree.prepare` from the WORKSPACE's own package.json and
+ * had the host execute it. That was rejected, and the reason is worth
+ * keeping: its default case was the bug. Every repository declares nothing
+ * -- aidos and thursday included -- so the no-op branch was the overwhelming
+ * majority, and it reported success over a worktree that still could not
+ * build. It also asked every project on earth to opt in, in a file that
+ * belongs to the project rather than to aidos.
  *
- *     { "aidos": { "worktree": { "prepare": [
- *         ["pnpm", "--filter", "./packages/tokens", "run", "build"]
- *     ] } } }
+ * So the recipe lives in the SESSION'S SCRATCH DIRECTORY instead:
  *
- * ARGV ARRAYS, NOT SHELL STRINGS. Every command aidos runs goes through
+ *     { "prepare": [["pnpm", "--filter", "./packages/tokens", "run", "build"]] }
+ *
+ * Scratch is agent-writable with no allowlist, so the orchestrator records
+ * what it worked out the first time it prepared this workspace, and every
+ * later dispatch reuses it. The recipe is aidos's memory, not the
+ * repository's configuration.
+ *
+ * WHO RUNS IT: the orchestrator, never the host. The host creates, links,
+ * refreshes and reports; the orchestrator prepares the tree and hands a
+ * working one to the subagent, so a failure lands in a turn that can
+ * diagnose it rather than in a host log that -- as verified on 2026-09-08 --
+ * is not persisted anywhere. This function therefore only PARSES; nothing
+ * in the kernel or the host executes what it returns.
+ *
+ * ARGV ARRAYS, NOT SHELL STRINGS. Everything aidos runs goes through
  * execFile with a fixed argument list and no shell (the rule `_gitIn` has
- * followed since #78), so a declaration cannot grow a pipeline, a
- * redirection or a `;`. A bare string is accepted and split on whitespace
- * as a convenience, and that is a real limitation rather than a hidden one:
- * a string whose arguments contain spaces must be written as an array.
+ * followed since #78), so a recipe cannot grow a pipeline, a redirection or
+ * a `;`. A bare string is accepted and split on whitespace as a
+ * convenience, and that is a real limitation rather than a hidden one: an
+ * argument containing spaces must be written as an array.
  *
- * ABSENCE IS A NO-OP, NOT AN ERROR. Most repositories -- aidos included --
- * need nothing pre-built, and preparation must stay silent for them.
- * A declaration that is PRESENT but malformed is the opposite case: it is
- * reported, because the author meant something by it.
+ * ABSENCE IS "NOT YET KNOWN", NOT "NOTHING TO DO". That distinction is the
+ * whole correction: `declared: false` means the orchestrator has not worked
+ * this workspace out yet, and the caller REPORTS it rather than treating it
+ * as a clean no-op.
  */
-export function parseWorktreePrepare(packageJsonText: string | undefined): WorktreePrepareSpec {
+export function parseWorktreePrepareConfig(configText: string | undefined): WorktreePrepareSpec {
   const empty: WorktreePrepareSpec = { declared: false, commands: [], problems: [] };
-  if (packageJsonText === undefined || packageJsonText.trim() === "") return empty;
+  if (configText === undefined || configText.trim() === "") return empty;
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(packageJsonText);
+    parsed = JSON.parse(configText);
   } catch (error) {
     return {
       declared: false,
       commands: [],
-      problems: [`package.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`],
+      problems: [
+        `${WORKTREE_PREPARE_CONFIG} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      ],
     };
   }
 
-  const root = parsed as { aidos?: { worktree?: { prepare?: unknown } } } | null;
-  const declaration = root?.aidos?.worktree?.prepare;
+  const root = parsed as { prepare?: unknown } | null;
+  const declaration = root?.prepare;
   if (declaration === undefined) return empty;
   if (!Array.isArray(declaration)) {
     return {
       declared: true,
       commands: [],
-      problems: ["aidos.worktree.prepare must be an array of commands"],
+      problems: [`${WORKTREE_PREPARE_CONFIG}: "prepare" must be an array of commands`],
     };
   }
 
@@ -355,17 +378,17 @@ export function parseWorktreePrepare(packageJsonText: string | undefined): Workt
   for (const [index, entry] of declaration.entries()) {
     if (typeof entry === "string") {
       const argv = entry.split(/\s+/).filter((part) => part.length > 0);
-      if (argv.length === 0) problems.push(`aidos.worktree.prepare[${index}] is empty`);
+      if (argv.length === 0) problems.push(`prepare[${index}] is empty`);
       else commands.push(argv);
       continue;
     }
     if (Array.isArray(entry) && entry.every((part) => typeof part === "string")) {
       const argv = (entry as string[]).filter((part) => part.length > 0);
-      if (argv.length === 0) problems.push(`aidos.worktree.prepare[${index}] is empty`);
+      if (argv.length === 0) problems.push(`prepare[${index}] is empty`);
       else commands.push(argv);
       continue;
     }
-    problems.push(`aidos.worktree.prepare[${index}] must be a string or an array of strings`);
+    problems.push(`prepare[${index}] must be a string or an array of strings`);
   }
   return { declared: true, commands, problems };
 }

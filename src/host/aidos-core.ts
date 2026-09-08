@@ -37,10 +37,12 @@ import {
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import {
-  PREPARE_TIMEOUT_MS,
+  WORKTREE_PREPARE_CONFIG,
+  type WorktreePrepareSpec,
   discoverNodeModulesDirs,
   nodeModulesLinkPlan,
-  parseWorktreePrepare,
+  parseWorktreePrepareConfig,
+  worktreePrepareConfigPath,
   stalenessVerdict,
   worktreeAddArgs,
   worktreePathFor,
@@ -3836,6 +3838,13 @@ registerAidosSessionEventTypes(ctx);
     const workspaceKey = workspaceKeyFromPath(workspace);
     const path = worktreePathFor(workspaceKey, ticketId);
     const problems: string[] = [];
+    /*
+     * A tree that did not exist a moment ago is definitely unprepared, and
+     * this is the moment the orchestrator is about to dispatch into it. A
+     * refreshed tree stays quiet unless something went wrong: it was
+     * reported when it was created.
+     */
+    let created = false;
     try {
       mkdirSync(dirname(path), { recursive: true });
       /*
@@ -3848,12 +3857,12 @@ registerAidosSessionEventTypes(ctx);
       if (existsSync(join(path, ".git"))) {
         await this._refreshWorktree(agent, ticketId, path, problems);
       } else {
+        created = true;
         for (const args of worktreeAddArgs(path)) {
           await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
         }
       }
       this._linkNodeModules(workspace, path, problems);
-      await this._runDeclaredPrepare(workspace, path, problems);
     } catch (error) {
       /*
        * #101: fail LOUDLY, and tell the truth about the consequence. The
@@ -3869,7 +3878,37 @@ registerAidosSessionEventTypes(ctx);
         `the checkout itself could not be created: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    this._reportWorktreePreparation(agent, ticketId, path, problems);
+    this._reportWorktreePreparation(agent, ticketId, path, problems, created);
+  }
+
+  /**
+   * #158: what the orchestrator has RECORDED about preparing this workspace.
+   *
+   * Reads only. The host does not run preparation -- see the header of
+   * `parseWorktreePrepareConfig` for why that inverted: a host-executed,
+   * workspace-declared recipe had a no-op default that reported success over
+   * a worktree which still could not build.
+   *
+   * An unreadable scratch root is the same answer as an absent file: nothing
+   * is recorded yet. That is a REPORTABLE state, not a silent success.
+   */
+  private _recordedPreparation(agent: Agent): {
+    configPath: string | null;
+    spec: WorktreePrepareSpec;
+  } {
+    let configPath: string | null = null;
+    try {
+      configPath = worktreePrepareConfigPath(scratchRootForAgent(agent));
+    } catch {
+      return { configPath: null, spec: { declared: false, commands: [], problems: [] } };
+    }
+    let text: string | undefined;
+    try {
+      text = readFileSync(configPath, "utf8");
+    } catch {
+      text = undefined;
+    }
+    return { configPath, spec: parseWorktreePrepareConfig(text) };
   }
 
   /**
@@ -3906,10 +3945,45 @@ registerAidosSessionEventTypes(ctx);
     ticketId: number,
     path: string,
     problems: string[],
+    created: boolean,
   ): void {
-    if (problems.length === 0) {
+    /*
+     * A NEWLY CREATED tree is announced even when nothing went wrong, and
+     * that is the correction of 2026-09-08: the host no longer runs
+     * preparation, so "the checkout exists" is NOT "the checkout builds".
+     * Staying quiet here would reproduce the rejected design's worst
+     * property -- reporting success over a tree that cannot build -- with
+     * the orchestrator never told it has a job to do before it dispatches.
+     *
+     * A refreshed tree stays quiet unless something went wrong: it was
+     * announced when it was created, and repeating it every move is how a
+     * channel becomes noise and stops being read.
+     */
+    if (problems.length === 0 && !created) {
       this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
       return;
+    }
+    if (problems.length === 0) {
+      const { configPath, spec } = this._recordedPreparation(agent);
+      for (const problem of spec.problems) {
+        problems.push(`the recorded preparation recipe is unusable: ${problem}`);
+      }
+      if (problems.length === 0) {
+        this._queueInjection(
+          agent.session,
+          `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} — ` +
+            `worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} ` +
+            `linked; **it has not been prepared**. ` +
+            (spec.declared
+              ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} ` +
+                `(${spec.commands.length} command(s)) — RUN IT there and confirm the tree builds before ` +
+                `dispatching into it.`
+              : `No preparation recipe is recorded for this workspace yet. Work out what makes it ` +
+                `build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} ` +
+                `so later dispatches reuse it.`),
+        );
+        return;
+      }
     }
     const detail = problems.map((problem) => `- ${problem}`).join("\n");
     this.ctx.logger?.warn?.(
@@ -4049,71 +4123,6 @@ registerAidosSessionEventTypes(ctx);
         );
       }
     }
-  }
-
-  /**
-   * #158: run whatever the WORKSPACE declared makes its checkout buildable.
-   *
-   * Declared, never inferred. `packages/tokens` is a thursday concern and
-   * must not be baked into aidos, so the workspace names its own commands in
-   * its package.json (`aidos.worktree.prepare`) and a repository with
-   * nothing to pre-build is a clean no-op -- aidos itself declares nothing
-   * and this does nothing for it.
-   *
-   * No shell, ever: execFile with a fixed argument list, the same rule #78
-   * set for git. A declaration therefore cannot grow a pipeline or a `;`.
-   *
-   * The commands run IN THE WORKTREE, which matters more than it looks: a
-   * declared build writes its output into the tree being prepared, not into
-   * the main checkout. What it can still reach is node_modules, through the
-   * link above -- a workspace whose prepare command installs is choosing to
-   * mutate the shared tree, and the kernel comment says so.
-   */
-  private async _runDeclaredPrepare(
-    workspace: string,
-    path: string,
-    problems: string[],
-  ): Promise<void> {
-    let packageJson: string | undefined;
-    try {
-      packageJson = readFileSync(join(workspace, "package.json"), "utf8");
-    } catch {
-      // No package.json at all is a perfectly ordinary repository, not a
-      // failure: nothing was declared, so there is nothing to run.
-      return;
-    }
-    const spec = parseWorktreePrepare(packageJson);
-    for (const problem of spec.problems) {
-      problems.push(`the workspace's aidos.worktree.prepare declaration is unusable: ${problem}`);
-    }
-    for (const command of spec.commands) {
-      const [file, ...args] = command as [string, ...string[]];
-      try {
-        await this._execIn(path, file, args, PREPARE_TIMEOUT_MS);
-      } catch (error) {
-        problems.push(
-          `the declared prepare command \`${command.join(" ")}\` failed, so the workspace's ` +
-            `own packages may not compile here: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        // Stop at the first failure: prepare steps are ordered (build the
-        // token package, then whatever depends on it), so running the rest
-        // produces a cascade of errors that hide the one that matters.
-        return;
-      }
-    }
-  }
-
-  /**
-   * #158: run one non-git command in a directory. execFile, no shell, fixed
-   * argument list -- the same contract `_gitRawIn` has kept since #78.
-   */
-  private _execIn(cwd: string, file: string, args: string[], timeoutMs: number): Promise<string> {
-    return new Promise((resolvePromise, rejectPromise) => {
-      execFile(file, args, { cwd, timeout: timeoutMs }, (error, stdout) => {
-        if (error) rejectPromise(error);
-        else resolvePromise(stdout);
-      });
-    });
   }
 
   /** #101: remove the ticket's worktree, best effort. */

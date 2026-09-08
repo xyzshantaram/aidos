@@ -10932,7 +10932,6 @@ function worktreeRemoveArgs(path) {
     ["worktree", "prune"]
   ];
 }
-var PREPARE_TIMEOUT_MS = 6e5;
 function nodeModulesLinkPlan(mainRoot, worktreePath, dirsWithNodeModules) {
   const seen = /* @__PURE__ */ new Set();
   const plan = [];
@@ -10956,27 +10955,33 @@ function discoverNodeModulesDirs(io, prefix = "", depth = 0) {
   }
   return found;
 }
-function parseWorktreePrepare(packageJsonText) {
+var WORKTREE_PREPARE_CONFIG = "worktree-prepare.json";
+function worktreePrepareConfigPath(scratchRoot) {
+  return scratchRoot.replace(/\/+$/, "") + "/" + WORKTREE_PREPARE_CONFIG;
+}
+function parseWorktreePrepareConfig(configText) {
   const empty = { declared: false, commands: [], problems: [] };
-  if (packageJsonText === void 0 || packageJsonText.trim() === "") return empty;
+  if (configText === void 0 || configText.trim() === "") return empty;
   let parsed;
   try {
-    parsed = JSON.parse(packageJsonText);
+    parsed = JSON.parse(configText);
   } catch (error51) {
     return {
       declared: false,
       commands: [],
-      problems: [`package.json is not valid JSON: ${error51 instanceof Error ? error51.message : String(error51)}`]
+      problems: [
+        `${WORKTREE_PREPARE_CONFIG} is not valid JSON: ${error51 instanceof Error ? error51.message : String(error51)}`
+      ]
     };
   }
   const root = parsed;
-  const declaration = root?.aidos?.worktree?.prepare;
+  const declaration = root?.prepare;
   if (declaration === void 0) return empty;
   if (!Array.isArray(declaration)) {
     return {
       declared: true,
       commands: [],
-      problems: ["aidos.worktree.prepare must be an array of commands"]
+      problems: [`${WORKTREE_PREPARE_CONFIG}: "prepare" must be an array of commands`]
     };
   }
   const commands = [];
@@ -10984,17 +10989,17 @@ function parseWorktreePrepare(packageJsonText) {
   for (const [index, entry] of declaration.entries()) {
     if (typeof entry === "string") {
       const argv = entry.split(/\s+/).filter((part) => part.length > 0);
-      if (argv.length === 0) problems.push(`aidos.worktree.prepare[${index}] is empty`);
+      if (argv.length === 0) problems.push(`prepare[${index}] is empty`);
       else commands.push(argv);
       continue;
     }
     if (Array.isArray(entry) && entry.every((part) => typeof part === "string")) {
       const argv = entry.filter((part) => part.length > 0);
-      if (argv.length === 0) problems.push(`aidos.worktree.prepare[${index}] is empty`);
+      if (argv.length === 0) problems.push(`prepare[${index}] is empty`);
       else commands.push(argv);
       continue;
     }
-    problems.push(`aidos.worktree.prepare[${index}] must be a string or an array of strings`);
+    problems.push(`prepare[${index}] must be a string or an array of strings`);
   }
   return { declared: true, commands, problems };
 }
@@ -29872,23 +29877,50 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const workspaceKey = workspaceKeyFromPath(workspace);
     const path = worktreePathFor(workspaceKey, ticketId);
     const problems = [];
+    let created = false;
     try {
       mkdirSync2(dirname(path), { recursive: true });
       if (existsSync(join(path, ".git"))) {
         await this._refreshWorktree(agent, ticketId, path, problems);
       } else {
+        created = true;
         for (const args of worktreeAddArgs(path)) {
           await this._gitInWorkspace(agent, args, WORKTREE_TIMEOUT_MS);
         }
       }
       this._linkNodeModules(workspace, path, problems);
-      await this._runDeclaredPrepare(workspace, path, problems);
     } catch (error51) {
       problems.push(
         `the checkout itself could not be created: ${error51 instanceof Error ? error51.message : String(error51)}`
       );
     }
-    this._reportWorktreePreparation(agent, ticketId, path, problems);
+    this._reportWorktreePreparation(agent, ticketId, path, problems, created);
+  }
+  /**
+   * #158: what the orchestrator has RECORDED about preparing this workspace.
+   *
+   * Reads only. The host does not run preparation -- see the header of
+   * `parseWorktreePrepareConfig` for why that inverted: a host-executed,
+   * workspace-declared recipe had a no-op default that reported success over
+   * a worktree which still could not build.
+   *
+   * An unreadable scratch root is the same answer as an absent file: nothing
+   * is recorded yet. That is a REPORTABLE state, not a silent success.
+   */
+  _recordedPreparation(agent) {
+    let configPath = null;
+    try {
+      configPath = worktreePrepareConfigPath(scratchRootForAgent(agent));
+    } catch {
+      return { configPath: null, spec: { declared: false, commands: [], problems: [] } };
+    }
+    let text;
+    try {
+      text = readFileSync(configPath, "utf8");
+    } catch {
+      text = void 0;
+    }
+    return { configPath, spec: parseWorktreePrepareConfig(text) };
   }
   /**
    * #158: one report per preparation, to the session and not only the log.
@@ -29919,10 +29951,23 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * channel stops being read -- which would cost exactly the failures this
    * is here to surface.
    */
-  _reportWorktreePreparation(agent, ticketId, path, problems) {
-    if (problems.length === 0) {
+  _reportWorktreePreparation(agent, ticketId, path, problems, created) {
+    if (problems.length === 0 && !created) {
       this.ctx.logger?.info?.(`aidos: worktree ready for ticket ${ticketId} at ${path}`);
       return;
+    }
+    if (problems.length === 0) {
+      const { configPath, spec } = this._recordedPreparation(agent);
+      for (const problem of spec.problems) {
+        problems.push(`the recorded preparation recipe is unusable: ${problem}`);
+      }
+      if (problems.length === 0) {
+        this._queueInjection(
+          agent.session,
+          `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} \u2014 worktree created at ${_mdCode(path)}. It is a bare checkout with ${_mdCode("node_modules")} linked; **it has not been prepared**. ` + (spec.declared ? `A preparation recipe is recorded at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} (${spec.commands.length} command(s)) \u2014 RUN IT there and confirm the tree builds before dispatching into it.` : `No preparation recipe is recorded for this workspace yet. Work out what makes it build, confirm it, and record it at ${_mdCode(configPath ?? WORKTREE_PREPARE_CONFIG)} so later dispatches reuse it.`)
+        );
+        return;
+      }
     }
     const detail = problems.map((problem) => `- ${problem}`).join("\n");
     this.ctx.logger?.warn?.(
@@ -30034,59 +30079,6 @@ ${detail}`
         );
       }
     }
-  }
-  /**
-   * #158: run whatever the WORKSPACE declared makes its checkout buildable.
-   *
-   * Declared, never inferred. `packages/tokens` is a thursday concern and
-   * must not be baked into aidos, so the workspace names its own commands in
-   * its package.json (`aidos.worktree.prepare`) and a repository with
-   * nothing to pre-build is a clean no-op -- aidos itself declares nothing
-   * and this does nothing for it.
-   *
-   * No shell, ever: execFile with a fixed argument list, the same rule #78
-   * set for git. A declaration therefore cannot grow a pipeline or a `;`.
-   *
-   * The commands run IN THE WORKTREE, which matters more than it looks: a
-   * declared build writes its output into the tree being prepared, not into
-   * the main checkout. What it can still reach is node_modules, through the
-   * link above -- a workspace whose prepare command installs is choosing to
-   * mutate the shared tree, and the kernel comment says so.
-   */
-  async _runDeclaredPrepare(workspace, path, problems) {
-    let packageJson;
-    try {
-      packageJson = readFileSync(join(workspace, "package.json"), "utf8");
-    } catch {
-      return;
-    }
-    const spec = parseWorktreePrepare(packageJson);
-    for (const problem of spec.problems) {
-      problems.push(`the workspace's aidos.worktree.prepare declaration is unusable: ${problem}`);
-    }
-    for (const command of spec.commands) {
-      const [file2, ...args] = command;
-      try {
-        await this._execIn(path, file2, args, PREPARE_TIMEOUT_MS);
-      } catch (error51) {
-        problems.push(
-          `the declared prepare command \`${command.join(" ")}\` failed, so the workspace's own packages may not compile here: ${error51 instanceof Error ? error51.message : String(error51)}`
-        );
-        return;
-      }
-    }
-  }
-  /**
-   * #158: run one non-git command in a directory. execFile, no shell, fixed
-   * argument list -- the same contract `_gitRawIn` has kept since #78.
-   */
-  _execIn(cwd, file2, args, timeoutMs) {
-    return new Promise((resolvePromise, rejectPromise) => {
-      execFile(file2, args, { cwd, timeout: timeoutMs }, (error51, stdout) => {
-        if (error51) rejectPromise(error51);
-        else resolvePromise(stdout);
-      });
-    });
   }
   /** #101: remove the ticket's worktree, best effort. */
   async _removeWorktree(agent, ticketId) {

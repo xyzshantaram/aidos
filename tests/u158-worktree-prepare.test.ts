@@ -33,16 +33,21 @@ import { describe, expect, it } from "vitest";
 
 import {
   NODE_MODULES_SCAN_DEPTH,
-  PREPARE_TIMEOUT_MS,
+  WORKTREE_PREPARE_CONFIG,
   type ScanIO,
   discoverNodeModulesDirs,
   nodeModulesLinkPlan,
-  parseWorktreePrepare,
+  parseWorktreePrepareConfig,
+  worktreePrepareConfigPath,
   stalenessVerdict,
   worktreeRefreshArgs,
 } from "../src/kernel/worktree";
 
 const core = readFileSync(new URL("../src/host/aidos-core.ts", import.meta.url).pathname, "utf8");
+const kernel = readFileSync(
+  new URL("../src/kernel/worktree.ts", import.meta.url).pathname,
+  "utf8",
+);
 
 /** A fake tree: the set of directories that have a node_modules, plus the layout. */
 function fakeIO(layout: Record<string, string[]>, withNodeModules: string[]): ScanIO {
@@ -177,20 +182,32 @@ describe("#158 node_modules is found for every package, not only the root", () =
   });
 });
 
-describe("#158 the build step is workspace-DECLARED, never hardcoded", () => {
-  it("a workspace that declares nothing is a clean no-op, not an error", () => {
+describe("#158 the preparation recipe is aidos's own memory, in scratch", () => {
+  /*
+   * DESIGN CORRECTED 2026-09-08, and these tests are the record of why.
+   *
+   * The first implementation read `aidos.worktree.prepare` from the
+   * WORKSPACE's package.json and had the HOST execute it. It was rejected
+   * because its default case was the bug: every repository declares
+   * nothing, so the overwhelmingly common branch was a silent no-op that
+   * reported success over a worktree which still could not build. The
+   * recipe now lives in the session's scratch directory -- written by the
+   * orchestrator once it works a workspace out -- and the orchestrator, not
+   * the host, runs it.
+   */
+  it("distinguishes NOT YET KNOWN from nothing-to-do", () => {
     /*
-     * The criterion by name: "a repo with nothing to pre-build is a clean
-     * no-op and thursday's packages/tokens build is not baked into aidos".
-     * aidos itself is that repo, so this is also the regression test for
-     * "preparation stayed silent for the repository it runs in".
+     * The correction in one assertion. `declared: false` must mean "no
+     * recipe has been recorded for this workspace yet", which the caller
+     * REPORTS -- not "this workspace needs nothing", which the rejected
+     * design silently assumed for every repo on earth.
      */
-    expect(parseWorktreePrepare(undefined)).toEqual({
+    expect(parseWorktreePrepareConfig(undefined)).toEqual({
       declared: false,
       commands: [],
       problems: [],
     });
-    expect(parseWorktreePrepare(JSON.stringify({ name: "aidos" }))).toEqual({
+    expect(parseWorktreePrepareConfig(JSON.stringify({ note: "written by hand" }))).toEqual({
       declared: false,
       commands: [],
       problems: [],
@@ -198,10 +215,8 @@ describe("#158 the build step is workspace-DECLARED, never hardcoded", () => {
   });
 
   it("reads argv arrays, which is what a no-shell runner can take", () => {
-    const spec = parseWorktreePrepare(
-      JSON.stringify({
-        aidos: { worktree: { prepare: [["pnpm", "--filter", "./packages/tokens", "run", "build"]] } },
-      }),
+    const spec = parseWorktreePrepareConfig(
+      JSON.stringify({ prepare: [["pnpm", "--filter", "./packages/tokens", "run", "build"]] }),
     );
     expect(spec.declared).toBe(true);
     expect(spec.problems).toEqual([]);
@@ -211,48 +226,73 @@ describe("#158 the build step is workspace-DECLARED, never hardcoded", () => {
   it("accepts a plain string by splitting on whitespace — and NOT by shelling out", () => {
     /*
      * The convenience form, with its limitation asserted rather than
-     * described: every command goes through execFile with a fixed argument
-     * list (the rule #78 set), so a declaration cannot grow a pipeline, a
-     * redirect or a `;`. Those characters survive as literal ARGUMENTS,
-     * which is the safe failure — the command fails visibly instead of
-     * doing something nobody declared.
+     * described: a recipe is an argument list, so it cannot grow a
+     * pipeline, a redirect or a `;`. Those characters survive as literal
+     * ARGUMENTS, which is the safe failure -- the command fails visibly
+     * instead of doing something nobody wrote down.
      */
-    const spec = parseWorktreePrepare(
-      JSON.stringify({ aidos: { worktree: { prepare: ["pnpm run build; rm -rf /"] } } }),
+    const spec = parseWorktreePrepareConfig(
+      JSON.stringify({ prepare: ["pnpm run build; rm -rf /"] }),
     );
     expect(spec.commands).toEqual([["pnpm", "run", "build;", "rm", "-rf", "/"]]);
   });
 
-  it("REPORTS a declaration that is present but unusable, rather than ignoring it", () => {
+  it("REPORTS a recipe that is present but unusable, rather than ignoring it", () => {
     /*
-     * Absence and malformation are opposite cases. Absence means "nothing to
-     * do"; a broken declaration means the author meant something, and
-     * silently doing nothing would hand over the unbuildable tree this
-     * ticket is about while looking like the no-op above.
+     * Absence and malformation are opposite cases. Absence means "nobody has
+     * worked this workspace out yet"; a broken recipe means someone did and
+     * wrote it down wrongly, and silently doing nothing there hands over the
+     * unbuildable tree this ticket is about.
      */
-    const notArray = parseWorktreePrepare(
-      JSON.stringify({ aidos: { worktree: { prepare: "pnpm build" } } }),
-    );
+    const notArray = parseWorktreePrepareConfig(JSON.stringify({ prepare: "pnpm build" }));
     expect(notArray.declared).toBe(true);
     expect(notArray.commands).toEqual([]);
     expect(notArray.problems.join(" ")).toMatch(/must be an array/);
 
-    const badEntry = parseWorktreePrepare(
-      JSON.stringify({ aidos: { worktree: { prepare: [42, [], ["pnpm", "build"]] } } }),
+    const badEntry = parseWorktreePrepareConfig(
+      JSON.stringify({ prepare: [42, [], ["pnpm", "build"]] }),
     );
     expect(badEntry.problems.length).toBe(2);
     // ...and the usable entries survive: one broken line must not silently
-    // discard the rest of a workspace's preparation.
+    // discard the rest of a recorded recipe.
     expect(badEntry.commands).toEqual([["pnpm", "build"]]);
 
-    const broken = parseWorktreePrepare("{not json");
+    const broken = parseWorktreePrepareConfig("{not json");
     expect(broken.problems.join(" ")).toMatch(/not valid JSON/);
   });
 
-  it("allows a real build the time a real build takes", () => {
-    // A tight timeout would turn "your workspace's build is slow" into
-    // "aidos silently gave you an unusable tree" — the failure being fixed.
-    expect(PREPARE_TIMEOUT_MS).toBeGreaterThanOrEqual(300000);
+  it("puts the recipe in the SCRATCH root, where the orchestrator may write it", () => {
+    // Scratch is agent-writable with no allowlist, which is the whole
+    // reason the recipe lives there: the orchestrator records what it
+    // worked out without needing an approval round-trip first.
+    expect(worktreePrepareConfigPath("/scratch/aidos/--ws--")).toBe(
+      "/scratch/aidos/--ws--/" + WORKTREE_PREPARE_CONFIG,
+    );
+    expect(worktreePrepareConfigPath("/scratch/aidos/--ws--/")).toBe(
+      "/scratch/aidos/--ws--/" + WORKTREE_PREPARE_CONFIG,
+    );
+  });
+
+  it("leaves NO host-side executor standing beside the orchestrator's", () => {
+    /*
+     * The criterion by name: "the rejected package.json-declared prepare
+     * mechanism is removed rather than left standing beside the new one, so
+     * there is one preparation path and not two half-mechanisms."
+     */
+    /*
+     * BEHAVIOUR, not a grep for the old name: the kernel still NAMES
+     * `aidos.worktree.prepare` in the comment recording why that design was
+     * rejected, and this codebase keeps that reasoning. What must be gone is
+     * the code path — so the old shape simply does not parse any more.
+     */
+    expect(
+      parseWorktreePrepareConfig(
+        JSON.stringify({ aidos: { worktree: { prepare: [["pnpm", "build"]] } } }),
+      ),
+    ).toEqual({ declared: false, commands: [], problems: [] });
+    expect(kernel).not.toContain("worktree?: { prepare");
+    expect(core).not.toContain("_runDeclaredPrepare");
+    expect(core).not.toContain("PREPARE_TIMEOUT_MS");
   });
 });
 
@@ -314,8 +354,16 @@ describe("#158 the host wires preparation into the move, and says so loudly", ()
     expect(core).toContain("nodeModulesLinkPlan");
   });
 
-  it("runs the workspace's declared prepare, and nothing aidos invented", () => {
-    expect(core).toContain("parseWorktreePrepare");
+  it("READS the recorded recipe and never runs it, and invents no layout", () => {
+    /*
+     * The host reads the recipe only so its report can say whether one
+     * exists. Execution belongs to the orchestrator, whose turn can
+     * diagnose a failure -- unlike a host log, which is not persisted at
+     * all (verified 2026-09-08: `aidos: worktree` appears in zero session
+     * records).
+     */
+    expect(core).toContain("parseWorktreePrepareConfig");
+    expect(core).toContain("_recordedPreparation");
     /*
      * The proof that no repository's layout is baked in: thursday's package
      * may be NAMED in a comment explaining why it is not hardcoded — that is
