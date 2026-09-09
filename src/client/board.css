@@ -2696,39 +2696,25 @@
    different sizes: one was pinned at 7.5rem and the other took its text
    width. The shared rule above sizes every button on the row. */
 
-/* ── #93: the state as coloured TEXT under the id ────────────────────────
-   A state is a property of the ticket, not an ask. As a badge it carried the
-   same weight as the things that need attention; as text it still reads
-   instantly by colour while giving back the width the title and the agent's
-   reason were squeezed out of. */
+/* ── the state badge under the id ─────────────────────────────────────────
+   A regular state chip (the board tile's badge), stacked under the id chip
+   and CENTERED with it (user's design): left-aligned it sat under the chip's
+   first letter and read as a caption that had slipped rather than as a label
+   belonging to the chip above it.
+
+   History: #93 rendered this as coloured parenthesised TEXT, on the theory
+   that a state is a property rather than an ask and should not carry a
+   badge's weight. The owner reversed it on sight — parens read as awkward
+   prose next to real chips — so the override block that stripped the chip
+   look is gone, and the per-state colours come from .aidos-chip-state-*.
+   Sizing inside the queue comes from the one-badge-size rule below. */
 .aidos-ticket-strip-idcol {
   display: flex;
   flex-direction: column;
-  /* CENTERED under the id chip (user's design). Left-aligned, the state sat
-     under the chip's first letter and read as a caption that had slipped
-     rather than as a label belonging to the chip above it. */
   align-items: center;
   gap: 2px;
   flex: none;
 }
-
-.aidos-ticket-strip-state {
-  /* Deliberately overrides the chip look the badgeClass would apply: the
-     class is kept only for its per-state COLOUR. */
-  background: none !important;
-  border: 0 !important;
-  padding: 0 !important;
-  height: auto !important;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--state-open);
-}
-
-.aidos-ticket-strip-state.aidos-chip-state-open { color: var(--state-open); }
-.aidos-ticket-strip-state.aidos-chip-state-in-progress { color: var(--state-in-progress); }
-.aidos-ticket-strip-state.aidos-chip-state-awaiting-verification { color: var(--state-awaiting); }
-.aidos-ticket-strip-state.aidos-chip-state-done { color: var(--state-done); }
 
 /* ── #93: one badge size inside the modal ────────────────────────────────
    Chips were inheriting slightly different heights from their variants, so a

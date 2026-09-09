@@ -410,9 +410,10 @@ export function QueuePanel(props: QueuePanelProps) {
         * wears the action's icon (the same one its rows wear collapsed, via
         * ACTION_ICONS and QUEUE_TAB_ICON_ACTION), its label, and its count.
         *
-        * The strips below a tab drop the state for the same reason #137's
-        * headings carried it: once the tab says what the job is, repeating
-        * it on every row is noise (showState={false}).
+        * The strips KEEP their state badge: a tab names the ASK (sign off /
+        * approvals / verify), not the state, so the badge is the only place
+        * a row says what it is — and it is the board's badge, not parens
+        * (#137's criterion, owner's call on sight).
         */}
       <div className="aidos-queue-tabs" role="tablist" aria-label="Queue">
         {tabs.map((tab) => (
@@ -442,7 +443,6 @@ export function QueuePanel(props: QueuePanelProps) {
         <ul className="aidos-ticket-strips" role="tabpanel">
           {active.entries.map((entry) => (
           <TicketStrip
-            showState={false}
             key={entryKey(entry)}
             actionIcon={ACTION_ICONS[entry.actionId]?.icon}
             actionHint={ACTION_ICONS[entry.actionId]?.hint}

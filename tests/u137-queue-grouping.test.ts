@@ -10,9 +10,9 @@
  *
  *  - the WORKDOWN order (sign off, then approve, then verify), which lives
  *    on as the tab order QUEUE_TAB_ORDER;
- *  - the strips dropping what the heading already says: under a tab the
- *    strip suppresses the state (showState={false}), while every surface
- *    WITHOUT a heading above it keeps it — the prop is opt-out, not opt-in.
+ *  - the strips keeping the state as the BOARD'S BADGE, not parenthesised
+ *    prose (#137's criterion, owner's call on sight): a tab names the ASK,
+ *    not the state, so the badge is the only place a row says what it is.
  *
  * The tab partition itself is tested in u169-queue-tabs.test.ts.
  */
@@ -40,17 +40,19 @@ describe("#137 as superseded: what survives into the tabs", () => {
     expect([...QUEUE_TAB_ORDER]).toEqual(["signoff", "approvals", "verify"]);
   });
 
-  it("the queue's strips suppress the state the tab already carries", () => {
-    expect(panel).toContain("showState={false}");
+  it("the queue's strips SHOW the state — the tab names the ask, not the state", () => {
+    /*
+     * The reversal of what this test used to pin. A tab says "sign off",
+     * not "open", so suppressing the badge left rows that never said what
+     * they were. The queue renders plain TicketStrips with the default.
+     */
+    expect(panel).not.toContain("showState={false}");
   });
 
-  it("every OTHER surface keeps the state — the prop is opt-out, not opt-in", () => {
-    /*
-     * The detail panel, the approval runner and the peek all render strips
-     * without a tab above them, so the state must still show there. A
-     * default of false would have silently stripped it from three surfaces
-     * nobody asked to change.
-     */
-    expect(strip).toContain("props.showState === false ? null : (");
+  it("the state it shows is the board's badge, not parenthesised prose", () => {
+    // #137's criterion, owner's call on sight: where a state shows, it is
+    // the same badge component the board cards use.
+    expect(strip).toContain("className={badgeClass(ticket.state)}");
+    expect(strip).not.toContain("({stateLabel(ticket.state)})");
   });
 });

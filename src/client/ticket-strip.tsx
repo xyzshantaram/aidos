@@ -42,12 +42,12 @@ export type TicketStripTicket = Pick<
 export interface TicketStripProps {
   ticket: TicketStripTicket;
   /**
-   * #137: whether the strip prints the ticket's state under its id chip.
+   * Whether the strip prints the ticket's state under its id chip.
    *
-   * Defaults to TRUE (every existing caller keeps what it had). The grouped
-   * queue passes false because its section heading already says the state,
-   * and repeating it on every row underneath is noise the title pays for
-   * in horizontal space.
+   * Defaults to TRUE. A caller with a heading above it that already says
+   * the state may pass false — but the queue does NOT: its tabs name the
+   * ASK (sign off / approvals / verify), not the state, so the badge is
+   * the only place the row says what it is.
    */
   showState?: boolean;
   /**
@@ -100,14 +100,17 @@ export function TicketStrip(props: TicketStripProps) {
     <li className={className}>
       <div className="aidos-ticket-strip-main">
         {/*
-          * #93 (user's design): the STATE moves under the id as coloured
-          * TEXT rather than sitting in the chip row as another badge.
+          * The STATE sits under the id as a REGULAR BADGE — the same chip
+          * the board tile wears (badgeClass + stateLabel, no parens).
           *
-          * A state is a property of the ticket, not an ask, and rendering it
-          * as a badge gave it the same visual weight as the things that
-          * actually need attention. As coloured text under the id it still
-          * reads instantly, while surrendering the horizontal space the
-          * title and the agent's reason were being squeezed out of.
+          * History: #93 moved it out of the chip row as coloured parenthesised
+          * text ("thursday#2 (Open)"), on the theory that a state is a property
+          * of the ticket rather than an ask and should not carry a badge's
+          * visual weight. The owner reversed it on sight: the parens read as
+          * awkward prose next to real chips, and one face for one fact (#21's
+          * rule — the same fact wearing two faces on two surfaces) matters
+          * more than the weight argument. #137's criterion said exactly this:
+          * where a state shows, it is the board's badge, not punctuation.
           */}
         <span className="aidos-ticket-strip-idcol">
           <span
@@ -118,29 +121,13 @@ export function TicketStrip(props: TicketStripProps) {
           >
             {ticketChipLabel(ticket as TicketView)}
           </span>
-          {/*
-            * PARENTHESISED (user's design). The state lost its chip border
-            * when it became coloured text, and without one it read as part
-            * of the id -- "thursday#2 Open" scans as a two-word name. The
-            * parens give it back a boundary at no visual weight, which is
-            * the whole point of moving it out of a chip.
-            *
-            * The title keeps the bare label: a tooltip reading "(Open)" is
-            * quoting the punctuation rather than naming the state.
-            *
-            * #137: SUPPRESSED where a section heading already says it. In
-            * the grouped queue every strip under "Sign off" is open, so
-            * repeating "(Open)" on each row is noise that costs the title
-            * its horizontal space. Opt-out rather than opt-in, so every
-            * other surface keeps the state without being touched.
-            */}
           {props.showState === false ? null : (
             <span
-              className={"aidos-ticket-strip-state " + badgeClass(ticket.state)}
+              className={badgeClass(ticket.state)}
               title={stateLabel(ticket.state)}
               data-dsh-tip=""
             >
-              ({stateLabel(ticket.state)})
+              {stateLabel(ticket.state)}
             </span>
           )}
         </span>

@@ -636,18 +636,18 @@ describe("#93 the queue collapses each row to a coloured action icon", () => {
     expect(css).not.toContain(".aidos-ticket-strip-actionrow .aidos-btn-primary {");
   });
 
-  it("shows the state CENTERED under the id chip and in parens", () => {
+  it("shows the state CENTERED under the id chip as the board's badge", () => {
     /*
-     * The user's design. Two separate problems with the plain coloured
-     * text: left-aligned it sat under the chip's first letter and read as a
-     * caption that had slipped, and with no chip border "thursday#2 Open"
-     * scans as a two-word name. Parens restore a boundary at no visual
-     * weight, which is the point of taking it out of a chip.
+     * The owner's reversal of the #93 parenthesised text. The parens read
+     * as awkward prose next to real chips, so the strip wears the SAME chip
+     * the board tile wears (badgeClass + stateLabel, no punctuation) — one
+     * face for one fact. Centering stays: left-aligned, the badge sat under
+     * the chip's first letter and read as a caption that had slipped.
      */
-    expect(strip).toContain("({stateLabel(ticket.state)})");
-    // The tooltip keeps the BARE label: "(Open)" quotes the punctuation
-    // rather than naming the state.
-    expect(strip).toContain("title={stateLabel(ticket.state)}");
+    expect(strip).toContain("className={badgeClass(ticket.state)}");
+    expect(strip).toContain("{stateLabel(ticket.state)}");
+    expect(strip).not.toContain("({stateLabel(ticket.state)})");
+    expect(strip).not.toContain("aidos-ticket-strip-state");
     const idcol = rule(".aidos-ticket-strip-idcol {");
     expect(idcol).toContain("align-items: center");
   });
@@ -676,24 +676,27 @@ describe("#93 the state reads as text, and badges are one size", () => {
     "utf8",
   );
 
-  it("puts the state under the id as coloured text", () => {
+  it("gives the state no private styling — the shared chip rules own it", () => {
     /*
-     * A state is a PROPERTY of the ticket, not an ask. As a badge it carried
-     * the same weight as the things needing attention; as text it still
-     * reads instantly by colour while giving back horizontal space.
+     * The override block that stripped the chip look (background: none,
+     * border: 0, per-state colours on a dead class) is gone with the text
+     * rendering. Per-state colour now comes from .aidos-chip-state-*, the
+     * same rules the board tile uses — a second copy would be a second
+     * answer to what "open" looks like. Sizing inside the queue comes from
+     * the one-badge-size rule, which still applies because the badge is a
+     * plain .aidos-chip.
      */
     expect(strip).toContain("aidos-ticket-strip-idcol");
-    expect(strip).toContain("aidos-ticket-strip-state");
-    const state = css.slice(css.indexOf(".aidos-ticket-strip-state {"));
-    expect(state.slice(0, state.indexOf("}"))).toContain("background: none");
+    expect(css).not.toContain(".aidos-ticket-strip-state");
+    expect(css).toContain(".aidos-queue .aidos-chip {");
   });
 
-  it("keeps a distinct colour per state", () => {
+  it("keeps a distinct colour per state, from the shared rules", () => {
     for (const cls of [
-      ".aidos-ticket-strip-state.aidos-chip-state-open",
-      ".aidos-ticket-strip-state.aidos-chip-state-in-progress",
-      ".aidos-ticket-strip-state.aidos-chip-state-awaiting-verification",
-      ".aidos-ticket-strip-state.aidos-chip-state-done",
+      ".aidos-chip-state-open",
+      ".aidos-chip-state-in-progress",
+      ".aidos-chip-state-awaiting-verification",
+      ".aidos-chip-state-done",
     ]) {
       expect(css, cls).toContain(cls);
     }
