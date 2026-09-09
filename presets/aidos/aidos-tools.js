@@ -25821,6 +25821,13 @@ var BUILTIN_KINDS = [
     allowedAuthors: ["agent", "user"]
   },
   {
+    id: "builtin:retired",
+    label: "Retired",
+    description: "The human hid this ticket without deleting it (#108). While a live row of this kind exists, every consumer ignores the ticket \u2014 the board grid, the filter counts, the tab badge, the human queue, the agent's board reads, the plan render \u2014 except the Retired panel, where it can be viewed and un-retired. DETACH this row to un-retire: the append-only log keeps both the retirement and the un-retirement as history, so the ticket returns to exactly the state and evidence it had. Contributes to nothing \u2014 it never satisfies a gate \u2014 and only the human may attach it: an agent that can hide tickets can hide its own inconvenient work. The payload carries an optional reason and optional supersededBy ticket references naming where the work went.",
+    weight: 0,
+    allowedAuthors: ["user"]
+  },
+  {
     id: "builtin:review_note",
     label: "Remark",
     description: "A remark: a note from a review round, or a general comment on the ticket. The one surviving free-form remark kind after builtin:comment folded into it \u2014 same weight, same authors, one kind instead of two doing the same job.",
@@ -27249,6 +27256,101 @@ function coalesceDigestLines(lines) {
   });
 }
 
+// src/kernel/retirement.ts
+var RETIRED_KIND = "builtin:retired";
+function isRetired(rows) {
+  if (rows === void 0) return false;
+  return rows.some((row) => row.kind === RETIRED_KIND);
+}
+function retirementOf(rows) {
+  if (rows === void 0) return null;
+  let found = null;
+  for (const row of rows) {
+    if (row.kind !== RETIRED_KIND) continue;
+    if (typeof row.at !== "number" || typeof row.author !== "string") continue;
+    if (found === null || row.at >= found.at) {
+      found = { ...row, at: row.at, author: row.author };
+    }
+  }
+  if (found === null) return null;
+  return {
+    at: found.at,
+    author: found.author,
+    ...lenientRetirementPayload(found.payload)
+  };
+}
+function lenientRetirementPayload(payload) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return { reason: null, supersededBy: [] };
+  }
+  const record2 = payload;
+  const reason = typeof record2.reason === "string" && record2.reason.trim() !== "" ? record2.reason.trim() : null;
+  const supersededBy = [];
+  if (Array.isArray(record2.supersededBy)) {
+    for (const entry of record2.supersededBy) {
+      if (typeof entry === "string" && entry.trim() !== "" && !supersededBy.includes(entry.trim())) {
+        supersededBy.push(entry.trim());
+      }
+    }
+  }
+  return { reason, supersededBy };
+}
+function parseRetirementPayload(payload) {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("the retirement payload must be a JSON object");
+  }
+  const record2 = payload;
+  for (const key of Object.keys(record2)) {
+    if (key !== "reason" && key !== "supersededBy" && key !== "criteria") {
+      throw new Error(
+        `unknown retirement payload key ${JSON.stringify(key)}; expected "reason" and/or "supersededBy"`
+      );
+    }
+  }
+  if (record2.reason !== void 0 && typeof record2.reason !== "string") {
+    throw new Error("the retirement reason must be a string");
+  }
+  let supersededBy = [];
+  if (record2.supersededBy !== void 0) {
+    if (!Array.isArray(record2.supersededBy)) {
+      throw new Error("the retirement supersededBy must be an array of ticket references");
+    }
+    for (const entry of record2.supersededBy) {
+      if (typeof entry !== "string" || entry.trim() === "") {
+        throw new Error("every supersededBy entry must be a non-empty ticket reference");
+      }
+    }
+    supersededBy = [...new Set(record2.supersededBy.map((entry) => entry.trim()))];
+  }
+  const reason = typeof record2.reason === "string" && record2.reason.trim() !== "" ? record2.reason.trim() : null;
+  return { reason, supersededBy };
+}
+function followSupersedeChain(startRefs, lookup) {
+  return startRefs.map((start) => {
+    const terminals = [];
+    let cycle = false;
+    const seen = /* @__PURE__ */ new Set([start]);
+    const stack = [start];
+    while (stack.length > 0) {
+      const ref = stack.pop();
+      const node = lookup(ref);
+      if (node === null || !node.retired || node.supersededBy.length === 0) {
+        if (!terminals.includes(ref)) terminals.push(ref);
+        continue;
+      }
+      for (const next of node.supersededBy) {
+        if (seen.has(next)) {
+          cycle = true;
+          continue;
+        }
+        seen.add(next);
+        stack.push(next);
+      }
+    }
+    return { start, terminals, cycle };
+  });
+}
+
 // src/kernel/helpers.ts
 function deepClone(value) {
   return structuredClone(value);
@@ -27920,6 +28022,27 @@ var PlanImportFileUncommittedError = class extends Error {
     this.status = status;
   }
 };
+var RetireRefused = class extends Error {
+  ticketId;
+  dependents;
+  constructor(ticketId, dependents) {
+    const names = dependents.map((dep) => `#${dep.id} ${dep.title} (${dep.state})`).join(", ");
+    super(
+      `cannot retire ticket #${ticketId}: ${dependents.length} live ticket(s) depend on it: ${names} \u2014 retire them first, or re-point their dependencies, then retire this one`
+    );
+    this.ticketId = ticketId;
+    this.dependents = dependents;
+  }
+};
+var RetiredTicketWriteRefused = class extends Error {
+  ticketId;
+  constructor(ticketId) {
+    super(
+      `ticket #${ticketId} is retired: it is hidden from the board until it is un-retired. A retired ticket takes no agent writes; un-retire it first`
+    );
+    this.ticketId = ticketId;
+  }
+};
 var ACTOR_UNION = z2.union(["agent", "user", "system"]);
 var AIDOS_SETTINGS_SCHEMA = z2.object({
   injectEnabled: z2.boolean().default(true),
@@ -28300,8 +28423,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean, created };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -28416,7 +28539,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
     const scoped = [...views.values()].filter((view) => view.projectId === projectId);
-    return filterTicketViews(scoped, {
+    const live = opts?.includeRetired === true ? scoped : scoped.filter((view) => !this._isRetired(cache.state, view.id));
+    return filterTicketViews(live, {
       stateIds: opts?.stateIds,
       projectIds: opts?.projectIds,
       search: opts?.search,
@@ -28458,6 +28582,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     this._sync(agent.session, cache);
     const states = /* @__PURE__ */ new Set();
     for (const snapshot of cache.state.tickets.values()) {
+      if (this._isRetired(cache.state, snapshot.id)) continue;
       states.add(snapshot.state);
     }
     return STATE_ORDER.filter((state) => states.has(state));
@@ -28555,6 +28680,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       this._sync(session, cache);
       for (const snapshot of cache.state.tickets.values()) {
         if (snapshot.state !== "in_progress") continue;
+        if (this._isRetired(cache.state, snapshot.id)) continue;
         for (const entry of snapshot.allowlist) {
           if (!seen.has(entry)) {
             seen.add(entry);
@@ -28575,7 +28701,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new UnknownProject(projectId);
     }
     const meta3 = this._planMetaOf(projectId, cache.state);
-    const tickets = this._ticketsFor(projectId, cache.state).map((row) => ({
+    const planTickets = this._ticketsFor(projectId, cache.state).filter(
+      (row) => !this._isRetired(cache.state, row.id)
+    );
+    const tickets = planTickets.map((row) => ({
       id: String(row.id),
       title: row.title,
       // Pre-P12 rows hold the prose in the body, later rows in the
@@ -28638,8 +28767,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       }
       const tickets = snap.values["aidos.tickets"];
       if (!tickets) continue;
+      const evidenceSnap = snap.values["aidos.evidence"];
       for (const [id, ticket] of Object.entries(tickets)) {
         if (!ticket.title.toLowerCase().includes(query)) continue;
+        if (isRetired(evidenceSnap?.[id])) continue;
         results.push({
           sessionId: session.id,
           ticketId: Number(id),
@@ -28664,7 +28795,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     const tickets = snap.values["aidos.tickets"];
     if (!tickets) return [];
-    let rows = Object.values(tickets);
+    const evidenceSnap = snap.values["aidos.evidence"];
+    let rows = Object.values(tickets).filter(
+      (ticket) => !isRetired(evidenceSnap?.[String(ticket.id)])
+    );
     if (args.states && args.states.length > 0) {
       rows = rows.filter((ticket) => args.states.includes(ticket.state));
     }
@@ -28729,6 +28863,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return ids;
   }
   async workspaceTickets(agent, args) {
+    const includeRetired = args?.includeRetired === true;
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const workspaceLabels = {};
@@ -28746,6 +28881,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const evidence = {};
     const comments = {};
     for (const view of [...ownViews.values()].sort(ownSort)) {
+      if (!includeRetired && this._isRetired(cache.state, view.id)) continue;
       tickets.push({ ...view, sourceSessionId: agent.session.id, foreign: false });
       const key = String(view.id);
       evidence[key] = [...cache.state.evidence.get(view.id) ?? []];
@@ -28760,6 +28896,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       this._sync(session, this._caches.get(session));
       const views = ticketsProjection(state, this._resolvedConfig);
       for (const view of [...views.values()].sort(ownSort)) {
+        if (!includeRetired && this._isRetired(state, view.id)) continue;
         const key = session.id + ":" + view.id;
         tickets.push({
           ...view,
@@ -28784,6 +28921,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const { state } = this._foldExternalLog(inspection.meta, inspection.events);
       const views = ticketsProjection(state, this._resolvedConfig);
       for (const view of [...views.values()].sort(ownSort)) {
+        if (!includeRetired && this._isRetired(state, view.id)) continue;
         const key = id + ":" + view.id;
         tickets.push({
           ...view,
@@ -28819,6 +28957,56 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
     return { tickets, evidence, comments, workspaceLabels };
+  }
+  async retiredTickets(agent, args) {
+    void args;
+    const merged = await this.workspaceTickets(agent, { includeRetired: true });
+    const byIdentity = /* @__PURE__ */ new Map();
+    for (const row of merged.tickets) {
+      byIdentity.set(row.workspaceKey + ":" + row.id, row);
+    }
+    const evidenceOf = (row) => merged.evidence[boardKeyText(row)] ?? [];
+    const lookup = (ref) => {
+      const row = byIdentity.get(ref);
+      if (row === void 0) return null;
+      const retirement = retirementOf(evidenceOf(row));
+      return {
+        retired: retirement !== null,
+        supersededBy: retirement?.supersededBy ?? []
+      };
+    };
+    const out = [];
+    for (const row of merged.tickets) {
+      const retirement = retirementOf(evidenceOf(row));
+      if (retirement === null) continue;
+      const supersededByTickets = retirement.supersededBy.map((ref) => {
+        const target = byIdentity.get(ref);
+        return {
+          ref,
+          id: target?.id ?? Number.NaN,
+          title: target?.title ?? "",
+          state: target?.state ?? "",
+          workspaceKey: target?.workspaceKey ?? "",
+          sourceSessionId: target?.sourceSessionId ?? "",
+          known: target !== void 0
+        };
+      });
+      const chains = followSupersedeChain(retirement.supersededBy, lookup);
+      out.push({
+        ...row,
+        retirement: {
+          at: retirement.at,
+          author: retirement.author,
+          reason: retirement.reason,
+          supersededBy: retirement.supersededBy,
+          supersededByTickets,
+          chainTerminals: [...new Set(chains.flatMap((chain) => chain.terminals))],
+          chainCycle: chains.some((chain) => chain.cycle)
+        }
+      });
+    }
+    out.sort((a, b) => b.retirement.at - a.retirement.at);
+    return { tickets: out };
   }
   /**
    * The agent the write should run against. A numeric ticketId (or a plain
@@ -28913,6 +29101,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const snapshot = this._cache(agent.session).state.tickets.get(args.ticketId);
     if (snapshot === void 0) {
       throw new Error(`unknown ticket ${args.ticketId}`);
+    }
+    if (this._isRetired(this._cache(agent.session).state, args.ticketId)) {
+      throw new Error(
+        `ticket ${args.ticketId} is retired; it takes no allowlist requests until it is un-retired`
+      );
     }
     const sessionId = String(agent.session.id);
     const mine = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId);
@@ -29143,6 +29336,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (state.tickets.get(ticketId) === void 0) {
         throw new Error(`unknown ticket ${ticketId}`);
       }
+      if (this._isRetired(state, ticketId)) {
+        throw new Error(
+          `ticket ${ticketId} is retired; it takes no nominations until it is un-retired`
+        );
+      }
       if (!HUMAN_NOMINATION_ACTIONS.includes(suggestion.actionId)) {
         throw new Error(
           `action ${suggestion.actionId} is not one a human performs; expected one of ` + HUMAN_NOMINATION_ACTIONS.join(", ")
@@ -29222,6 +29420,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       const snapshot = cache.state.tickets.get(Number(nomination.ticketId));
       const wanted = NOMINATION_ACTION_STATE[nomination.actionId];
       let spent = snapshot === void 0;
+      if (!spent && snapshot !== void 0 && this._isRetired(cache.state, Number(nomination.ticketId))) {
+        spent = true;
+      }
       if (!spent && snapshot !== void 0 && wanted !== void 0) {
         const wantedAt = NOMINATION_STATE_SEQUENCE.indexOf(wanted);
         const actualAt = NOMINATION_STATE_SEQUENCE.indexOf(snapshot.state);
@@ -29774,6 +29975,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (!prev) {
       throw new UnknownTicket(ticketId);
     }
+    if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     this._assertLocalWorkspace(agent, prev);
     const nextSlug = args.slug?.trim() ?? prev.slug;
     if (nextSlug !== prev.slug && this._slugTaken(cache.state, prev.workspaceKey, nextSlug, ticketId)) {
@@ -30108,6 +30312,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     this._assertLocalWorkspace(agent, ticket);
     const fromState = ticket.state;
+    if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
+      const message = new RetiredTicketWriteRefused(ticketId).message;
+      this._appendRefusal(agent, ticketId, fromState, toState, actor, message);
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     if (!isLegalTransition(fromState, toState)) {
       this._appendRefusal(agent, ticketId, fromState, toState, actor, "no gate configured for this transition");
       throw new GateRefused({ noGate: true, fromState, toState, actor });
@@ -30423,6 +30632,9 @@ ${detail}`
       throw new UnknownTicket(ticketId);
     }
     this._assertLocalWorkspace(agent, snapshot);
+    if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     const at = this._atFor(agent.session, ticketId);
     this._commit(agent, {
       kind: "comment/added",
@@ -30540,6 +30752,9 @@ ${detail}`
       throw new EvidenceAuthorRefused(kind, actor);
     }
     const snapshot = cache.state.tickets.get(ticketId);
+    if (actor === "agent" && snapshot !== void 0 && this._isRetired(cache.state, ticketId)) {
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     if (snapshot !== void 0 && payload.criteria !== void 0) {
       const criteria = payload.criteria;
       if (typeof criteria !== "string") {
@@ -30643,6 +30858,178 @@ ${detail}`
       }
     }
     return false;
+  }
+  /**
+   * #108: the live retirement of one ticket, or null. THE ONE LOOKUP: every
+   * consumer in this service reads retirement through it, so there is one
+   * definition of "retired" and it lives in the kernel module.
+   */
+  _retirementOf(state, ticketId) {
+    return retirementOf(state.evidence.get(ticketId));
+  }
+  /** #108: whether the ticket is retired right now. */
+  _isRetired(state, ticketId) {
+    return isRetired(state.evidence.get(ticketId));
+  }
+  /**
+   * #108: the tickets whose `dependsOn` names one of the given workspace
+   * references, are NOT retired themselves, and are not done. A DONE
+   * dependent does not block a retirement (its reference is history, not an
+   * outstanding need); a retired dependent cannot block anything, since it
+   * is hidden itself.
+   */
+  _liveDependents(state, targetRefs) {
+    const wanted = new Set(targetRefs);
+    const out = [];
+    for (const snapshot of state.tickets.values()) {
+      if (snapshot.state === "done") continue;
+      if (this._isRetired(state, snapshot.id)) continue;
+      for (const ref of snapshot.dependsOn) {
+        if (wanted.has(ref)) {
+          out.push({ id: snapshot.id, title: snapshot.title, state: snapshot.state });
+          break;
+        }
+      }
+    }
+    out.sort((a, b) => a.id - b.id);
+    return out;
+  }
+  /**
+   * #108: resolve a supersede reference the way `dependsOn` references are
+   * resolved — `workspaceKey:id`, `workspaceKey:slug`, or a legacy bare
+   * number against this workspace — against the given state, and validate
+   * it. Returns the normalized `workspaceKey:id` list.
+   *
+   * The reference uses the SAME format as dependsOn and is validated the
+   * same way (the D1 rule): a reference to a ticket that does not exist is
+   * refused, because a supersede pointing at nothing is worse than none. A
+   * target that is ITSELF retired is refused too — following a chain must
+   * land on a live ticket, and a chain into a retired ticket stops there.
+   * A self-reference is refused for the same reason the D1 invariant
+   * refuses a self-dependency.
+   */
+  _validatedSupersedeRefs(state, ticket, refs) {
+    const ownWorkspace = ticket.workspaceKey;
+    const normalized = [];
+    for (const ref of refs) {
+      let target;
+      let key;
+      const colon = ref.indexOf(":");
+      if (colon >= 0) {
+        key = ref.slice(0, colon);
+        const tail = ref.slice(colon + 1);
+        if (/^\d+$/.test(tail)) {
+          const numeric = Number(tail);
+          target = state.tickets.get(numeric);
+          if (target !== void 0 && target.workspaceKey !== key) {
+            target = void 0;
+          }
+        } else {
+          for (const snapshot of state.tickets.values()) {
+            if (snapshot.workspaceKey === key && snapshot.slug === tail) {
+              target = snapshot;
+              break;
+            }
+          }
+        }
+      } else {
+        key = ownWorkspace;
+        if (/^\d+$/.test(ref)) {
+          target = state.tickets.get(Number(ref));
+          if (target !== void 0 && target.workspaceKey !== key) {
+            target = void 0;
+          }
+        } else {
+          for (const snapshot of state.tickets.values()) {
+            if (snapshot.workspaceKey === key && snapshot.slug === ref) {
+              target = snapshot;
+              break;
+            }
+          }
+        }
+      }
+      if (target === void 0) {
+        throw new BadPayloadError(
+          `supersededBy reference ${JSON.stringify(ref)} names no ticket in this state; the reference format is <workspaceKey>:<ticketId> (or <workspaceKey>:<slug>), the same format as dependsOn`
+        );
+      }
+      if (target.id === ticket.id) {
+        throw new BadPayloadError(
+          `supersededBy reference ${JSON.stringify(ref)} names the ticket being retired`
+        );
+      }
+      if (this._isRetired(state, target.id)) {
+        throw new BadPayloadError(
+          `supersededBy reference ${JSON.stringify(ref)} names ticket #${target.id}, which is itself retired; following a supersede chain must land on a live ticket`
+        );
+      }
+      normalized.push(`${target.workspaceKey}:${target.id}`);
+    }
+    return normalized;
+  }
+  /**
+   * #108: the retire and un-retire writes. ONE implementation, and the
+   * panels/queues may offer the act from several surfaces only by reaching
+   * this method (the u98 rule, extended to retirement by this change).
+   *
+   * Retire attaches a `builtin:retired` row; un-retire DETACHES the newest
+   * one by its stamped `at` — the same mechanism the evidence panel's
+   * delete uses, so the append-only log keeps both directions as history
+   * and nothing is ever removed.
+   *
+   * The agent can reach neither path: `userRetireTicket` and
+   * `userUnretireTicket` are Remote surfaces with no tool twin, and the
+   * attach tool's kind list never offers `builtin:retired`.
+   */
+  userRetireTicket(agent, args) {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const cache = this._cache(routed.session);
+    this._sync(routed.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(routed, snapshot);
+    if (this._isRetired(cache.state, ticketId)) {
+      throw new BadPayloadError(`ticket #${ticketId} is already retired`);
+    }
+    const parsed = parseRetirementPayload({
+      ...args.reason !== void 0 ? { reason: args.reason } : {},
+      ...args.supersededBy !== void 0 ? { supersededBy: args.supersededBy } : {}
+    });
+    const supersededBy = this._validatedSupersedeRefs(cache.state, snapshot, parsed.supersededBy);
+    const dependents = this._liveDependents(cache.state, [
+      `${snapshot.workspaceKey}:${snapshot.id}`,
+      `${snapshot.workspaceKey}:${snapshot.slug}`,
+      String(snapshot.id)
+    ]);
+    if (dependents.length > 0) {
+      throw new RetireRefused(ticketId, dependents);
+    }
+    const payload = {};
+    if (parsed.reason !== null) payload.reason = parsed.reason;
+    if (supersededBy.length > 0) payload.supersededBy = supersededBy;
+    this._attachEvidenceInternal(routed, ticketId, RETIRED_KIND, payload, "user");
+    return { ticketId, retired: true, payload };
+  }
+  userUnretireTicket(agent, args) {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const cache = this._cache(routed.session);
+    this._sync(routed.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(routed, snapshot);
+    const rows = cache.state.evidence.get(ticketId) ?? [];
+    const retirement = retirementOf(rows);
+    if (retirement === null) {
+      throw new BadPayloadError(`ticket #${ticketId} is not retired`);
+    }
+    this._detachEvidence(routed, { ticketId, at: retirement.at, rowKind: RETIRED_KIND });
+    return { ticketId, retired: false, at: retirement.at };
   }
   /**
    * Resolve a ticket reference (a numeric id or a slug) to a numeric id.
@@ -30821,6 +31208,7 @@ __decorateElement(_init, 1, "userSetTicket", _userSetTicket_dec, AidosService);
 __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
+__decorateElement(_init, 1, "retiredTickets", _retiredTickets_dec, AidosService);
 __decorateElement(_init, 1, "requestAllowlist", _requestAllowlist_dec, AidosService);
 __decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);
 __decorateElement(_init, 1, "pendingApprovals", _pendingApprovals_dec, AidosService);
@@ -31445,6 +31833,29 @@ function refusal(error51, overrides) {
       "bad_payload"
     );
   }
+  if (error51 instanceof RetireRefused) {
+    throw new HarnessError2(
+      JSON.stringify({
+        ok: false,
+        error: "retire_refused",
+        ticketId: error51.ticketId,
+        dependents: error51.dependents,
+        message: error51.message
+      }),
+      "retire_refused"
+    );
+  }
+  if (error51 instanceof RetiredTicketWriteRefused) {
+    throw new HarnessError2(
+      JSON.stringify({
+        ok: false,
+        error: "retired_ticket",
+        ticketId: error51.ticketId,
+        message: error51.message
+      }),
+      "retired_ticket"
+    );
+  }
   if (error51 instanceof FileNotReadError) {
     throw new HarnessError2(
       JSON.stringify({ ok: false, error: "file_not_read", path: error51.path, message: error51.message }),
@@ -31463,7 +31874,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Retired tickets are hidden from every board read and take no writes: only the human can retire or un-retire a ticket, so if a ticket you are told to work on cannot be found on the board, say so instead of inventing one -- the human either retired it or can un-retire it from the board's Retired panel. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
 function registerGetTickets(ctx) {
   registerBoardTool(
     ctx,

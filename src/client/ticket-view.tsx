@@ -37,6 +37,13 @@ export interface TicketViewProps {
   /** #93: opens the human work queue. Absent hides the button entirely. */
   onQueue?: () => void;
   /**
+   * #108: opens the Retired panel. Shown only while at least one ticket is
+   * retired — a permanent zero button is furniture the board does not need.
+   */
+  onRetired?: () => void;
+  /** #108: how many tickets are currently retired (the button's count). */
+  retiredCount?: number;
+  /**
    * #131: how many queue entries are the AGENT ASKING for something the
    * gate still allows — nominations and pending approval cards alike. This
    * drives BOTH the number and the button's attention state.
@@ -178,6 +185,22 @@ export function TicketView(props: TicketViewProps) {
               >
                 {queueButton.count}
               </b>
+            </button>
+          ) : null}
+          {/*
+            * #108: the Retired panel's entry. Hidden at zero — the owner's
+            * ask is a panel that exists when something is retired, not a
+            * permanent counter of nothing.
+            */}
+          {props.onRetired !== undefined && (props.retiredCount ?? 0) > 0 ? (
+            <button
+              className="aidos-btn"
+              onClick={props.onRetired}
+              title="Hidden tickets — view and un-retire them"
+              data-dsh-tip=""
+            >
+              {"Retired"}
+              <b className="aidos-queue-count">{props.retiredCount}</b>
             </button>
           ) : null}
           <button className="aidos-btn" onClick={props.onPlan}>

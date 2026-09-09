@@ -41,6 +41,7 @@ import type { BoardKey } from "./board-logic";
 import { SignoffDialog } from "./signoff-dialog";
 import { SendBackModal } from "./send-back-modal";
 import { MarkDoneModal } from "./mark-done-modal";
+import { RetireDialog } from "./retired-panel";
 import { PencilIcon, TrashIcon, WarningIcon } from "./icons";
 import { logDebug } from "./log";
 import { callAidosRemote, AidosRemoteError } from "./remote";
@@ -83,6 +84,8 @@ export interface DetailPanelProps {
   onViewEvidence?: (row: EvidenceRowLike) => void;
   /** Always-present action descriptors with unlock reasons (#62). */
   actionHints?: Record<string, string>;
+  /** Opens the retire dialog (#108); the dialog state lives in DetailView. */
+  onOpenRetire?: () => void;
   /** Every board-known ticket view keyed for dependency cards. */
   ticketsByKey?: Map<string, TicketView>;
   /** Jump the board's selection to another ticket (dependency cards). */
@@ -914,6 +917,23 @@ export function DetailPanel(props: DetailPanelBodyProps) {
         onResolved={props.onFieldSaved}
       />
       {props.actions}
+      {/*
+        * #108: the retire entry, beside the lifecycle actions rather than
+        * inside them. Retirement is ORTHOGONAL to the state axis — it is
+        * available in every state, including done — so it is not an
+        * ActionDescriptor and greying rules do not apply to it. The dialog
+        * it opens is the ONE retire surface on the ticket.
+        */}
+      {props.onOpenRetire !== undefined ? (
+        <button
+          className="aidos-btn"
+          title="Hide this ticket everywhere. Reversible from the Retired panel."
+          data-dsh-tip=""
+          onClick={props.onOpenRetire}
+        >
+          {"Retire\u2026"}
+        </button>
+      ) : null}
       <DescriptionPanel
         ticket={ticket}
         ticketIdKey={props.ticketIdKey}
@@ -1009,6 +1029,7 @@ export function DetailView(props: DetailViewProps) {
   const [sendBackOpen, setSendBackOpen] = useStoredModal("sendBack");
   const [markDoneOpen, setMarkDoneOpen] = useStoredModal("markDone");
   const [allowlistOpen, setAllowlistOpen] = useStoredModal("allowlist");
+  const [retireOpen, setRetireOpen] = useStoredModal("retire");
   /*
    * The evidence viewer stores a ROW, not a flag, because that is what it
    * renders. Same rule as the modals: the store is written first.
@@ -1089,6 +1110,9 @@ export function DetailView(props: DetailViewProps) {
             }}
           />
         }
+        onOpenRetire={() => {
+          setRetireOpen(true);
+        }}
       />
       <EvidenceViewer
         row={viewingEvidence}
@@ -1161,6 +1185,27 @@ export function DetailView(props: DetailViewProps) {
           }}
           onMarkedDone={props.onClose}
           agentId={agentId}
+        />
+      ) : null}
+      {/*
+        * #108: the retire dialog. The dialog state is store-backed like its
+        * siblings, so a badge remount cannot close it mid-typing. Retiring
+        * closes the detail panel as well: the ticket is about to vanish
+        * from every surface the panel reads, and the Retired panel is where
+        * it lives until un-retired.
+        */}
+      {retireOpen ? (
+        <RetireDialog
+          open
+          ticketId={props.ticketIdKey}
+          ticketTitle={ticket.title}
+          agentId={agentId}
+          onClose={() => {
+            setRetireOpen(false);
+          }}
+          onRetired={function () {
+            props.onClose();
+          }}
         />
       ) : null}
     </div>

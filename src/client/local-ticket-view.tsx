@@ -14,6 +14,7 @@ import {
   filterTickets,
   openCount,
   evidenceIsMany,
+  hideRetiredTickets,
 } from "./board-logic";
 import type { SortKey } from "./board-logic";
 
@@ -30,6 +31,7 @@ import { DetailView } from "./detail-panel";
 import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
+import { RetiredPanel } from "./retired-panel";
 import {
   boardKeyOf,
   rememberWorkspaceLabel,
@@ -430,7 +432,17 @@ function ProjectionReader(props: ProjectionReaderProps) {
   }
   const rawEvidence: Record<string, EvidenceRow[]> = { ...foreignEvidence, ...ownEvidence };
   const rawComments: Record<string, CommentRecord[]> = { ...foreignComments, ...ownComments };
-  const allTicketsCount = rawTickets.length;
+  /*
+   * #108: THE one hiding point for the merged board. Every surface below —
+   * the grid, the filter counts, the tab badge, the active-ticket marker,
+   * the human queue — reads `liveTickets`; `rawTickets` stays the full merge
+   * for the things a retired ticket must still answer: the detail panel's
+   * held row, the deep-link resolver, the dependency cards, and the title
+   * index the tool cards read.
+   */
+  const liveTickets = hideRetiredTickets(rawTickets, rawEvidence);
+  const retiredCount = rawTickets.length - liveTickets.length;
+  const allTicketsCount = liveTickets.length;
   // Persist the filter under one workspace key. When the board shows tickets
   // from projects with different workspace keys, keep the first key but suffix
   // with sessionId so the shared "default" bucket does not poison across
@@ -546,6 +558,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [createOpen, setCreateOpen] = useStoredModal("create");
   const [planOpen, setPlanOpen] = useStoredModal("plan");
   const [queueOpen, setQueueOpen] = useStoredModal("queue");
+  const [retiredOpen, setRetiredOpen] = useStoredModal("retired");
 
   /*
    * User-reported 2026-09-05: "opening the queue makes the board vanish."
@@ -568,7 +581,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
    */
   react.useEffect(
     function () {
-      const open = queueOpen || createOpen || planOpen;
+      const open = queueOpen || createOpen || planOpen || retiredOpen;
       setRemountSuppressed(open);
       return function () {
         // Release on unmount for a REAL reason (session switch), so a stale
@@ -576,7 +589,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         setRemountSuppressed(false);
       };
     },
-    [queueOpen, createOpen, planOpen],
+    [queueOpen, createOpen, planOpen, retiredOpen],
   );
   /*
    * #93: nominations are fetched when the queue OPENS, not polled. They only
@@ -709,8 +722,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const layoutRef = react.useRef<HTMLDivElement | null>(null);
   useTopChromeClearance(layoutRef);
 
-  // Report the open count to the tab badge store.
-  const count = openCount(rawTickets);
+  // Report the open count to the tab badge store. Live rows only: a retired
+  // ticket must not raise the badge (#108).
+  const count = openCount(liveTickets);
   react.useEffect(
     function () {
       if (!loaded) return;
@@ -852,7 +866,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       </div>
     ) : null;
 
-  const filtered = filterTickets(rawTickets, applied);
+  const filtered = filterTickets(liveTickets, applied);
 
   function applyState(state: AppliedState) {
     const next = cloneAppliedState(state);
@@ -1026,8 +1040,11 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * #93 third review, finding 2: this was String(activeTicketId(...)), a bare
    * id compared against boardKeyOf in ticket-view, so a FOREIGN active ticket
    * highlighted the wrong card (or none). Resolve the row, then key it.
+   *
+   * #108: live rows only — a retired in-progress ticket must not wear the
+   * active marker while it is hidden.
    */
-  const activeRow = activeTicketRow(rawTickets);
+  const activeRow = activeTicketRow(liveTickets);
   const activeBoardKey = activeRow === null ? null : boardKeyOf(activeRow);
 
   const selectedEvidence: EvidenceRow[] =
@@ -1182,8 +1199,11 @@ function ProjectionReader(props: ProjectionReaderProps) {
      * the ask count, and computing them from two separate calls would let
      * the badge's number and its colour drift apart under a mid-render
      * change.
+     *
+     * #108: composed over the LIVE rows — a retired ticket is in no queue
+     * and lights no badge.
      */
-    const queueEntries = queueEntriesFor(rawTickets, rawEvidence, nominations, approvals);
+    const queueEntries = queueEntriesFor(liveTickets, rawEvidence, nominations, approvals);
     body = (
       <TicketView
         ownWorkspaceKey={ownWorkspaceKey}
@@ -1211,6 +1231,10 @@ function ProjectionReader(props: ProjectionReaderProps) {
           // identical request on every open (#131 review, MINOR).
           setQueueOpen(true);
         }}
+        onRetired={() => {
+          setRetiredOpen(true);
+        }}
+        retiredCount={retiredCount}
         /*
          * #131: the SAME composition the panel renders, counted. Passing the
          * nominations in is what makes the count mean "asks the gate allows"
@@ -1322,7 +1346,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
     >
       <QueuePanel
         sessionId={sessionId}
-        tickets={rawTickets}
+        tickets={liveTickets}
         evidenceByTicket={rawEvidence}
         nominations={nominations}
         approvals={approvals}
@@ -1349,6 +1373,24 @@ function ProjectionReader(props: ProjectionReaderProps) {
                 "refusal",
               );
             });
+        }}
+      />
+    </ModalShell>
+  ) : null;
+
+  const retiredModal = retiredOpen ? (
+    <ModalShell
+      title="Retired tickets"
+      wide
+      onClose={() => {
+        setRetiredOpen(false);
+      }}
+    >
+      <RetiredPanel
+        sessionId={sessionId}
+        onOpen={(key) => {
+          setRetiredOpen(false);
+          selectTicket(key);
         }}
       />
     </ModalShell>
@@ -1389,6 +1431,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       {createModal}
       {planModal}
       {queueModal}
+      {retiredModal}
       {/* The toast container is a sibling of the layout, not a child, so it
           persists across the slot-mutation remount. The single-string toast
           state and its timer are gone; the module-level toast store owns

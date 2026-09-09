@@ -19,6 +19,7 @@ import { compareTicketViews, filterTicketViews } from "../kernel/projections";
 
 import { BUILTIN_KINDS, DEFAULT_GATES } from "../kernel/constants";
 import { boardKeyText } from "../kernel/board-key";
+import { RETIRED_KIND, isRetired } from "../kernel/retirement";
 import { STATE_ORDER } from "../kernel/types";
 import type { TicketState } from "../kernel/types";
 
@@ -142,6 +143,26 @@ export interface EvidenceRowLike {
   author?: string;
   /** The row's stamped timestamp; the detach Remote names rows by it. */
   at?: number;
+}
+
+/**
+ * #108: THE client-side hiding. One function, imported everywhere the board
+ * shows or counts tickets: the grid, the filter counts, the tab badge, the
+ * active-ticket marker, the human queue.
+ *
+ * Rows are the full merge (`rawTickets`), evidence keyed by BOARD KEY. The
+ * retired set is derived, never stored: a ticket is retired exactly when its
+ * live evidence rows hold a `builtin:retired` row (kernel/retirement.ts).
+ *
+ * Deliberately returns the SAME element type: callers keep their row type,
+ * foreign rows included, so this composes with everything downstream.
+ */
+export function hideRetiredTickets<
+  T extends TicketLike & BoardKeyed,
+>(tickets: readonly T[], evidenceByTicket: Record<string, readonly EvidenceRowLike[]>): T[] {
+  return tickets.filter(
+    (ticket) => !isRetired(evidenceByTicket[boardKeyText(ticket)]),
+  );
 }
 
 /** The state checklist order. Done is always last. */
@@ -299,7 +320,14 @@ export function autocompleteTickets<T extends TicketLike>(
   return out.slice(0, limit);
 }
 
-/** Count tickets that are not done. */
+/**
+ * Count tickets that are not done.
+ *
+ * #108: the caller passes the LIVE rows — hideRetiredTickets runs before
+ * this in the board view — so a retired ticket raises the tab badge for
+ * nothing. The guard is documentation, not a second derivation: this
+ * function cannot see evidence and must not re-derive retirement.
+ */
 export function openCount<T extends TicketLike>(tickets: readonly T[]): number {
   let count = 0;
   for (const ticket of tickets) {
@@ -520,6 +548,12 @@ export function kindColor(kind: string): string {
    * on next to a plain review_note.
    */
   if (kind === "builtin:review_fail") return "var(--verdict-fail)";
+  /*
+   * #108: retirement is its own verdict — "parked", not "wrong" — and gets
+   * an explicit token like review_fail rather than whatever the hash lands
+   * on. The token is declared in board.css beside --verdict-fail.
+   */
+  if (kind === "builtin:retired") return "var(--verdict-retired)";
   let hash = 0;
   for (let i = 0; i < kind.length; i++) {
     hash = (hash * 31 + kind.charCodeAt(i)) | 0;
@@ -568,6 +602,7 @@ const KIND_KEYWORDS: Record<string, string> = {
   "builtin:review_pass": "ACCEPTED",
   "builtin:review_fail": "FAILED",
   "builtin:review_note": "NOTE",
+  "builtin:retired": "RETIRED",
 };
 
 export function kindKeyword(kind: string): string {

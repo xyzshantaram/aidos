@@ -49,6 +49,14 @@
      never silently recolours a verdict, and vice versa. Same mid-saturation
      family so white text stays readable on it. */
   --verdict-fail: #a5453c;
+
+  /* #108: retirement is a HIDING, not a verdict and not a state. Muted
+     slate, in the same mid-saturation family as --state-open (which is also
+     a resting state), so a retired chip reads as "parked" rather than as
+     "wrong". Own token, never borrowed: recolouring the states must not
+     recolour retirement, and recolouring retirement must not recolour
+     states. */
+  --verdict-retired: #5a6472;
 }
 
 /* ── 2. Typography + base ──────────────────────────────── */
@@ -2748,6 +2756,43 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/*
+ * #108: the Retired panel reuses the queue's one-column strip layout
+ * (TicketStrip rows), with its own accents: the supersede note under each
+ * title and the panel's prose states.
+ */
+.aidos-retired-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aidos-retired-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.aidos-retired-error {
+  font-size: 12px;
+  color: var(--verdict-fail);
+}
+
+.aidos-retired-supersede {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidos-retired-supersede::before {
+  content: "\2192";
+  flex: none;
 }
 
 .aidos-queue-empty {

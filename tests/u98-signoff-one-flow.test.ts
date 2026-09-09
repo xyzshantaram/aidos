@@ -225,3 +225,68 @@ describe("inline chat actions launch the board's flows and implement none", () =
     expect(inlineActions).not.toContain("ticketId: props.ticketId");
   });
 });
+
+/**
+ * #108: RETIREMENT HAS ONE WRITE IMPLEMENTATION, and the rule that produced
+ * this file is why. Retiring from the ticket and un-retiring from the panel
+ * are two entry points to the SAME host remotes (`userRetireTicket`,
+ * `userUnretireTicket`) — which validate the supersede references, run the
+ * dependent gate, and detach by the row's own stamp. A surface that attached
+ * or detached a `builtin:retired` row directly would bypass all of that, and
+ * the board would carry a retirement with no reason, no dependent check, and
+ * possibly a dangling supersede.
+ *
+ * The permitted shape, pinned here:
+ *  - retired-panel.tsx is the ONLY module that CALLS either remote;
+ *  - detail-panel.tsx opens the shared RetireDialog (it does not call);
+ *  - the queue and the evidence-attach form write nothing of the kind;
+ *  - the panel renders rows through the SHARED TicketStrip (#93), never a
+ *    second ticket-row implementation.
+ */
+describe("#108 retirement has ONE implementation, reached from two places", () => {
+  const retiredPanel = read("retired-panel.tsx");
+
+  it("only the retired panel calls the retire and un-retire remotes", () => {
+    const calling = SURFACES.filter(
+      ([, text]) =>
+        text.includes('"userRetireTicket"') || text.includes('"userUnretireTicket"'),
+    ).map(([name]) => name);
+    // The panel file itself is not in SURFACES; assert the known surfaces
+    // are clean AND the panel is the one module that calls.
+    expect(calling).toEqual([]);
+    expect(retiredPanel).toContain('"userRetireTicket"');
+    expect(retiredPanel).toContain('"userUnretireTicket"');
+  });
+
+  it("no client module attaches or detaches a retirement row directly", () => {
+    // Matched on the WRITE argument, not on mentions: board-logic and
+    // human-queue legitimately NAME the kind to filter it out.
+    const writing = SURFACES.filter(
+      ([, text]) =>
+        text.includes('kind: "builtin:retired"') ||
+        text.includes('"userDetachEvidence"'),
+    ).map(([name]) => name);
+    // The detail panel's own evidence delete is the one legitimate
+    // userDetachEvidence caller (it deletes whatever row the human points
+    // at, including a retirement row — the same act, by another road, on a
+    // row the human is looking at). Everything else writes nothing.
+    expect(writing).toEqual(["detail-panel.tsx"]);
+  });
+
+  it("the detail panel opens the shared dialog and implements nothing", () => {
+    const detail = read("detail-panel.tsx");
+    expect(detail).toContain("<RetireDialog");
+    expect(detail).not.toContain('"userRetireTicket"');
+    expect(retiredPanel).toContain("export function RetireDialog");
+  });
+
+  it("the queue grows no retirement surface of its own", () => {
+    expect(queuePanel).not.toContain("builtin:retired");
+    expect(queuePanel).not.toContain("userRetireTicket");
+    expect(queuePanel).not.toContain("userUnretireTicket");
+  });
+
+  it("the panel renders rows through the SHARED TicketStrip", () => {
+    expect(retiredPanel).toContain("<TicketStrip");
+  });
+});

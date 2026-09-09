@@ -12,7 +12,7 @@ import { BUILTIN_KINDS } from "../src/kernel/constants";
 import { userEvidenceKinds } from "../src/client/user-evidence-kinds";
 
 describe("u2c user-evidence-kinds: userEvidenceKinds", () => {
-  it("returns the user-allowed kinds minus the system-only and retired kinds", () => {
+  it("returns the user-allowed kinds minus the system-only, retired, and unoffered kinds", () => {
     const expected = BUILTIN_KINDS.filter(
       (kind) =>
         kind.allowedAuthors.includes("user") &&
@@ -20,7 +20,12 @@ describe("u2c user-evidence-kinds: userEvidenceKinds", () => {
         // #96: builtin:comment folded into builtin:review_note. It stays a
         // valid kind so pre-existing rows still render, but it is never
         // OFFERED again -- two kinds doing one job is the clutter this removed.
-        kind.id !== "builtin:comment",
+        kind.id !== "builtin:comment" &&
+        // #108: builtin:retired is user-authorable but only the host's
+        // userRetireTicket Remote writes it -- the attach form must never
+        // offer it, because the raw form cannot run the supersede and
+        // dependent validations that make a retirement safe.
+        kind.id !== "builtin:retired",
     )
       .map((kind) => kind.id)
       .sort();
@@ -34,6 +39,11 @@ describe("u2c user-evidence-kinds: userEvidenceKinds", () => {
     const ids = userEvidenceKinds().map((kind) => kind.id);
     expect(ids).not.toContain("builtin:comment");
     expect(ids).toContain("builtin:review_note");
+  });
+
+  it("never offers the retirement kind: only userRetireTicket writes it", () => {
+    const ids = userEvidenceKinds().map((kind) => kind.id);
+    expect(ids).not.toContain("builtin:retired");
   });
 
   it("lists the human-only kinds first in the fixed order", () => {

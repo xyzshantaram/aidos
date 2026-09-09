@@ -25,6 +25,15 @@ const SYSTEM_ONLY_ID = "builtin:imported_state";
 const RETIRED_IDS = new Set(["builtin:comment"]);
 
 /**
+ * #108: builtin:retired is USER-authorable but is never offered in the
+ * attach form — the ONLY writer is the host's userRetireTicket Remote,
+ * which runs the supersede and dependent validations the raw form cannot.
+ * A free-form retired row with a malformed supersededBy would create
+ * exactly the dangling references the retire gate exists to refuse.
+ */
+const NOT_OFFERED_IDS = new Set(["builtin:retired"]);
+
+/**
  * The user-attachable kinds. Human-only kinds first, then the rest sorted
  * by id ascending.
  */
@@ -34,6 +43,7 @@ export function userEvidenceKinds(): KindDescriptor[] {
   for (const kind of BUILTIN_KINDS) {
     if (!kind.allowedAuthors.includes("user")) continue;
     if (kind.id === SYSTEM_ONLY_ID || RETIRED_IDS.has(kind.id)) continue;
+    if (NOT_OFFERED_IDS.has(kind.id)) continue;
     const descriptor: KindDescriptor = {
       id: kind.id,
       label: kind.label,

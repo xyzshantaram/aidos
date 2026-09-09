@@ -18,6 +18,7 @@
  */
 
 import type { TicketView } from "../kernel/projections";
+import { RETIRED_KIND } from "../kernel/retirement";
 import { actionsFor } from "./action-visibility";
 import { boardKeyOf } from "./board-logic";
 import type { BoardKey } from "./board-logic";
@@ -131,6 +132,15 @@ export function derivedQueue<T extends TicketView>(
   for (const ticket of tickets) {
     if (ticket.state === "done") continue;
     const kinds = evidenceKindsOf(ticket);
+    /*
+     * #108: a retired ticket raises NO asks. The board hides retired rows,
+     * so an ask on one could never be answered from where the human looks —
+     * a retired ticket that still generates a queue ask is worse than no
+     * feature. Defence in depth: the view passes live rows already, but
+     * this module is exported and unit-tested on its own, so the rule
+     * lives here too.
+     */
+    if (kinds.includes(RETIRED_KIND)) continue;
     const available = actionsFor(ticket, kinds).filter(
       (action) => HUMAN_ACTIONS.has(action.id) && action.unavailableReason === undefined,
     );

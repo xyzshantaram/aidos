@@ -477,7 +477,11 @@ describe("#131 the indicator is fed while the queue is SHUT", () => {
      * #131 made them change it, so an open-only fetch would light the
      * indicator only after the human had already looked -- the very thing
      * they asked to be spared.
+     *
+     * #108 renamed the rows the count rides on: liveTickets (raw minus
+     * retired), so the queue never raises an ask for a retired ticket. The
+     * nominations still ride the same seam.
      */
-    expect(board).toContain("queueEntriesFor(rawTickets, rawEvidence, nominations, approvals)");
+    expect(board).toContain("queueEntriesFor(liveTickets, rawEvidence, nominations, approvals)");
   });
 });

@@ -34,6 +34,8 @@ import {
   FileNotReadError,
   PlanImportDirtyTreeError,
   PlanImportFileUncommittedError,
+  RetireRefused,
+  RetiredTicketWriteRefused,
 } from "../host/aidos-core";
 import {
   ContextTooLongError,
@@ -490,6 +492,34 @@ function refusal(error: unknown, overrides?: { kind?: string }): never {
       "bad_payload",
     );
   }
+  if (error instanceof RetireRefused) {
+    /*
+     * #108: the refusal names every live dependent, so the human can act on
+     * them rather than hunt for them. Retiring the dependents first, or
+     * re-pointing their dependsOn, both clear it — nothing is auto-repointed.
+     */
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "retire_refused",
+        ticketId: error.ticketId,
+        dependents: error.dependents,
+        message: error.message,
+      }),
+      "retire_refused",
+    );
+  }
+  if (error instanceof RetiredTicketWriteRefused) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "retired_ticket",
+        ticketId: error.ticketId,
+        message: error.message,
+      }),
+      "retired_ticket",
+    );
+  }
   if (error instanceof FileNotReadError) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "file_not_read", path: error.path, message: error.message }),
@@ -528,6 +558,7 @@ const AIDOS_GUIDANCE =
   "review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. " +
   "move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. " +
   "plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. " +
+  "Retired tickets are hidden from every board read and take no writes: only the human can retire or un-retire a ticket, so if a ticket you are told to work on cannot be found on the board, say so instead of inventing one -- the human either retired it or can un-retire it from the board's Retired panel. " +
   "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
   "The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. " +

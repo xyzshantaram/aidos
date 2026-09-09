@@ -300,7 +300,8 @@ export function setRemountSuppressed(suppressed: boolean): void {
  * a session you navigate away from should still be open when you return,
  * which is the same property the selection has.
  */
-export type ModalKey = "queue" | "create" | "plan";
+/** Board-level modals. `retired` is #108's panel; the rest are the classics. */
+export type ModalKey = "queue" | "create" | "plan" | "retired";
 
 const openModals = new Map<string, Set<ModalKey>>();
 
@@ -375,7 +376,8 @@ export function __resetModalsForTests(): void {
  * exist to survive; the bare id collides across sessions, which this file
  * has already paid for twice (the badge, and the title index above).
  */
-export type DetailModalKey = "signoff" | "verify" | "sendBack" | "markDone" | "allowlist";
+/** `retire` is #108's dialog, hosted by the detail panel like its siblings. */
+export type DetailModalKey = "signoff" | "verify" | "sendBack" | "markDone" | "allowlist" | "retire";
 
 interface DetailModalState {
   open: Set<DetailModalKey>;

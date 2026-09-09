@@ -76,6 +76,14 @@ import { nextStep } from "../kernel/next-step";
 import { recentBoardChanges } from "../kernel/recent-changes";
 import type { BoardChange } from "../kernel/recent-changes";
 import { DIGEST_SEPARATOR, coalesceDigestLines } from "../kernel/digest";
+import {
+  RETIRED_KIND,
+  followSupersedeChain,
+  isRetired,
+  parseRetirementPayload,
+  retirementOf,
+} from "../kernel/retirement";
+import type { RetirementInfo } from "../kernel/retirement";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
@@ -164,6 +172,59 @@ export class PlanImportFileUncommittedError extends Error {
     super(message);
     this.file = file;
     this.status = status;
+  }
+}
+
+/**
+ * #108: retiring a ticket that live tickets depend on is REFUSED (user's
+ * decision, 2026-09-03) — chosen over marking the reference because a
+ * refusal is VISIBLE at the moment of the decision, while a dangling
+ * reference is discovered later by whoever trips over it. The tool renders
+ * it as `retire_refused`; the refusal names every blocking dependent so the
+ * human can act on them rather than hunt for them.
+ *
+ * A refusal is not a dead end: retiring the dependents first, or
+ * re-pointing their dependsOn, both clear it. Dependencies are never
+ * auto-repointed — a wrong auto-edit across a dependency graph is hard to
+ * notice and harder to undo. A DONE dependent does not block: it has
+ * already been satisfied, so its reference is history, not an outstanding
+ * need.
+ */
+export class RetireRefused extends Error {
+  readonly ticketId: TicketId;
+  readonly dependents: Array<{ id: TicketId; title: string; state: TicketState }>;
+  constructor(
+    ticketId: TicketId,
+    dependents: Array<{ id: TicketId; title: string; state: TicketState }>,
+  ) {
+    const names = dependents
+      .map((dep) => `#${dep.id} ${dep.title} (${dep.state})`)
+      .join(", ");
+    super(
+      `cannot retire ticket #${ticketId}: ${dependents.length} live ticket(s) depend on it: ${names} — ` +
+        `retire them first, or re-point their dependencies, then retire this one`,
+    );
+    this.ticketId = ticketId;
+    this.dependents = dependents;
+  }
+}
+
+/**
+ * #108: an agent-actor write against a retired ticket. The agent's board
+ * reads hide retired tickets, but an agent working from a stale read (taken
+ * before the retirement) could otherwise keep writing to a ticket the human
+ * hid. The refusal says what happened and what re-opens it. User-actor
+ * paths stay open: the human owns the ticket and may edit it before
+ * un-retiring.
+ */
+export class RetiredTicketWriteRefused extends Error {
+  readonly ticketId: TicketId;
+  constructor(ticketId: TicketId) {
+    super(
+      `ticket #${ticketId} is retired: it is hidden from the board until it is un-retired. ` +
+        `A retired ticket takes no agent writes; un-retire it first`,
+    );
+    this.ticketId = ticketId;
   }
 }
 
@@ -633,6 +694,39 @@ export interface BoardTicketView extends TicketView {
 export interface SupersededCopy {
   sessionId: string;
   updatedAt: number;
+}
+
+/** #108: one resolved supersede target: enough to render a strip and a jump. */
+export type SupersedeTarget = {
+  ref: string;
+  id: number;
+  title: string;
+  state: string;
+  workspaceKey: string;
+  sourceSessionId: string;
+  /** Resolved against this merge; a ref that names an unknown ticket has no entry. */
+  known: boolean;
+};
+
+/** #108: one retired row for the Retired panel. */
+export interface RetiredTicketRow extends BoardTicketView {
+  /** Who retired it, when, why, and in favour of what. */
+  retirement: {
+    at: number;
+    author: string;
+    reason: string | null;
+    supersededBy: string[];
+    /** Each reference resolved to a row on this merge where one exists. */
+    supersededByTickets: SupersedeTarget[];
+    /**
+     * Where each supersede chain ENDS: live tickets, unknown refs, and
+     * retired tickets with no onward edge. A reader clicking through a
+     * chain lands here, never mid-chain.
+     */
+    chainTerminals: string[];
+    /** True when a chain revisited a ref (a cycle was cut). */
+    chainCycle: boolean;
+  };
 }
 
 /** What the dedupe did, so the caller can log it without recomputing it. */
@@ -1310,6 +1404,14 @@ registerAidosSessionEventTypes(ctx);
       search?: string;
       sortKey?: TicketSortKey;
       descending?: boolean;
+      /**
+       * #108: absent (the default) hides retired tickets — the agent's board
+       * read ignores them. Nothing in the tool surface offers this today;
+       * it exists so a deliberate reader CAN sweep retired rows without
+       * bypassing the projection, and so the default is the hiding, not the
+       * exception.
+       */
+      includeRetired?: boolean;
     },
   ): TicketView[] {
     // #146: a subagent reads the board that dispatched it, not its own
@@ -1328,8 +1430,17 @@ registerAidosSessionEventTypes(ctx);
     }
     const views = ticketsProjection(cache.state, this._resolvedConfig);
     const scoped = [...views.values()].filter((view) => view.projectId === projectId);
+    /*
+     * #108: retired tickets are absent from the agent's board read. The
+     * agent must still be able to READ one deliberately — get_ticket on a
+     * retired id resolves — or it could not help un-retire; the hiding is
+     * of the board sweep, not of the ticket's existence.
+     */
+    const live = opts?.includeRetired === true
+      ? scoped
+      : scoped.filter((view) => !this._isRetired(cache.state, view.id));
     // FilterPanel-parity filtering (#49): server-side, no default narrowing.
-    return filterTicketViews(scoped, {
+    return filterTicketViews(live, {
       stateIds: opts?.stateIds,
       projectIds: opts?.projectIds,
       search: opts?.search,
@@ -1382,6 +1493,12 @@ registerAidosSessionEventTypes(ctx);
     this._sync(agent.session, cache);
     const states = new Set<TicketState>();
     for (const snapshot of cache.state.tickets.values()) {
+      /*
+       * #108: a retired ticket contributes no state to the mask. The tier
+       * mask keys off which states exist on the board; a hidden ticket must
+       * not keep the tools of a state it is hidden in.
+       */
+      if (this._isRetired(cache.state, snapshot.id)) continue;
       states.add(snapshot.state);
     }
     return STATE_ORDER.filter((state) => states.has(state));
@@ -1554,6 +1671,12 @@ registerAidosSessionEventTypes(ctx);
       this._sync(session, cache);
       for (const snapshot of cache.state.tickets.values()) {
         if (snapshot.state !== "in_progress") continue;
+        /*
+         * #108: a retired ticket grants nothing. Its allowlist would
+         * otherwise keep feeding the write boundary while the ticket is
+         * hidden — the union must match what the board shows.
+         */
+        if (this._isRetired(cache.state, snapshot.id)) continue;
         for (const entry of snapshot.allowlist) {
           if (!seen.has(entry)) {
             seen.add(entry);
@@ -1576,7 +1699,15 @@ registerAidosSessionEventTypes(ctx);
       throw new UnknownProject(projectId);
     }
     const meta = this._planMetaOf(projectId, cache.state);
-    const tickets: PlanTicket[] = this._ticketsFor(projectId, cache.state).map((row): PlanTicket => ({
+    /*
+     * #108: a retired ticket does not render into the plan document. The
+     * plan is the export the plan_import round trip feeds on; a retired
+     * ticket must not re-enter a fresh project through it.
+     */
+    const planTickets = this._ticketsFor(projectId, cache.state).filter(
+      (row) => !this._isRetired(cache.state, row.id),
+    );
+    const tickets: PlanTicket[] = planTickets.map((row): PlanTicket => ({
       id: String(row.id),
       title: row.title,
       // Pre-P12 rows hold the prose in the body, later rows in the
@@ -1665,8 +1796,17 @@ registerAidosSessionEventTypes(ctx);
       }
       const tickets = snap.values["aidos.tickets"];
       if (!tickets) continue;
+      /*
+       * #108: retired tickets are not search hits. The dependency picker is
+       * a write surface — adding a retired ticket as a dependency would
+       * silently recreate the dangling reference the retire gate refuses.
+       */
+      const evidenceSnap = snap.values["aidos.evidence"] as
+        | Record<string, EvidenceRow[]>
+        | undefined;
       for (const [id, ticket] of Object.entries(tickets)) {
         if (!ticket.title.toLowerCase().includes(query)) continue;
+        if (isRetired(evidenceSnap?.[id])) continue;
         results.push({
           sessionId: session.id,
           ticketId: Number(id),
@@ -1702,7 +1842,17 @@ registerAidosSessionEventTypes(ctx);
     }
     const tickets = snap.values["aidos.tickets"];
     if (!tickets) return [];
-    let rows = Object.values(tickets);
+    /*
+     * #108: a cold board read hides retired tickets, exactly as the live
+     * merge does — the two surfaces must not disagree about what a board
+     * holds.
+     */
+    const evidenceSnap = snap.values["aidos.evidence"] as
+      | Record<string, EvidenceRow[]>
+      | undefined;
+    let rows = Object.values(tickets).filter(
+      (ticket) => !isRetired(evidenceSnap?.[String(ticket.id)]),
+    );
     if (args.states && args.states.length > 0) {
       rows = rows.filter((ticket) => (args.states as string[]).includes(ticket.state));
     }
@@ -1790,7 +1940,7 @@ registerAidosSessionEventTypes(ctx);
    * numeric ids and carry no source marker.
    */
   @Remote("workspaceTickets")
-  async workspaceTickets(agent: Agent, args?: Record<string, never>): Promise<{
+  async workspaceTickets(agent: Agent, args?: { includeRetired?: boolean }): Promise<{
     tickets: BoardTicketView[];
     evidence: Record<string, EvidenceRow[]>;
     comments: Record<string, CommentRecord[]>;
@@ -1811,6 +1961,13 @@ registerAidosSessionEventTypes(ctx);
      */
     workspaceLabels: Record<string, string>;
   }> {
+    /*
+     * #108: retired tickets are HIDDEN from the merge by default and the
+     * Retired panel asks for them by name (`includeRetired: true`, via the
+     * retiredTickets Remote). Every row dropped here also drops its
+     * evidence and comment entries, so the maps never orphan a key.
+     */
+    const includeRetired = args?.includeRetired === true;
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     /*
@@ -1836,6 +1993,7 @@ registerAidosSessionEventTypes(ctx);
     const comments: Record<string, CommentRecord[]> = {};
 
     for (const view of [...ownViews.values()].sort(ownSort)) {
+      if (!includeRetired && this._isRetired(cache.state, view.id)) continue;
       tickets.push({ ...view, sourceSessionId: agent.session.id, foreign: false });
       const key = String(view.id);
       evidence[key] = [...(cache.state.evidence.get(view.id) ?? [])];
@@ -1851,6 +2009,7 @@ registerAidosSessionEventTypes(ctx);
       this._sync(session, this._caches.get(session)!);
       const views = ticketsProjection(state, this._resolvedConfig);
       for (const view of [...views.values()].sort(ownSort)) {
+        if (!includeRetired && this._isRetired(state, view.id)) continue;
         const key = session.id + ":" + view.id;
         tickets.push({
           ...view,
@@ -1878,6 +2037,7 @@ registerAidosSessionEventTypes(ctx);
       const { state } = this._foldExternalLog(inspection.meta, inspection.events);
       const views = ticketsProjection(state, this._resolvedConfig);
       for (const view of [...views.values()].sort(ownSort)) {
+        if (!includeRetired && this._isRetired(state, view.id)) continue;
         const key = id + ":" + view.id;
         tickets.push({
           ...view,
@@ -1938,6 +2098,73 @@ registerAidosSessionEventTypes(ctx);
 
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
     return { tickets, evidence, comments, workspaceLabels };
+  }
+
+  /**
+   * #108: the Retired panel's read. The ONLY surface that returns retired
+   * tickets, so the panel is the special place the owner asked for: it lists
+   * each retired ticket with its reason, its retirement time and author, and
+   * its supersede targets as resolvable references, and the panel offers
+   * un-retire through userUnretireTicket.
+   *
+   * Reuses the workspace merge rather than re-deriving it: the same dedupe
+   * rules apply (one row per ticket identity, newest wins), and the evidence
+   * maps come back keyed by board key exactly as the board reads them.
+   */
+  @Remote("retiredTickets")
+  async retiredTickets(agent: Agent, args?: Record<string, never>): Promise<{
+    tickets: RetiredTicketRow[];
+  }> {
+    void args;
+    const merged = await this.workspaceTickets(agent, { includeRetired: true });
+    // Identity -> row, for resolving supersede references and chains.
+    const byIdentity = new Map<string, BoardTicketView>();
+    for (const row of merged.tickets) {
+      byIdentity.set(row.workspaceKey + ":" + row.id, row);
+    }
+    const evidenceOf = (row: BoardTicketView): EvidenceRow[] =>
+      merged.evidence[boardKeyText(row)] ?? [];
+    const lookup = (ref: string): { retired: boolean; supersededBy: string[] } | null => {
+      const row = byIdentity.get(ref);
+      if (row === undefined) return null;
+      const retirement = retirementOf(evidenceOf(row));
+      return {
+        retired: retirement !== null,
+        supersededBy: retirement?.supersededBy ?? [],
+      };
+    };
+    const out: RetiredTicketRow[] = [];
+    for (const row of merged.tickets) {
+      const retirement = retirementOf(evidenceOf(row));
+      if (retirement === null) continue;
+      const supersededByTickets: SupersedeTarget[] = retirement.supersededBy.map((ref) => {
+        const target = byIdentity.get(ref);
+        return {
+          ref,
+          id: target?.id ?? Number.NaN,
+          title: target?.title ?? "",
+          state: target?.state ?? "",
+          workspaceKey: target?.workspaceKey ?? "",
+          sourceSessionId: target?.sourceSessionId ?? "",
+          known: target !== undefined,
+        };
+      });
+      const chains = followSupersedeChain(retirement.supersededBy, lookup);
+      out.push({
+        ...row,
+        retirement: {
+          at: retirement.at,
+          author: retirement.author,
+          reason: retirement.reason,
+          supersededBy: retirement.supersededBy,
+          supersededByTickets,
+          chainTerminals: [...new Set(chains.flatMap((chain) => chain.terminals))],
+          chainCycle: chains.some((chain) => chain.cycle),
+        },
+      });
+    }
+    out.sort((a, b) => b.retirement.at - a.retirement.at);
+    return { tickets: out };
   }
 
   /**
@@ -2074,6 +2301,16 @@ registerAidosSessionEventTypes(ctx);
     const snapshot = this._cache(agent.session).state.tickets.get(args.ticketId as TicketId);
     if (snapshot === undefined) {
       throw new Error(`unknown ticket ${args.ticketId}`);
+    }
+    /*
+     * #108: a retired ticket takes no allowlist requests. The queue hides
+     * retired rows, so an approval card for one could never be answered —
+     * the agent would wait forever on a card the human cannot see.
+     */
+    if (this._isRetired(this._cache(agent.session).state, args.ticketId as TicketId)) {
+      throw new Error(
+        `ticket ${args.ticketId} is retired; it takes no allowlist requests until it is un-retired`,
+      );
     }
     // A per-session cap bounds a looping agent (finding 6).
     const sessionId = String(agent.session.id);
@@ -2527,6 +2764,17 @@ registerAidosSessionEventTypes(ctx);
       if (state.tickets.get(ticketId as TicketId) === undefined) {
         throw new Error(`unknown ticket ${ticketId}`);
       }
+      /*
+       * #108: a retired ticket takes no nominations. The queue hides retired
+       * rows, so a nomination naming one could never show a button — the
+       * exact "ask the human cannot act on" the gate-checked validation
+       * exists to prevent.
+       */
+      if (this._isRetired(state, ticketId as TicketId)) {
+        throw new Error(
+          `ticket ${ticketId} is retired; it takes no nominations until it is un-retired`,
+        );
+      }
       if (!HUMAN_NOMINATION_ACTIONS.includes(suggestion.actionId)) {
         throw new Error(
           `action ${suggestion.actionId} is not one a human performs; expected one of ` +
@@ -2633,6 +2881,19 @@ registerAidosSessionEventTypes(ctx);
        */
       const wanted = NOMINATION_ACTION_STATE[nomination.actionId];
       let spent = snapshot === undefined;
+      /*
+       * #108: a retired ticket takes no nominations. The human queue derives
+       * its entries from the board the client sees — which hides retired
+       * rows — so a nomination naming one could never be answered; pruning
+       * it here keeps the cap and the list telling the same story.
+       */
+      if (
+        !spent &&
+        snapshot !== undefined &&
+        this._isRetired(cache.state, Number(nomination.ticketId) as TicketId)
+      ) {
+        spent = true;
+      }
       if (!spent && snapshot !== undefined && wanted !== undefined) {
         const wantedAt = NOMINATION_STATE_SEQUENCE.indexOf(wanted);
         const actualAt = NOMINATION_STATE_SEQUENCE.indexOf(snapshot.state);
@@ -3485,6 +3746,15 @@ registerAidosSessionEventTypes(ctx);
     if (!prev) {
       throw new UnknownTicket(ticketId);
     }
+    /*
+     * #108: a retired ticket takes no agent edits. Same rule as the attach
+     * funnel: the human hid the ticket, so the agent must not keep writing
+     * it from a stale read. User edits stay open (the human may want to
+     * correct something before un-retiring).
+     */
+    if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     this._assertLocalWorkspace(agent, prev);
     const nextSlug = args.slug?.trim() ?? prev.slug;
     if (nextSlug !== prev.slug && this._slugTaken(cache.state, prev.workspaceKey, nextSlug, ticketId)) {
@@ -3937,6 +4207,16 @@ registerAidosSessionEventTypes(ctx);
     }
     this._assertLocalWorkspace(agent, ticket);
     const fromState = ticket.state;
+    /*
+     * #108: a retired ticket takes no agent moves. The refusal rides the
+     * same log-only aidos/refusal record the gate refusals append, so the
+     * history answers "why did nothing happen".
+     */
+    if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
+      const message = new RetiredTicketWriteRefused(ticketId).message;
+      this._appendRefusal(agent, ticketId, fromState, toState, actor, message);
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
 
     // 1. The pair must be legal. An illegal pair is a refusal like any
     //    other: it appends one aidos/refusal record and changes no state.
@@ -4375,6 +4655,14 @@ registerAidosSessionEventTypes(ctx);
       throw new UnknownTicket(ticketId);
     }
     this._assertLocalWorkspace(agent, snapshot);
+    /*
+     * #108: a retired ticket takes no agent comments. Comments are how the
+     * agent talks to the human ABOUT a ticket; on a retired ticket they are
+     * writes to something the human chose not to look at.
+     */
+    if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     const at = this._atFor(agent.session, ticketId);
     this._commit(agent, {
       kind: "comment/added",
@@ -4532,6 +4820,22 @@ registerAidosSessionEventTypes(ctx);
       throw new EvidenceAuthorRefused(kind, actor);
     }
     const snapshot = cache.state.tickets.get(ticketId);
+    /*
+     * #108: a retired ticket takes NO agent writes. The agent's board reads
+     * hide retired tickets, but an agent working from a read taken before
+     * the retirement could otherwise keep writing to a ticket the human hid.
+     * This is the ONE funnel every agent attach path goes through
+     * (agentAttachEvidence, attachCommit, plan import), so one guard covers
+     * them all. User paths stay open: the human owns the ticket and may edit
+     * it before un-retiring.
+     */
+    if (
+      actor === "agent" &&
+      snapshot !== undefined &&
+      this._isRetired(cache.state, ticketId)
+    ) {
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
     if (snapshot !== undefined && payload.criteria !== undefined) {
       const criteria = payload.criteria;
       if (typeof criteria !== "string") {
@@ -4666,6 +4970,209 @@ registerAidosSessionEventTypes(ctx);
       }
     }
     return false;
+  }
+
+  /**
+   * #108: the live retirement of one ticket, or null. THE ONE LOOKUP: every
+   * consumer in this service reads retirement through it, so there is one
+   * definition of "retired" and it lives in the kernel module.
+   */
+  private _retirementOf(state: AidosState, ticketId: TicketId): RetirementInfo | null {
+    return retirementOf(state.evidence.get(ticketId));
+  }
+
+  /** #108: whether the ticket is retired right now. */
+  private _isRetired(state: AidosState, ticketId: TicketId): boolean {
+    return isRetired(state.evidence.get(ticketId));
+  }
+
+  /**
+   * #108: the tickets whose `dependsOn` names one of the given workspace
+   * references, are NOT retired themselves, and are not done. A DONE
+   * dependent does not block a retirement (its reference is history, not an
+   * outstanding need); a retired dependent cannot block anything, since it
+   * is hidden itself.
+   */
+  private _liveDependents(
+    state: AidosState,
+    targetRefs: readonly string[],
+  ): Array<{ id: TicketId; title: string; state: TicketState }> {
+    const wanted = new Set(targetRefs);
+    const out: Array<{ id: TicketId; title: string; state: TicketState }> = [];
+    for (const snapshot of state.tickets.values()) {
+      if (snapshot.state === "done") continue;
+      if (this._isRetired(state, snapshot.id)) continue;
+      for (const ref of snapshot.dependsOn) {
+        if (wanted.has(ref)) {
+          out.push({ id: snapshot.id, title: snapshot.title, state: snapshot.state });
+          break;
+        }
+      }
+    }
+    out.sort((a, b) => a.id - b.id);
+    return out;
+  }
+
+  /**
+   * #108: resolve a supersede reference the way `dependsOn` references are
+   * resolved — `workspaceKey:id`, `workspaceKey:slug`, or a legacy bare
+   * number against this workspace — against the given state, and validate
+   * it. Returns the normalized `workspaceKey:id` list.
+   *
+   * The reference uses the SAME format as dependsOn and is validated the
+   * same way (the D1 rule): a reference to a ticket that does not exist is
+   * refused, because a supersede pointing at nothing is worse than none. A
+   * target that is ITSELF retired is refused too — following a chain must
+   * land on a live ticket, and a chain into a retired ticket stops there.
+   * A self-reference is refused for the same reason the D1 invariant
+   * refuses a self-dependency.
+   */
+  private _validatedSupersedeRefs(
+    state: AidosState,
+    ticket: TicketSnapshot,
+    refs: readonly string[],
+  ): string[] {
+    const ownWorkspace = ticket.workspaceKey;
+    const normalized: string[] = [];
+    for (const ref of refs) {
+      let target: TicketSnapshot | undefined;
+      let key: string;
+      const colon = ref.indexOf(":");
+      if (colon >= 0) {
+        key = ref.slice(0, colon);
+        const tail = ref.slice(colon + 1);
+        if (/^\d+$/.test(tail)) {
+          const numeric = Number(tail);
+          target = state.tickets.get(numeric as TicketId);
+          if (
+            target !== undefined &&
+            target.workspaceKey !== key
+          ) {
+            target = undefined;
+          }
+        } else {
+          for (const snapshot of state.tickets.values()) {
+            if (snapshot.workspaceKey === key && snapshot.slug === tail) {
+              target = snapshot;
+              break;
+            }
+          }
+        }
+      } else {
+        // A legacy bare number (or bare slug) resolves against the retiring
+        // ticket's own workspace, the same courtesy dependsOn resolution
+        // applies to pre-D1 references.
+        key = ownWorkspace;
+        if (/^\d+$/.test(ref)) {
+          target = state.tickets.get(Number(ref) as TicketId);
+          if (target !== undefined && target.workspaceKey !== key) {
+            target = undefined;
+          }
+        } else {
+          for (const snapshot of state.tickets.values()) {
+            if (snapshot.workspaceKey === key && snapshot.slug === ref) {
+              target = snapshot;
+              break;
+            }
+          }
+        }
+      }
+      if (target === undefined) {
+        throw new BadPayloadError(
+          `supersededBy reference ${JSON.stringify(ref)} names no ticket in this state; ` +
+            `the reference format is <workspaceKey>:<ticketId> (or <workspaceKey>:<slug>), ` +
+            `the same format as dependsOn`,
+        );
+      }
+      if (target.id === ticket.id) {
+        throw new BadPayloadError(
+          `supersededBy reference ${JSON.stringify(ref)} names the ticket being retired`,
+        );
+      }
+      if (this._isRetired(state, target.id)) {
+        throw new BadPayloadError(
+          `supersededBy reference ${JSON.stringify(ref)} names ticket #${target.id}, which is itself retired; ` +
+            `following a supersede chain must land on a live ticket`,
+        );
+      }
+      normalized.push(`${target.workspaceKey}:${target.id}`);
+    }
+    return normalized;
+  }
+
+  /**
+   * #108: the retire and un-retire writes. ONE implementation, and the
+   * panels/queues may offer the act from several surfaces only by reaching
+   * this method (the u98 rule, extended to retirement by this change).
+   *
+   * Retire attaches a `builtin:retired` row; un-retire DETACHES the newest
+   * one by its stamped `at` — the same mechanism the evidence panel's
+   * delete uses, so the append-only log keeps both directions as history
+   * and nothing is ever removed.
+   *
+   * The agent can reach neither path: `userRetireTicket` and
+   * `userUnretireTicket` are Remote surfaces with no tool twin, and the
+   * attach tool's kind list never offers `builtin:retired`.
+   */
+  userRetireTicket(
+    agent: Agent,
+    args: { ticketId: number | string; reason?: string; supersededBy?: string[] },
+  ): { ticketId: number; retired: true; payload: Record<string, unknown> } {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const cache = this._cache(routed.session);
+    this._sync(routed.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(routed, snapshot);
+    if (this._isRetired(cache.state, ticketId)) {
+      throw new BadPayloadError(`ticket #${ticketId} is already retired`);
+    }
+    const parsed = parseRetirementPayload({
+      ...(args.reason !== undefined ? { reason: args.reason } : {}),
+      ...(args.supersededBy !== undefined ? { supersededBy: args.supersededBy } : {}),
+    });
+    const supersededBy = this._validatedSupersedeRefs(cache.state, snapshot, parsed.supersededBy);
+    // The dependency gate, AFTER the references are normalized, so the
+    // refusal names the live dependents of the ticket being retired —
+    // whatever their reference format.
+    const dependents = this._liveDependents(cache.state, [
+      `${snapshot.workspaceKey}:${snapshot.id}`,
+      `${snapshot.workspaceKey}:${snapshot.slug}`,
+      String(snapshot.id),
+    ]);
+    if (dependents.length > 0) {
+      throw new RetireRefused(ticketId, dependents);
+    }
+    const payload: Record<string, unknown> = {};
+    if (parsed.reason !== null) payload.reason = parsed.reason;
+    if (supersededBy.length > 0) payload.supersededBy = supersededBy;
+    this._attachEvidenceInternal(routed, ticketId, RETIRED_KIND, payload, "user");
+    return { ticketId, retired: true, payload };
+  }
+
+  userUnretireTicket(
+    agent: Agent,
+    args: { ticketId: number | string },
+  ): { ticketId: number; retired: false; at: number } {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const cache = this._cache(routed.session);
+    this._sync(routed.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(routed, snapshot);
+    const rows = cache.state.evidence.get(ticketId) ?? [];
+    const retirement = retirementOf(rows);
+    if (retirement === null) {
+      throw new BadPayloadError(`ticket #${ticketId} is not retired`);
+    }
+    this._detachEvidence(routed, { ticketId, at: retirement.at, rowKind: RETIRED_KIND });
+    return { ticketId, retired: false, at: retirement.at };
   }
 
   /**

@@ -88,6 +88,14 @@ const MIRROR_BUILTIN_KINDS: KindDef[] = [
     allowedAuthors: ["agent", "user"],
   },
   {
+    id: "builtin:retired",
+    label: "Retired",
+    description:
+      "The human hid this ticket without deleting it (#108). While a live row of this kind exists, every consumer ignores the ticket \u2014 the board grid, the filter counts, the tab badge, the human queue, the agent's board reads, the plan render \u2014 except the Retired panel, where it can be viewed and un-retired. DETACH this row to un-retire: the append-only log keeps both the retirement and the un-retirement as history, so the ticket returns to exactly the state and evidence it had. Contributes to nothing \u2014 it never satisfies a gate \u2014 and only the human may attach it: an agent that can hide tickets can hide its own inconvenient work. The payload carries an optional reason and optional supersededBy ticket references naming where the work went.",
+    weight: 0,
+    allowedAuthors: ["user"],
+  },
+  {
     id: "builtin:review_note",
     label: "Remark",
     description:
@@ -169,7 +177,7 @@ describe("constants mirror", () => {
     expect(STATE_ORDER).toEqual(MIRROR_STATE_ORDER);
   });
 
-  it("restates BUILTIN_KINDS verbatim, all 14 rows", () => {
+  it("restates BUILTIN_KINDS verbatim, all 15 rows", () => {
     expect([...BUILTIN_KINDS]).toEqual(MIRROR_BUILTIN_KINDS);
   });
 

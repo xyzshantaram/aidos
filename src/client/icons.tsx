@@ -67,6 +67,21 @@ export function PopOutIcon() {
 }
 
 /**
+ * #108: the UN-RETIRE icon — an arrow swinging back into a box. The reverse
+ * of the pop-out glyph by design: retiring sent the ticket away, this brings
+ * it back. It inherits the current text colour like every icon here.
+ */
+export function UnretireIcon() {
+  return (
+    <svg {...iconProps()}>
+      <path d="M6.5 10H2V2h8v4.5" />
+      <path d="M10.5 6.5v3.5H7" />
+      <path d="M10.2 6.8L7.2 9.8" />
+    </svg>
+  );
+}
+
+/**
  * The warning triangle: marks a criterion no evidence covers yet. Like the
  * others it inherits the current text color, so the caller decides the hue.
  */
