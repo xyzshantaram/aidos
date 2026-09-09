@@ -24,6 +24,7 @@ import {
   DEFAULT_APPLIED,
   cloneAppliedState,
   reportCount,
+  setTicketParam,
   setAppliedState,
 } from "./view-state";
 import { TicketView } from "./ticket-view";
@@ -145,16 +146,11 @@ function ticketRefFromSearch(search: string): string | null {
 }
 
 /** Write the ticket's board key into the query string. Null clears it. */
-function setTicketParam(key: string | null): void {
-  const url = new URL(window.location.href);
-  if (key === null) {
-    url.searchParams.delete("ticket");
-    window.history.replaceState({}, "", url);
-  } else {
-    url.searchParams.set("ticket", key);
-    window.history.pushState({}, "", url);
-  }
-}
+/*
+ * The writer moved to view-state (#177 follow-up): a tool card opens tickets
+ * too, and this is the channel that survives a reload, so both surfaces
+ * share one implementation rather than agreeing by coincidence.
+ */
 
 /**
  * Mobile top-chrome clearance (#64).

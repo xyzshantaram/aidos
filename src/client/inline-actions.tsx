@@ -60,7 +60,7 @@ import { boardKeyOf } from "./board-logic";
 import { VerifyModal } from "./evidence-attach";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { SignoffDialog } from "./signoff-dialog";
-import { setSelection, ticketTitle } from "./view-state";
+import { setSelection, setTicketParam, ticketTitle } from "./view-state";
 import { showToast } from "./toast-store";
 
 /** The actions a nomination can carry, as the queue names them. */
@@ -173,9 +173,21 @@ export function InlineTicketAction(props: {
        * No modal: see the header. Opening the ticket puts the human in
        * front of the one surface that can show what marking done would
        * close -- its evidence and its unmet criteria.
+       *
+       * USER-REPORTED, 2026-09-08: "does not actually open the ticket's
+       * detail view - it just opens the board." The first cut wrote only
+       * the selection store, which is enough ONLY when the board is already
+       * mounted for this session -- the store is in-memory, so a board that
+       * mounts later had nothing to restore from and landed on the grid.
+       *
+       * Writing the deep-link param too is what makes this work from a
+       * transcript, where the board usually is NOT mounted: #100 round 4
+       * made that param the channel a board reads on mount, and the same
+       * function now serves both surfaces.
        */
       setSelection(props.sessionId, props.boardKey);
-      showToast("Opened " + props.boardKey + " on the board", "info");
+      setTicketParam(props.boardKey);
+      showToast("Opening " + props.boardKey + " — see the Tickets tab", "info");
       return;
     }
     /*

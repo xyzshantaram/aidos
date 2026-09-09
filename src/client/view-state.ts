@@ -582,6 +582,28 @@ export function onSelectionChanged(listener: (sessionId: string) => void): () =>
   };
 }
 
+/**
+ * Write the open ticket into the URL, or clear it.
+ *
+ * #100 round 4 made this the channel that survives a page reload -- the
+ * selection store is in-memory and dies with the page -- so ANY surface that
+ * opens a ticket must write it, not just the board. It lives here rather
+ * than in local-ticket-view because a tool card in the transcript opens
+ * tickets too (#171), and a second copy of this would be a second answer to
+ * "what does the URL say is open" (#170).
+ */
+export function setTicketParam(key: string | null): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (key === null) {
+    url.searchParams.delete("ticket");
+    window.history.replaceState({}, "", url);
+  } else {
+    url.searchParams.set("ticket", key);
+    window.history.pushState({}, "", url);
+  }
+}
+
 /** Remember (or clear) the open ticket of one session. */
 export function setSelection(sessionId: string, key: string | null): void {
   const previous = selections.get(sessionId) ?? null;

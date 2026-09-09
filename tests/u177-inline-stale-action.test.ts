@@ -19,6 +19,8 @@
  * write-before-check fails on the captured method list, not on prose.
  */
 
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -159,5 +161,58 @@ describe("#177 stale inline actions refuse without writing", () => {
     // in_progress row and refused (or worse, written to the wrong ticket).
     expect(refusal).toBeNull();
     expect(methods).toEqual(["aidos/workspaceTickets"]);
+  });
+});
+
+/**
+ * USER-REPORTED, 2026-09-08: the inline "Open on board" action "does not
+ * actually open the ticket's detail view - it just opens the board".
+ *
+ * The first cut wrote only the selection STORE, which is in-memory: enough
+ * when the board is already mounted for that session, and nothing at all
+ * when it mounts later — which is the normal case from a transcript, where
+ * the board is usually not on screen. #100 round 4 had already established
+ * which channel survives that gap: the `?ticket=` deep link a board reads on
+ * mount. The card must write it too.
+ */
+describe("#177 opening a ticket from a card uses the channel a board can read", () => {
+  const inline = readFileSync(
+    new URL("../src/client/inline-actions.tsx", import.meta.url).pathname,
+    "utf8",
+  );
+  const view = readFileSync(
+    new URL("../src/client/view-state.ts", import.meta.url).pathname,
+    "utf8",
+  );
+  const board = readFileSync(
+    new URL("../src/client/local-ticket-view.tsx", import.meta.url).pathname,
+    "utf8",
+  );
+
+  it("writes the deep link, not only the in-memory selection", () => {
+    const branch = inline.slice(inline.indexOf('props.actionId === "mark-done"'));
+    expect(branch.slice(0, 1400)).toContain("setSelection(props.sessionId, props.boardKey)");
+    expect(branch.slice(0, 1400)).toContain("setTicketParam(props.boardKey)");
+  });
+
+  it("shares ONE param writer with the board, rather than agreeing by luck", () => {
+    /*
+     * #170's rule applied to a one-line function: two copies of "what does
+     * the URL say is open" is two answers, and the board's copy is the one
+     * #100 spent four rounds getting right.
+     */
+    expect(view).toContain("export function setTicketParam");
+    expect(board).not.toContain("function setTicketParam(");
+    expect(board).toContain("setTicketParam,");
+  });
+
+  it("still writes no board evidence on this path", () => {
+    // Opening a ticket is navigation, not a write. The #170 guard in u98
+    // covers the module; this pins the specific branch.
+    const branch = inline.slice(
+      inline.indexOf('props.actionId === "mark-done"'),
+      inline.indexOf("#177: ASK before acting"),
+    );
+    expect(branch).not.toContain("callAidosRemote(");
   });
 });
