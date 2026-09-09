@@ -14,6 +14,7 @@ import react from "react";
 import { callAidosRemote, AidosRemoteError } from "./remote";
 import { showToast } from "./toast-store";
 import { EvidenceStrip } from "./evidence-strip";
+import { EvidenceViewer } from "./evidence-viewer";
 import type { EvidenceRow } from "../kernel/types";
 import type { EvidenceRowLike } from "./board-logic";
 
@@ -61,6 +62,12 @@ export interface CriterionLinkerProps {
 
 export function CriterionLinker(props: CriterionLinkerProps) {
   const [busyAt, setBusyAt] = react.useState<number | null>(null);
+  /*
+   * The viewer for the strips below. A strip without onView is a dead end:
+   * the identical strip in the evidence list opens the viewer, so one here
+   * that does nothing teaches the button means nothing.
+   */
+  const [viewed, setViewed] = react.useState<EvidenceRowLike | null>(null);
   const [draft, setDraft] = react.useState<Record<string, string>>({});
 
   const candidates = unlinkedRows(props.evidence);
@@ -91,6 +98,14 @@ export function CriterionLinker(props: CriterionLinkerProps) {
 
   return (
     <div className="aidos-criterion-blocks">
+      {viewed === null ? null : (
+        <EvidenceViewer
+          row={viewed}
+          onClose={() => {
+            setViewed(null);
+          }}
+        />
+      )}
       {props.criteria.map((label) => {
         const linked = rowsForCriterion(props.evidence, label);
         const options = candidates.filter((row) => !linked.includes(row));
@@ -104,6 +119,7 @@ export function CriterionLinker(props: CriterionLinkerProps) {
                   <EvidenceStrip
                     key={String(row.at) + ":" + row.kind}
                     row={row}
+                    onView={setViewed}
                     deleting={busyAt === row.at}
                     onUnlink={
                       props.readOnly ? undefined : () => void resolve(row, null)

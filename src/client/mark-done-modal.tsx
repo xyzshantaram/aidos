@@ -16,8 +16,10 @@ import { showToast } from "./toast-store";
 import { ModalShell, NoteField } from "./ui";
 import { CriterionLinker } from "./criterion-linker";
 import { EvidenceStrip } from "./evidence-strip";
+import { EvidenceViewer } from "./evidence-viewer";
 import type { EvidenceRow } from "../kernel/types";
 import type { TicketView } from "../kernel/projections";
+import type { EvidenceRowLike } from "./board-logic";
 
 export interface MarkDoneModalProps {
   open: boolean;
@@ -34,6 +36,8 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
   const [step, setStep] = react.useState<1 | 2>(1);
   const [finalComment, setFinalComment] = react.useState("");
   const [working, setWorking] = react.useState(false);
+  // The viewer for the step-2 strips; same dead-end rule as the linker.
+  const [viewed, setViewed] = react.useState<EvidenceRowLike | null>(null);
 
   react.useEffect(function () {
     if (props.open) logDebug("mark done modal opened");
@@ -87,6 +91,14 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
 
   return (
     <ModalShell title="Mark done" working={working} onClose={props.onClose}>
+      {viewed === null ? null : (
+        <EvidenceViewer
+          row={viewed}
+          onClose={() => {
+            setViewed(null);
+          }}
+        />
+      )}
       {step === 1 ? (
         <div className="aidos-modal-form">
           <p className="aidos-modal-body">The ticket criteria, with their evidence:</p>
@@ -125,6 +137,7 @@ export function MarkDoneModal(props: MarkDoneModalProps) {
                 <EvidenceStrip
                   key={String(row.at ?? index) + ":" + row.kind}
                   row={row}
+                  onView={setViewed}
                   criterionLabel={
                     typeof row.payload.criteria === "string" &&
                     row.payload.criteria.trim() !== ""

@@ -837,6 +837,9 @@ export function fallbackBody(resultText: string | null): react.ReactNode | null 
 export function AttachEvidenceRow(props: AidosViewProps) {
   const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
   const kind = typeof args?.kind === "string" ? args.kind : undefined;
+  // The viewer for the just-attached strip: a card showing a row it cannot
+  // open is a receipt with no way to inspect what was received.
+  const evidenceViewer = useEvidenceViewer();
   /*
    * The EVIDENCE STRIP, and the criterion's whole point: this is literally
    * the component the evidence panel, the criteria panel and the mark-done
@@ -844,23 +847,28 @@ export function AttachEvidenceRow(props: AidosViewProps) {
    * A lookalike built here would drift from it -- which is exactly what #82
    * proved when three hand-written approximations of tool-render all failed.
    */
-  const body =
-    errorText !== null && errorText !== ""
-      ? errorBody(errorText)
-      : kind !== undefined
-        ? (
-            <ul className="aidos-evidence-list">
-              <EvidenceStrip
-                row={{
-                  kind: kind.startsWith("builtin:") ? kind : "builtin:" + kind,
-                  payload: (args?.payload as Record<string, unknown>) ?? {},
-                  author: "agent",
-                  at: typeof result?.updatedAt === "number" ? result.updatedAt : undefined,
-                }}
-              />
-            </ul>
-          )
-        : null;
+  const body = (
+    <>
+      {errorText !== null && errorText !== ""
+        ? errorBody(errorText)
+        : kind !== undefined
+          ? (
+              <ul className="aidos-evidence-list">
+                <EvidenceStrip
+                  row={{
+                    kind: kind.startsWith("builtin:") ? kind : "builtin:" + kind,
+                    payload: (args?.payload as Record<string, unknown>) ?? {},
+                    author: "agent",
+                    at: typeof result?.updatedAt === "number" ? result.updatedAt : undefined,
+                  }}
+                  onView={evidenceViewer.open}
+                />
+              </ul>
+            )
+          : null}
+      {evidenceViewer.viewer}
+    </>
+  );
   return (
     <AidosRow
       icon={<SignoffIcon />}
