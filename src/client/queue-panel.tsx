@@ -29,6 +29,7 @@ import { TicketStrip } from "./ticket-strip";
 import { ApprovalRunner } from "./approval-runner";
 import { VerifyModal } from "./evidence-attach";
 import { SignoffDialog } from "./signoff-dialog";
+import { MarkDoneModal } from "./mark-done-modal";
 import { boardKeyOf } from "./board-logic";
 import { getRunningApproval, setRunningApproval } from "./view-state";
 
@@ -75,27 +76,16 @@ export interface QueuePanelProps {
 /** The step list an action collects before it can be performed. */
 function stepsFor(entry: QueueEntry): Step[] {
   /*
-   * NO CRITERION PICKER LIVES HERE ANY MORE (#123).
+   * NO GATE ASK REACHES HERE ANY MORE (#98, #123, #170).
    *
-   * It used to, for verify alone — and that inline `<select>` was the OLD
-   * linker the user reported. Verify now opens the detail panel's modal
-   * instead of a runner step, so the only actions that still reach this
-   * function are signoff (authorises work to START: nothing is proven yet,
-   * so there is no criterion to attest) and mark-done (a pure move that
-   * attaches no row at all). Neither has anything to link.
+   * Signoff, verify and mark-done each opened a lookalike here while the
+   * detail panel ran a richer dialog, so each feature was true from one
+   * entry point and false from the other. The queue now opens the SAME
+   * SignoffDialog, VerifyModal and MarkDoneModal the detail panel opens
+   * (see the render below). The runner keeps the one ask with no richer
+   * surface to diverge from: an allowlist approval, which is genuinely a
+   * confirm-the-paths step.
    */
-  const titles: Record<string, string> = {
-    signoff: "Sign off on " + entry.ticket.title,
-    verify: "Verify " + entry.ticket.title,
-    "mark-done": "Mark " + entry.ticket.title + " done",
-  };
-  const prompts: Record<string, string> = {
-    signoff:
-      "Signing off moves this to in progress and grants the agent write access " +
-      "inside its allowlist.",
-    verify: "Attaches your user_verified row. It does not move the ticket.",
-    "mark-done": "This is the final state. Only you can set it.",
-  };
   /*
    * An approval entry is not a gate ask: the agent proposed something and is
    * BLOCKED until answered. It runs a path-list step pre-filled with what was
@@ -117,32 +107,16 @@ function stepsFor(entry: QueueEntry): Step[] {
   }
   const confirm: Step = {
     kind: "confirm",
-    title: titles[entry.actionId] ?? entry.label,
-    prompt: prompts[entry.actionId],
+    title: entry.label,
+    prompt: entry.prompt,
     noteLabel: "Note (optional)",
   };
   /*
-   * #98: SIGNOFF AND ALLOWLIST ARE ONE DECISION.
-   *
-   * Observed live: five signoffs meant five more allowlist cards — ten
-   * interactions for five decisions — because signoff on its own grants
-   * write access to NOTHING. It moves the ticket to in_progress, which
-   * unlocks the write tools, and the boundary then refuses every path
-   * because the union is empty until a file_allowlist row exists. So the
-   * agent's first act after every signoff was to ask again. The board had
-   * split one decision ("you may work on this, here") into two.
-   *
-   * The second step is SKIPPABLE and starts empty when the agent proposed
-   * nothing: a human may legitimately sign off now and scope the files
-   * later, which leaves the ticket exactly as it is today. The point is to
-   * remove the forced round-trip, not to make the allowlist mandatory.
-   */
-  /*
-   * NO SIGNOFF BRANCH HERE ANY MORE. The queue's signoff two-step lived in
-   * this function while the detail panel ran a note-only dialog, so the
-   * allowlist rode one entry point and not the other. Signoff now opens
-   * SignoffDialog from both (see the render below), which is the same
-   * correction #123 made for verify.
+   * The confirm fallback is reached only by asks with no dedicated surface
+   * (an approval entry returns above; signoff, verify and mark-done open
+   * their shared dialogs in the render below). It carries the entry's own
+   * label and prompt, so a future ask degrades to its own words rather than
+   * to a lookalike of another flow.
    */
   return [confirm];
 }
@@ -547,18 +521,17 @@ export function QueuePanel(props: QueuePanelProps) {
         </ul>
       )}
       {/*
-        * #123: VERIFY IS NOT A RUNNER STEP.
+        * #123 + #98 + #170: GATE ASKS ARE NOT RUNNER STEPS.
         *
-        * A verify ask opens the SAME modal the detail panel's Verify button
-        * opens — screenshot paste and all — because the user's rule is that
-        * one label means one flow. Everything else (signoff, mark-done, an
-        * allowlist approval) keeps the runner: those genuinely are confirm
-        * steps, and the detail panel has no richer surface for them to
-        * diverge from.
+        * A verify, signoff or mark-done ask opens the SAME modal the detail
+        * panel's button opens -- because the user's rule is that one label
+        * means one flow. The runner keeps the one ask with no richer surface
+        * to diverge from: an allowlist approval, which genuinely is a
+        * confirm-the-paths step.
         *
-        * An APPROVAL entry is never routed here even though its actionId can
-        * look adjacent: it resolves a pending card rather than attaching
-        * evidence, and `stepsFor` gives it the path-list step.
+        * An APPROVAL entry is never routed to a gate modal even though its
+        * actionId can look adjacent: it resolves a pending card rather than
+        * attaching evidence, and `stepsFor` gives it the path-list step.
         */}
       {running !== null &&
       running.actionId === "verify" &&
@@ -588,9 +561,7 @@ export function QueuePanel(props: QueuePanelProps) {
          * the detail panel's Sign off button ran a note-only dialog with no
          * allowlist at all — so "signoff carries the allowlist" was true
          * from one entry point and false from the other, which is exactly
-         * the divergence #123 was filed for on verify. The runner keeps
-         * mark-done and allowlist approvals, which have no richer surface
-         * to diverge from.
+         * the divergence #123 was filed for on verify.
          */
         <SignoffDialog
           open
@@ -602,6 +573,36 @@ export function QueuePanel(props: QueuePanelProps) {
             setRunning(null);
           }}
           onSignedOff={() => {
+            setAnswered(function (previous) {
+              const next = new Set(previous);
+              next.add(entryKey(running));
+              return next;
+            });
+            props.onRefresh?.();
+          }}
+        />
+      ) : running !== null &&
+        running.actionId === "mark-done" &&
+        running.approvalId === undefined ? (
+        /*
+         * #170: MARK DONE IS ONE FLOW TOO.
+         *
+         * The queue ran a bare move while the detail panel's modal attached
+         * an empty-payload verified row and moved -- same label, different
+         * consequence, and neither behaviour survives: mark done is now
+         * GATED on the verified row in the shared MarkDoneModal, which both
+         * entry points open. The runner keeps allowlist approvals only.
+         */
+        <MarkDoneModal
+          open
+          ticketId={running.boardKey}
+          ticket={running.ticket}
+          evidence={props.evidenceByTicket[running.boardKey] ?? []}
+          agentId={props.sessionId}
+          onClose={() => {
+            setRunning(null);
+          }}
+          onMarkedDone={() => {
             setAnswered(function (previous) {
               const next = new Set(previous);
               next.add(entryKey(running));

@@ -8,8 +8,8 @@
  */
 import react from "react";
 
-import { callAidosRemote, AidosRemoteError } from "./remote";
-import { showToast } from "./toast-store";
+import { callAidosRemote } from "./remote";
+import { resolveApprovalRequest } from "./approval-resolution";
 
 interface PendingApproval {
   id: string;
@@ -109,18 +109,12 @@ export function AllowlistRequestCard(props: {
     if (request === null || working) return;
     setWorking(true);
     try {
-      const clean = paths.map((p) => p.trim()).filter((p) => p !== "");
-      await callAidosRemote(
-        "resolveApproval",
-        { requestId: request.id, approved, ...(approved ? { paths: clean } : {}) },
-        props.agentId,
-      );
-      showToast(approved ? "Allowlist approved" : "Allowlist rejected", approved ? "success" : "info");
+      // #170: the resolution itself lives in approval-resolution.ts, shared
+      // with the queue. This handler only refreshes its own card state.
+      await resolveApprovalRequest(props.agentId, request.id, approved, paths);
       dirtyRef.current = false;
       setRequest(null);
       props.onResolved?.();
-    } catch (error) {
-      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
     } finally {
       setWorking(false);
     }

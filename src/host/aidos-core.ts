@@ -2570,11 +2570,16 @@ registerAidosSessionEventTypes(ctx);
       );
       return { resolved: "rejected" };
     }
-    // The click is the user authorship: attach + field write here, so the
-    // coverage gate sees a user-authored row and the union updates at once.
+    // The click is the user authorship: the grant lands through
+    // userGrantAllowlist -- the ONE allowlist path (#170) -- so an approval
+    // grant is indistinguishable on the board from a signoff-carried or
+    // editor grant: same user-authored row, same coverage filter, same merge.
     // Re-validate the edited paths (finding 3): the card sends whatever is
     // in the textarea, so approve-time is when containment + existence are
     // re-checked — propose-time validation alone is not the gate.
+    // userGrantAllowlist re-validates against the OWNING session's cwd, which
+    // is this session (the resolver must be the requesting session, checked
+    // above), so the second validation agrees by construction.
     const rawPaths = args.paths ?? (pending.payload.paths as string[]);
     const cwd = agent.session?.header?.cwd ?? "";
     const revalidated = validateAllowlistPaths(cwd, rawPaths);
@@ -2602,21 +2607,25 @@ registerAidosSessionEventTypes(ctx);
       );
       return { resolved: `refused: ${detail}` };
     }
-    const paths = this._grantAllowlistPaths(agent, pending.ticketId, revalidated.paths);
+    const paths = this.userGrantAllowlist(agent, {
+      ticketId: pending.ticketId,
+      paths: revalidated.paths,
+    }).granted;
     return { resolved: `approved: ${paths.join(", ")}` };
   }
 
   /**
    * Attach an approved allowlist and merge it into the ticket's field.
    *
-   * Extracted from resolveApproval for #98 (signoff and allowlist are ONE
-   * decision, so the signoff run collects the paths and lands them by the
-   * same route). The caller has already validated: this method performs
-   * only the two writes and the merge, so an allowlist granted while
-   * signing off is indistinguishable on the board from one granted through
-   * an approval card — same user-authored row, same coverage gate, same
-   * field. Two entry points, one implementation; a second copy of this
-   * merge is how #112 happened.
+   * The single writer behind userGrantAllowlist (#170): every grant --
+   * approval card, signoff-carried paths, ticket editor, evidence form --
+   * funnels through it, and it performs only the two writes and the merge,
+   * so a granted allowlist is indistinguishable on the board whichever entry
+   * point the human used. Extracted from resolveApproval for #98 (signoff
+   * and allowlist are ONE decision); resolveApproval now calls
+   * userGrantAllowlist, which calls this. A second copy of this merge is
+   * how #112 happened. The caller has already validated: this method
+   * performs only the two writes and the merge.
    */
   private _grantAllowlistPaths(
     agent: Agent,

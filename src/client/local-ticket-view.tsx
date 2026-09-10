@@ -49,6 +49,7 @@ import type { RunOutcome } from "./approval-runner";
 import { activeTicketRow } from "./active-ticket";
 import { logDebug, logWarn } from "./log";
 import { showToast } from "./toast-store";
+import { resolveApprovalRequest } from "./approval-resolution";
 import { callAidosRemote } from "./remote";
 import { clearDetailModals, isModalOpen, setModalOpen, getHeldTicket, getMerge, getPulledVersion, getSelection, holdInput, isMergePulling, onSelectionChanged, publishTicketTitles, recordResolution, setMerge, setMergePulling, setPulledVersion, setRemountSuppressed, setSelection } from "./view-state";
 import type { WorkspaceMerge } from "./view-state";
@@ -1257,10 +1258,14 @@ function ProjectionReader(props: ProjectionReaderProps) {
   }
 
   /**
-   * #93: the queue's actions go through the SAME remotes the detail panel
-   * uses — signoff attaches the row then moves, verify attaches only, and
-   * mark-done moves. One write path, so the queue can never drift from what
-   * the buttons on a ticket do.
+   * #93 + #170: the queue's writes go through the SAME flows the detail
+   * panel opens -- one label, one flow. Signoff, verify and mark-done open
+   * their shared dialogs (rendered by QueuePanel), so this function never
+   * implements them: that is precisely how "signoff carries the allowlist"
+   * ended up true from the queue and false from the ticket, and how the
+   * queue's bare mark-done move diverged from the modal's. What reaches here
+   * is the one ask with no richer surface: an allowlist approval, which
+   * resolves its card through the shared approval-resolution module.
    */
   async function performQueueAction(
     entry: QueueEntry,
@@ -1269,63 +1274,35 @@ function ProjectionReader(props: ProjectionReaderProps) {
     if (outcome.status === "rejected") {
       // Rejecting an APPROVAL must resolve its card, or it lingers forever
       // and the agent is never told. Rejecting a gate ask writes nothing.
+      // #170: the resolution lives in approval-resolution.ts, shared with
+      // the ticket card -- this path only names the request.
       if (entry.approvalId !== undefined) {
-        await callAidosRemote(
-          "resolveApproval",
-          { requestId: entry.approvalId, approved: false },
-          sessionId,
-        );
-        showToast("Request rejected", "info");
+        await resolveApprovalRequest(sessionId, entry.approvalId, false);
       }
       return;
     }
-    const first = outcome.values[0];
-    const note =
-      first !== undefined && first.kind === "confirm" ? first.note.trim() : "";
-    const criterion =
-      first !== undefined && first.kind === "confirm" ? first.criterion : undefined;
-    const payload: Record<string, unknown> = {};
-    if (note !== "") payload.note = note;
-    if (criterion !== undefined) payload.criteria = criterion;
-    /*
-     * The BOARD key, not the bare id. #93's review found that a plain number
-     * makes _routedAgent return the CALLER unchanged, so signing off foreign
-     * #12 wrote to own #12. The composite `sourceSessionId:id` is what routes
-     * the write to the owning session.
-     */
-    const ticketId = entry.boardKey;
     try {
       /*
-       * #93: an approval entry resolves the pending CARD; it does not attach
-       * evidence itself. resolveApproval re-validates the edited paths and
-       * performs the user-authored attach plus the field write in one step.
+       * #93 + #170: an approval entry resolves the pending CARD; it does not
+       * attach evidence itself. The resolution lives in
+       * approval-resolution.ts, shared with the ticket card -- this path
+       * only collects the (possibly edited) paths from the runner step.
        */
       if (entry.approvalId !== undefined) {
         const step = outcome.values[0];
         const paths = step !== undefined && step.kind === "path-list" ? step.paths : [];
-        await callAidosRemote(
-          "resolveApproval",
-          { requestId: entry.approvalId, approved: true, paths },
-          sessionId,
-        );
-        showToast("Approved " + paths.length + " path(s)", "success");
+        await resolveApprovalRequest(sessionId, entry.approvalId, true, paths);
         return;
       }
       /*
-       * SIGNOFF AND VERIFY ARE NOT HANDLED HERE ANY MORE.
+       * SIGNOFF, VERIFY AND MARK-DONE ARE NOT HANDLED HERE.
        *
-       * Both used to have a full write implementation in this function --
-       * a third and fourth copy beside the detail panel's dialogs -- and
-       * that is precisely how "signoff carries the allowlist" ended up true
-       * from the queue and false from the ticket. The queue now opens the
-       * SAME SignoffDialog and VerifyModal the detail panel opens (#98,
-       * #123), so those flows have exactly one implementation each and this
-       * function is left with the two asks that genuinely are one write.
+       * Each used to have a write implementation in this function beside the
+       * detail panel's dialogs. The queue now opens the SAME SignoffDialog,
+       * VerifyModal and MarkDoneModal, so those flows have exactly one
+       * implementation each. A gate ask reaching here is a routing bug, and
+       * it writes nothing.
        */
-      if (entry.actionId === "mark-done") {
-        await callAidosRemote("userMoveTicket", { ticketId, to: "done" }, sessionId);
-        showToast("Marked done", "success");
-      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : String(error), "refusal");
       throw error;
