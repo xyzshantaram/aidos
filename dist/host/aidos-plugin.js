@@ -27992,8 +27992,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean, created };
 }
-var _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _a3) {
+var _userUnretireTicket_dec, _userRetireTicket_dec, _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _userRetireTicket_dec = [Remote("userRetireTicket")], _userUnretireTicket_dec = [Remote("userUnretireTicket")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -30536,20 +30536,6 @@ ${detail}`
     }
     return normalized;
   }
-  /**
-   * #108: the retire and un-retire writes. ONE implementation, and the
-   * panels/queues may offer the act from several surfaces only by reaching
-   * this method (the u98 rule, extended to retirement by this change).
-   *
-   * Retire attaches a `builtin:retired` row; un-retire DETACHES the newest
-   * one by its stamped `at` — the same mechanism the evidence panel's
-   * delete uses, so the append-only log keeps both directions as history
-   * and nothing is ever removed.
-   *
-   * The agent can reach neither path: `userRetireTicket` and
-   * `userUnretireTicket` are Remote surfaces with no tool twin, and the
-   * attach tool's kind list never offers `builtin:retired`.
-   */
   userRetireTicket(agent, args) {
     const routed = this._routedAgent(agent, args.ticketId);
     const ticketId = this._resolveTicketId(routed, args.ticketId);
@@ -30796,6 +30782,8 @@ __decorateElement(_init, 1, "userAttachCommitEvidence", _userAttachCommitEvidenc
 __decorateElement(_init, 1, "userMoveTicket", _userMoveTicket_dec, AidosService);
 __decorateElement(_init, 1, "userAddComment", _userAddComment_dec, AidosService);
 __decorateElement(_init, 1, "userSetPlanMeta", _userSetPlanMeta_dec, AidosService);
+__decorateElement(_init, 1, "userRetireTicket", _userRetireTicket_dec, AidosService);
+__decorateElement(_init, 1, "userUnretireTicket", _userUnretireTicket_dec, AidosService);
 __decoratorMetadata(_init, AidosService);
 __publicField(AidosService, "inject", [
   "agents",

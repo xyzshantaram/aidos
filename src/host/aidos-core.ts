@@ -5114,6 +5114,7 @@ registerAidosSessionEventTypes(ctx);
    * `userUnretireTicket` are Remote surfaces with no tool twin, and the
    * attach tool's kind list never offers `builtin:retired`.
    */
+  @Remote("userRetireTicket")
   userRetireTicket(
     agent: Agent,
     args: { ticketId: number | string; reason?: string; supersededBy?: string[] },
@@ -5153,6 +5154,7 @@ registerAidosSessionEventTypes(ctx);
     return { ticketId, retired: true, payload };
   }
 
+  @Remote("userUnretireTicket")
   userUnretireTicket(
     agent: Agent,
     args: { ticketId: number | string },
