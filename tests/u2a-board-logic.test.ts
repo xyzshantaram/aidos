@@ -453,6 +453,7 @@ describe("kindKeyword", () => {
     // code". The two tokens must be distinguishable at a glance on a chip.
     expect(kindKeyword("builtin:review_pass")).toBe("ACCEPTED");
     expect(kindKeyword("builtin:review_fail")).toBe("FAILED");
+    expect(kindKeyword("builtin:user_commit")).toBe("COMMIT");
   });
 
   it("never returns the raw kind id of a builtin kind", () => {

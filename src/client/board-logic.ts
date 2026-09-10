@@ -603,6 +603,7 @@ const KIND_KEYWORDS: Record<string, string> = {
   "builtin:review_fail": "FAILED",
   "builtin:review_note": "NOTE",
   "builtin:retired": "RETIRED",
+  "builtin:user_commit": "COMMIT",
 };
 
 export function kindKeyword(kind: string): string {
