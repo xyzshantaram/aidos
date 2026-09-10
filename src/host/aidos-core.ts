@@ -52,6 +52,17 @@ import {
 
 /** #101: a worktree checkout is not a 5-second operation on a big repo. */
 const WORKTREE_TIMEOUT_MS = 120000;
+
+/**
+ * How long a closed session's fold stays cached in the workspace merge
+ * (user-reported 2026-09-10: the merge re-inspected 225 logs per call and
+ * tool-card actions timed out). A closed log cannot grow while its session
+ * stays dead, so the cache is exact in-process; the TTL only bounds the
+ * cross-process edge of another dsh writing to a session this one sees as
+ * closed. Reopen-then-close with new events is handled by dropping the entry
+ * the moment the session is live, not by this TTL.
+ */
+const CLOSED_FOLD_CACHE_TTL_MS = 60000;
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { reviewChainOf } from "../kernel/gates";
@@ -2023,21 +2034,73 @@ registerAidosSessionEventTypes(ctx);
     }
 
     const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
+    /*
+     * USER-REPORTED 2026-09-10: opening a tool-card action timed out after
+     * 15s. The check behind it calls this merge, and this loop re-inspected
+     * AND re-folded every closed session log on every call — measured at 225
+     * persisted sessions in this workspace, the largest a 62M log. The parse
+     * and fold of hundreds of megabytes, sequentially, is the timeout.
+     *
+     * A closed log cannot grow while its session stays dead: no live agent
+     * holds it, so no one appends to it. Its fold is therefore cached by
+     * session id. Two invalidations keep the cache exact:
+     *  - a session that is live now is folded live below AND its entry is
+     *    dropped, so a reopen-close cycle with new events re-inspects;
+     *  - a TTL backstops the one case this process cannot see — ANOTHER
+     *    process appending to a session this one considers closed — bounding
+     *    that staleness to the TTL rather than eliminating it.
+     * Only the derived views are cached, never the full fold: a 62M log is
+     * mostly tool-call payloads, while its ticket views are kilobytes, so
+     * pinning 225 folds would trade a timeout for a memory leak.
+     */
+    const now = Date.now();
+    for (const liveId of liveIds) this._closedFolds.delete(liveId);
     for (const id of closedIds) {
-      let inspection: { meta: SessionHeader; events: readonly SessionEvent[] };
-      try {
-        const persistence = this.ctx.get("sessionPersistence") as {
-          inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
-        };
-        inspection = await persistence.inspect(id);
-      } catch (error) {
-        this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
-        continue;
+      const hit = this._closedFolds.get(id);
+      let views: TicketView[];
+      let stateEvidence: Map<number, EvidenceRow[]>;
+      let stateComments: Map<number, CommentRecord[]>;
+      let retired: Set<number>;
+      if (hit !== undefined && now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
+        ({ views, evidence: stateEvidence, comments: stateComments, retired } = hit);
+      } else {
+        let inspection: { meta: SessionHeader; events: readonly SessionEvent[] };
+        try {
+          const persistence = this.ctx.get("sessionPersistence") as {
+            inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
+          };
+          inspection = await persistence.inspect(id);
+        } catch (error) {
+          this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
+        const { state } = this._foldExternalLog(inspection.meta, inspection.events);
+        views = [...ticketsProjection(state, this._resolvedConfig).values()];
+        stateEvidence = state.evidence;
+        stateComments = state.comments;
+        // The retire check needs the full fold, which is NOT cached — so the
+        // retired ids are resolved here, once per inspect, and the entry
+        // carries the answer rather than the state that produced it.
+        retired = new Set<number>();
+        for (const view of views) {
+          if (this._isRetired(state, view.id)) retired.add(view.id);
+        }
+        this._closedFolds.set(id, {
+          at: now,
+          views,
+          evidence: stateEvidence,
+          comments: stateComments,
+          retired,
+        });
+        // Entries for sessions that vanished or went quiet are dropped as
+        // they age out, so the map tracks the workspace rather than growing
+        // without bound across reopen cycles.
+        for (const [cachedId, entry] of this._closedFolds) {
+          if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS) this._closedFolds.delete(cachedId);
+        }
       }
-      const { state } = this._foldExternalLog(inspection.meta, inspection.events);
-      const views = ticketsProjection(state, this._resolvedConfig);
-      for (const view of [...views.values()].sort(ownSort)) {
-        if (!includeRetired && this._isRetired(state, view.id)) continue;
+      for (const view of [...views].sort(ownSort)) {
+        if (!includeRetired && retired.has(view.id)) continue;
         const key = id + ":" + view.id;
         tickets.push({
           ...view,
@@ -2045,8 +2108,8 @@ registerAidosSessionEventTypes(ctx);
           sourceSessionId: id,
           foreign: true,
         } as BoardTicketView);
-        evidence[key] = [...(state.evidence.get(view.id) ?? [])];
-        comments[key] = [...(state.comments.get(view.id) ?? [])];
+        evidence[key] = [...(stateEvidence.get(view.id) ?? [])];
+        comments[key] = [...(stateComments.get(view.id) ?? [])];
       }
     }
 
@@ -2268,6 +2331,22 @@ registerAidosSessionEventTypes(ctx);
   /** In-memory pending approvals keyed by request id. Restarts drop them. */
   private readonly _pendingApprovals = new Map<string, PendingApproval>();
   private _approvalSeq = 0;
+
+  /**
+   * Closed-session folds for the workspace merge, keyed by session id.
+   * Populated and read in `workspaceTickets`; see the loop there for the
+   * exactness argument (invalidate-on-live plus TTL).
+   */
+  private readonly _closedFolds = new Map<
+    string,
+    {
+      at: number;
+      views: TicketView[];
+      evidence: Map<number, EvidenceRow[]>;
+      comments: Map<number, CommentRecord[]>;
+      retired: Set<number>;
+    }
+  >;
 
   /**
    * The AGENT surface (#51): propose an allowlist for one ticket. Validates

@@ -27994,6 +27994,7 @@ function aidosSessionEventTypesRegistered() {
 
 // src/host/aidos-core.ts
 var WORKTREE_TIMEOUT_MS = 12e4;
+var CLOSED_FOLD_CACHE_TTL_MS = 6e4;
 var BadPayloadError = class extends Error {
   constructor(message) {
     super(message);
@@ -28440,6 +28441,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     /** In-memory pending approvals keyed by request id. Restarts drop them. */
     __publicField(this, "_pendingApprovals", /* @__PURE__ */ new Map());
     __publicField(this, "_approvalSeq", 0);
+    /**
+     * Closed-session folds for the workspace merge, keyed by session id.
+     * Populated and read in `workspaceTickets`; see the loop there for the
+     * exactness argument (invalidate-on-live plus TTL).
+     */
+    __publicField(this, "_closedFolds", /* @__PURE__ */ new Map());
     // ---- the action-nomination store (#93) --------------------------------
     /**
      * Session-scoped nominations, keyed by id. Decided with the user
@@ -28909,19 +28916,46 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       }
     }
     const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
+    const now = Date.now();
+    for (const liveId of liveIds) this._closedFolds.delete(liveId);
     for (const id of closedIds) {
-      let inspection;
-      try {
-        const persistence = this.ctx.get("sessionPersistence");
-        inspection = await persistence.inspect(id);
-      } catch (error51) {
-        this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
-        continue;
+      const hit = this._closedFolds.get(id);
+      let views;
+      let stateEvidence;
+      let stateComments;
+      let retired;
+      if (hit !== void 0 && now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
+        ({ views, evidence: stateEvidence, comments: stateComments, retired } = hit);
+      } else {
+        let inspection;
+        try {
+          const persistence = this.ctx.get("sessionPersistence");
+          inspection = await persistence.inspect(id);
+        } catch (error51) {
+          this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+          continue;
+        }
+        const { state } = this._foldExternalLog(inspection.meta, inspection.events);
+        views = [...ticketsProjection(state, this._resolvedConfig).values()];
+        stateEvidence = state.evidence;
+        stateComments = state.comments;
+        retired = /* @__PURE__ */ new Set();
+        for (const view of views) {
+          if (this._isRetired(state, view.id)) retired.add(view.id);
+        }
+        this._closedFolds.set(id, {
+          at: now,
+          views,
+          evidence: stateEvidence,
+          comments: stateComments,
+          retired
+        });
+        for (const [cachedId, entry] of this._closedFolds) {
+          if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS) this._closedFolds.delete(cachedId);
+        }
       }
-      const { state } = this._foldExternalLog(inspection.meta, inspection.events);
-      const views = ticketsProjection(state, this._resolvedConfig);
-      for (const view of [...views.values()].sort(ownSort)) {
-        if (!includeRetired && this._isRetired(state, view.id)) continue;
+      for (const view of [...views].sort(ownSort)) {
+        if (!includeRetired && retired.has(view.id)) continue;
         const key = id + ":" + view.id;
         tickets.push({
           ...view,
@@ -28929,8 +28963,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
           sourceSessionId: id,
           foreign: true
         });
-        evidence[key] = [...state.evidence.get(view.id) ?? []];
-        comments[key] = [...state.comments.get(view.id) ?? []];
+        evidence[key] = [...stateEvidence.get(view.id) ?? []];
+        comments[key] = [...stateComments.get(view.id) ?? []];
       }
     }
     const deduped = dedupeBoardRows(tickets);
