@@ -27831,6 +27831,36 @@ function isPlainRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var DEFAULT_PHASE_TITLE = "Untitled phase";
+var TICKET_CALL_MARKUP = [
+  /<parameter\s+name\s*=/i,
+  /<\/?invoke\b/i,
+  /<\/parameter\b/i,
+  /<\/(description|body|criteria|title)\b/i
+];
+function _stripCodeSpans(text) {
+  return text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+}
+function _findCallMarkup(value) {
+  const visible = _stripCodeSpans(value);
+  for (const pattern of TICKET_CALL_MARKUP) {
+    const hit = pattern.exec(visible);
+    if (hit) return hit[0];
+  }
+  return void 0;
+}
+function _assertTicketTextClean(args) {
+  const fields = ["title", "description", "body", "criteria"];
+  for (const field of fields) {
+    const value = args[field];
+    if (typeof value !== "string") continue;
+    const marker = _findCallMarkup(value);
+    if (marker !== void 0) {
+      throw new BadPayloadError(
+        `set_ticket refuses the ${field} field: it contains serialized tool-call markup (${marker}). Pass description, body, and criteria as separate arguments, never one field containing another's markup. To discuss the markup itself, put it in a code span.`
+      );
+    }
+  }
+}
 function dedupeBoardRows(rows) {
   const groups = /* @__PURE__ */ new Map();
   const order = [];
@@ -29520,6 +29550,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (typeof title !== "string" || title.trim() === "") {
       throw new BadPayloadError("set_ticket requires a title to create a ticket");
     }
+    _assertTicketTextClean(args);
     if (args.allowlist !== void 0) {
       throw new BadPayloadError(
         "a new ticket cannot carry an allowlist; create it, then set the allowlist once an approved builtin:file_allowlist evidence row exists"
@@ -29578,6 +29609,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (!prev) {
       throw new UnknownTicket(ticketId);
     }
+    _assertTicketTextClean(args);
     if (actor === "agent" && this._isRetired(cache.state, ticketId)) {
       throw new RetiredTicketWriteRefused(ticketId);
     }
