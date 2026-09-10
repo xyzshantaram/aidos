@@ -91,3 +91,24 @@ declare module "node:child_process" {
     callback: (error: Error | null, stdout: string, stderr: string) => void,
   ): void;
 }
+/**
+ * #38: the small `node:sqlite` surface the store needs, declared here for
+ * the same reason as the modules above. (Unlike them, no @types/node
+ * declaration resolves under this repo's TS7/Bundler setup — the import
+ * fails with TS2591 without this shim — so this is the only declaration,
+ * not a narrowing of a second one.) Results stay `unknown` at the
+ * boundary; every caller casts to the row shape it selected.
+ */
+declare module "node:sqlite" {
+  export interface SqliteStatement {
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+    run(...params: unknown[]): { lastInsertRowid: number | bigint };
+  }
+  export interface SqliteDatabase {
+    exec(sql: string): void;
+    prepare(sql: string): SqliteStatement;
+    close(): void;
+  }
+  export const DatabaseSync: new (path: string) => SqliteDatabase;
+}

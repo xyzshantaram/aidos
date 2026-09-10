@@ -13,11 +13,14 @@ import { checkGate, isLegalTransition } from "./gates";
 import { planContextLineCount, validateAidosEvent } from "./invariants";
 import { confidenceScoreOf, gateFractionOf } from "./projections";
 import { PLAN_CONTEXT_LIMIT } from "./constants";
+import { MemoryStorage } from "./storage-memory";
+import type { StoragePort } from "./storage";
 import {
   ContextTooLongError,
   EvidenceAuthorRefused,
   DuplicateSlug,
   GateRefused,
+  UnknownEvidenceRow,
   UnknownKind,
   UnknownProject,
   UnknownTicket,
@@ -25,6 +28,7 @@ import {
 import type {
   AidosConfig,
   Actor,
+  CommentRecord,
   ContextSection,
   EvidenceViewRow,
   PhaseView,
@@ -48,6 +52,35 @@ export interface StoreOptions {
   log?: AidosEvent[];
   /** Seconds as a float. Default Date.now() / 1000. */
   now?: () => number;
+  /**
+   * #38: the persistence port this store writes through. Defaults to an
+   * ephemeral in-memory port, which is exactly the behaviour the whole
+   * existing suite was written against — so passing nothing changes
+   * nothing. Pass the SQLite implementation for a durable workspace store.
+   *
+   * When BOTH `log` and `storage` are given, the explicit `log` seeds the
+   * in-memory fold and the storage persists only what flows through
+   * `_append` from here on; a fresh `new Store(config, { storage })` with
+   * no `log` replays the storage's rows. Seeding and durable truth are
+   * never merged, so a reopen can neither duplicate nor drop a row.
+   */
+  storage?: StoragePort;
+  /**
+   * #38: the dsh session id stamped as the origin of every write through
+   * this store. Absent (the default) stamps no origin — the normal case
+   * until #41's importer flushes session-log rows, which is the only writer
+   * that passes one. Both origin columns stay nullable in every schema.
+   */
+  originSessionId?: string;
+}
+
+/** One kernel-level search hit: identity plus the title it matched on. */
+export interface TicketSearchHit {
+  ticketId: TicketId;
+  projectId: ProjectId;
+  title: string;
+  state: TicketState;
+  workspaceKey: string;
 }
 
 /** The plan of a project that never held one. */
@@ -113,13 +146,21 @@ export class Store {
   constructor(config: AidosConfig, options?: StoreOptions) {
     this.config = config;
     this._nowFn = options?.now ?? (() => Date.now() / 1000);
-    this._log = options?.log ? (deepClone(options.log) as AidosEvent[]) : [];
+    this._storage = options?.storage ?? new MemoryStorage();
+    this._originSessionId = options?.originSessionId;
+    // An explicit log seeds the fold; otherwise the storage's own rows are
+    // the durable truth (a reopen replays them). Never both — see StoreOptions.
+    const seed = options?.log ?? this._storage.readAll().map((stored) => stored.event);
+    this._log = deepClone(seed) as AidosEvent[];
     this.replay();
   }
 
   readonly config: AidosConfig;
 
   private readonly _nowFn: () => number;
+  private readonly _storage: StoragePort;
+  private readonly _originSessionId: string | undefined;
+  private _originSeq = 0;
   private readonly _log: AidosEvent[] = [];
   private _state: AidosState = createInitialState();
 
@@ -142,11 +183,32 @@ export class Store {
 
   // ---- internal ----
 
-  /** Validate, then append, then fold. The log changes only on allow. */
+  /** Validate, then persist, then fold. The log changes only on allow. */
   private _append(event: AidosEvent): void {
     validateAidosEvent(this._state, event);
+    // Persist BEFORE the in-memory push: a port failure (disk full, locked)
+    // throws with the fold untouched, so the store never believes a write
+    // the log does not hold.
+    if (this._originSessionId !== undefined) {
+      this._originSeq += 1;
+      this._storage.append(event, {
+        sessionId: this._originSessionId,
+        localSeq: this._originSeq,
+      });
+    } else {
+      this._storage.append(event);
+    }
     this._log.push(event);
     foldAidosEvents(this._state, event);
+  }
+
+  /**
+   * Release the underlying port handle. For a workspace store backed by the
+   * shared SQLite registry this drops the shared handle too — reopening the
+   * same path re-registers a fresh one. Idempotent.
+   */
+  close(): void {
+    this._storage.close();
   }
 
   /**
@@ -571,6 +633,40 @@ export class Store {
     };
   }
 
+  /**
+   * Substring search over title, description, and criteria (the same three
+   * columns the SQLite FTS table indexes, plus comment text there). The
+   * search itself folds from state so both ports answer identically — the
+   * FTS table is the future acceleration path and the external query
+   * surface, not a second source of truth. Empty query matches nothing;
+   * at most 50 hits, in ticket id order.
+   */
+  searchTickets(query: string, opts?: { projectId?: ProjectId }): TicketSearchHit[] {
+    const needle = (query ?? "").toLowerCase().trim();
+    if (needle === "") {
+      return [];
+    }
+    const hits: TicketSearchHit[] = [];
+    for (const snapshot of this._state.tickets.values()) {
+      if (opts?.projectId !== undefined && snapshot.projectId !== opts.projectId) {
+        continue;
+      }
+      const haystacks = [snapshot.title, snapshot.description, snapshot.criteria];
+      if (!haystacks.some((field) => field.toLowerCase().includes(needle))) {
+        continue;
+      }
+      hits.push({
+        ticketId: snapshot.id,
+        projectId: snapshot.projectId,
+        title: snapshot.title,
+        state: snapshot.state,
+        workspaceKey: snapshot.workspaceKey,
+      });
+    }
+    hits.sort((a, b) => a.ticketId - b.ticketId);
+    return hits.slice(0, 50);
+  }
+
   // ---- evidence ----
 
   attachEvidence(
@@ -622,6 +718,95 @@ export class Store {
     return confidenceScoreOf(this.config, this._state.evidence.get(ticketId) ?? []);
   }
 
+  /**
+   * Remove one evidence row the board shows, named by its stamped `at` plus
+   * its kind (the same identity the fold drops by). The log keeps both the
+   * attachment and this detachment as history — nothing is ever removed
+   * from the log, so un-retiring (`builtin:retired` detached) restores the
+   * exact prior state. Unknown ticket or no live row throws; the log
+   * changes only on allow.
+   *
+   * No actor parameter, mirroring the host: detach has no agent path —
+   * evidence is append-only for the agent — so the only honest caller is
+   * the human, and inventing a parameter to check would imply a path that
+   * does not exist.
+   */
+  detachEvidence(ticketId: TicketId, at: number, rowKind: string): void {
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    const rows = this._state.evidence.get(ticketId) ?? [];
+    const index = rows.findIndex((row) => row.at === at && row.kind === rowKind);
+    if (index < 0) {
+      throw new UnknownEvidenceRow(ticketId, at, rowKind);
+    }
+    this._append({
+      kind: "evidence/detached",
+      version: 1,
+      ticketId,
+      at,
+      rowKind,
+    });
+  }
+
+  /**
+   * Link one existing evidence row to one criterion line of the ticket's
+   * criteria (`criterion: null` clears the link, committing the same empty
+   * sentinel the host writes). A non-empty criterion must be one of the
+   * ticket's verbatim criterion lines; anything else — unknown ticket, no
+   * live row, empty or foreign criterion — throws and the log is untouched.
+   * The agent has no link path (payload edits stay user-owned, per the same
+   * rule as detach), so like detach this takes no actor.
+   */
+  linkEvidence(
+    ticketId: TicketId,
+    at: number,
+    rowKind: string,
+    criterion: string | null,
+  ): void {
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    const rows = this._state.evidence.get(ticketId) ?? [];
+    const row = rows.find((candidate) => candidate.at === at && candidate.kind === rowKind);
+    if (!row) {
+      throw new UnknownEvidenceRow(ticketId, at, rowKind);
+    }
+    if (criterion === null) {
+      this._append({
+        kind: "evidence/linked",
+        version: 1,
+        ticketId,
+        at,
+        rowKind,
+        criterion: "",
+      });
+      return;
+    }
+    const trimmed = criterion.trim();
+    if (trimmed === "") {
+      throw new Error("the criterion must be a non-empty line of the ticket's criteria, or null to unlink");
+    }
+    const valid = snapshot.criteria
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (!valid.includes(trimmed)) {
+      throw new Error(
+        `evidence criterion ${JSON.stringify(criterion)} is not one of the ticket's criteria`,
+      );
+    }
+    this._append({
+      kind: "evidence/linked",
+      version: 1,
+      ticketId,
+      at,
+      rowKind,
+      criterion: trimmed,
+    });
+  }
+
   addComment(ticketId: TicketId, text: string, author: Actor): void {
     if (!this._state.tickets.has(ticketId)) {
       throw new UnknownTicket(ticketId);
@@ -634,6 +819,14 @@ export class Store {
       author,
       at: this._atFor(ticketId),
     });
+  }
+
+  /** Every comment on one ticket, oldest first. Copies, like every read. */
+  commentsFor(ticketId: TicketId): CommentRecord[] {
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    return (this._state.comments.get(ticketId) ?? []).map((record) => ({ ...record }));
   }
 
   // ---- transitions ----
@@ -712,3 +905,17 @@ export class Store {
     });
   }
 }
+
+/*
+ * DELIBERATELY NOT ON THE STORE — host surfaces with no kernel event.
+ *
+ * `requestAllowlist` / pending approvals, `suggestActions` / nominations,
+ * review-chain dispatch, worktrees, and git history are SESSION-scoped and
+ * in-memory by explicit decision with the user (2026-09-03): NO kernel
+ * event and no durable field. A restart drops the nominations and the queue
+ * degrades to its derived half, which is recomputed from board state — so
+ * the worst case is losing the agent's commentary, never the ask itself.
+ * Persisting them here would make a restart restore asks the human already
+ * answered elsewhere, which is worse than losing them. They stay in
+ * `aidos-core.ts`; the Store owns board state, the host owns the session.
+ */
