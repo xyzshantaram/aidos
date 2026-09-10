@@ -642,6 +642,80 @@ export interface AttachEvidenceArgs {
   payload?: Record<string, unknown>;
 }
 
+/**
+ * #166: serialized tool-call markup that must never land in a ticket's text
+ * fields.
+ *
+ * The #142 incident (its description carrying #157's write-up plus
+ * `<parameter name="title">` fragments) was diagnosed against three
+ * candidates, and two are refuted by the code in this file: `_editTicket`
+ * builds its snapshot from exactly one ticket's previous row and commits one
+ * `ticket/change` event, the fold applies that event to exactly
+ * `event.ticket.id`, and the workspace merge only selects rows — so neither
+ * racing set_ticket calls nor the merge can move one ticket's text into
+ * another's fields. The fragments themselves match the model-facing
+ * invoke/parameter serialization, which appears nowhere in src: they are
+ * caller-composed text the store faithfully persisted, i.e. #167's
+ * reproduced mechanism (criteria written INSIDE the description string,
+ * first-hand again on #171). The live board still carries the class:
+ * #148's description holds another ticket's title/criteria/phase fragments,
+ * and a dozen tickets hold their own criteria inside their description
+ * behind `</description><parameter name="criteria">` seams.
+ *
+ * This guard refuses the shape at the funnel both set_ticket paths share,
+ * so the corruption cannot be stored again. It is a tripwire for accidents,
+ * not a sanitizer: the write is refused, never rewritten.
+ */
+const TICKET_CALL_MARKUP: RegExp[] = [
+  /<parameter\s+name\s*=/i,
+  /<\/?invoke\b/i,
+  /<\/parameter\b/i,
+  /<\/(description|body|criteria|title)\b/i,
+];
+
+/**
+ * #166: code spans are discussion, not serialization. #167 and #171 document
+ * this exact corruption in backticks; refusing those notes would punish the
+ * tickets that describe the bug. Strip fenced blocks and inline spans before
+ * matching, so guidance about the markup stays writable.
+ */
+function _stripCodeSpans(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`\n]*`/g, "");
+}
+
+/** The first call-markup hit in one field value, or undefined when clean. */
+function _findCallMarkup(value: string): string | undefined {
+  const visible = _stripCodeSpans(value);
+  for (const pattern of TICKET_CALL_MARKUP) {
+    const hit = pattern.exec(visible);
+    if (hit) return hit[0];
+  }
+  return undefined;
+}
+
+/**
+ * #166: refuse a set_ticket write whose text fields carry serialized
+ * call markup. Runs in both _createTicket and _editTicket, so the agent and
+ * user paths share it; plan_import bypasses both and is unaffected.
+ */
+function _assertTicketTextClean(args: SetTicketArgs): void {
+  const fields = ["title", "description", "body", "criteria"] as const;
+  for (const field of fields) {
+    const value = args[field];
+    if (typeof value !== "string") continue;
+    const marker = _findCallMarkup(value);
+    if (marker !== undefined) {
+      throw new BadPayloadError(
+        `set_ticket refuses the ${field} field: it contains serialized tool-call markup (${marker}). ` +
+          "Pass description, body, and criteria as separate arguments, never one field containing another's markup. " +
+          "To discuss the markup itself, put it in a code span.",
+      );
+    }
+  }
+}
+
 export interface MoveTicketArgs {
   ticketId: number | string;
   to: TicketState;
@@ -3679,6 +3753,8 @@ registerAidosSessionEventTypes(ctx);
     if (typeof title !== "string" || title.trim() === "") {
       throw new BadPayloadError("set_ticket requires a title to create a ticket");
     }
+    // #166: never store serialized call markup in a text field.
+    _assertTicketTextClean(args);
     if (args.allowlist !== undefined) {
       // A new ticket has no ticket id yet, so no approved builtin:file_allowlist
       // evidence row can exist to cover it. Refuse rather than silently drop the
@@ -3746,6 +3822,10 @@ registerAidosSessionEventTypes(ctx);
     if (!prev) {
       throw new UnknownTicket(ticketId);
     }
+    // #166: never store serialized call markup in a text field. Checked
+    // before any other field logic, so a malformed payload refuses no matter
+    // which ticket it names — and names the field, not the ticket.
+    _assertTicketTextClean(args);
     /*
      * #108: a retired ticket takes no agent edits. Same rule as the attach
      * funnel: the human hid the ticket, so the agent must not keep writing
