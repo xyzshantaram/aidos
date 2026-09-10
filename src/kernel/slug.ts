@@ -72,5 +72,8 @@ export function normalizeTicketSnapshot(
   const workspaceKey = snapshot.workspaceKey;
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
   const allowlist = Array.isArray(snapshot.allowlist) ? snapshot.allowlist : [];
-  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist };
+  // #180: pre-tag logs carry no tags field; replay fills [] rather than
+  // treating the record as corrupt.
+  const tags = Array.isArray(snapshot.tags) ? snapshot.tags : [];
+  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist, tags };
 }

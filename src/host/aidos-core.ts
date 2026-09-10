@@ -124,6 +124,7 @@ import {
   ForeignWorkspace,
   GateRefused,
   ProjectNotEmptyError,
+  TagDetachRefused,
   UnknownKind,
   UnknownProject,
   UnknownTicket,
@@ -247,6 +248,8 @@ declare module "@deepseek-ai/dsh-session/types" {
     "evidence/attached": import("../kernel/events").EvidenceAttachedEvent;
     "evidence/detached": import("../kernel/events").EvidenceDetachedEvent;
     "evidence/linked": import("../kernel/events").EvidenceLinkedEvent;
+    "tags/attached": import("../kernel/events").TagsAttachedEvent;
+    "tags/detached": import("../kernel/events").TagsDetachedEvent;
     "plan/change": import("../kernel/events").PlanChangeEvent;
     "comment/added": import("../kernel/events").CommentAddedEvent;
     "aidos/refusal": import("../kernel/events").RefusalEvent;
@@ -467,6 +470,32 @@ export function applyTicketsProjection(
       evidence: { ...state.evidence, [id]: next },
     };
   }
+  /*
+   * #180: the projection holds whole snapshots, so a tag delta must rewrite
+   * the snapshot entry (immutable, like every other arm), not mutate it.
+   */
+  if (event.type === "tags/attached") {
+    const id = String(event.data.ticketId);
+    const current = state.tickets[id] as TicketSnapshot | undefined;
+    if (current === undefined) return state;
+    const merged = new Set(current.tags ?? []);
+    for (const name of event.data.names) merged.add(name as string);
+    return {
+      tickets: { ...state.tickets, [id]: { ...current, tags: [...merged] } },
+      evidence: state.evidence,
+    };
+  }
+  if (event.type === "tags/detached") {
+    const id = String(event.data.ticketId);
+    const current = state.tickets[id] as TicketSnapshot | undefined;
+    if (current === undefined) return state;
+    const removed = new Set((event.data.names ?? []) as unknown as string[]);
+    const next = (current.tags ?? []).filter((name) => !removed.has(name));
+    return {
+      tickets: { ...state.tickets, [id]: { ...current, tags: next } },
+      evidence: state.evidence,
+    };
+  }
   return state;
 }
 
@@ -575,6 +604,7 @@ const TICKET_VIEW_ZOD = zod.object({
   slug: zod.string(),
   dependsOn: zod.array(zod.string()),
   allowlist: zod.array(zod.string()),
+  tags: zod.array(zod.string()),
 });
 const PLAN_VALUE_ZOD = zod.object({
   frontmatter: zod.string(),
@@ -2563,6 +2593,28 @@ registerAidosSessionEventTypes(ctx);
       throw new Error(`approval request ${args.requestId} belongs to another session`);
     }
     this._pendingApprovals.delete(args.requestId);
+    // #180: a tag proposal is resolved by its own kind, never by the
+    // allowlist path below — the tag write is user-authored by this click,
+    // and runs through the same _applyTags one-flow as a direct human edit.
+    if (pending.kind === "tag-delete" || pending.kind === "tag-migrate") {
+      const tag = pending.payload.tag as string;
+      if (!args.approved) {
+        this._queueInjection(
+          agent.session,
+          `Tag ${pending.kind === "tag-delete" ? "deletion" : "migration"} proposal for ${_mdCode(tag)} was rejected on the board — do not re-propose it without new grounds`,
+        );
+        return { resolved: "rejected" };
+      }
+      if (pending.kind === "tag-delete") {
+        const result = this.userDeleteTag(agent, { tag });
+        return { resolved: `approved: deleted ${tag} from ${result.tickets.length} ticket(s)` };
+      }
+      const result = this.userMigrateTag(agent, {
+        from: tag,
+        to: pending.payload.to as string,
+      });
+      return { resolved: `approved: migrated ${tag} to ${result.to} on ${result.tickets.length} ticket(s)` };
+    }
     if (!args.approved) {
       this._queueInjection(
         agent.session,
@@ -3194,6 +3246,320 @@ registerAidosSessionEventTypes(ctx);
     removed: number;
   } {
     return this._detachEvidence(this._routedAgent(agent, args.ticketId), args as { ticketId: number; at: number; rowKind: string });
+  }
+
+  // ---- tags (#180): one flow, attach-only agents, human-only removal -----
+
+  /**
+   * Clean one tag batch. Trims, refuses empties and non-strings, dedupes
+   * keeping first order. One implementation: the agent path, the human
+   * path, and the approval executor all clean through here.
+   */
+  private _cleanTagNames(raw: unknown): string[] {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new BadPayloadError("at least one tag name is required");
+    }
+    const clean: string[] = [];
+    const seen = new Set<string>();
+    for (const entry of raw) {
+      if (typeof entry !== "string" || entry.trim() === "") {
+        throw new BadPayloadError("tag names must be non-empty strings");
+      }
+      const name = entry.trim();
+      if (!seen.has(name)) {
+        seen.add(name);
+        clean.push(name);
+      }
+    }
+    return clean;
+  }
+
+  /**
+   * THE tag write path: the ONLY method that commits `tags/attached` or
+   * `tags/detached` (#170 one-flow rule). The agent path calls it with
+   * `remove: []` and is refused anything else; the human surface calls it
+   * with whatever the human approved; the approval executor calls it with
+   * the approved proposal. Two commits never grow here a second way.
+   */
+  private _applyTags(
+    agent: Agent,
+    ticketId: TicketId,
+    delta: { add: string[]; remove: string[] },
+    actor: Actor,
+  ): { ticketId: TicketId; added: string[]; removed: string[] } {
+    const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    if (
+      actor === "agent" &&
+      (delta.remove.length > 0 || this._isRetired(this._cache(agent.session).state, ticketId))
+    ) {
+      if (delta.remove.length > 0) {
+        throw new TagDetachRefused(actor);
+      }
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
+    const added: string[] = [];
+    const removed: string[] = [];
+    if (delta.add.length > 0) {
+      const at = this._atFor(agent.session, ticketId);
+      this._commit(agent, {
+        kind: "tags/attached",
+        version: 1,
+        ticketId,
+        names: delta.add,
+        at,
+      });
+      added.push(...delta.add.filter((name) => !(snapshot.tags ?? []).includes(name)));
+    }
+    const afterAttach = this._cache(agent.session).state.tickets.get(ticketId);
+    if (delta.remove.length > 0) {
+      const present = delta.remove.filter((name) => (afterAttach?.tags ?? []).includes(name));
+      if (present.length === 0) {
+        throw new BadPayloadError(
+          `ticket ${ticketId} carries none of: ${delta.remove.join(", ")}`,
+        );
+      }
+      this._commit(agent, {
+        kind: "tags/detached",
+        version: 1,
+        ticketId,
+        names: present,
+        at: this._atFor(agent.session, ticketId),
+      });
+      removed.push(...present);
+    }
+    if (added.length > 0 && _isUserAction(actor)) {
+      const title = this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      this._queueInjection(
+        agent.session,
+        `${_mdTicketHead(ticketId, title)} — tagged by ${actor}: ${added.map(_mdCode).join(" ")}`,
+      );
+    }
+    return { ticketId, added, removed };
+  }
+
+  /**
+   * The AGENT tag surface: attach only, freeform. A name no workspace
+   * ticket carries yet is CREATED by the attach (no registry, no
+   * pre-declaration), and the result reports it — "agent created N tags"
+   * with the names — so a new tag never appears silently.
+   */
+  agentAttachTags(
+    agent: Agent,
+    args: { ticketId: number | string; tags: string[] },
+  ): {
+    ok: true;
+    ticketId: number;
+    attached: string[];
+    createdTags: string[];
+    createdCount: number;
+    message: string;
+  } {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const names = this._cleanTagNames(args.tags);
+    // Creation is measured against the workspace BEFORE the commit, so the
+    // report names names that are new to the workspace, not names the
+    // ticket merely lacked.
+    const before = this._workspaceTagSet(routed);
+    this._applyTags(routed, ticketId, { add: names, remove: [] }, "agent");
+    const created = names.filter((name) => !before.has(name));
+    const summary =
+      created.length === 0
+        ? "agent created 0 tags"
+        : `agent created ${created.length} tag${created.length === 1 ? "" : "s"}: ${created.join(", ")}`;
+    return {
+      ok: true,
+      ticketId,
+      attached: names,
+      createdTags: created,
+      createdCount: created.length,
+      message: summary,
+    };
+  }
+
+  /**
+   * The BOARD surface: the human detaches tags from one ticket. The only
+   * detach path that exists; the agent's attach flow cannot reach it.
+   */
+  @Remote("userDetachTags")
+  userDetachTags(
+    agent: Agent,
+    args: { ticketId: number | string; tags: string[] },
+  ): { ticketId: number; detached: string[] } {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const names = this._cleanTagNames(args.tags);
+    const result = this._applyTags(routed, ticketId, { add: [], remove: names }, "user");
+    return { ticketId: result.ticketId, detached: result.removed };
+  }
+
+  /**
+   * The BOARD surface: bulk migration, per approved proposal. Every ticket
+   * in the caller's own session log carrying `from` gets `to` instead —
+   * the detach half and the attach half each run through `_applyTags`.
+   */
+  @Remote("userMigrateTag")
+  userMigrateTag(
+    agent: Agent,
+    args: { from: string; to: string },
+  ): { from: string; to: string; tickets: number[] } {
+    const from = this._cleanTagNames([args.from])[0];
+    const to = this._cleanTagNames([args.to])[0];
+    if (from === to) {
+      throw new BadPayloadError("migration needs two different tag names");
+    }
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const affected: number[] = [];
+    for (const snapshot of cache.state.tickets.values()) {
+      if ((snapshot.tags ?? []).includes(from)) {
+        this._applyTags(agent, snapshot.id, { add: [to], remove: [from] }, "user");
+        affected.push(snapshot.id);
+      }
+    }
+    if (affected.length === 0) {
+      throw new BadPayloadError(`no ticket carries the tag ${from}`);
+    }
+    this._queueInjection(
+      agent.session,
+      `Tag migrated by user: ${_mdCode(from)} → ${_mdCode(to)} on ${affected.length} ticket(s)`,
+    );
+    return { from, to, tickets: affected };
+  }
+
+  /**
+   * The BOARD surface: delete one tag, per approved proposal. Removes it
+   * from every ticket in the caller's log that carries it.
+   */
+  @Remote("userDeleteTag")
+  userDeleteTag(agent: Agent, args: { tag: string }): { tag: string; tickets: number[] } {
+    const name = this._cleanTagNames([args.tag])[0];
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const affected: number[] = [];
+    for (const snapshot of cache.state.tickets.values()) {
+      if ((snapshot.tags ?? []).includes(name)) {
+        this._applyTags(agent, snapshot.id, { add: [], remove: [name] }, "user");
+        affected.push(snapshot.id);
+      }
+    }
+    if (affected.length === 0) {
+      throw new BadPayloadError(`no ticket carries the tag ${name}`);
+    }
+    this._queueInjection(
+      agent.session,
+      `Tag deleted by user: ${_mdCode(name)} from ${affected.length} ticket(s)`,
+    );
+    return { tag: name, tickets: affected };
+  }
+
+  /**
+   * Every tag name the caller's workspace carries right now.
+   * Read over the caller's own log; the workspace merge's union comes from
+   * the `workspaceTags` Remote below.
+   */
+  private _workspaceTagSet(agent: Agent): Set<string> {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const out = new Set<string>();
+    for (const snapshot of cache.state.tickets.values()) {
+      for (const tag of snapshot.tags ?? []) out.add(tag);
+    }
+    return out;
+  }
+
+  /**
+   * The BOARD surface: every tag in the workspace with counts, newest
+   * activity order. Aggregated from the SAME merge the board reads
+   * (workspaceTickets), so the browser cannot disagree with the board.
+   */
+  @Remote("workspaceTags")
+  async workspaceTags(agent: Agent): Promise<{
+    tags: Array<{ tag: string; count: number; tickets: Array<{ boardKey: string; id: number; title: string; state: string; slug: string; workspaceKey: string }> }>;
+  }> {
+    const merged = await this.workspaceTickets(agent);
+    const counts = new Map<string, { count: number; tickets: Array<{ boardKey: string; id: number; title: string; state: string; slug: string; workspaceKey: string }> }>();
+    for (const row of merged.tickets) {
+      for (const tag of row.tags ?? []) {
+        let entry = counts.get(tag);
+        if (entry === undefined) {
+          entry = { count: 0, tickets: [] };
+          counts.set(tag, entry);
+        }
+        entry.count += 1;
+        entry.tickets.push({
+          boardKey: boardKeyText(row),
+          id: row.id,
+          title: row.title,
+          state: row.state,
+          slug: row.slug,
+          workspaceKey: row.workspaceKey,
+        });
+      }
+    }
+    const tags = [...counts.entries()]
+      .map(([tag, entry]) => ({ tag, count: entry.count, tickets: entry.tickets }))
+      .sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
+    return { tags };
+  }
+
+  /**
+   * The AGENT surface: propose a tag for DELETION, or a bulk MIGRATION
+   * (`from` -> `to` across every ticket carrying `from`). Queues ONE
+   * approval card and returns at once. The proposal executes only when the
+   * human approves it, per proposal — a standing grant is exactly how the
+   * gate stops being a gate.
+   */
+  requestTagChange(
+    agent: Agent,
+    args: { action: "delete" | "migrate"; tag: string; to?: string; reason: string },
+  ): { ok: true; status: "pending"; requestId: string; action: string; tag: string; to: string | null } {
+    const action = args.action;
+    if (action !== "delete" && action !== "migrate") {
+      throw new Error(`unknown tag action ${String(action)}; expected delete or migrate`);
+    }
+    const tag = this._cleanTagNames([args.tag])[0];
+    const reason = (args.reason ?? "").trim();
+    if (reason === "") {
+      throw new Error("a tag proposal needs a reason");
+    }
+    let to: string | null = null;
+    if (action === "migrate") {
+      to = this._cleanTagNames([args.to ?? ""])[0];
+      if (to === tag) {
+        throw new Error("migration needs two different tag names");
+      }
+    }
+    // The tag must exist now — a proposal for a tag nobody carries queues a
+    // card no action can ever satisfy.
+    if (!this._workspaceTagSet(agent).has(tag)) {
+      throw new Error(`no ticket carries the tag ${tag}`);
+    }
+    const sessionId = String(agent.session.id);
+    const mine = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId);
+    if (mine.length >= 5) {
+      throw new Error("too many pending requests (5); resolve some on the board first");
+    }
+    this._approvalSeq += 1;
+    const id = `req-${Date.now()}-${this._approvalSeq}`;
+    const pending: PendingApproval = {
+      id,
+      sessionId,
+      ticketId: 0,
+      kind: action === "delete" ? "tag-delete" : "tag-migrate",
+      prompt:
+        action === "delete"
+          ? `Delete the tag "${tag}" from every ticket carrying it?`
+          : `Replace the tag "${tag}" with "${to}" on every ticket carrying it?`,
+      payload: { tag, ...(to === null ? {} : { to }), reason },
+      at: this._now(),
+    };
+    this._pendingApprovals.set(id, pending);
+    return { ok: true, status: "pending", requestId: id, action, tag, to };
   }
 
   /**
@@ -4953,6 +5319,8 @@ registerAidosSessionEventTypes(ctx);
       order,
       state: "open",
       allowlist: [],
+      // #180: a new ticket starts untagged; tags arrive only as deltas.
+      tags: [],
       dependsOn: [...(opts?.dependsOn ?? [])],
       slug,
       workspaceKey,
@@ -5528,6 +5896,7 @@ registerAidosSessionEventTypes(ctx);
         state: snapshot.state,
         dependsOn: [...(snapshot.dependsOn ?? [])],
         allowlist: [...snapshot.allowlist],
+        tags: [...(snapshot.tags ?? [])],
         confidenceScore: confidenceScoreOf(config, evidence),
         gateFraction: progress.fraction,
         gatePresent: progress.present,

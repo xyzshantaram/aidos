@@ -300,8 +300,8 @@ export function setRemountSuppressed(suppressed: boolean): void {
  * a session you navigate away from should still be open when you return,
  * which is the same property the selection has.
  */
-/** Board-level modals. `retired` is #108's panel; the rest are the classics. */
-export type ModalKey = "queue" | "create" | "plan" | "retired";
+/** Board-level modals. `retired` is #108's panel, `tags` is #180's; the rest are the classics. */
+export type ModalKey = "queue" | "create" | "plan" | "retired" | "tags";
 
 const openModals = new Map<string, Set<ModalKey>>();
 

@@ -30,6 +30,7 @@ export function makeTicket(
     slug: "t",
     dependsOn: [],
     allowlist: [],
+    tags: [],
     ...overrides,
   };
 }

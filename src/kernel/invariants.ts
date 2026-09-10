@@ -41,6 +41,7 @@ const SNAPSHOT_KEYS = [
   "createdAt",
   "updatedAt",
   "dependsOn",
+  "tags",
 ];
 const EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 const EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
@@ -64,6 +65,7 @@ const REFUSAL_KEYS = [
 const PROJECT_CREATED_KEYS = ["kind", "version", "projectId", "absPath", "name", "at"];
 const PROJECT_MOVED_KEYS = ["kind", "version", "projectId", "absPath", "name", "at"];
 const PHASE_SET_KEYS = ["kind", "version", "projectId", "number", "title", "state", "at"];
+const TAGS_KEYS = ["kind", "version", "ticketId", "names", "at"];
 
 // ---- checks ----
 
@@ -192,6 +194,14 @@ function validateTicketChange(
       rawTicket.dependsOn.some((entry) => typeof entry !== "string"))
   ) {
     invariant("ticket dependsOn must be an array of strings");
+  }
+  // #180: tags is a normalized field (old logs replay with []), and the
+  // folded snapshot must always carry a string array.
+  if (
+    !Array.isArray(ticket.tags) ||
+    (ticket.tags as unknown[]).some((entry) => typeof entry !== "string")
+  ) {
+    invariant("ticket tags must be an array of strings");
   }
   expectInt(ticket.revision, "ticket revision", 1);
   expectNumber(ticket.createdAt, "ticket createdAt");
@@ -462,6 +472,53 @@ function validateEvidenceLinked(
   // the real guard here.
 }
 
+/**
+ * #180: shared validation for both tag delta events. Names must be a
+ * non-empty, deduped list of non-empty strings; the ticket must exist; a
+ * tag write is a write to the ticket, so `at` must not fall.
+ */
+function validateTagsDelta(
+  state: AidosState,
+  raw: Record<string, unknown>,
+  what: string,
+): void {
+  expectKeys(raw, TAGS_KEYS, what);
+  if (raw.version !== 1) {
+    invariant(`${what} version must be 1`);
+  }
+  expectInt(raw.ticketId, "ticket id", 1);
+  const names = raw.names;
+  if (!Array.isArray(names) || names.length === 0) {
+    invariant(`${what} names must be a non-empty array of strings`);
+  }
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (typeof name !== "string" || name.trim() === "") {
+      invariant(`${what} names must be non-empty strings`);
+    }
+    if (seen.has(name)) {
+      invariant(`${what} names must not repeat (${name})`);
+    }
+    seen.add(name);
+  }
+  const ticketId = raw.ticketId as TicketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`${what} references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
+  if (lastAt !== undefined && (raw.at as number) < lastAt) {
+    invariant(`${what} at for ticket ${ticketId} must not fall below ${lastAt}`);
+  }
+}
+
+function validateTagsAttached(state: AidosState, raw: Record<string, unknown>): void {
+  validateTagsDelta(state, raw, "tags/attached");
+}
+
+function validateTagsDetached(state: AidosState, raw: Record<string, unknown>): void {
+  validateTagsDelta(state, raw, "tags/detached");
+}
+
 function validatePlanChange(
   _state: AidosState,
   raw: Record<string, unknown>,
@@ -623,6 +680,12 @@ export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
       return;
     case "evidence/linked":
       validateEvidenceLinked(state, raw);
+      return;
+    case "tags/attached":
+      validateTagsAttached(state, raw);
+      return;
+    case "tags/detached":
+      validateTagsDetached(state, raw);
       return;
     case "plan/change":
       validatePlanChange(state, raw);

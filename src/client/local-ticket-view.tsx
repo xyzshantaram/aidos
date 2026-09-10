@@ -33,6 +33,7 @@ import { CreateTicketModal } from "./create-ticket-modal";
 import { PlanMetaModal } from "./plan-meta-modal";
 import { QueuePanel, queueEntriesFor } from "./queue-panel";
 import { RetiredPanel } from "./retired-panel";
+import { TagsModal } from "./tags-modal";
 import {
   boardKeyOf,
   rememberWorkspaceLabel,
@@ -556,6 +557,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
   const [planOpen, setPlanOpen] = useStoredModal("plan");
   const [queueOpen, setQueueOpen] = useStoredModal("queue");
   const [retiredOpen, setRetiredOpen] = useStoredModal("retired");
+  const [tagsOpen, setTagsOpen] = useStoredModal("tags");
 
   /*
    * User-reported 2026-09-05: "opening the queue makes the board vanish."
@@ -578,7 +580,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
    */
   react.useEffect(
     function () {
-      const open = queueOpen || createOpen || planOpen || retiredOpen;
+      const open = queueOpen || createOpen || planOpen || retiredOpen || tagsOpen;
       setRemountSuppressed(open);
       return function () {
         // Release on unmount for a REAL reason (session switch), so a stale
@@ -586,7 +588,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
         setRemountSuppressed(false);
       };
     },
-    [queueOpen, createOpen, planOpen, retiredOpen],
+    [queueOpen, createOpen, planOpen, retiredOpen, tagsOpen],
   );
   /*
    * #93: nominations are fetched when the queue OPENS, not polled. They only
@@ -864,6 +866,19 @@ function ProjectionReader(props: ProjectionReaderProps) {
     ) : null;
 
   const filtered = filterTickets(liveTickets, applied);
+
+  /*
+   * #180: the distinct tags across the live board — the Tags button's count.
+   * Derived from the same rows the board renders (which carry tags on their
+   * TicketView), so the button cannot disagree with the modal's listing.
+   */
+  const tagsTotal = (function (): number {
+    const seen = new Set<string>();
+    for (const row of liveTickets) {
+      for (const tag of row.tags ?? []) seen.add(tag);
+    }
+    return seen.size;
+  })();
 
   function applyState(state: AppliedState) {
     const next = cloneAppliedState(state);
@@ -1228,6 +1243,10 @@ function ProjectionReader(props: ProjectionReaderProps) {
           // identical request on every open (#131 review, MINOR).
           setQueueOpen(true);
         }}
+        onTags={() => {
+          setTagsOpen(true);
+        }}
+        tagsTotal={tagsTotal}
         onRetired={() => {
           setRetiredOpen(true);
         }}
@@ -1369,6 +1388,19 @@ function ProjectionReader(props: ProjectionReaderProps) {
     </ModalShell>
   ) : null;
 
+  const tagsModal = tagsOpen ? (
+    <TagsModal
+      sessionId={sessionId}
+      onOpen={(key) => {
+        setTagsOpen(false);
+        selectTicket(key);
+      }}
+      onClose={() => {
+        setTagsOpen(false);
+      }}
+    />
+  ) : null;
+
   const planModal = (
     <PlanMetaModal
       open={planOpen}
@@ -1405,6 +1437,7 @@ function ProjectionReader(props: ProjectionReaderProps) {
       {planModal}
       {queueModal}
       {retiredModal}
+      {tagsModal}
       {/* The toast container is a sibling of the layout, not a child, so it
           persists across the slot-mutation remount. The single-string toast
           state and its timer are gone; the module-level toast store owns

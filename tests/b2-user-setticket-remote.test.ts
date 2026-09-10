@@ -237,6 +237,7 @@ describe("the userSetTicket Remote surface", () => {
         order: 1,
         state: "open",
         allowlist: [],
+        tags: [],
         revision: 1,
         createdAt: 1000,
         updatedAt: 1000,

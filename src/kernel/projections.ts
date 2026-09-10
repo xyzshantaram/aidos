@@ -156,6 +156,7 @@ function rowFromSnapshot(snapshot: TicketSnapshot): TicketRow {
     state: snapshot.state,
     dependsOn: [...snapshot.dependsOn],
     allowlist: [...snapshot.allowlist],
+    tags: [...snapshot.tags],
   };
 }
 

@@ -29,6 +29,8 @@ export const AIDOS_EVENT_TYPES: ReadonlySet<string> = new Set([
   "evidence/attached",
   "evidence/detached",
   "evidence/linked",
+  "tags/attached",
+  "tags/detached",
   "plan/change",
   "comment/added",
   "aidos/refusal",

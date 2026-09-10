@@ -177,6 +177,7 @@ const EXPECTED_TICKETS: TicketRow[] = [
     state: "awaiting_verification",
     dependsOn: [],
     allowlist: [],
+    tags: [],
   },
   {
     id: 2,
@@ -190,6 +191,7 @@ const EXPECTED_TICKETS: TicketRow[] = [
     state: "open",
     dependsOn: [],
     allowlist: [],
+    tags: [],
   },
   {
     id: 3,
@@ -203,6 +205,7 @@ const EXPECTED_TICKETS: TicketRow[] = [
     state: "open",
     dependsOn: [],
     allowlist: [],
+    tags: [],
   },
 ];
 
@@ -352,6 +355,7 @@ describe("legacy ticket defaults", () => {
       state: "open",
       dependsOn: [],
       allowlist: [],
+      tags: [],
     });
   });
 
@@ -374,6 +378,7 @@ describe("legacy ticket defaults", () => {
       state: "open",
       dependsOn: [],
       allowlist: [],
+      tags: [],
     });
     expect(store.getTicket(legacy)).toEqual({
       id: 2,
@@ -387,6 +392,7 @@ describe("legacy ticket defaults", () => {
       state: "open",
       dependsOn: [],
       allowlist: [],
+      tags: [],
     });
   });
 });

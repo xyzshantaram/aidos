@@ -48,6 +48,15 @@ export interface TicketSnapshot {
    * dependencies. Informational only: no gate enforces them.
    */
   dependsOn: string[];
+  /**
+   * #180: freeform workspace labels. Written ONLY as delta events
+   * (`tags/attached` / `tags/detached`) folded by set union / difference —
+   * never as a whole-list replace — so two concurrent writers editing one
+   * ticket cannot clobber each other's tags the way a whole-value
+   * `ticket/change` snapshot would. setTicket deliberately accepts no tags
+   * argument; that is the merge rule, not an omission.
+   */
+  tags: string[];
   /** 1 on create, +1 on every set and move. */
   revision: number;
   /** at of the create event. */
@@ -176,6 +185,8 @@ export interface TicketRow {
   dependsOn: string[];
   /** Per-ticket file allowlist. User-set; the write boundary enforces it. */
   allowlist: string[];
+  /** #180: freeform labels; see TicketSnapshot.tags for the merge rule. */
+  tags: string[];
 }
 
 /** One paged ticket row: the ticket fields plus the derived pair. */
@@ -393,6 +404,19 @@ export class AllowlistActorRefused extends Error {
   readonly actor: Actor;
   constructor(actor: Actor) {
     super(`only the user may set a ticket's allowlist; actor ${actor} cannot`);
+    this.actor = actor;
+  }
+}
+
+/**
+ * #180: a non-user actor tried to DETACH tags. The agent may ONLY attach;
+ * every removal is a human action, so the detach surface takes a user actor
+ * and nothing else.
+ */
+export class TagDetachRefused extends Error {
+  readonly actor: Actor;
+  constructor(actor: Actor) {
+    super(`only the user may detach tags; actor ${actor} cannot — the agent may only attach`);
     this.actor = actor;
   }
 }

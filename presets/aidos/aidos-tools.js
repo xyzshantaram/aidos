@@ -11058,7 +11058,8 @@ function normalizeTicketSnapshot(snapshot) {
   const workspaceKey = snapshot.workspaceKey;
   const dependsOn = Array.isArray(snapshot.dependsOn) ? snapshot.dependsOn : [];
   const allowlist = Array.isArray(snapshot.allowlist) ? snapshot.allowlist : [];
-  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist };
+  const tags = Array.isArray(snapshot.tags) ? snapshot.tags : [];
+  return { ...snapshot, slug, workspaceKey, dependsOn, allowlist, tags };
 }
 
 // src/kernel/types.ts
@@ -11207,6 +11208,13 @@ var AllowlistActorRefused = class extends Error {
   actor;
   constructor(actor) {
     super(`only the user may set a ticket's allowlist; actor ${actor} cannot`);
+    this.actor = actor;
+  }
+};
+var TagDetachRefused = class extends Error {
+  actor;
+  constructor(actor) {
+    super(`only the user may detach tags; actor ${actor} cannot \u2014 the agent may only attach`);
     this.actor = actor;
   }
 };
@@ -26106,7 +26114,8 @@ var SNAPSHOT_KEYS = [
   "revision",
   "createdAt",
   "updatedAt",
-  "dependsOn"
+  "dependsOn",
+  "tags"
 ];
 var EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 var EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
@@ -26130,6 +26139,7 @@ var REFUSAL_KEYS = [
 var PROJECT_CREATED_KEYS = ["kind", "version", "projectId", "absPath", "name", "at"];
 var PROJECT_MOVED_KEYS = ["kind", "version", "projectId", "absPath", "name", "at"];
 var PHASE_SET_KEYS = ["kind", "version", "projectId", "number", "title", "state", "at"];
+var TAGS_KEYS = ["kind", "version", "ticketId", "names", "at"];
 function invariant(message) {
   throw new InvariantError(message);
 }
@@ -26216,6 +26226,9 @@ function validateTicketChange(state, raw) {
   }
   if ("dependsOn" in rawTicket && (!Array.isArray(rawTicket.dependsOn) || rawTicket.dependsOn.some((entry) => typeof entry !== "string"))) {
     invariant("ticket dependsOn must be an array of strings");
+  }
+  if (!Array.isArray(ticket.tags) || ticket.tags.some((entry) => typeof entry !== "string")) {
+    invariant("ticket tags must be an array of strings");
   }
   expectInt(ticket.revision, "ticket revision", 1);
   expectNumber(ticket.createdAt, "ticket createdAt");
@@ -26425,6 +26438,41 @@ function validateEvidenceLinked(state, raw) {
     }
   }
 }
+function validateTagsDelta(state, raw, what) {
+  expectKeys(raw, TAGS_KEYS, what);
+  if (raw.version !== 1) {
+    invariant(`${what} version must be 1`);
+  }
+  expectInt(raw.ticketId, "ticket id", 1);
+  const names = raw.names;
+  if (!Array.isArray(names) || names.length === 0) {
+    invariant(`${what} names must be a non-empty array of strings`);
+  }
+  const seen = /* @__PURE__ */ new Set();
+  for (const name2 of names) {
+    if (typeof name2 !== "string" || name2.trim() === "") {
+      invariant(`${what} names must be non-empty strings`);
+    }
+    if (seen.has(name2)) {
+      invariant(`${what} names must not repeat (${name2})`);
+    }
+    seen.add(name2);
+  }
+  const ticketId = raw.ticketId;
+  if (!state.tickets.has(ticketId)) {
+    invariant(`${what} references unknown ticket ${ticketId}`);
+  }
+  const lastAt = state.lastAt.get(ticketId);
+  if (lastAt !== void 0 && raw.at < lastAt) {
+    invariant(`${what} at for ticket ${ticketId} must not fall below ${lastAt}`);
+  }
+}
+function validateTagsAttached(state, raw) {
+  validateTagsDelta(state, raw, "tags/attached");
+}
+function validateTagsDetached(state, raw) {
+  validateTagsDelta(state, raw, "tags/detached");
+}
 function validatePlanChange(_state, raw) {
   expectKeys(raw, PLAN_CHANGE_KEYS, "plan/change");
   if (raw.version !== 1) {
@@ -26563,6 +26611,12 @@ function validateAidosEvent(state, event) {
     case "evidence/linked":
       validateEvidenceLinked(state, raw);
       return;
+    case "tags/attached":
+      validateTagsAttached(state, raw);
+      return;
+    case "tags/detached":
+      validateTagsDetached(state, raw);
+      return;
     case "plan/change":
       validatePlanChange(state, raw);
       return;
@@ -26654,6 +26708,26 @@ function foldAidosEvents(state, event) {
           state.evidence.set(event.ticketId, next);
         }
       }
+      return state;
+    }
+    case "tags/attached": {
+      const ticket = state.tickets.get(event.ticketId);
+      if (ticket) {
+        const merged = new Set(ticket.tags);
+        for (const name2 of event.names) merged.add(name2);
+        state.tickets.set(event.ticketId, { ...ticket, tags: [...merged] });
+      }
+      state.lastAt.set(event.ticketId, event.at);
+      return state;
+    }
+    case "tags/detached": {
+      const ticket = state.tickets.get(event.ticketId);
+      if (ticket) {
+        const removed = new Set(event.names);
+        const next = ticket.tags.filter((name2) => !removed.has(name2));
+        state.tickets.set(event.ticketId, { ...ticket, tags: next });
+      }
+      state.lastAt.set(event.ticketId, event.at);
       return state;
     }
     case "plan/change": {
@@ -26791,7 +26865,8 @@ function rowFromSnapshot(snapshot) {
     order: snapshot.order,
     state: snapshot.state,
     dependsOn: [...snapshot.dependsOn],
-    allowlist: [...snapshot.allowlist]
+    allowlist: [...snapshot.allowlist],
+    tags: [...snapshot.tags]
   };
 }
 function ticketsProjection(state, config2) {
@@ -27367,7 +27442,8 @@ function rowOf(snapshot) {
     order: snapshot.order,
     state: snapshot.state,
     dependsOn: [...snapshot.dependsOn],
-    allowlist: [...snapshot.allowlist]
+    allowlist: [...snapshot.allowlist],
+    tags: [...snapshot.tags]
   };
 }
 function refusalReason(missing, allowedActors) {
@@ -27887,6 +27963,8 @@ var AIDOS_EVENT_TYPES = /* @__PURE__ */ new Set([
   "evidence/attached",
   "evidence/detached",
   "evidence/linked",
+  "tags/attached",
+  "tags/detached",
   "plan/change",
   "comment/added",
   "aidos/refusal",
@@ -28148,6 +28226,28 @@ function applyTicketsProjection(state, event) {
       evidence: { ...state.evidence, [id]: next }
     };
   }
+  if (event.type === "tags/attached") {
+    const id = String(event.data.ticketId);
+    const current = state.tickets[id];
+    if (current === void 0) return state;
+    const merged = new Set(current.tags ?? []);
+    for (const name2 of event.data.names) merged.add(name2);
+    return {
+      tickets: { ...state.tickets, [id]: { ...current, tags: [...merged] } },
+      evidence: state.evidence
+    };
+  }
+  if (event.type === "tags/detached") {
+    const id = String(event.data.ticketId);
+    const current = state.tickets[id];
+    if (current === void 0) return state;
+    const removed = new Set(event.data.names ?? []);
+    const next = (current.tags ?? []).filter((name2) => !removed.has(name2));
+    return {
+      tickets: { ...state.tickets, [id]: { ...current, tags: next } },
+      evidence: state.evidence
+    };
+  }
   return state;
 }
 function applyEvidenceProjection(state, event) {
@@ -28236,7 +28336,8 @@ var TICKET_VIEW_ZOD = external_exports.object({
   workspaceKey: external_exports.string(),
   slug: external_exports.string(),
   dependsOn: external_exports.array(external_exports.string()),
-  allowlist: external_exports.array(external_exports.string())
+  allowlist: external_exports.array(external_exports.string()),
+  tags: external_exports.array(external_exports.string())
 });
 var PLAN_VALUE_ZOD = external_exports.object({
   frontmatter: external_exports.string(),
@@ -28454,8 +28555,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean, created };
 }
-var _userUnretireTicket_dec, _userRetireTicket_dec, _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _userRetireTicket_dec = [Remote("userRetireTicket")], _userUnretireTicket_dec = [Remote("userUnretireTicket")], _a3) {
+var _userUnretireTicket_dec, _userRetireTicket_dec, _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _workspaceTags_dec, _userDeleteTag_dec, _userMigrateTag_dec, _userDetachTags_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userDetachTags_dec = [Remote("userDetachTags")], _userMigrateTag_dec = [Remote("userMigrateTag")], _userDeleteTag_dec = [Remote("userDeleteTag")], _workspaceTags_dec = [Remote("workspaceTags")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _userRetireTicket_dec = [Remote("userRetireTicket")], _userUnretireTicket_dec = [Remote("userUnretireTicket")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -29227,6 +29328,25 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new Error(`approval request ${args.requestId} belongs to another session`);
     }
     this._pendingApprovals.delete(args.requestId);
+    if (pending.kind === "tag-delete" || pending.kind === "tag-migrate") {
+      const tag = pending.payload.tag;
+      if (!args.approved) {
+        this._queueInjection(
+          agent.session,
+          `Tag ${pending.kind === "tag-delete" ? "deletion" : "migration"} proposal for ${_mdCode(tag)} was rejected on the board \u2014 do not re-propose it without new grounds`
+        );
+        return { resolved: "rejected" };
+      }
+      if (pending.kind === "tag-delete") {
+        const result2 = this.userDeleteTag(agent, { tag });
+        return { resolved: `approved: deleted ${tag} from ${result2.tickets.length} ticket(s)` };
+      }
+      const result = this.userMigrateTag(agent, {
+        from: tag,
+        to: pending.payload.to
+      });
+      return { resolved: `approved: migrated ${tag} to ${result.to} on ${result.tickets.length} ticket(s)` };
+    }
     if (!args.approved) {
       this._queueInjection(
         agent.session,
@@ -29553,6 +29673,246 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   userDetachEvidence(agent, args) {
     return this._detachEvidence(this._routedAgent(agent, args.ticketId), args);
+  }
+  // ---- tags (#180): one flow, attach-only agents, human-only removal -----
+  /**
+   * Clean one tag batch. Trims, refuses empties and non-strings, dedupes
+   * keeping first order. One implementation: the agent path, the human
+   * path, and the approval executor all clean through here.
+   */
+  _cleanTagNames(raw) {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new BadPayloadError("at least one tag name is required");
+    }
+    const clean = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const entry of raw) {
+      if (typeof entry !== "string" || entry.trim() === "") {
+        throw new BadPayloadError("tag names must be non-empty strings");
+      }
+      const name2 = entry.trim();
+      if (!seen.has(name2)) {
+        seen.add(name2);
+        clean.push(name2);
+      }
+    }
+    return clean;
+  }
+  /**
+   * THE tag write path: the ONLY method that commits `tags/attached` or
+   * `tags/detached` (#170 one-flow rule). The agent path calls it with
+   * `remove: []` and is refused anything else; the human surface calls it
+   * with whatever the human approved; the approval executor calls it with
+   * the approved proposal. Two commits never grow here a second way.
+   */
+  _applyTags(agent, ticketId, delta, actor) {
+    const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._assertLocalWorkspace(agent, snapshot);
+    if (actor === "agent" && (delta.remove.length > 0 || this._isRetired(this._cache(agent.session).state, ticketId))) {
+      if (delta.remove.length > 0) {
+        throw new TagDetachRefused(actor);
+      }
+      throw new RetiredTicketWriteRefused(ticketId);
+    }
+    const added = [];
+    const removed = [];
+    if (delta.add.length > 0) {
+      const at = this._atFor(agent.session, ticketId);
+      this._commit(agent, {
+        kind: "tags/attached",
+        version: 1,
+        ticketId,
+        names: delta.add,
+        at
+      });
+      added.push(...delta.add.filter((name2) => !(snapshot.tags ?? []).includes(name2)));
+    }
+    const afterAttach = this._cache(agent.session).state.tickets.get(ticketId);
+    if (delta.remove.length > 0) {
+      const present2 = delta.remove.filter((name2) => (afterAttach?.tags ?? []).includes(name2));
+      if (present2.length === 0) {
+        throw new BadPayloadError(
+          `ticket ${ticketId} carries none of: ${delta.remove.join(", ")}`
+        );
+      }
+      this._commit(agent, {
+        kind: "tags/detached",
+        version: 1,
+        ticketId,
+        names: present2,
+        at: this._atFor(agent.session, ticketId)
+      });
+      removed.push(...present2);
+    }
+    if (added.length > 0 && _isUserAction(actor)) {
+      const title = this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      this._queueInjection(
+        agent.session,
+        `${_mdTicketHead(ticketId, title)} \u2014 tagged by ${actor}: ${added.map(_mdCode).join(" ")}`
+      );
+    }
+    return { ticketId, added, removed };
+  }
+  /**
+   * The AGENT tag surface: attach only, freeform. A name no workspace
+   * ticket carries yet is CREATED by the attach (no registry, no
+   * pre-declaration), and the result reports it — "agent created N tags"
+   * with the names — so a new tag never appears silently.
+   */
+  agentAttachTags(agent, args) {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const names = this._cleanTagNames(args.tags);
+    const before = this._workspaceTagSet(routed);
+    this._applyTags(routed, ticketId, { add: names, remove: [] }, "agent");
+    const created = names.filter((name2) => !before.has(name2));
+    const summary = created.length === 0 ? "agent created 0 tags" : `agent created ${created.length} tag${created.length === 1 ? "" : "s"}: ${created.join(", ")}`;
+    return {
+      ok: true,
+      ticketId,
+      attached: names,
+      createdTags: created,
+      createdCount: created.length,
+      message: summary
+    };
+  }
+  userDetachTags(agent, args) {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const names = this._cleanTagNames(args.tags);
+    const result = this._applyTags(routed, ticketId, { add: [], remove: names }, "user");
+    return { ticketId: result.ticketId, detached: result.removed };
+  }
+  userMigrateTag(agent, args) {
+    const from = this._cleanTagNames([args.from])[0];
+    const to = this._cleanTagNames([args.to])[0];
+    if (from === to) {
+      throw new BadPayloadError("migration needs two different tag names");
+    }
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const affected = [];
+    for (const snapshot of cache.state.tickets.values()) {
+      if ((snapshot.tags ?? []).includes(from)) {
+        this._applyTags(agent, snapshot.id, { add: [to], remove: [from] }, "user");
+        affected.push(snapshot.id);
+      }
+    }
+    if (affected.length === 0) {
+      throw new BadPayloadError(`no ticket carries the tag ${from}`);
+    }
+    this._queueInjection(
+      agent.session,
+      `Tag migrated by user: ${_mdCode(from)} \u2192 ${_mdCode(to)} on ${affected.length} ticket(s)`
+    );
+    return { from, to, tickets: affected };
+  }
+  userDeleteTag(agent, args) {
+    const name2 = this._cleanTagNames([args.tag])[0];
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const affected = [];
+    for (const snapshot of cache.state.tickets.values()) {
+      if ((snapshot.tags ?? []).includes(name2)) {
+        this._applyTags(agent, snapshot.id, { add: [], remove: [name2] }, "user");
+        affected.push(snapshot.id);
+      }
+    }
+    if (affected.length === 0) {
+      throw new BadPayloadError(`no ticket carries the tag ${name2}`);
+    }
+    this._queueInjection(
+      agent.session,
+      `Tag deleted by user: ${_mdCode(name2)} from ${affected.length} ticket(s)`
+    );
+    return { tag: name2, tickets: affected };
+  }
+  /**
+   * Every tag name the caller's workspace carries right now.
+   * Read over the caller's own log; the workspace merge's union comes from
+   * the `workspaceTags` Remote below.
+   */
+  _workspaceTagSet(agent) {
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    const out = /* @__PURE__ */ new Set();
+    for (const snapshot of cache.state.tickets.values()) {
+      for (const tag of snapshot.tags ?? []) out.add(tag);
+    }
+    return out;
+  }
+  async workspaceTags(agent) {
+    const merged = await this.workspaceTickets(agent);
+    const counts = /* @__PURE__ */ new Map();
+    for (const row of merged.tickets) {
+      for (const tag of row.tags ?? []) {
+        let entry = counts.get(tag);
+        if (entry === void 0) {
+          entry = { count: 0, tickets: [] };
+          counts.set(tag, entry);
+        }
+        entry.count += 1;
+        entry.tickets.push({
+          boardKey: boardKeyText(row),
+          id: row.id,
+          title: row.title,
+          state: row.state,
+          slug: row.slug,
+          workspaceKey: row.workspaceKey
+        });
+      }
+    }
+    const tags = [...counts.entries()].map(([tag, entry]) => ({ tag, count: entry.count, tickets: entry.tickets })).sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
+    return { tags };
+  }
+  /**
+   * The AGENT surface: propose a tag for DELETION, or a bulk MIGRATION
+   * (`from` -> `to` across every ticket carrying `from`). Queues ONE
+   * approval card and returns at once. The proposal executes only when the
+   * human approves it, per proposal — a standing grant is exactly how the
+   * gate stops being a gate.
+   */
+  requestTagChange(agent, args) {
+    const action = args.action;
+    if (action !== "delete" && action !== "migrate") {
+      throw new Error(`unknown tag action ${String(action)}; expected delete or migrate`);
+    }
+    const tag = this._cleanTagNames([args.tag])[0];
+    const reason = (args.reason ?? "").trim();
+    if (reason === "") {
+      throw new Error("a tag proposal needs a reason");
+    }
+    let to = null;
+    if (action === "migrate") {
+      to = this._cleanTagNames([args.to ?? ""])[0];
+      if (to === tag) {
+        throw new Error("migration needs two different tag names");
+      }
+    }
+    if (!this._workspaceTagSet(agent).has(tag)) {
+      throw new Error(`no ticket carries the tag ${tag}`);
+    }
+    const sessionId = String(agent.session.id);
+    const mine = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId);
+    if (mine.length >= 5) {
+      throw new Error("too many pending requests (5); resolve some on the board first");
+    }
+    this._approvalSeq += 1;
+    const id = `req-${Date.now()}-${this._approvalSeq}`;
+    const pending = {
+      id,
+      sessionId,
+      ticketId: 0,
+      kind: action === "delete" ? "tag-delete" : "tag-migrate",
+      prompt: action === "delete" ? `Delete the tag "${tag}" from every ticket carrying it?` : `Replace the tag "${tag}" with "${to}" on every ticket carrying it?`,
+      payload: { tag, ...to === null ? {} : { to }, reason },
+      at: this._now()
+    };
+    this._pendingApprovals.set(id, pending);
+    return { ok: true, status: "pending", requestId: id, action, tag, to };
   }
   userLinkEvidence(agent, args) {
     return this._linkEvidence(
@@ -30794,6 +31154,8 @@ ${detail}`
       order,
       state: "open",
       allowlist: [],
+      // #180: a new ticket starts untagged; tags arrive only as deltas.
+      tags: [],
       dependsOn: [...opts?.dependsOn ?? []],
       slug,
       workspaceKey,
@@ -31247,6 +31609,7 @@ ${detail}`
         state: snapshot.state,
         dependsOn: [...snapshot.dependsOn ?? []],
         allowlist: [...snapshot.allowlist],
+        tags: [...snapshot.tags ?? []],
         confidenceScore: confidenceScoreOf(config2, evidence),
         gateFraction: progress.fraction,
         gatePresent: progress.present,
@@ -31277,6 +31640,10 @@ __decorateElement(_init, 1, "workspaceRoot", _workspaceRoot_dec, AidosService);
 __decorateElement(_init, 1, "userAttachEvidence", _userAttachEvidence_dec, AidosService);
 __decorateElement(_init, 1, "reviewStandings", _reviewStandings_dec, AidosService);
 __decorateElement(_init, 1, "userDetachEvidence", _userDetachEvidence_dec, AidosService);
+__decorateElement(_init, 1, "userDetachTags", _userDetachTags_dec, AidosService);
+__decorateElement(_init, 1, "userMigrateTag", _userMigrateTag_dec, AidosService);
+__decorateElement(_init, 1, "userDeleteTag", _userDeleteTag_dec, AidosService);
+__decorateElement(_init, 1, "workspaceTags", _workspaceTags_dec, AidosService);
 __decorateElement(_init, 1, "userLinkEvidence", _userLinkEvidence_dec, AidosService);
 __decorateElement(_init, 1, "userRecentCommits", _userRecentCommits_dec, AidosService);
 __decorateElement(_init, 1, "userAttachCommitEvidence", _userAttachCommitEvidence_dec, AidosService);
@@ -31639,7 +32006,9 @@ var TICKET_VIEW_SCHEMA = {
     },
     updatedAt: { type: "number", required: true },
     workspaceKey: { type: "string", required: true },
-    slug: { type: "string", required: true }
+    slug: { type: "string", required: true },
+    // #180: the freeform labels a ticket carries, for the board and the agent.
+    tags: { type: "array", items: { type: "string" }, required: true }
   }
 };
 var DESCRIPTION_EXCERPT = 200;
@@ -31677,6 +32046,7 @@ function summarizeTicket(view) {
     dependsOnCount: view.dependsOn?.length ?? 0,
     allowlistCount: view.allowlist?.length ?? 0,
     hasCriteria: typeof view.criteria === "string" && view.criteria.trim() !== "",
+    tags: [...view.tags ?? []],
     descriptionExcerpt: truncated ? description.slice(0, DESCRIPTION_EXCERPT) : description,
     descriptionTruncated: truncated
   };
@@ -31698,6 +32068,7 @@ var TICKET_SUMMARY_SCHEMA = {
     dependsOnCount: { type: "integer", required: true },
     allowlistCount: { type: "integer", required: true },
     hasCriteria: { type: "boolean", required: true },
+    tags: { type: "array", items: { type: "string" }, required: true },
     descriptionExcerpt: { type: "string", required: true },
     descriptionTruncated: { type: "boolean", required: true }
   }
@@ -31914,6 +32285,16 @@ function refusal(error51, overrides) {
       "retired_ticket"
     );
   }
+  if (error51 instanceof TagDetachRefused) {
+    throw new HarnessError2(
+      JSON.stringify({
+        ok: false,
+        error: "agent_cannot_detach_tags",
+        message: error51.message
+      }),
+      "agent_cannot_detach_tags"
+    );
+  }
   if (error51 instanceof FileNotReadError) {
     throw new HarnessError2(
       JSON.stringify({ ok: false, error: "file_not_read", path: error51.path, message: error51.message }),
@@ -31932,7 +32313,7 @@ function refusal(error51, overrides) {
     "AIDOS_TOOL_ERROR"
   );
 }
-var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Retired tickets are hidden from every board read and take no writes: only the human can retire or un-retire a ticket, so if a ticket you are told to work on cannot be found on the board, say so instead of inventing one -- the human either retired it or can un-retire it from the board's Retired panel. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
+var AIDOS_GUIDANCE = "Run the ticket lifecycle of the session's project with the board tools. get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. plan and plan_import serialize and load the plan markdown, and an import lands every ticket in open. Retired tickets are hidden from every board read and take no writes: only the human can retire or un-retire a ticket, so if a ticket you are told to work on cannot be found on the board, say so instead of inventing one -- the human either retired it or can un-retire it from the board's Retired panel. plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist, suggest_actions, attach_tags and suggest_tag_change all refuse a subagent. Tags are freeform workspace labels: attach_tags attaches them to one ticket (a name no ticket carries yet is created by the attach, and the result reports 'agent created N tags' so creation is always visible, never silent), and you may ONLY attach \u2014 detaching, deleting, and bulk migration are never yours to perform; propose them with suggest_tag_change and the human approves, per proposal. Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. The depth guard refuses a subagent's writes anyway, so the filter is a second layer. NEVER remind the user of pending work as a list in chat when the board can encode it: call suggest_actions instead, so the ask lands in the 'Waiting on you' queue with a button -- actionable, durable, deduplicated (a re-nomination REPLACES that ticket's previous reason instead of stacking a second row), and gate-checked (a nomination whose action the gate does not allow is dropped, so it can never show a button that would refuse, while prose can ask for the impossible). The rule is BRANCHLESS: there is no situation in which suggested actions belong in prose, and there is no 'gentle nudge' exception. When the human has not acted on an earlier suggestion, do not write a reminder -- call suggest_actions again. Replacement semantics make the repeat safe, and the queue is where the human looks. The limit, which is part of the rule: only signoff, verify and mark-done are nominatable today. An allowlist approval, a design question, or a 'look at your console' ask has no nomination action -- write those in prose, briefly, and do not stretch the tool where it cannot go. Keep your REASONING in prose. The work report, the ordering you recommend and the why behind it are exactly what the human wants to read; only the actionable ask moves into the tool. BAD (a work report with the asks welded into it): 'Composition landed and is reviewed; skin has two fronts still open; first-run unblocks once skin is signed. My recommended order: composition first, then skin, then first-run -- so the queue on your side right now: #117 signoff, #118 signoff, plus the older #141/#132 pair.' -- the report and the ordering are real reasoning the human wants to read; the hand-written queue is not: the human must mine ticket numbers out of the prose, hunt for each card by hand, and the list dies at the next compaction. GOOD (the same turn, asks encoded): keep the report and the recommended order in prose, then call suggest_actions with {ticketId: 117, actionId: 'signoff', reason: 'composition front; everything else hangs off it'} and {ticketId: 118, actionId: 'signoff', reason: 'pairs with 117 on the same seam'}, and close with exactly one line: 'Please approve the suggested actions.'";
 function registerGetTickets(ctx) {
   registerBoardTool(
     ctx,
@@ -32763,6 +33144,132 @@ function registerSuggestActions(ctx) {
     })
   );
 }
+function registerAttachTags(ctx) {
+  registerBoardTool(
+    ctx,
+    "write",
+    defineTool2({
+      name: "attach_tags",
+      description: "Attach freeform tags to one ticket (#180). Tags are free workspace labels with no registry and no pre-declaration: attaching a name no ticket carries yet CREATES it, and the result reports it \u2014 'agent created N tags' with the new names \u2014 so creation is always visible, never silent. You may ONLY attach: detaching, deleting, and bulk migration are never agent-executable; propose them with suggest_tag_change and the human approves, per proposal.",
+      parameters: {
+        ticketId: {
+          oneOf: [{ type: "integer" }, { type: "string" }],
+          required: true,
+          description: "The ticket to tag, by numeric id or slug."
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          required: true,
+          description: "The tag names to attach; unseen names are created by the attach."
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticketId: { type: "integer", required: true },
+            attached: { type: "array", items: { type: "string" }, required: true },
+            createdTags: { type: "array", items: { type: "string" }, required: true },
+            createdCount: { type: "integer", required: true },
+            message: { type: "string", required: true }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: attach_tags called by agent ${agent.session?.id}`);
+        try {
+          const result = ctx.aidos.agentAttachTags(
+            agent,
+            args
+          );
+          ctx.logger?.info?.(`aidos: attach_tags attached ${result.attached.length} tag(s) to ticket ${result.ticketId} (${result.message})`);
+          return result;
+        } catch (error51) {
+          refusal(error51);
+        }
+      },
+      presentCall: (a) => {
+        const req = a;
+        return present("Attach tags", "edit", req.ticketId, [
+          "#" + req.ticketId,
+          (req.tags ?? []).join(" ")
+        ]);
+      }
+    })
+  );
+}
+function registerSuggestTagChange(ctx) {
+  registerBoardTool(
+    ctx,
+    "write",
+    defineTool2({
+      name: "suggest_tag_change",
+      description: "Propose a tag deletion or a bulk tag migration (#180). The agent can ONLY attach tags; detachment, deletion of a tag, and bulk migration (replace tag A with tag B across every ticket carrying A) are never agent-executable \u2014 this tool proposes them and the human approves, per proposal, in the tags modal. The proposal queues an APPROVAL CARD and returns at once \u2014 do not wait, do not poll: you will be steered with the outcome when the human resolves the card.",
+      parameters: {
+        action: {
+          type: "string",
+          enum: ["delete", "migrate"],
+          required: true,
+          description: "Delete the tag, or migrate it into another tag."
+        },
+        tag: {
+          type: "string",
+          required: true,
+          description: "The existing tag the proposal is about."
+        },
+        to: {
+          type: "string",
+          description: "The replacement tag; required when action is migrate."
+        },
+        reason: {
+          type: "string",
+          required: true,
+          description: "Why this change \u2014 shown verbatim on the approval card."
+        }
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            status: { type: "string", const: "pending", required: true },
+            requestId: { type: "string", required: true },
+            action: { type: "string", required: true },
+            tag: { type: "string", required: true },
+            to: { oneOf: [{ type: "string" }, { type: "null" }], required: true }
+          }
+        },
+        render: renderJson2
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: suggest_tag_change called by agent ${agent.session?.id}`);
+        try {
+          const result = ctx.aidos.requestTagChange(
+            agent,
+            args
+          );
+          ctx.logger?.info?.(`aidos: tag ${result.action} proposal ${result.requestId} queued for tag ${result.tag}`);
+          return result;
+        } catch (error51) {
+          refusal(error51);
+        }
+      },
+      presentCall: (a) => {
+        const req = a;
+        return present("Suggest tag change", "edit", req.tag, [
+          req.action === "migrate" ? `${req.tag} \u2192 ${req.to}` : `delete ${req.tag}`
+        ]);
+      }
+    })
+  );
+}
 function registerPlanImport(ctx) {
   registerBoardTool(
     ctx,
@@ -32948,6 +33455,8 @@ function apply(ctx, config2) {
   registerScratchTools(ctx);
   registerRequestAllowlist(ctx);
   registerSuggestActions(ctx);
+  registerAttachTags(ctx);
+  registerSuggestTagChange(ctx);
   registerGetTicket(ctx);
   registerGetEvidence(ctx);
   registerDigestRecent(ctx);

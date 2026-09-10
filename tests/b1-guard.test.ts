@@ -43,6 +43,10 @@ const WRITE_TOOLS = [
   "plan_meta_set",
   "request_allowlist",
   "suggest_actions",
+  // #180: attach-only tags, plus the delete/migrate proposal tool. Both
+  // write the board, so the depth guard refuses them for a subagent.
+  "attach_tags",
+  "suggest_tag_change",
 ] as const;
 
 /**
