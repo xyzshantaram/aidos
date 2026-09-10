@@ -1,5 +1,5 @@
 /**
- * #98 + #123: ONE FLOW PER USER ACTION.
+ * #98 + #123 + #170: ONE FLOW PER USER ACTION.
  *
  * The bug this pins, in the owner's words after testing two builds: "still
  * no signoff-carries-allowlist". #98 was implemented, landed and green --
@@ -9,19 +9,19 @@
  * false from the other. #123 was the identical failure on verify, reported
  * the same way, fixed the same way, and did not generalise.
  *
- * There were FOUR implementations of "sign off" in the client at the point
- * this test was written:
+ * #170 is the generalisation: EVERY user-facing board action has exactly
+ * one implementation, audited all at once because the copies drift and the
+ * drift reads as "you said you fixed this and you didn't":
  *
- *   1. signoff-dialog.tsx     -- attach + move (no allowlist)
- *   2. queue-panel.tsx        -- a two-step runner that collected paths
- *   3. local-ticket-view.tsx  -- the writes behind that runner, incl. grant
- *   4. evidence-attach.tsx    -- the generic form, which offers the
- *                                human-only kinds and can attach a
- *                                user_signoff ROW with no move and no files
- *
- * Copies 2 and 3 are gone: the queue opens the same SignoffDialog the
- * detail panel opens. Copy 4 is a DIFFERENT act (attach a bare row) and is
- * covered by its own finding rather than by this file.
+ *   signoff   signoff-dialog.tsx (the queue opens the same dialog)
+ *   verify    evidence-attach.tsx's VerifyModal (mark-done routes INTO it)
+ *   mark-done mark-done-modal.tsx (the queue opens the same modal; the bare
+ *             queue move is deleted, and the modal's own empty-payload
+ *             verified row is deleted -- verify has one meaning)
+ *   approval  approval-resolution.ts (card and queue both call it)
+ *   grant     host userGrantAllowlist (resolveApproval CALLS it; the
+ *             editor and the evidence form route through it; no client
+ *             userSetTicket allowlist write remains)
  *
  * WHY SOURCE ASSERTIONS. The rule is about call-site UNIQUENESS -- "there
  * is exactly one place that writes this" -- which is a property of the
@@ -57,6 +57,15 @@ const SURFACES: ReadonlyArray<[string, string]> = [
   ["send-back-modal.tsx", read("send-back-modal.tsx")],
   ["allowlist-request-card.tsx", read("allowlist-request-card.tsx")],
   ["inline-actions.tsx", read("inline-actions.tsx")],
+  // #170: the audit widened to every surface that names a board write.
+  // approval-resolution.ts is the OWNER of resolveApproval (its one
+  // occurrence is the implementation, not a duplicate); approval-runner,
+  // action-bar, field-editor and create-ticket-modal are pinned clean.
+  ["approval-resolution.ts", read("approval-resolution.ts")],
+  ["approval-runner.tsx", read("approval-runner.tsx")],
+  ["action-bar.tsx", read("action-bar.tsx")],
+  ["field-editor.tsx", read("field-editor.tsx")],
+  ["create-ticket-modal.tsx", read("create-ticket-modal.tsx")],
 ];
 
 const inlineActions = read("inline-actions.tsx");
@@ -84,16 +93,24 @@ describe("#98 signoff has ONE implementation", () => {
 
   it("only the signoff dialog grants the allowlist that signoff carries", () => {
     /*
-     * The half that kept going missing. A grant living anywhere else is a
-     * second answer to "what does signing off give the agent", and the
-     * board has already been burned by two answers to one question (#112:
-     * an approval REPLACED the allowlist while an evidence row said
-     * otherwise).
+     * #170: the grant ENTRY POINTS, not the implementation. The
+     * implementation is host-side userGrantAllowlist (one path: validate,
+     * attach, merge); these are the client surfaces allowed to reach it,
+     * each for a different act -- signoff carries paths, the editor grants
+     * on an in-progress ticket, the evidence form's file_allowlist branch
+     * grants instead of attaching a bare row. A FOURTH file naming the
+     * remote is a new grant path and fails here.
+     *
+     * (SURFACES order, not alpha: the filter preserves it.)
      */
     const granting = SURFACES.filter(([, text]) =>
       text.includes('"userGrantAllowlist"'),
     ).map(([name]) => name);
-    expect(granting).toEqual(["signoff-dialog.tsx"]);
+    expect(granting).toEqual([
+      "signoff-dialog.tsx",
+      "evidence-attach.tsx",
+      "allowlist-editor.tsx",
+    ]);
   });
 
   it("the queue holds no signoff write of its own", () => {
@@ -128,24 +145,17 @@ describe("#98 signoff has ONE implementation", () => {
 });
 
 describe("#123 verify has ONE implementation, and the queue reuses it", () => {
-  it("names every place that attaches a user_verified row", () => {
+  it("only the shared verify modal attaches a user_verified row", () => {
     /*
-     * TWO, and the second is a FINDING this audit surfaced rather than a
-     * blessing: `mark-done-modal.tsx` attaches a `user_verified` row of its
-     * own, with an empty payload -- no note, no criterion link, no
-     * screenshot. So "verify" means one thing from the Verify button and a
-     * quieter thing from Mark done, which is the same divergence #123 was
-     * filed for, one surface along.
-     *
-     * It is listed rather than forbidden because collapsing it changes what
-     * Mark done DOES (it would have to open the verify flow, or stop
-     * attesting at all), and that is the owner's call, not a refactor to
-     * slip into a bug fix. The test's job is to make sure the list does not
-     * grow a third entry while that decision is pending.
+     * #170 DECIDED (grilled 2026-09-09, verify half): mark done is GATED
+     * by the verified row -- neither old behaviour survives. The modal's
+     * empty-payload attach is deleted (it gave one kind two meanings) and
+     * the queue's bare move gained the same gate by opening the same
+     * modal, so VerifyModal is the only writer and this list has ONE
+     * entry. A second entry is a new meaning for verification.
      */
     expect(filesAttaching("builtin:user_verified")).toEqual([
       "evidence-attach.tsx",
-      "mark-done-modal.tsx",
     ]);
   });
 
@@ -288,5 +298,181 @@ describe("#108 retirement has ONE implementation, reached from two places", () =
 
   it("the panel renders rows through the SHARED TicketStrip", () => {
     expect(retiredPanel).toContain("<TicketStrip");
+  });
+});
+
+/**
+ * #170: MARK DONE HAS ONE IMPLEMENTATION, AND IT IS GATED.
+ *
+ * Was two: the modal attached an empty-payload user_verified row and moved,
+ * while the queue's performQueueAction moved bare. Same label, different
+ * consequence -- and the grilled decision keeps NEITHER: mark done is gated
+ * on the verified row, the modal never writes the kind, and the queue opens
+ * the same modal. The gate teaches (routes into the verify flow) rather
+ * than just refusing, and the override is an explicit force, never a bare
+ * confirm that secretly forces.
+ */
+describe("#170 mark done does the same thing from every entry point", () => {
+  const markDone = read("mark-done-modal.tsx");
+
+  it("only the mark-done modal moves a ticket to done", () => {
+    const movers = SURFACES.filter(([, text]) =>
+      text.includes('to: "done"'),
+    ).map(([name]) => name);
+    expect(movers).toEqual(["mark-done-modal.tsx"]);
+  });
+
+  it("every other move is named too, so a new destination fails loudly", () => {
+    // signoff and send-back both land in_progress through DIFFERENT gates
+    // (different actions, different states); submit-for-review lands
+    // awaiting_verification. Each pair below is the complete writer list
+    // for that destination.
+    const to = (dest: string): string[] =>
+      SURFACES.filter(([, text]) => text.includes(`to: "${dest}"`)).map(
+        ([name]) => name,
+      );
+    expect(to("in_progress")).toEqual([
+      "signoff-dialog.tsx",
+      "send-back-modal.tsx",
+    ]);
+    expect(to("awaiting_verification")).toEqual(["detail-panel.tsx"]);
+  });
+
+  it("the queue opens that modal rather than moving", () => {
+    expect(queuePanel).toContain("<MarkDoneModal");
+    expect(queuePanel).toMatch(/running\.actionId === "mark-done"/);
+    expect(localTicketView).not.toContain('to: "done"');
+    expect(localTicketView).not.toContain('"userMoveTicket", { ticketId');
+  });
+
+  it("the modal never attaches a user_verified row", () => {
+    // Verify keeps one meaning: only VerifyModal writes the kind.
+    expect(markDone).not.toContain('kind: "builtin:user_verified"');
+  });
+
+  it("the gate is an explicit verify|force choice, never a bare confirm", () => {
+    // promptToVerify starts null (no silent force) and leaves null only by
+    // an explicit click; verify routes into the shared flow, force moves
+    // with no row and says so on its button.
+    expect(markDone).toContain('export type PromptToVerify = "verify" | "force"');
+    expect(markDone).toContain("useState<PromptToVerify | null>(null)");
+    expect(markDone).toContain('setPromptToVerify("verify")');
+    expect(markDone).toContain('setPromptToVerify("force")');
+    expect(markDone).toContain("<VerifyModal");
+    expect(markDone).toContain("Force mark done");
+  });
+});
+
+/**
+ * #170: APPROVAL RESOLUTION HAS ONE IMPLEMENTATION.
+ *
+ * Was two: allowlist-request-card.tsx and local-ticket-view.tsx both called
+ * resolveApproval with their own surrounding logic. Both now call
+ * approval-resolution.ts, which owns the remote, the toasts and the refusal
+ * handling; the callers only refresh. Host-side, resolveApproval itself
+ * became a CALLER of userGrantAllowlist rather than a second merge, with
+ * the #112-round-2 coverage filter preserved inside the one merge.
+ */
+describe("#170 approval resolution is shared by the card and the queue", () => {
+  it("only the shared module names the resolveApproval remote", () => {
+    const calling = SURFACES.filter(([, text]) =>
+      text.includes('"resolveApproval"'),
+    ).map(([name]) => name);
+    expect(calling).toEqual(["approval-resolution.ts"]);
+  });
+
+  it("the card and the queue route through it and implement nothing", () => {
+    const card = read("allowlist-request-card.tsx");
+    expect(card).toContain('from "./approval-resolution"');
+    expect(card).toContain("resolveApprovalRequest(");
+    expect(localTicketView).toContain('from "./approval-resolution"');
+    expect(localTicketView).toContain("resolveApprovalRequest(");
+  });
+});
+
+/**
+ * #170: ALLOWLIST GRANTING HAS ONE PATH, AND IT MERGES.
+ *
+ * Was three: host userGrantAllowlist, host resolveApproval with its own
+ * merge, and allowlist-editor.tsx attaching the row + writing the field
+ * through userSetTicket -- where the field write REPLACED rather than
+ * merged, the replace-not-merge split that caused #112's silent data loss.
+ * Now resolveApproval calls userGrantAllowlist, the editor grants through
+ * it, the evidence form's file_allowlist branch grants through it, and the
+ * client's direct field write is deleted, not deprecated.
+ */
+describe("#170 the allowlist field is never written directly from the client", () => {
+  it("no client module attaches a file_allowlist row itself", () => {
+    // Every grant lands through the userGrantAllowlist remote (owned
+    // host-side); a bare row without the field write grants nothing, which
+    // would be a second shape of grant beside the merged one.
+    expect(filesAttaching("builtin:file_allowlist")).toEqual([]);
+  });
+
+  it("the two deleted userSetTicket call sites stay deleted", () => {
+    // These are the exact writes #112 burned on: the editor's replace and
+    // the evidence form's row-without-field. Either coming back fails here.
+    expect(read("allowlist-editor.tsx")).not.toContain('"userSetTicket"');
+    expect(read("allowlist-editor.tsx")).not.toContain("allowlist: paths");
+    expect(evidenceAttach).not.toContain('"userSetTicket"');
+  });
+
+  it("the remaining userSetTicket callers are the legitimate set", () => {
+    // field-editor (type-closed: EditableField has no allowlist member),
+    // create-ticket-modal (title/description on a new ticket, which cannot
+    // carry an allowlist by host rule), detail-panel
+    // (description/criteria/dependsOn). A fourth caller fails here.
+    const setting = SURFACES.filter(([, text]) =>
+      text.includes('"userSetTicket"'),
+    ).map(([name]) => name);
+    expect(setting).toEqual([
+      "detail-panel.tsx",
+      "field-editor.tsx",
+      "create-ticket-modal.tsx",
+    ]);
+  });
+
+  it("the generic field editor cannot address the allowlist by construction", () => {
+    // The EditableField union names every field the editor can write. If
+    // "allowlist" ever joins it, this fails -- the replace path would be
+    // back behind a generic input.
+    const fieldEditor = read("field-editor.tsx");
+    expect(fieldEditor).not.toContain("allowlist");
+  });
+
+  it("the detail panel's three field writes stay allowlist-free", () => {
+    // Description, criteria, dependency edges -- none of them the boundary.
+    // Counted, not just scanned: a fourth userSetTicket call (the shape a
+    // re-added direct grant would take) fails even without the word.
+    const detail = read("detail-panel.tsx");
+    expect(detail.match(/"userSetTicket"/g)).toHaveLength(3);
+    expect(detail).not.toContain("allowlist: paths");
+  });
+});
+
+/**
+ * #170: the listed exceptions -- similar-looking writes that are DIFFERENT
+ * acts, named with their reasons rather than excluded silently.
+ */
+describe("#170 exceptions, listed with reasons", () => {
+  it("userAddComment from the ticket and from mark-done are different acts", () => {
+    // comments-section.tsx posts standalone discussion; mark-done-modal's
+    // final comment rides the close the way signoff's note rides the
+    // signoff row. Same remote, different acts -- not two implementations
+    // of one action.
+    expect(read("mark-done-modal.tsx")).toContain('"userAddComment"');
+  });
+
+  it("the approval runner performs no write of its own", () => {
+    // It collects and returns; the caller decides. A write remote here
+    // would make the runner a competing implementation of every flow it
+    // serves, which is exactly what the queue-panel branches above exist
+    // to prevent.
+    const runner = read("approval-runner.tsx");
+    expect(runner).not.toContain('"userAttachEvidence"');
+    expect(runner).not.toContain('"userMoveTicket"');
+    expect(runner).not.toContain('"resolveApproval"');
+    expect(runner).not.toContain('"userGrantAllowlist"');
+    expect(runner).not.toContain('"userSetTicket"');
   });
 });

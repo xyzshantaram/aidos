@@ -1,13 +1,21 @@
 /**
- * Ticket U2e: the per-ticket allowlist editor. A modal opened from the
- * detail panel for in-progress tickets only. A text area holds one path per
- * line, prefilled from the ticket's current allowlist, plus a preview of the
- * union with the other in-progress tickets' allowlists.
+ * Ticket U2e + #170: the per-ticket allowlist editor. A modal opened from
+ * the detail panel for in-progress tickets only. A text area holds one path
+ * per line, prefilled from the ticket's current allowlist, plus a preview
+ * of the union with the other in-progress tickets' allowlists.
  *
- * Save sends the whole list through `userSetTicket` with the `allowlist`
- * field and writes the `builtin:file_allowlist` evidence row (author `user`,
- * payload `{ paths: string[] }`) with the same paths, matching the A7
- * design: the ticket field and the durable approval record land together.
+ * Save grants through `userGrantAllowlist` -- the ONE allowlist path, which
+ * validates, attaches the user-authored `builtin:file_allowlist` row, and
+ * MERGES into the field. The editor used to attach the row itself and write
+ * the field through `userSetTicket`, where the field write REPLACED rather
+ * than merged: that split is what silently dropped config's earlier grant
+ * (#112). The direct field write is deleted, not deprecated.
+ *
+ * Saving is therefore ADDITIVE: paths named here are granted on top of what
+ * the ticket already holds. To revoke a path, delete its grant row from the
+ * ticket's evidence -- the next grant carries forward only what is still
+ * covered, so a detached grant stops applying instead of jamming the
+ * ticket (#112 round 2).
  */
 
 import react from "react";
@@ -114,19 +122,20 @@ export function AllowlistEditor(props: AllowlistEditorProps) {
     const paths = parseAllowlistText(text);
     setSaving(true);
     try {
-      // The approval record first, then the field: the coverage check reads
-      // the row, so a field write must never outrun its evidence.
-      await callAidosRemote(
-        "userAttachEvidence",
-        { ticketId: props.ticketIdKey, kind: "builtin:file_allowlist", payload: { paths } },
+      // #170: the grant is one remote -- validate, attach the
+      // user-authored row, merge -- owned host-side by userGrantAllowlist.
+      // No direct field write: userSetTicket REPLACES the allowlist, which
+      // is the replace-not-merge split that caused #112's silent data loss.
+      const outcome = (await callAidosRemote(
+        "userGrantAllowlist",
+        { ticketId: props.ticketIdKey, paths },
         props.agentId,
+      )) as unknown as { granted?: string[] };
+      const granted = Array.isArray(outcome?.granted) ? outcome.granted.length : paths.length;
+      showToast(
+        granted > 0 ? "Allowlist granted — " + granted + " path(s)" : "Allowlist unchanged",
+        "success",
       );
-      await callAidosRemote(
-        "userSetTicket",
-        { ticketId: props.ticketIdKey, allowlist: paths },
-        props.agentId,
-      );
-      showToast("Allowlist saved", "success");
       props.onClose();
       props.onSaved();
     } catch (error) {
@@ -167,7 +176,7 @@ export function AllowlistEditor(props: AllowlistEditorProps) {
         </div>
         <div className="aidos-modal-form">
           <div className="aidos-modal-row">
-            <label>One path per line. A write outside this list refuses while the ticket is in progress.</label>
+            <label>One path per line. Saving grants these paths on top of the current list — a write outside the granted set refuses while the ticket is in progress. To revoke a path, delete its grant row from the ticket's evidence.</label>
             <textarea
               className="aidos-allowlist-input"
               value={text}

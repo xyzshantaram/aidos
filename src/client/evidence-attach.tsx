@@ -614,7 +614,38 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
     }
   }
 
+  /**
+   * #170: the file_allowlist branch grants rather than attaches. The grant
+   * is one remote -- validate, attach the user-authored row, merge -- owned
+   * host-side by userGrantAllowlist, so the evidence form cannot produce a
+   * row the field does not honour.
+   */
+  async function grantAllowlist(paths: string[]) {
+    if (working) return;
+    setWorking(true);
+    try {
+      await callAidosRemote(
+        "userGrantAllowlist",
+        { ticketId: props.ticketId, paths },
+        props.agentId,
+      );
+      showToast("Allowlist granted", "success");
+      setNote("");
+      setPathsText("");
+      setPayloadText("");
+      props.onAttached();
+    } catch (error) {
+      showToast(error instanceof AidosRemoteError ? error.message : String(error), "refusal");
+    } finally {
+      setWorking(false);
+    }
+  }
+
   // builtin:file_allowlist: a paths editor, no JSON.
+  //
+  // #170: granted through userGrantAllowlist -- the ONE allowlist path --
+  // never attached as a bare row. A row without the field write grants
+  // nothing, which would be a second shape of grant beside the merged one.
   if (props.kind === "builtin:file_allowlist") {
     const parsed = parseLinesText(pathsText);
     return (
@@ -634,7 +665,7 @@ function TailoredForm(props: { ticketId: number | string; agentId: string; kind:
             title={parsed.ok ? undefined : parsed.error}
             data-dsh-tip=""
             onClick={() => {
-              if (parsed.ok) void attachWith(props.kind, { paths: parsed.lines });
+              if (parsed.ok) void grantAllowlist(parsed.lines ?? []);
             }}
           >
             {working ? "Working…" : "Attach"}
