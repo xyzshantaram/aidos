@@ -53,8 +53,8 @@
 import react from "react";
 
 import type { TicketView } from "../kernel/projections";
-import { actionsFor } from "./action-visibility";
-import type { EvidenceKinds } from "./action-visibility";
+import { actionsFor, refusalForAction } from "./action-visibility";
+import type { ActionId, EvidenceKinds } from "./action-visibility";
 import { AllowlistRequestCard } from "./allowlist-request-card";
 import { boardKeyOf } from "./board-logic";
 import { VerifyModal } from "./evidence-attach";
@@ -148,6 +148,51 @@ export async function checkInlineActionAvailable(
     .map((entry) => entry.kind)
     .filter((kind): kind is string => typeof kind === "string");
   return refusalForInlineAction(row as unknown as TicketView, kinds, actionId);
+}
+
+/**
+ * #194: the board-surface sibling of `checkInlineActionAvailable`.
+ *
+ * Same shape -- resolve the ticket from the board FIRST, run the SAME
+ * `actionsFor` availability the board renders from (via `refusalForAction`,
+ * which covers every `ActionId` the bar offers), refuse with the reason
+ * writing nothing when the action no longer applies -- but WITHOUT the tool
+ * card's mark-done exception. A card has no ticket context, so its mark-done
+ * navigates; the board surfaces that call this HAVE the row and its
+ * evidence, so they open the real `MarkDoneModal` and the guard checks it
+ * like every other action.
+ *
+ * Evidence is read under BOTH the requested key and the found row's
+ * canonical key. On a viewer-space board the two are identical; a card that
+ * addresses its ticket in the OWNER's space (plain id, owner session --
+ * the only address a tile can derive without knowing the viewing session)
+ * finds the row under the canonical key. Either shape names the same
+ * ticket, so reading both cannot mix tickets the way a bare-id ADDRESS
+ * would (#93: that rule is about which ROW is found, and the row here is
+ * found by key match exactly once).
+ */
+export async function checkBoardActionAvailable(
+  sessionId: string,
+  boardKey: string,
+  actionId: ActionId,
+): Promise<string | null> {
+  const result = (await callAidosRemote("workspaceTickets", {}, sessionId)) as unknown as {
+    tickets?: BoardRowLike[];
+    evidence?: Record<string, EvidenceRowLike[]>;
+  } | BoardRowLike[];
+  const tickets = Array.isArray(result) ? result : (result.tickets ?? []);
+  const evidence = Array.isArray(result) ? {} : (result.evidence ?? {});
+  const row = tickets.find((ticket) => boardKeyOf(ticket) === boardKey) ?? null;
+  if (row === null) {
+    return (
+      "#" + boardKey + " is not on this board (it may belong to another session)"
+    );
+  }
+  const canonical = boardKeyOf(row);
+  const kinds = [...(evidence[boardKey] ?? []), ...(evidence[canonical] ?? [])]
+    .map((entry) => entry.kind)
+    .filter((kind): kind is string => typeof kind === "string");
+  return refusalForAction(row as unknown as TicketView, kinds, actionId);
 }
 
 /**

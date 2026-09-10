@@ -31,6 +31,8 @@ import {
 } from "./board-logic";
 import { FieldEditor } from "./field-editor";
 import { ActionBar } from "./action-bar";
+import { checkBoardActionAvailable } from "./inline-actions";
+import type { ActionId } from "./action-visibility";
 import { CommentsSection } from "./comments-section";
 import { EvidenceAttach, VerifyModal } from "./evidence-attach";
 import { AllowlistRequestCard } from "./allowlist-request-card";
@@ -111,6 +113,33 @@ function showError(error: unknown) {
   } else {
     showToast(String(error), "refusal");
   }
+}
+
+/**
+ * #194: submit for review, owned HERE and called from both board surfaces.
+ *
+ * The move itself (`in_progress -> awaiting_verification`) has exactly ONE
+ * writer -- this function -- because a second copy is the #170 bug class:
+ * "Submit for review" meaning one gate from the detail panel and another
+ * from the card. The card calls this; it does not move.
+ *
+ * Throws the remote's refusal (callers toast it); toasts success itself, so
+ * both callers celebrate identically.
+ */
+export async function submitTicketForReview(
+  agentId: string,
+  ticketIdKey: string,
+): Promise<void> {
+  await callAidosRemote(
+    "userMoveTicket",
+    // #93 third review, finding 1: this sent the bare `ticket.id` while
+    // every sibling write in this component uses props.ticketIdKey. For a
+    // FOREIGN row _routedAgent returns the caller unchanged for a number,
+    // so Submit for review moved the caller's OWN ticket with that id.
+    { ticketId: ticketIdKey, to: "awaiting_verification" },
+    agentId,
+  );
+  showToast("Submitted for review", "success");
 }
 
 /**
@@ -1051,22 +1080,23 @@ export function DetailView(props: DetailViewProps) {
     if (submitting) return;
     setSubmitting(true);
     try {
-      await callAidosRemote(
-        "userMoveTicket",
-        // #93 third review, finding 1: this sent the bare `ticket.id` while
-        // every sibling write in this component uses props.ticketIdKey. For a
-        // FOREIGN row _routedAgent returns the caller unchanged for a number,
-        // so Submit for review moved the caller's OWN ticket with that id.
-        { ticketId: props.ticketIdKey, to: "awaiting_verification" },
-        agentId,
-      );
-      showToast("Submitted for review", "success");
+      await submitTicketForReview(agentId, props.ticketIdKey);
       props.onClose();
     } catch (error) {
       showError(error);
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /*
+   * #194: the click-time re-check for every button in this panel's action
+   * bar. The bar renders from render-time descriptors; the panel can sit
+   * open while the ticket moves, so the click re-derives from the board
+   * and refuses -- writing nothing -- when the action no longer applies.
+   */
+  function checkAction(id: ActionId): Promise<string | null> {
+    return checkBoardActionAvailable(agentId, props.ticketIdKey, id);
   }
 
   return (
@@ -1090,6 +1120,7 @@ export function DetailView(props: DetailViewProps) {
           <ActionBar
             ticket={ticket}
             evidence={props.evidence}
+            checkAction={checkAction}
             onOpenSignoff={() => {
               setSignoffOpen(true);
             }}
