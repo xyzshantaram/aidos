@@ -331,6 +331,23 @@ export class UnknownTicket extends Error {
   }
 }
 
+/**
+ * #38: a detach or link that names no live evidence row. The row identity
+ * is its stamped `at` plus its kind — the same rule the fold drops by — so
+ * the error carries both halves of the name the caller gave.
+ */
+export class UnknownEvidenceRow extends Error {
+  readonly ticketId: TicketId;
+  readonly at: number;
+  readonly rowKind: string;
+  constructor(ticketId: TicketId, at: number, rowKind: string) {
+    super(`no evidence row on ticket ${ticketId} with at=${at} and kind=${rowKind}`);
+    this.ticketId = ticketId;
+    this.at = at;
+    this.rowKind = rowKind;
+  }
+}
+
 export class UnknownProject extends Error {
   readonly projectId: ProjectId;
   constructor(projectId: ProjectId) {
