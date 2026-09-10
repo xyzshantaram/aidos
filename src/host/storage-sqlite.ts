@@ -40,6 +40,7 @@ import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 import { workspaceKeyFromPath } from "../kernel/slug";
 import { STORE_SCHEMA_VERSION } from "../kernel/storage";
 import type { AidosEvent } from "../kernel/events";
+import type { TicketId } from "../kernel/types";
 import type { EventOrigin, StoredEvent, StoragePort } from "../kernel/storage";
 
 /** The store file name inside one workspace's storage directory. */
@@ -235,6 +236,26 @@ export class SqliteStorage implements StoragePort {
       localSeq: row.origin_seq,
       event: JSON.parse(row.payload) as AidosEvent,
     }));
+  }
+
+  /**
+   * #39: claim the next workspace-unique ticket id. ONE statement —
+   * UPDATE...RETURNING — so the claim is atomic across two dsh processes
+   * holding one workspace: a separate SELECT-then-UPDATE could hand both
+   * processes the same id, this cannot. A fresh database seeds the row at
+   * 1, so the first claim is 1. Lazy open applies: claiming touches the
+   * file, like any other first use.
+   */
+  allocateTicketId(): TicketId {
+    const db = this._ensure();
+    db.exec(`INSERT OR IGNORE INTO id_counter(name, value) VALUES ('ticket', 1)`);
+    const row = db.prepare(
+      `UPDATE id_counter SET value = value + 1 WHERE name = 'ticket' RETURNING value`,
+    ).get() as { value: number } | undefined;
+    if (row === undefined) {
+      throw new Error("id_counter lost its 'ticket' row during allocation");
+    }
+    return row.value - 1;
   }
 
   close(): void {
