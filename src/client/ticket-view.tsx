@@ -37,6 +37,14 @@ export interface TicketViewProps {
   /** #93: opens the human work queue. Absent hides the button entirely. */
   onQueue?: () => void;
   /**
+   * #180: opens the Tags browser. Absent hides the button entirely. The
+   * count is the number of DISTINCT tags in the workspace (what the modal
+   * lists), passed by the wrapper so this view stays presentation-only.
+   */
+  onTags?: () => void;
+  /** #180: how many distinct tags the workspace carries. */
+  tagsTotal?: number;
+  /**
    * #108: opens the Retired panel. Shown only while at least one ticket is
    * retired — a permanent zero button is furniture the board does not need.
    */
@@ -206,6 +214,17 @@ export function TicketView(props: TicketViewProps) {
           <button className="aidos-btn" onClick={props.onPlan}>
             Plan
           </button>
+          {props.onTags !== undefined ? (
+            <button
+              className="aidos-btn"
+              onClick={props.onTags}
+              title="Browse every tag in the workspace, with counts"
+              data-dsh-tip=""
+            >
+              {"Tags"}
+              <b className="aidos-queue-count">{props.tagsTotal ?? 0}</b>
+            </button>
+          ) : null}
           <button className="aidos-btn aidos-btn-primary" onClick={props.onCreate}>
             Create
           </button>

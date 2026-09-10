@@ -209,7 +209,101 @@ export class Store {
       state: snapshot.state,
       dependsOn: [...snapshot.dependsOn],
       allowlist: [...snapshot.allowlist],
+      tags: [...snapshot.tags],
     };
+  }
+
+  // ---- tags (#180) ----
+
+  /**
+   * Attach freeform tags to one ticket as ONE delta event. The names are
+   * trimmed, deduped, and unioned by the fold — a write never carries the
+   * whole list, which is the concurrent-edit merge rule. Returns the names
+   * that are NEW to this workspace, so the caller can report implicit tag
+   * creation instead of doing it silently.
+   */
+  attachTags(
+    ticketId: TicketId,
+    names: string[],
+    opts?: { actor?: Actor },
+  ): { attached: string[]; created: string[] } {
+    void opts;
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    const clean: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of names) {
+      if (typeof raw !== "string") {
+        throw new Error("tag names must be strings");
+      }
+      const name = raw.trim();
+      if (name === "") {
+        throw new Error("tag names must not be empty");
+      }
+      if (!seen.has(name)) {
+        seen.add(name);
+        clean.push(name);
+      }
+    }
+    if (clean.length === 0) {
+      throw new Error("attachTags requires at least one tag name");
+    }
+    // Creation is computed BEFORE the append, over the whole workspace.
+    const existing = new Set<string>();
+    for (const other of this._state.tickets.values()) {
+      if (other.workspaceKey !== snapshot.workspaceKey) continue;
+      for (const tag of other.tags) existing.add(tag);
+    }
+    const created = clean.filter((name) => !existing.has(name));
+    this._append({
+      kind: "tags/attached",
+      version: 1,
+      ticketId,
+      names: clean,
+      at: this._atFor(ticketId),
+    });
+    return { attached: clean, created };
+  }
+
+  /**
+   * Detach tags from one ticket as ONE delta event. USER-ONLY by contract:
+   * the store cannot see actors here, so the actor gate lives at the
+   * service boundary (TagDetachRefused); the store method exists so B0
+   * tests can prove the fold, not to offer the agent a path.
+   */
+  detachTags(ticketId: TicketId, names: string[]): { detached: string[] } {
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    const clean: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of names) {
+      if (typeof raw !== "string" || raw.trim() === "") {
+        throw new Error("tag names must be non-empty strings");
+      }
+      if (!seen.has(raw.trim())) {
+        seen.add(raw.trim());
+        clean.push(raw.trim());
+      }
+    }
+    if (clean.length === 0) {
+      throw new Error("detachTags requires at least one tag name");
+    }
+    const present = clean.filter((name) => snapshot.tags.includes(name));
+    if (present.length === 0) {
+      throw new Error(`ticket ${ticketId} carries none of: ${clean.join(", ")}`);
+    }
+    this._append({
+      kind: "tags/detached",
+      version: 1,
+      ticketId,
+      names: present,
+      at: this._atFor(ticketId),
+    });
+    return { detached: present };
   }
 
   // ---- projects ----
@@ -442,6 +536,8 @@ export class Store {
       allowlist: [...(opts?.allowlist ?? [])],
       dependsOn: [...(opts?.dependsOn ?? [])],
       slug,
+      // #180: a new ticket starts untagged; tags arrive only as deltas.
+      tags: [],
       workspaceKey,
       revision: 1,
       createdAt: at,

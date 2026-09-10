@@ -44,6 +44,7 @@ import {
   InvariantError,
   PlanParseError,
   ProjectNotEmptyError,
+  TagDetachRefused,
   UnknownKind,
   UnknownProject,
   UnknownTicket,
@@ -109,6 +110,8 @@ const TICKET_VIEW_SCHEMA = {
     updatedAt: { type: "number", required: true },
     workspaceKey: { type: "string", required: true },
     slug: { type: "string", required: true },
+    // #180: the freeform labels a ticket carries, for the board and the agent.
+    tags: { type: "array", items: { type: "string" }, required: true },
   },
 } as const;
 
@@ -165,6 +168,8 @@ interface TicketSummary {
   dependsOnCount: number;
   allowlistCount: number;
   hasCriteria: boolean;
+  // #180: short labels — the summary carries the names, not just a count.
+  tags: string[];
   descriptionExcerpt: string;
   descriptionTruncated: boolean;
 }
@@ -186,6 +191,7 @@ function summarizeTicket(view: TicketView): TicketSummary {
     dependsOnCount: view.dependsOn?.length ?? 0,
     allowlistCount: view.allowlist?.length ?? 0,
     hasCriteria: typeof view.criteria === "string" && view.criteria.trim() !== "",
+    tags: [...(view.tags ?? [])],
     descriptionExcerpt: truncated
       ? description.slice(0, DESCRIPTION_EXCERPT)
       : description,
@@ -210,6 +216,7 @@ const TICKET_SUMMARY_SCHEMA = {
     dependsOnCount: { type: "integer", required: true },
     allowlistCount: { type: "integer", required: true },
     hasCriteria: { type: "boolean", required: true },
+    tags: { type: "array", items: { type: "string" }, required: true },
     descriptionExcerpt: { type: "string", required: true },
     descriptionTruncated: { type: "boolean", required: true },
   },
@@ -520,6 +527,16 @@ function refusal(error: unknown, overrides?: { kind?: string }): never {
       "retired_ticket",
     );
   }
+  if (error instanceof TagDetachRefused) {
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "agent_cannot_detach_tags",
+        message: error.message,
+      }),
+      "agent_cannot_detach_tags",
+    );
+  }
   if (error instanceof FileNotReadError) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "file_not_read", path: error.path, message: error.message }),
@@ -561,7 +578,8 @@ const AIDOS_GUIDANCE =
   "Retired tickets are hidden from every board read and take no writes: only the human can retire or un-retire a ticket, so if a ticket you are told to work on cannot be found on the board, say so instead of inventing one -- the human either retired it or can un-retire it from the board's Retired panel. " +
   "plan_meta reads the stored plan blocks (frontmatter, preamble, context sections) and plan_meta_set edits one block in place: every present field replaces its stored value, and absent fields keep it, so there is no need to re-send the whole plan. " +
   "Your implementation tools (write, edit, bash, subagents, jobs) exist only while a ticket is in progress: before any signoff you can read and plan but cannot change files or run commands, and writes stay inside the in-progress tickets' file allowlists. A ticket awaiting verification keeps bash (every call asks the human) and freezes its files. " +
-  "The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist and suggest_actions all refuse a subagent. " +
+  "The board's WRITES are the orchestrator's: set_ticket, attach_evidence, move_ticket, plan_import, plan_meta_set, request_allowlist, suggest_actions, attach_tags and suggest_tag_change all refuse a subagent. " +
+  "Tags are freeform workspace labels: attach_tags attaches them to one ticket (a name no ticket carries yet is created by the attach, and the result reports 'agent created N tags' so creation is always visible, never silent), and you may ONLY attach — detaching, deleting, and bulk migration are never yours to perform; propose them with suggest_tag_change and the human approves, per proposal. " +
   "Its READS are not: a subagent may call get_tickets, get_ticket, get_evidence, digest_recent, plan and plan_meta, and those reads resolve against the board that DISPATCHED it, not its own empty session. " +
   "So a reviewer reads the ticket it is reviewing -- criteria, description, evidence -- from the board itself; do not paste a criteria summary into a reviewer prompt and ask it to review against your paraphrase. " +
   "Pass a toolFilter that denies the WRITE tools whenever you spawn a subagent or a fork, and leave the reads alone. " +
@@ -1536,6 +1554,152 @@ function registerSuggestActions(ctx: Context): void {
   );
 }
 
+/**
+ * #180: attach freeform tags to one ticket. Creation is by attaching an
+ * unseen name — there is no separate create-tag tool — and the result
+ * reports it ("agent created N tags" with the names) so a new tag never
+ * appears silently. The agent may ONLY attach: there is no detach
+ * parameter and no delete/migrate path here; those are human-approved
+ * proposals through suggest_tag_change.
+ */
+function registerAttachTags(ctx: Context): void {
+  registerBoardTool(
+    ctx,
+    "write",
+    defineTool({
+      name: "attach_tags",
+      description:
+        "Attach freeform tags to one ticket (#180). Tags are free workspace labels with no registry and no pre-declaration: attaching a name no ticket carries yet CREATES it, and the result reports it — 'agent created N tags' with the new names — so creation is always visible, never silent. You may ONLY attach: detaching, deleting, and bulk migration are never agent-executable; propose them with suggest_tag_change and the human approves, per proposal.",
+      parameters: {
+        ticketId: {
+          oneOf: [{ type: "integer" }, { type: "string" }],
+          required: true,
+          description: "The ticket to tag, by numeric id or slug.",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          required: true,
+          description: "The tag names to attach; unseen names are created by the attach.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            ticketId: { type: "integer", required: true },
+            attached: { type: "array", items: { type: "string" }, required: true },
+            createdTags: { type: "array", items: { type: "string" }, required: true },
+            createdCount: { type: "integer", required: true },
+            message: { type: "string", required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: attach_tags called by agent ${agent.session?.id}`);
+        try {
+          const result = ctx.aidos.agentAttachTags(
+            agent,
+            args as { ticketId: number | string; tags: string[] },
+          );
+          ctx.logger?.info?.(`aidos: attach_tags attached ${result.attached.length} tag(s) to ticket ${result.ticketId} (${result.message})`);
+          return result;
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (a) => {
+        const req = a as { ticketId?: number | string; tags?: string[] };
+        return present("Attach tags", "edit", req.ticketId, [
+          "#" + req.ticketId,
+          (req.tags ?? []).join(" "),
+        ]);
+      },
+    }),
+  );
+}
+
+/**
+ * #180: propose what the agent may never do itself — delete a tag, or
+ * migrate one tag into another across every ticket carrying it. Queues ONE
+ * approval card per proposal and returns at once. Executes only when the
+ * human approves it, per proposal: deletion and migration rewrite other
+ * tickets' metadata, and a standing grant would be exactly how the gate
+ * stops being a gate.
+ */
+function registerSuggestTagChange(ctx: Context): void {
+  registerBoardTool(
+    ctx,
+    "write",
+    defineTool({
+      name: "suggest_tag_change",
+      description:
+        "Propose a tag deletion or a bulk tag migration (#180). The agent can ONLY attach tags; detachment, deletion of a tag, and bulk migration (replace tag A with tag B across every ticket carrying A) are never agent-executable — this tool proposes them and the human approves, per proposal, in the tags modal. The proposal queues an APPROVAL CARD and returns at once — do not wait, do not poll: you will be steered with the outcome when the human resolves the card.",
+      parameters: {
+        action: {
+          type: "string",
+          enum: ["delete", "migrate"],
+          required: true,
+          description: "Delete the tag, or migrate it into another tag.",
+        },
+        tag: {
+          type: "string",
+          required: true,
+          description: "The existing tag the proposal is about.",
+        },
+        to: {
+          type: "string",
+          description: "The replacement tag; required when action is migrate.",
+        },
+        reason: {
+          type: "string",
+          required: true,
+          description: "Why this change — shown verbatim on the approval card.",
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean", const: true, required: true },
+            status: { type: "string", const: "pending", required: true },
+            requestId: { type: "string", required: true },
+            action: { type: "string", required: true },
+            tag: { type: "string", required: true },
+            to: { oneOf: [{ type: "string" }, { type: "null" }], required: true },
+          },
+        },
+        render: renderJson,
+      },
+      execute: async (args, exec) => {
+        const agent = orchestratorAgent(exec);
+        ctx.logger?.info?.(`aidos: suggest_tag_change called by agent ${agent.session?.id}`);
+        try {
+          const result = ctx.aidos.requestTagChange(
+            agent,
+            args as { action: "delete" | "migrate"; tag: string; to?: string; reason: string },
+          );
+          ctx.logger?.info?.(`aidos: tag ${result.action} proposal ${result.requestId} queued for tag ${result.tag}`);
+          return result;
+        } catch (error) {
+          refusal(error);
+        }
+      },
+      presentCall: (a) => {
+        const req = a as { action?: string; tag?: string; to?: string };
+        return present("Suggest tag change", "edit", req.tag, [
+          req.action === "migrate" ? `${req.tag} → ${req.to}` : `delete ${req.tag}`,
+        ]);
+      },
+    }),
+  );
+}
+
 function registerPlanImport(ctx: Context): void {
   registerBoardTool(
     ctx,
@@ -1766,6 +1930,8 @@ export function apply(ctx: Context, config: unknown): void {
   registerScratchTools(ctx);
   registerRequestAllowlist(ctx);
   registerSuggestActions(ctx);
+  registerAttachTags(ctx);
+  registerSuggestTagChange(ctx);
   registerGetTicket(ctx);
   registerGetEvidence(ctx);
   registerDigestRecent(ctx);

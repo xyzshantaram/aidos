@@ -600,6 +600,7 @@ describe("#108 the client surfaces ignore a retired ticket", () => {
     order: 1,
     dependsOn: [],
     allowlist: [],
+    tags: [],
     confidenceScore: 0,
     gateFraction: null,
     gatePresent: null,

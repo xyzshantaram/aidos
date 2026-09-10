@@ -94,12 +94,14 @@ describe("#146 the access class is declared by each tool, not by a list", () => 
     expect(boardToolNames("write")).toEqual([
       "attach_commit",
       "attach_evidence",
+      "attach_tags",
       "move_ticket",
       "plan_import",
       "plan_meta_set",
       "request_allowlist",
       "set_ticket",
       "suggest_actions",
+      "suggest_tag_change",
     ]);
   });
 
@@ -220,6 +222,10 @@ describe("#146 the writes still refuse", () => {
       ["plan_import", { file: "PLAN.md" }],
       ["plan_meta_set", { preamble: "x" }],
       ["request_allowlist", { ticketId: ticket.id, paths: ["src"] }],
+      // #180: attach-only tags, and the delete/migrate proposal tool. Both
+      // write, so a subagent's body call refuses exactly like every other.
+      ["attach_tags", { ticketId: ticket.id, tags: ["ui"] }],
+      ["suggest_tag_change", { action: "delete", tag: "ui", reason: "x" }],
     ] as const) {
       const payload = failureJson(await harness.runTool(name, args, { agent: child }));
       expect(payload.ok, `${name} must refuse a subagent`).toBe(false);
@@ -241,12 +247,14 @@ describe("#146 the writes still refuse", () => {
       [
         "attach_commit",
         "attach_evidence",
+        "attach_tags",
         "move_ticket",
         "plan_import",
         "plan_meta_set",
         "request_allowlist",
         "set_ticket",
         "suggest_actions",
+        "suggest_tag_change",
       ].sort(),
     );
   });

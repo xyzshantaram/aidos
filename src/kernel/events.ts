@@ -123,12 +123,42 @@ export interface PhaseSetEvent {
   at: number;
 }
 
+/**
+ * #180: attach freeform tags to one ticket as a DELTA — the names to add,
+ * never the whole list. The fold unions them into the snapshot's tags, so
+ * two concurrent writers editing one ticket cannot clobber each other's
+ * tags the way a whole-value snapshot replace would.
+ */
+export interface TagsAttachedEvent {
+  kind: "tags/attached";
+  version: 1;
+  ticketId: TicketId;
+  /** Deduped, non-empty tag names to add. */
+  names: string[];
+  at: number;
+}
+
+/**
+ * #180: remove tags from one ticket as a DELTA. Human-only (the agent may
+ * only attach); the fold differences them from the snapshot's tags.
+ */
+export interface TagsDetachedEvent {
+  kind: "tags/detached";
+  version: 1;
+  ticketId: TicketId;
+  /** Deduped, non-empty tag names to remove. */
+  names: string[];
+  at: number;
+}
+
 /** Every event the aidos log can hold. */
 export type AidosEvent =
   | TicketChangeEvent
   | EvidenceAttachedEvent
   | EvidenceDetachedEvent
   | EvidenceLinkedEvent
+  | TagsAttachedEvent
+  | TagsDetachedEvent
   | PlanChangeEvent
   | CommentAddedEvent
   | RefusalEvent

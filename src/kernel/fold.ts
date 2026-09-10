@@ -109,6 +109,31 @@ export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosStat
       }
       return state;
     }
+    case "tags/attached": {
+      // #180: DELTA fold — union the names into the snapshot's tags. This
+      // is the concurrent-edit merge rule: a write never carries the whole
+      // list, so last-write-wins clobbering cannot happen.
+      const ticket = state.tickets.get(event.ticketId);
+      if (ticket) {
+        const merged = new Set(ticket.tags);
+        for (const name of event.names) merged.add(name);
+        state.tickets.set(event.ticketId, { ...ticket, tags: [...merged] });
+      }
+      state.lastAt.set(event.ticketId, event.at);
+      return state;
+    }
+    case "tags/detached": {
+      // #180: DELTA fold — remove the named tags. Human-only by the
+      // service's actor rule; the fold itself stays actor-agnostic.
+      const ticket = state.tickets.get(event.ticketId);
+      if (ticket) {
+        const removed = new Set(event.names);
+        const next = ticket.tags.filter((name) => !removed.has(name));
+        state.tickets.set(event.ticketId, { ...ticket, tags: next });
+      }
+      state.lastAt.set(event.ticketId, event.at);
+      return state;
+    }
     case "plan/change": {
       // Whole-value replace.
       state.plans.set(event.projectId, event.plan);
