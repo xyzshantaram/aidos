@@ -48,6 +48,7 @@
  */
 
 import { marked } from "marked";
+import { stripHarnessChrome } from "./strip-harness-chrome";
 
 /** The five characters that can open an HTML construct. */
 const HTML_ESCAPES: Record<string, string> = {
@@ -104,9 +105,14 @@ function neutralizeUrls(html: string): string {
  *
  * Author-supplied HTML becomes visible text rather than live markup, and a
  * link to anything but http/https/mailto is defused to "#".
+ *
+ * #182 runs FIRST: harness ref-chip chrome is stripped before escaping, so
+ * it never renders as visible escaped markup. The escaper below is
+ * untouched -- it is the security boundary, and this step is the reason it
+ * never has to choose between mangling chrome and passing HTML through.
  */
 export function renderMarkdownSafe(text: string): string {
   if (text === "") return "";
-  const parsed = marked.parse(escapeHtml(text), { async: false });
+  const parsed = marked.parse(escapeHtml(stripHarnessChrome(text)), { async: false });
   return neutralizeUrls(String(parsed));
 }
