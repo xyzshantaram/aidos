@@ -39,6 +39,10 @@ const CLIENT = new URL("../src/client/", import.meta.url).pathname;
 
 const read = (name: string): string => readFileSync(CLIENT + name, "utf8");
 
+const HOST = new URL("../src/host/", import.meta.url).pathname;
+
+const readHost = (name: string): string => readFileSync(HOST + name, "utf8");
+
 const signoffDialog = read("signoff-dialog.tsx");
 const queuePanel = read("queue-panel.tsx");
 const localTicketView = read("local-ticket-view.tsx");
@@ -474,5 +478,68 @@ describe("#170 exceptions, listed with reasons", () => {
     expect(runner).not.toContain('"resolveApproval"');
     expect(runner).not.toContain('"userGrantAllowlist"');
     expect(runner).not.toContain('"userSetTicket"');
+  });
+});
+
+/**
+ * #170 follow-up (mutation run mut170-*): five suite gaps the surviving
+ * mutants proved. Same WHY as the file header: each rule is about call-site
+ * UNIQUENESS or exact payload shape, which no behavioural test can see —
+ * the merge runs either way, the modal renders either way, the remote
+ * answers either way. (m170-04 toast-stripping survived too, but toasts are
+ * not board writes: explicitly out of scope.)
+ */
+describe("#170 mutation-proven gaps: funnel, indirection, gate, exclusion, payload", () => {
+  const core = readHost("aidos-core.ts");
+  const approvalResolution = read("approval-resolution.ts");
+
+  it("resolveApproval grants through userGrantAllowlist, never the private merge", () => {
+    // m170-06: reverting the funnel to this._grantAllowlistPaths stays
+    // green — the merge runs either way, but the re-validation against the
+    // owning session's cwd, the user-authored row and the coverage filter
+    // belong to the one path. The pin is the call, in the resolve body.
+    const start = core.indexOf("\n  resolveApproval(");
+    const end = core.indexOf("\n  private _grantAllowlistPaths(", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = core.slice(start, end);
+    expect(body).toContain("this.userGrantAllowlist(");
+    expect(body).not.toContain("this._grantAllowlistPaths(");
+  });
+
+  it("the file_allowlist branch grants, never attaches — even by indirection", () => {
+    // m170-07: attachWith(props.kind, ...) carries no literal
+    // `kind: "builtin:file_allowlist"`, so the filesAttaching scan above
+    // cannot see it. This pins the branch text, not the string.
+    const branchStart = evidenceAttach.indexOf('props.kind === "builtin:file_allowlist"');
+    expect(branchStart).toBeGreaterThan(-1);
+    const tail = evidenceAttach.slice(branchStart);
+    const branch = tail.slice(0, tail.indexOf("// builtin:eval_criteria"));
+    expect(branch).toContain("grantAllowlist(");
+    expect(branch).not.toContain("attachWith(");
+    expect(branch).not.toContain('"userAttachEvidence"');
+  });
+
+  it("the mark-done gate reads the verifiedOnBoard check, not a constant", () => {
+    // m170-02: `const gated = false` stays green — the modal renders either
+    // way, and `void verifiedOnBoard` keeps the NAME in the file. The pin
+    // is the gating expression itself.
+    expect(markDoneModal).toContain("const gated = !verifiedOnBoard && !verifiedNow");
+  });
+
+  it("the queue's mark-done branch excludes approval entries", () => {
+    // m170-03: dropping `running.approvalId === undefined` stays green —
+    // an approval entry would open the gate modal instead of resolving its
+    // card. Same exclusion the verify and signoff branches carry.
+    expect(queuePanel).toMatch(
+      /running\.actionId === "mark-done" &&\s+running\.approvalId === undefined/,
+    );
+  });
+
+  it("a rejection sends no paths to the host", () => {
+    // m170-05: `approved || clean !== undefined` stays green — the payload
+    // shape is invisible to every behavioural test. Only an approval
+    // carries paths; a rejection resolves with none.
+    expect(approvalResolution).toContain("approved && clean !== undefined");
   });
 });

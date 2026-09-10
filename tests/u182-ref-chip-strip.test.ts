@@ -58,6 +58,20 @@ describe("#182 the reported sample no longer renders as escaped markup", () => {
     );
     expect(stripHarnessChrome("")).toBe("");
   });
+
+  it("a self-closing chip leaves no chrome and throws nothing", () => {
+    // Mutation run mut182-*: deleting the REF_CHIP_SPAN_EMPTY branch keeps
+    // the suite green — every fixture chip carries a label. A labelless
+    // self-closing chip strips to nothing; without the branch the residual
+    // rule throws instead.
+    const html = renderMarkdownSafe(
+      'See <span class="gdEzaW_refChip" data-ref-chip="skill"/> for details.',
+    );
+    expect(html).not.toContain("refChip");
+    expect(html).not.toContain("data-ref-chip");
+    expect(html).not.toContain("&lt;span");
+    expect(html).toContain("See");
+  });
 });
 
 describe("#182 the strip never eats author text or quoted evidence", () => {

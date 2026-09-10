@@ -288,6 +288,25 @@ describe("#180 deletion and migration are human-approved proposals", () => {
     expect(svc.getTicket(agent, { ticketId: ticket.id }).ticket.tags).toEqual(["old"]);
   });
 
+  it("queues five tag proposals and refuses the sixth", () => {
+    // Mutation run mut180-*: lifting the cap to 5000 AND rewording the
+    // message both survive — the pin is the count and the exact refusal.
+    const { svc, agent } = setup();
+    const ticket = create(svc, agent, "Work");
+    svc.agentAttachTags(agent, { ticketId: ticket.id, tags: ["old"] });
+    for (let i = 0; i < 5; i++) {
+      const proposal = svc.requestTagChange(agent, {
+        action: "delete",
+        tag: "old",
+        reason: `round ${i}`,
+      });
+      expect(proposal.status).toBe("pending");
+    }
+    expect(() =>
+      svc.requestTagChange(agent, { action: "delete", tag: "old", reason: "one too many" }),
+    ).toThrow("too many pending requests (5); resolve some on the board first");
+  });
+
   it("an approved migration replaces A with B on every carrying ticket", () => {
     const { svc, agent, fake } = setup();
     const a = create(svc, agent, "A");
@@ -393,6 +412,18 @@ describe("#180 the tags modal reads what the host wrote", () => {
     const rows = tagRowsFor(payload);
     expect(filterTagRows(rows, "").map((row) => row.tag)).toEqual(["ui", "perf"]);
     expect(filterTagRows(rows, "UI").map((row) => row.tag)).toEqual(["ui"]);
+    expect(filterTagRows(rows, "zzz")).toEqual([]);
+  });
+
+  it("folds the ROW side too: a mixed-case tag matches a lowercase query", () => {
+    // Mutation run mut180-*: dropping row-side toLowerCase keeps the suite
+    // green because every fixture tag is already lowercase — the query-side
+    // fold alone answers those. A mixed-case row needs both sides.
+    const rows = tagRowsFor({ tags: [{ tag: "WebGPU", count: 1, tickets: [] }] });
+    expect(rows.map((row) => row.tag)).toEqual(["WebGPU"]);
+    expect(filterTagRows(rows, "webgpu").map((row) => row.tag)).toEqual(["WebGPU"]);
+    expect(filterTagRows(rows, "WEBGPU").map((row) => row.tag)).toEqual(["WebGPU"]);
+    expect(filterTagRows(rows, "web").map((row) => row.tag)).toEqual(["WebGPU"]);
     expect(filterTagRows(rows, "zzz")).toEqual([]);
   });
 

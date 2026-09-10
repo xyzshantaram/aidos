@@ -59,4 +59,23 @@ describe("every client-called remote is exposed on the host", () => {
     expect(exposed.has("userRetireTicket")).toBe(true);
     expect(exposed.has("userUnretireTicket")).toBe(true);
   });
+
+  it("every @Remote name decorates its same-named method — no cross-wire", () => {
+    // Mutation run mutdirect-*: swapping the two retire decorator names
+    // keeps the suite green — both names stay exposed, so the name scan
+    // above cannot see the cross, and every direct method call in every
+    // other test bypasses the gateway entirely. The decorator IS the
+    // gateway route, so the pin is decorator-to-method wiring, for every
+    // remote (comments between decorator and method are allowed).
+    const source = readFileSync(HOST_SOURCE, "utf8");
+    const pairs = [
+      ...source.matchAll(/@Remote\("([^"]+)"\)\s+(?:async\s+)?(?:\/\/[^\n]*\n\s*)*(\w+)\(/g),
+    ];
+    const exposed = [...source.matchAll(/@Remote\("([^"]+)"\)/g)].map((match) => match[1]);
+    expect(pairs).toHaveLength(exposed.length);
+    const crossed = pairs
+      .filter((match) => match[1] !== match[2])
+      .map((match) => `@Remote("${match[1]}") decorates ${match[2]}`);
+    expect(crossed).toEqual([]);
+  });
 });

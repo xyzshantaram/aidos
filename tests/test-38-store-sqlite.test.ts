@@ -257,6 +257,38 @@ describe("sqlite schema", () => {
     });
   });
 
+  it("detach removes the row from the materialized evidence table, not just the fold", () => {
+    // Mutation run mut38-*: deleting the DELETE in _materialize
+    // evidence/detached kept the suite green because conformance reads
+    // detach through the fold, never the materialized table — while stale
+    // rows would serve external readers. This reads the table itself.
+    const dir = mkdtempSync(join(tmpdir(), "aidos-38-db-"));
+    const storage = openSqliteStorage(join(dir, "t.db"));
+    const path = storage.path;
+    const store = new Store(makeConfig(), { now: () => FIXED_NOW, storage });
+    try {
+      const project = store.createProject("/w", "w");
+      const ticket = store.createTicket(project, "T", "d");
+      store.attachEvidence(ticket, "builtin:agent_report", { n: 1 }, "agent");
+      store.attachEvidence(ticket, "builtin:comment", { n: 2 }, "agent");
+      const [first] = store.evidenceFor(ticket);
+      store.detachEvidence(ticket, first!.createdAt, first!.kind);
+      expect(store.evidenceFor(ticket).map((row) => row.kind)).toEqual(["builtin:comment"]);
+      const db = new DatabaseSync(path);
+      try {
+        const rows = db.prepare(`SELECT kind FROM evidence WHERE ticket_id = ?`).all(ticket) as {
+          kind: string;
+        }[];
+        expect(rows.map((row) => row.kind)).toEqual(["builtin:comment"]);
+      } finally {
+        db.close();
+      }
+    } finally {
+      storage.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the origin columns #41 needs, nullable when unstamped", () => {
     withTempDb((path) => {
       const storage = openSqliteStorage(path);
