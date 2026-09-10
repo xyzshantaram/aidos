@@ -108,4 +108,63 @@ describe("closed-session fold cache", () => {
       vi.useRealTimers();
     }
   });
+
+  it("a closed session that vanishes from persistence is evicted as it ages out", async () => {
+    // Mutation run mutdirect-*: deleting the anti-growth sweep keeps the
+    // suite green — every existing test watches inspect COUNTS, and a
+    // lingering entry is never re-inspected, so counts cannot see it. The
+    // pin is the map itself: two cached sessions, one deleted from
+    // persistence, both aged past the TTL — the survivor re-caches, the
+    // vanished one is swept instead of lingering without bound.
+    const ID_A = "session-evict-a";
+    const ID_B = "session-evict-b";
+    const harness = createHarness(undefined, { cwd: WS });
+    harness.installService();
+    const inspects = { a: 0, b: 0 };
+    const peerA = harness.makeAgent({ id: ID_A });
+    (peerA.session.header as { cwd?: string }).cwd = WS;
+    harness.service.userSetTicket(harness.asAgent(peerA), { title: "ticket from A" });
+    const eventsA = [...peerA.session.events];
+    harness.agents.splice(harness.agents.indexOf(peerA), 1);
+    const peerB = harness.makeAgent({ id: ID_B });
+    (peerB.session.header as { cwd?: string }).cwd = WS;
+    harness.service.userSetTicket(harness.asAgent(peerB), { title: "ticket from B" });
+    const eventsB = [...peerB.session.events];
+    harness.agents.splice(harness.agents.indexOf(peerB), 1);
+    let listed = [ID_A, ID_B];
+    harness.ctx.reflect.provide("sessionPersistence", {
+      list: async () => listed.map((id) => ({ id: SessionId(id), cwd: WS })),
+      inspect: async (id: string) => {
+        if (id === ID_A) {
+          inspects.a += 1;
+          return { meta: { id: ID_A, cwd: WS }, events: [...eventsA] };
+        }
+        if (id === ID_B) {
+          inspects.b += 1;
+          return { meta: { id: ID_B, cwd: WS }, events: [...eventsB] };
+        }
+        throw new Error("not found");
+      },
+    });
+    const foldsOf = (svc: unknown): Map<string, unknown> =>
+      (svc as unknown as { _closedFolds: Map<string, unknown> })._closedFolds;
+    vi.useFakeTimers();
+    try {
+      await harness.service.workspaceTickets(harness.asAgent());
+      expect(inspects).toEqual({ a: 1, b: 1 });
+      expect(foldsOf(harness.service).size).toBe(2);
+      // B's log is deleted from persistence; both entries age past the TTL.
+      listed = [ID_A];
+      await vi.advanceTimersByTimeAsync(61000);
+      await harness.service.workspaceTickets(harness.asAgent());
+      // A re-inspects and re-caches; B is never touched again — and its
+      // stale entry is swept rather than kept.
+      expect(inspects).toEqual({ a: 2, b: 1 });
+      expect(foldsOf(harness.service).has(ID_A)).toBe(true);
+      expect(foldsOf(harness.service).has(ID_B)).toBe(false);
+      expect(foldsOf(harness.service).size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

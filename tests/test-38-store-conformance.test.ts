@@ -22,8 +22,9 @@ import { join } from "node:path";
 import { Store } from "../src/kernel/store";
 import { MemoryStorage } from "../src/kernel/storage-memory";
 import { openSqliteStorage } from "../src/host/storage-sqlite";
-import type { StoragePort } from "../src/kernel/storage";
+import type { StoragePort, StoredEvent } from "../src/kernel/storage";
 import type { AidosConfig } from "../src/kernel/types";
+import type { TicketId } from "../src/kernel/types";
 import {
   EvidenceAuthorRefused,
   UnknownEvidenceRow,
@@ -337,5 +338,161 @@ for (const [label, makeBackend] of Object.entries(BACKENDS)) {
         backend.dispose();
       }
     });
+
+    it("assigns port seq values 1..N in append order", () => {
+      const backend = makeBackend();
+      try {
+        const store = new Store(makeConfig(), {
+          now: () => FIXED_NOW,
+          storage: backend.storage,
+        });
+        const project = store.createProject("/w", "w");
+        const ticket = store.createTicket(project, "T", "d");
+        store.attachEvidence(ticket, "builtin:agent_report", {}, "agent");
+        // The port assigns seq, 1-based and strictly increasing: the
+        // envelope is the migration chain's (#41) ordering, not a counter
+        // any fold recomputes.
+        expect(backend.storage.readAll().map((row) => row.seq)).toEqual([1, 2, 3]);
+        store.close();
+      } finally {
+        backend.dispose();
+      }
+    });
   });
 }
+
+/**
+ * #38 follow-up (mutation run mut38-*): eight suite gaps the surviving
+ * mutants proved. The port-parity half lives in the loop above (including
+ * the seq test); these are the Store-level behaviours both ports share,
+ * driven here through the memory port. The SQLite-only materialized-table
+ * half lives in test-38-store-sqlite.test.ts.
+ */
+
+/** A port whose persist always fails: disk full, locked file, dead handle. */
+class ThrowingStorage implements StoragePort {
+  append(): StoredEvent {
+    throw new Error("disk full");
+  }
+  allocateTicketId(): TicketId {
+    return 1;
+  }
+  readAll(): StoredEvent[] {
+    return [];
+  }
+  close(): void {}
+}
+
+function gapStore(): { store: Store; storage: MemoryStorage } {
+  const storage = new MemoryStorage();
+  const store = new Store(makeConfig(), { now: () => FIXED_NOW, storage });
+  return { store, storage };
+}
+
+describe("#38 a failing port never moves the fold", () => {
+  it("a throwing append leaves the log and the fold untouched", () => {
+    const store = new Store(makeConfig(), {
+      now: () => FIXED_NOW,
+      storage: new ThrowingStorage(),
+    });
+    // Persist runs BEFORE the in-memory push: the write throws with the
+    // fold untouched, so the store never believes a write the log lacks.
+    expect(() => store.createProject("/w", "w")).toThrow(/disk full/);
+    expect(store.events()).toEqual([]);
+    expect(store.projects()).toEqual([]);
+  });
+});
+
+describe("#38 search limits, filters, and order", () => {
+  it("caps substring search at 50 hits", () => {
+    const { store } = gapStore();
+    try {
+      const project = store.createProject("/w", "w");
+      for (let i = 0; i < 55; i++) {
+        store.createTicket(project, `Cap ticket ${i}`, "a shared needle");
+      }
+      expect(store.searchTickets("needle")).toHaveLength(50);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("honours the projectId filter", () => {
+    const { store } = gapStore();
+    try {
+      const first = store.createProject("/one", "one");
+      const second = store.createProject("/two", "two");
+      const inFirst = store.createTicket(first, "Scoped work", "a shared needle");
+      const inSecond = store.createTicket(second, "Scoped work", "a shared needle");
+      expect(
+        store.searchTickets("needle", { projectId: first }).map((hit) => hit.ticketId),
+      ).toEqual([inFirst]);
+      expect(
+        store.searchTickets("needle", { projectId: second }).map((hit) => hit.ticketId),
+      ).toEqual([inSecond]);
+      expect(store.searchTickets("needle")).toHaveLength(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("returns hits in ascending ticket id order", () => {
+    const { store } = gapStore();
+    try {
+      const project = store.createProject("/w", "w");
+      const ids = [
+        store.createTicket(project, "Order one", "a sortable needle"),
+        store.createTicket(project, "Order two", "a sortable needle"),
+        store.createTicket(project, "Order three", "a sortable needle"),
+      ];
+      expect(store.searchTickets("sortable needle").map((hit) => hit.ticketId)).toEqual(ids);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("#38 linking to an empty criterion refuses", () => {
+  it("an empty or blank criterion names the non-empty-line rule", () => {
+    const { store } = gapStore();
+    try {
+      const project = store.createProject("/w", "w");
+      const ticket = store.createTicket(project, "T", "d", { criteria: "ship it" });
+      store.attachEvidence(ticket, "builtin:agent_report", {}, "agent");
+      const [row] = store.evidenceFor(ticket);
+      const at = row!.createdAt;
+      // Without the empty check these still throw, but with the WRONG
+      // message ("not one of the ticket's criteria") — the pin is the
+      // rule, not the refusal.
+      expect(() => store.linkEvidence(ticket, at, "builtin:agent_report", "")).toThrow(
+        /non-empty/,
+      );
+      expect(() => store.linkEvidence(ticket, at, "builtin:agent_report", "   ")).toThrow(
+        /non-empty/,
+      );
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("#38 MemoryStorage honours close", () => {
+  it("refuses appends and id claims after close, and close stays idempotent", () => {
+    const storage = new MemoryStorage();
+    storage.close();
+    expect(() => storage.close()).not.toThrow();
+    expect(() =>
+      storage.append({
+        kind: "aidos/refusal",
+        version: 1,
+        ticketId: 1,
+        fromState: null,
+        toState: null,
+        actor: null,
+        reason: "r",
+        at: 1,
+      }),
+    ).toThrow(/closed/);
+    expect(() => storage.allocateTicketId()).toThrow(/closed/);
+  });
+});
