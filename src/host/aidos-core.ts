@@ -1517,6 +1517,12 @@ registerAidosSessionEventTypes(ctx);
       stateIds?: readonly string[];
       projectIds?: readonly number[];
       search?: string;
+      /**
+       * #138: only tickets carrying any of these tags. Absent or empty
+       * means all tickets — the same rule the FilterPanel applies, so the
+       * get_tickets tool and the panel agree (#49 parity).
+       */
+      tags?: readonly string[];
       sortKey?: TicketSortKey;
       descending?: boolean;
       /**
@@ -1559,6 +1565,7 @@ registerAidosSessionEventTypes(ctx);
       stateIds: opts?.stateIds,
       projectIds: opts?.projectIds,
       search: opts?.search,
+      tags: opts?.tags,
       sortKey: opts?.sortKey,
       descending: opts?.descending,
     });
@@ -3395,6 +3402,28 @@ registerAidosSessionEventTypes(ctx);
     const names = this._cleanTagNames(args.tags);
     const result = this._applyTags(routed, ticketId, { add: [], remove: names }, "user");
     return { ticketId: result.ticketId, detached: result.removed };
+  }
+
+  /**
+   * #138: the BOARD surface for ATTACHING tags to one ticket — the path the
+   * create-ticket modal uses after userSetTicket creates the ticket.
+   *
+   * Runs through `_applyTags`, the one tag-write flow (#170): the commit is
+   * still a `tags/attached` DELTA, never a whole-list replace, so the #180
+   * merge rule holds for board writes too. User-actor, like every other
+   * user* Remote here; unlike the agent path it reports no "created N tags"
+   * line, because the human sees the tags they just typed.
+   */
+  @Remote("userAttachTags")
+  userAttachTags(
+    agent: Agent,
+    args: { ticketId: number | string; tags: string[] },
+  ): { ticketId: number; attached: string[] } {
+    const routed = this._routedAgent(agent, args.ticketId);
+    const ticketId = this._resolveTicketId(routed, args.ticketId);
+    const names = this._cleanTagNames(args.tags);
+    const result = this._applyTags(routed, ticketId, { add: names, remove: [] }, "user");
+    return { ticketId: result.ticketId, attached: names };
   }
 
   /**

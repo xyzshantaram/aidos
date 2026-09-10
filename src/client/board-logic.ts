@@ -184,6 +184,13 @@ export interface FilterState {
   sortKey: SortKey;
   descending: boolean;
   search: string;
+  /**
+   * #138: tag filter. OPTIONAL so every existing FilterState literal still
+   * compiles (AppliedState lives in view-state.ts, outside this ticket's
+   * scope); absent or empty means all tickets. Passed straight through to
+   * the kernel's filterTicketViews, so the board and get_tickets agree.
+   */
+  tags?: string[];
 }
 
 /** The display label of one ticket state. */
@@ -287,7 +294,8 @@ function matchesSearch<T extends TicketLike>(ticket: T, query: string): boolean 
  *  - `stateIds` passes through, so an EMPTY selection still matches nothing
  *    (every state unticked shows an empty board, which is what the panel
  *    has always done — see the note on TicketFilter.stateIds);
- *  - `projectIds: null` means "all projects" here and `undefined` there.
+ *  - `projectIds: null` means "all projects" here and `undefined` there;
+ *  - `tags` passes through, where absent or empty means "all tags" (#138).
  */
 export function filterTickets<T extends TicketLike>(
   tickets: readonly T[],
@@ -297,6 +305,7 @@ export function filterTickets<T extends TicketLike>(
     stateIds: filter.stateIds,
     projectIds: filter.projectIds ?? undefined,
     search: filter.search,
+    tags: filter.tags,
     sortKey: filter.sortKey,
     descending: filter.descending,
   });
@@ -940,6 +949,50 @@ export function idColor(fullId: string): string {
   }
   const index = Math.abs(hash) % BADGE_HUES.length;
   return BADGE_HUES[index];
+}
+
+/**
+ * #138: the chip hue of one freeform tag.
+ *
+ * The SAME hash family as the id badges, deliberately: one set of hues for
+ * the whole board means a colour means "a hue", not "a hue from whichever
+ * list this component happened to import" (the KIND_COLORS note above).
+ * Tag chips therefore sit in the same visual language as the evidence kind
+ * chips without sharing their per-kind meaning.
+ */
+export function tagColor(tag: string): string {
+  return idColor(tag);
+}
+
+/** One tag with the number of tickets carrying it. */
+export interface TagCount {
+  tag: string;
+  count: number;
+}
+
+/**
+ * #138: every tag the given rows carry, with counts.
+ *
+ * Ordered by count descending, then name ascending — the SAME order the
+ * host's `workspaceTags` Remote returns, so the FilterPanel and the Tags
+ * browser cannot disagree about which tag leads. Structural over the tags
+ * field only, so the panel can feed it its TicketViews directly.
+ */
+export function tagCounts<T extends { tags?: readonly string[] }>(
+  tickets: readonly T[],
+): TagCount[] {
+  const counts = new Map<string, number>();
+  for (const ticket of tickets) {
+    for (const tag of ticket.tags ?? []) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  const out: TagCount[] = [];
+  for (const [tag, count] of counts) {
+    out.push({ tag, count });
+  }
+  out.sort((a, b) => b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
+  return out;
 }
 
 

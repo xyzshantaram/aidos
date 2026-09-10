@@ -20,10 +20,29 @@ export interface CreateTicketModalProps {
   agentId: string;
 }
 
+/**
+ * #138: split a tags input on commas. Trims, drops empties, dedupes keeping
+ * first order — the same cleaning the host applies, so the modal never
+ * sends a batch the host would refuse for shape. Pure, so it is testable
+ * without a browser.
+ */
+export function parseTagInput(value: string): string[] {
+  const clean: string[] = [];
+  const seen = new Set<string>();
+  for (const part of value.split(",")) {
+    const name = part.trim();
+    if (name === "" || seen.has(name)) continue;
+    seen.add(name);
+    clean.push(name);
+  }
+  return clean;
+}
+
 export function CreateTicketModal(props: CreateTicketModalProps) {
   const [title, setTitle] = react.useState("");
   const [description, setDescription] = react.useState("");
   const [criteria, setCriteria] = react.useState("");
+  const [tagsInput, setTagsInput] = react.useState("");
   const [saving, setSaving] = react.useState(false);
 
   react.useEffect(function () {
@@ -50,6 +69,34 @@ export function CreateTicketModal(props: CreateTicketModalProps) {
         typeof (result as { id: unknown }).id === "number"
           ? (result as { id: number }).id
           : NaN;
+      /*
+       * #138: tags arrive as a DELTA after the create, never inside it —
+       * setTicket takes no tags argument (#180 merge rule), so the modal
+       * creates first and attaches through the board's user-actor path.
+       * A refused attach still leaves a created ticket: say so plainly
+       * rather than reporting success or failure alone.
+       */
+      const tags = parseTagInput(tagsInput);
+      if (tags.length > 0 && Number.isFinite(id)) {
+        try {
+          await callAidosRemote(
+            "userAttachTags",
+            { ticketId: id, tags },
+            props.agentId,
+          );
+        } catch (attachError) {
+          const detail =
+            attachError instanceof AidosRemoteError
+              ? attachError.message
+              : String(attachError);
+          showToast("Ticket created, but its tags were not attached: " + detail, "refusal");
+          props.onClose();
+          if (props.onCreated !== undefined) {
+            props.onCreated(id);
+          }
+          return;
+        }
+      }
       showToast("Ticket created", "success");
       props.onClose();
       if (props.onCreated !== undefined && Number.isFinite(id)) {
@@ -120,6 +167,18 @@ export function CreateTicketModal(props: CreateTicketModalProps) {
               disabled={saving}
               onChange={(event) => {
                 setCriteria(event.target.value);
+              }}
+            />
+          </div>
+          <div className="aidos-modal-row">
+            <label>Tags</label>
+            <input
+              type="text"
+              value={tagsInput}
+              disabled={saving}
+              placeholder="ui, host, debt (comma-separated, optional)"
+              onChange={(event) => {
+                setTagsInput(event.target.value);
               }}
             />
           </div>

@@ -620,6 +620,12 @@ function registerGetTickets(ctx: Context): void {
           type: "string",
           description: "Substring match over title or id, like the board search box.",
         },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Only tickets carrying any of these tags. Absent = all tags (#138, FilterPanel parity).",
+        },
         sortKey: {
           type: "string",
           enum: ["confidence", "gates", "time", "alpha"],
@@ -678,6 +684,7 @@ function registerGetTickets(ctx: Context): void {
             stateIds: args.stateIds,
             projectIds: args.projectIds,
             search: args.search,
+            tags: args.tags,
             sortKey: args.sortKey,
             descending: args.descending,
           });
@@ -713,6 +720,9 @@ function registerGetTickets(ctx: Context): void {
         const filters: string[] = [];
         if (args.stateIds !== undefined) filters.push("states: " + args.stateIds.join("|"));
         if (args.search !== undefined && args.search !== "") filters.push("search: " + args.search);
+        if (args.tags !== undefined && (args.tags as string[]).length > 0) {
+          filters.push("tags: " + (args.tags as string[]).join("|"));
+        }
         if (args.projectId !== undefined) filters.push("project " + args.projectId);
         return present("Read the board", "read", args.projectId, filters);
       },

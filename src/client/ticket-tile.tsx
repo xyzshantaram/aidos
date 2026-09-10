@@ -16,6 +16,7 @@ import {
   idColor,
   stateLabel,
   ringPercent,
+  tagColor,
   ticketChipLabel,
 } from "./board-logic";
 import { EvidenceTags } from "./evidence-tags";
@@ -23,6 +24,37 @@ import { AlertCircleIcon, CompassIcon, ForkIcon, KeyholeIcon } from "./icons";
 
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
+
+/**
+ * #138: one compact chip per freeform tag.
+ *
+ * Hook-free and exported so it is directly unit-renderable AND shared: the
+ * detail panel renders this same component rather than a second copy. The
+ * hue rides the same `--chip-hue` custom property the evidence kind chips
+ * use (see board.css `.aidos-chip`), so no stylesheet change is needed —
+ * but that shared mechanism is also why a tag chip READS like an evidence
+ * chip at a glance. That collision is reported on #138 rather than
+ * redesigned here: renaming either chip's look belongs to its owner.
+ */
+export function TicketTagChips(props: { tags: readonly string[] }) {
+  if (props.tags.length === 0) return null;
+  return (
+    <>
+      {props.tags.map((tag) => (
+        <span
+          key={tag}
+          className="aidos-chip aidos-chip-tag"
+          style={{ ["--chip-hue"]: tagColor(tag) } as react.CSSProperties}
+          aria-label={"Tag " + tag}
+          title={"Tag " + tag}
+          data-dsh-tip=""
+        >
+          {tag}
+        </span>
+      ))}
+    </>
+  );
+}
 
 export interface TicketTileProps {
   ticket: TicketView;
@@ -170,6 +202,7 @@ export function TicketTile(props: TicketTileProps) {
           </span>
         </span>
         <EvidenceTags evidence={props.evidence} state={ticket.state} />
+        <TicketTagChips tags={ticket.tags ?? []} />
         {ticket.dependsOn?.map((ref) => (
           <span
             key={ref}
