@@ -12,11 +12,18 @@
 
 import type { AidosEvent } from "./events";
 import type { EventOrigin, StoredEvent, StoragePort } from "./storage";
+import type { TicketId } from "./types";
 
 /** An ephemeral port: the log lives in one array and dies with the handle. */
 export class MemoryStorage implements StoragePort {
   private _rows: StoredEvent[] = [];
   private _closed = false;
+  /**
+   * #39: the workspace-unique id counter. Lives on the PORT, not on any
+   * one Store's fold, so two Stores sharing this handle allocate
+   * distinct ids. Starts at 1: a fresh workspace's first create is 1.
+   */
+  private _nextTicketId: TicketId = 1;
 
   append(event: AidosEvent, origin?: Partial<EventOrigin>): StoredEvent {
     if (this._closed) {
@@ -34,6 +41,15 @@ export class MemoryStorage implements StoragePort {
 
   readAll(): StoredEvent[] {
     return [...this._rows];
+  }
+
+  allocateTicketId(): TicketId {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    const id = this._nextTicketId;
+    this._nextTicketId += 1;
+    return id;
   }
 
   close(): void {

@@ -32,6 +32,7 @@
  */
 
 import type { AidosEvent } from "./events";
+import type { TicketId } from "./types";
 
 /** The schema version the implementations create on first open. */
 export const STORE_SCHEMA_VERSION = 1;
@@ -67,6 +68,19 @@ export interface StoragePort {
    * nullable. Throwing leaves nothing persisted.
    */
   append(event: AidosEvent, origin?: Partial<EventOrigin>): StoredEvent;
+  /**
+   * #39: claim the next workspace-unique ticket id and advance the
+   * counter past it. The Store calls this BEFORE appending the create
+   * event, because the id goes into the event payload. One call claims
+   * exactly one id: two Stores sharing one port (two sessions, one
+   * workspace) never receive the same id, even when their in-memory
+   * folds are stale relative to each other. A fresh port starts at 1.
+   *
+   * A refused create consumes nothing — the Store validates (unknown
+   * project, duplicate slug) BEFORE allocating, so only a create that
+   * will actually append claims an id.
+   */
+  allocateTicketId(): TicketId;
   /** Every stored event, oldest first. */
   readAll(): StoredEvent[];
   /** Release the underlying handle. Idempotent: closing twice is silent. */

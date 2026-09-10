@@ -228,6 +228,28 @@ export class Store {
     return at;
   }
 
+  /**
+   * #39: the next ticket id, allocated from the STORE, not read from the
+   * fold's per-session `nextTicketId` counter. The allocation runs before
+   * the create event appends, because the id goes into the event payload.
+   *
+   * The fold counter stays as a FLOOR, not the source: a Store seeded
+   * with an explicit `log` (the reopen path every existing test uses)
+   * folds ids its ephemeral port never issued, and the floor keeps such
+   * a store from reissuing a seeded id. Whenever the port is ahead — the
+   * live case, including two sessions sharing one workspace port with
+   * stale folds — the port's id wins, so the two sessions' tickets
+   * differ. The fold still advances on every create, so `nextTicketId`
+   * keeps its monotonic, never-recomputed property.
+   *
+   * The host harness (`aidos-core.ts`) has no store and keeps reading
+   * its own fold counter — that fallback is exactly why every existing
+   * harness test still passes; its rescope is #42's wrapper work.
+   */
+  private _nextTicketId(): TicketId {
+    return Math.max(this._storage.allocateTicketId(), this._state.nextTicketId);
+  }
+
   /** The next free order in one phase, counted from 1. */
   private _nextOrder(projectId: ProjectId, phase: number): number {
     let max = 0;
@@ -576,12 +598,17 @@ export class Store {
     if (!this._state.projects.has(projectId)) {
       throw new UnknownProject(projectId);
     }
-    const ticketId = this._state.nextTicketId;
     const workspaceKey = workspaceKeyFromPath(this._state.projects.get(projectId)!.absPath);
-    const slug = opts?.slug?.trim() || slugFromTitle(title) || `ticket-${ticketId}`;
-    if (this._slugTaken(workspaceKey, slug, null)) {
-      throw new DuplicateSlug(slug, workspaceKey);
+    const base = opts?.slug?.trim() || slugFromTitle(title);
+    // Refuse a taken slug BEFORE claiming an id, so a refusal consumes
+    // nothing. The id is claimed only for a create that will append —
+    // the allocation still runs before the log append, because the id
+    // goes into the event payload.
+    if (base !== "" && this._slugTaken(workspaceKey, base, null)) {
+      throw new DuplicateSlug(base, workspaceKey);
     }
+    const ticketId = this._nextTicketId();
+    const slug = base || `ticket-${ticketId}`;
     const phase = opts?.phase ?? 1;
     const order = opts?.order ?? this._nextOrder(projectId, phase);
     const at = this._nowFn();
