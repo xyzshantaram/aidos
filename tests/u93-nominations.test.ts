@@ -256,7 +256,8 @@ describe("#93 nominations: a dismissal sticks for the session", () => {
 describe("#93 nominations: the cap counts new pairs, not resubmissions", () => {
   it("at the cap, an existing ask can still have its reason revised", () => {
     const { svc, agent } = setup();
-    const tickets = Array.from({ length: 20 }, (_u, i) =>
+    // #203: the signoff bucket holds 10, not the old shared 20.
+    const tickets = Array.from({ length: 10 }, (_u, i) =>
       svc.setTicket(agent, { title: "T" + i }),
     );
     svc.suggestActions(agent, {
@@ -271,7 +272,7 @@ describe("#93 nominations: the cap counts new pairs, not resubmissions", () => {
       suggestions: [{ ticketId: tickets[0].id, actionId: "signoff", reason: "revised" }],
     });
     expect(revised.accepted).toBe(1);
-    expect(svc.actionNominations(agent)).toHaveLength(20);
+    expect(svc.actionNominations(agent)).toHaveLength(10);
     const row = svc
       .actionNominations(agent)
       .find((n: { ticketId: number }) => n.ticketId === tickets[0].id);
@@ -280,11 +281,12 @@ describe("#93 nominations: the cap counts new pairs, not resubmissions", () => {
 
   it("but a genuinely new ask past the cap is still refused", () => {
     const { svc, agent } = setup();
-    const tickets = Array.from({ length: 21 }, (_u, i) =>
+    // #203: 11 tickets — the signoff bucket holds 10.
+    const tickets = Array.from({ length: 11 }, (_u, i) =>
       svc.setTicket(agent, { title: "T" + i }),
     );
     svc.suggestActions(agent, {
-      suggestions: tickets.slice(0, 20).map((t) => ({
+      suggestions: tickets.slice(0, 10).map((t) => ({
         ticketId: t.id,
         actionId: "signoff",
         reason: "r",
@@ -292,7 +294,7 @@ describe("#93 nominations: the cap counts new pairs, not resubmissions", () => {
     });
     expect(() =>
       svc.suggestActions(agent, {
-        suggestions: [{ ticketId: tickets[20].id, actionId: "signoff", reason: "one more" }],
+        suggestions: [{ ticketId: tickets[10].id, actionId: "signoff", reason: "one more" }],
       }),
     ).toThrow(/too many nominations/);
   });

@@ -68,7 +68,8 @@ describe("#160 a fulfilled nomination stops existing", () => {
      */
     const { harness, agent } = setup();
     const ids: number[] = [];
-    for (let index = 0; index < 20; index += 1) {
+    // #203: the signoff bucket holds 10, not the old shared 20.
+    for (let index = 0; index < 10; index += 1) {
       const id = openTicket(harness);
       ids.push(id);
       harness.service.suggestActions(agent, {
@@ -217,15 +218,15 @@ describe("#160 the list and the cap read the same rule", () => {
     const shown = harness.service.actionNominations(agent).length;
     expect(shown).toBe(1);
 
-    // Fill the remaining room exactly; the 20th new pair must still fit if
-    // the cap counts what the list shows.
-    for (let index = shown; index < 20; index += 1) {
+    // Fill the remaining room exactly; the 10th new pair must still fit if
+    // the cap counts what the list shows (#203: the signoff bucket holds 10).
+    for (let index = shown; index < 10; index += 1) {
       const id = openTicket(harness);
       harness.service.suggestActions(agent, {
         suggestions: [{ ticketId: id, actionId: "signoff", reason: "filler" }],
       });
     }
-    expect(harness.service.actionNominations(agent)).toHaveLength(20);
+    expect(harness.service.actionNominations(agent)).toHaveLength(10);
   });
 
   it("dismissal still works and still records the human's decision", () => {
