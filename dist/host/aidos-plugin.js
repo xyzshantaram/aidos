@@ -25642,6 +25642,17 @@ var UnknownTicket = class extends Error {
     this.ticketId = ticketId;
   }
 };
+var UnknownEvidenceRow = class extends Error {
+  ticketId;
+  at;
+  rowKind;
+  constructor(ticketId, at, rowKind) {
+    super(`no evidence row on ticket ${ticketId} with at=${at} and kind=${rowKind}`);
+    this.ticketId = ticketId;
+    this.at = at;
+    this.rowKind = rowKind;
+  }
+};
 var UnknownProject = class extends Error {
   projectId;
   constructor(projectId) {
@@ -25670,6 +25681,14 @@ var ContextTooLongError = class extends Error {
   constructor(overage) {
     super(`plan context exceeds 2000 lines by ${overage}`);
     this.overage = overage;
+  }
+};
+var StoreWriteRefused = class extends Error {
+  code = "STORE_WRITE_REFUSED";
+  constructor(cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`the store refused the write; no log event was kept: ${detail}`);
+    this.name = "StoreWriteRefused";
   }
 };
 var InvariantError = class extends Error {
@@ -27011,6 +27030,9 @@ function gateProgressOf(config2, snapshot, evidence) {
     total: gate.requiredKinds.length
   };
 }
+function gateFractionOf(config2, snapshot, evidence) {
+  return gateProgressOf(config2, snapshot, evidence).fraction;
+}
 function rowFromSnapshot(snapshot) {
   return {
     id: snapshot.id,
@@ -27791,6 +27813,137 @@ function followSupersedeChain(startRefs, lookup) {
   });
 }
 
+// src/kernel/backfill.ts
+var AIDOS_LOG_EVENT_KINDS = /* @__PURE__ */ new Set([
+  "ticket/change",
+  "evidence/attached",
+  "evidence/detached",
+  "evidence/linked",
+  "tags/attached",
+  "tags/detached",
+  "plan/change",
+  "comment/added",
+  "aidos/refusal",
+  "project/created",
+  "project/moved",
+  "phase/set"
+]);
+function evidenceKey(ticketId, row) {
+  return `${ticketId}\0${row.at}\0${row.kind}`;
+}
+function foldSessionLog(log) {
+  const state = createInitialState();
+  const seqOfTicket = /* @__PURE__ */ new Map();
+  const seqOfEvidence = /* @__PURE__ */ new Map();
+  const seqsOfComments = /* @__PURE__ */ new Map();
+  for (const event of log.events) {
+    if (!AIDOS_LOG_EVENT_KINDS.has(event.type)) continue;
+    const aidos = event.data;
+    foldAidosEvents(state, aidos);
+    switch (aidos.kind) {
+      case "ticket/change":
+        seqOfTicket.set(aidos.ticket.id, event.seq);
+        break;
+      case "evidence/attached":
+        seqOfEvidence.set(evidenceKey(aidos.ticketId, aidos.row), event.seq);
+        break;
+      case "comment/added": {
+        const seqs = seqsOfComments.get(aidos.ticketId) ?? [];
+        seqs.push(event.seq);
+        seqsOfComments.set(aidos.ticketId, seqs);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return { sessionId: log.sessionId, state, seqOfTicket, seqOfEvidence, seqsOfComments };
+}
+function importedRowsOf(folded) {
+  const evidence = [];
+  for (const [ticketId, rows] of folded.state.evidence) {
+    for (const row of rows) {
+      evidence.push({
+        ticketId,
+        row,
+        originSeq: folded.seqOfEvidence.get(evidenceKey(ticketId, row)) ?? null
+      });
+    }
+  }
+  const comments = [];
+  for (const [ticketId, records] of folded.state.comments) {
+    const seqs = folded.seqsOfComments.get(ticketId) ?? [];
+    for (const [index, record2] of records.entries()) {
+      comments.push({ record: record2, originSeq: seqs[index] ?? null });
+    }
+  }
+  return { evidence, comments };
+}
+
+// src/kernel/storage-memory.ts
+var MemoryStorage = class {
+  _rows = [];
+  _closed = false;
+  /**
+   * #39: the workspace-unique id counter. Lives on the PORT, not on any
+   * one Store's fold, so two Stores sharing this handle allocate
+   * distinct ids. Starts at 1: a fresh workspace's first create is 1.
+   */
+  _nextTicketId = 1;
+  append(event, origin) {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    const stored = {
+      seq: this._rows.length + 1,
+      sessionId: origin?.sessionId ?? null,
+      localSeq: origin?.localSeq ?? null,
+      event
+    };
+    this._rows.push(stored);
+    return stored;
+  }
+  readAll() {
+    return [...this._rows];
+  }
+  allocateTicketId() {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    const id = this._nextTicketId;
+    this._nextTicketId += 1;
+    return id;
+  }
+  close() {
+    this._closed = true;
+  }
+  // ---- #40: the transaction bracket (no-ops — the fake is always
+  // consistent with itself — but the nesting guard keeps the bracket
+  // contract honest, so the same Store path runs against both ports) ----
+  _inTransaction = false;
+  beginTransaction() {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    if (this._inTransaction) {
+      throw new Error("a storage transaction is already open");
+    }
+    this._inTransaction = true;
+  }
+  commitTransaction() {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    if (!this._inTransaction) {
+      throw new Error("no storage transaction is open");
+    }
+    this._inTransaction = false;
+  }
+  rollbackTransaction() {
+    this._inTransaction = false;
+  }
+};
+
 // src/kernel/helpers.ts
 function deepClone(value) {
   return structuredClone(value);
@@ -27821,6 +27974,1197 @@ function refusalReason(missing, allowedActors) {
   }
   return parts.join(" ");
 }
+
+// src/kernel/store.ts
+var EMPTY_PLAN = {
+  frontmatter: "",
+  context: { preamble: "", contextSections: [] },
+  rules: ""
+};
+function deepFreeze(value) {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const record2 = value;
+  for (const key of Object.keys(record2)) {
+    deepFreeze(record2[key]);
+  }
+  return Object.freeze(value);
+}
+function sortedLocalIds(fold) {
+  return [...fold.state.tickets.keys()].sort((a, b) => a - b);
+}
+var SORT_COLUMNS = {
+  id: [(row) => row.id],
+  title: [(row) => row.title],
+  phase: [(row) => row.phase, (row) => row.order],
+  score: [(row) => row.score],
+  gate_fraction: [(row) => row.gateFraction]
+};
+function compareValues(a, b) {
+  if (a === void 0) a = null;
+  if (b === void 0) b = null;
+  if (a === null && b === null) {
+    return 0;
+  }
+  if (a === null) {
+    return -1;
+  }
+  if (b === null) {
+    return 1;
+  }
+  if (typeof a === "number" && typeof b === "number") {
+    return a - b;
+  }
+  const textA = String(a);
+  const textB = String(b);
+  if (textA < textB) {
+    return -1;
+  }
+  if (textA > textB) {
+    return 1;
+  }
+  return 0;
+}
+var Store = class {
+  constructor(config2, options2) {
+    this.config = config2;
+    this._nowFn = options2?.now ?? (() => Date.now() / 1e3);
+    this._storage = options2?.storage ?? new MemoryStorage();
+    this._originSessionId = options2?.originSessionId;
+    const storedRows = options2?.log === void 0 ? this._storage.readAll() : void 0;
+    if (storedRows !== void 0) {
+      for (const stored of storedRows) {
+        this._noteOrigin(stored);
+      }
+    }
+    const seed = options2?.log ?? storedRows.map((stored) => stored.event);
+    this._log = deepClone(seed);
+    this.replay();
+    if (options2?.log !== void 0) {
+      this._repairStorage();
+    }
+  }
+  config;
+  _nowFn;
+  _storage;
+  _originSessionId;
+  _originSeq = 0;
+  _log = [];
+  _state = createInitialState();
+  /**
+   * #42: source session of every imported ticket, by its WORKSPACE id. The
+   * board renders a store row with the session that log came from, so the
+   * read needs the create event's origin columns without re-walking the
+   * storage rows on every board read. Filled from the storage rows on open
+   * and from every origin-stamped append (the backfill is the only writer
+   * that passes one); a ticket created directly in the store has no origin.
+   */
+  _originSessionOfTicket = /* @__PURE__ */ new Map();
+  /** Record one stored row's origin when it is a ticket create. */
+  _noteOrigin(stored) {
+    if (stored.sessionId === null) return;
+    const event = stored.event;
+    if (event.kind !== "ticket/change" || event.operation !== "create") return;
+    this._originSessionOfTicket.set(event.ticket.id, stored.sessionId);
+  }
+  /**
+   * Rebuild the derived state from the log. Construction folds
+   * options.log; a corrupt record throws InvariantError here.
+   */
+  replay() {
+    const state = createInitialState();
+    for (const event of this._log) {
+      foldAidosEvents(state, event);
+    }
+    this._state = state;
+  }
+  /** The whole log, oldest first, as a frozen copy. */
+  events() {
+    return deepFreeze(deepClone(this._log));
+  }
+  /**
+   * #42: the folded state, for the host wrapper's read projections. Read
+   * only — the host derives views through `ticketsProjection` and never
+   * mutates; a mutating caller would corrupt the store's own fold.
+   */
+  get state() {
+    return this._state;
+  }
+  /**
+   * #42: whether the one-time backfill marker is in the log. The host
+   * checks this BEFORE gathering any logs, so a board read after the first
+   * open never touches the persistence inspect path at all.
+   */
+  hasBackfillCompleted() {
+    return this._log.some((event) => event.kind === "backfill/completed");
+  }
+  /**
+   * #42: the session id whose log this ticket was imported from, or null
+   * when the ticket was created directly in the store.
+   */
+  originSessionOf(ticketId) {
+    return this._originSessionOfTicket.get(ticketId) ?? null;
+  }
+  // ---- internal ----
+  /**
+   * Validate, then persist, then fold. The log changes only on allow.
+   *
+   * #40, the mirrored write path. The order is exactly the ticket's:
+   * open the store's transaction, append to the session log, then commit
+   * the transaction. A failure at ANY step refuses the whole write, so
+   * the log and the store can never disagree — the same hard-fail rule
+   * as the unregistered-event-type refusal in the host's _commit. A port
+   * without the transaction bracket keeps the pre-#40 persist-first
+   * order, which is all-or-nothing from the fold's side (see StoragePort).
+   */
+  _append(event) {
+    validateAidosEvent(this._state, event);
+    const storage = this._storage;
+    const origin = () => {
+      if (this._originSessionId === void 0) {
+        return void 0;
+      }
+      this._originSeq += 1;
+      return { sessionId: this._originSessionId, localSeq: this._originSeq };
+    };
+    const mirrored = typeof storage.beginTransaction === "function" && typeof storage.commitTransaction === "function";
+    if (!mirrored) {
+      const originValue2 = origin();
+      if (originValue2) {
+        if (originValue2.sessionId !== void 0) {
+          this._noteOrigin({ seq: 0, event, sessionId: originValue2.sessionId, localSeq: originValue2.localSeq ?? null });
+        }
+        storage.append(event, originValue2);
+      } else {
+        storage.append(event);
+      }
+      this._log.push(event);
+      foldAidosEvents(this._state, event);
+      return;
+    }
+    storage.beginTransaction();
+    let originValue;
+    try {
+      this._log.push(event);
+      originValue = origin();
+      if (originValue) {
+        storage.append(event, originValue);
+      } else {
+        storage.append(event);
+      }
+      foldAidosEvents(this._state, event);
+      storage.commitTransaction();
+    } catch (error51) {
+      this._log.pop();
+      this.replay();
+      if (originValue !== void 0) {
+        this._originSeq -= 1;
+      }
+      storage.rollbackTransaction?.();
+      throw new StoreWriteRefused(error51);
+    }
+  }
+  /**
+   * #41: one validated append WITHOUT its own transaction bracket — the
+   * bracket belongs to the caller. The backfill uses this to flush a whole
+   * import inside ONE bracket, so a crash midway leaves nothing behind and
+   * the next open retries cleanly. Order matches _append: log push, store
+   * append, fold. Throws whatever fails; the caller owns the rollback.
+   */
+  _emit(event, origin) {
+    validateAidosEvent(this._state, event);
+    this._log.push(event);
+    if (origin) {
+      this._noteOrigin({ seq: 0, event, sessionId: origin.sessionId, localSeq: origin.localSeq });
+      this._storage.append(event, origin);
+    } else {
+      this._storage.append(event);
+    }
+    foldAidosEvents(this._state, event);
+  }
+  /**
+   * #40, the repair half. A commit that failed AFTER a successful log
+   * append left log events with no store row — the one window the mirrored
+   * order cannot close while it is happening, because the log is already
+   * durable when the store refuses. Repair on the next open: if the store
+   * holds a proper PREFIX of the seeded log, append the missing tail (one
+   * bracket, so the repair is itself all-or-nothing); any other shape is
+   * a disagreement the repair refuses to paper over, and the open fails.
+   */
+  _repairStorage() {
+    const storage = this._storage;
+    const stored = storage.readAll();
+    const log = this._log;
+    const shared = Math.min(stored.length, log.length);
+    const sameEvent = (a, b) => JSON.stringify(a.event) === JSON.stringify(b);
+    for (let index = 0; index < shared; index++) {
+      if (!sameEvent(stored[index], log[index])) {
+        throw new InvariantError(
+          `the store and the log disagree at event ${index + 1}; refusing the open rather than repairing blind`
+        );
+      }
+    }
+    if (stored.length > log.length) {
+      throw new InvariantError(
+        `the store holds ${stored.length} events but the log holds ${log.length}; refusing the open`
+      );
+    }
+    if (stored.length === log.length) {
+      return;
+    }
+    const transactional = typeof storage.beginTransaction === "function" && typeof storage.commitTransaction === "function";
+    if (transactional) {
+      storage.beginTransaction();
+    }
+    try {
+      for (let index = stored.length; index < log.length; index++) {
+        if (this._originSessionId !== void 0) {
+          this._originSeq += 1;
+          storage.append(log[index], {
+            sessionId: this._originSessionId,
+            localSeq: this._originSeq
+          });
+        } else {
+          storage.append(log[index]);
+        }
+      }
+      if (transactional) {
+        storage.commitTransaction();
+      }
+    } catch (error51) {
+      if (transactional) {
+        storage.rollbackTransaction?.();
+      }
+      throw new StoreWriteRefused(error51);
+    }
+  }
+  /**
+   * Release the underlying port handle. For a workspace store backed by the
+   * shared SQLite registry this drops the shared handle too — reopening the
+   * same path re-registers a fresh one. Idempotent.
+   */
+  close() {
+    this._storage.close();
+  }
+  /**
+   * The at of one write to one ticket. The injectable clock may repeat a
+   * value (ties are legal) but must never let a ticket's at fall, so the
+   * store floors the clock at the ticket's last at and its last updatedAt.
+   */
+  _atFor(ticketId, floor) {
+    let at = this._nowFn();
+    const lastAt = this._state.lastAt.get(ticketId);
+    if (lastAt !== void 0 && lastAt > at) {
+      at = lastAt;
+    }
+    if (floor !== void 0 && floor > at) {
+      at = floor;
+    }
+    return at;
+  }
+  /**
+   * #39: the next ticket id, allocated from the STORE, not read from the
+   * fold's per-session `nextTicketId` counter. The allocation runs before
+   * the create event appends, because the id goes into the event payload.
+   *
+   * The fold counter stays as a FLOOR, not the source: a Store seeded
+   * with an explicit `log` (the reopen path every existing test uses)
+   * folds ids its ephemeral port never issued, and the floor keeps such
+   * a store from reissuing a seeded id. Whenever the port is ahead — the
+   * live case, including two sessions sharing one workspace port with
+   * stale folds — the port's id wins, so the two sessions' tickets
+   * differ. The fold still advances on every create, so `nextTicketId`
+   * keeps its monotonic, never-recomputed property.
+   *
+   * The host harness (`aidos-core.ts`) has no store and keeps reading
+   * its own fold counter — that fallback is exactly why every existing
+   * harness test still passes; its rescope is #42's wrapper work.
+   */
+  _nextTicketId() {
+    try {
+      return Math.max(this._storage.allocateTicketId(), this._state.nextTicketId);
+    } catch (error51) {
+      throw new StoreWriteRefused(error51);
+    }
+  }
+  /** The next free order in one phase, counted from 1. */
+  _nextOrder(projectId, phase) {
+    let max = 0;
+    for (const snapshot of this._state.tickets.values()) {
+      if (snapshot.projectId === projectId && snapshot.phase === phase && snapshot.order > max) {
+        max = snapshot.order;
+      }
+    }
+    return max + 1;
+  }
+  /** Whether one workspace already holds the given slug on another ticket. */
+  _slugTaken(workspaceKey, slug, excludeId) {
+    for (const snapshot of this._state.tickets.values()) {
+      if (snapshot.workspaceKey === workspaceKey && snapshot.slug === slug && snapshot.id !== excludeId) {
+        return true;
+      }
+    }
+    return false;
+  }
+  /** One ticket row from a folded snapshot. The one read code path. */
+  _row(snapshot) {
+    return {
+      id: snapshot.id,
+      projectId: snapshot.projectId,
+      title: snapshot.title,
+      description: snapshot.description,
+      body: snapshot.body,
+      criteria: snapshot.criteria,
+      phase: snapshot.phase,
+      order: snapshot.order,
+      state: snapshot.state,
+      dependsOn: [...snapshot.dependsOn],
+      allowlist: [...snapshot.allowlist],
+      tags: [...snapshot.tags]
+    };
+  }
+  // ---- tags (#180) ----
+  /**
+   * Attach freeform tags to one ticket as ONE delta event. The names are
+   * trimmed, deduped, and unioned by the fold — a write never carries the
+   * whole list, which is the concurrent-edit merge rule. Returns the names
+   * that are NEW to this workspace, so the caller can report implicit tag
+   * creation instead of doing it silently.
+   */
+  attachTags(ticketId, names, opts) {
+    void opts;
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    const clean = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const raw of names) {
+      if (typeof raw !== "string") {
+        throw new Error("tag names must be strings");
+      }
+      const name = raw.trim();
+      if (name === "") {
+        throw new Error("tag names must not be empty");
+      }
+      if (!seen.has(name)) {
+        seen.add(name);
+        clean.push(name);
+      }
+    }
+    if (clean.length === 0) {
+      throw new Error("attachTags requires at least one tag name");
+    }
+    const existing = /* @__PURE__ */ new Set();
+    for (const other of this._state.tickets.values()) {
+      if (other.workspaceKey !== snapshot.workspaceKey) continue;
+      for (const tag of other.tags) existing.add(tag);
+    }
+    const created = clean.filter((name) => !existing.has(name));
+    this._append({
+      kind: "tags/attached",
+      version: 1,
+      ticketId,
+      names: clean,
+      at: this._atFor(ticketId)
+    });
+    return { attached: clean, created };
+  }
+  /**
+   * Detach tags from one ticket as ONE delta event. USER-ONLY by contract:
+   * the store cannot see actors here, so the actor gate lives at the
+   * service boundary (TagDetachRefused); the store method exists so B0
+   * tests can prove the fold, not to offer the agent a path.
+   */
+  detachTags(ticketId, names) {
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    const clean = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const raw of names) {
+      if (typeof raw !== "string" || raw.trim() === "") {
+        throw new Error("tag names must be non-empty strings");
+      }
+      if (!seen.has(raw.trim())) {
+        seen.add(raw.trim());
+        clean.push(raw.trim());
+      }
+    }
+    if (clean.length === 0) {
+      throw new Error("detachTags requires at least one tag name");
+    }
+    const present = clean.filter((name) => snapshot.tags.includes(name));
+    if (present.length === 0) {
+      throw new Error(`ticket ${ticketId} carries none of: ${clean.join(", ")}`);
+    }
+    this._append({
+      kind: "tags/detached",
+      version: 1,
+      ticketId,
+      names: present,
+      at: this._atFor(ticketId)
+    });
+    return { detached: present };
+  }
+  // ---- backfill (#41) ----
+  /**
+   * #41: the one-time import of the workspace's existing session logs.
+   *
+   * The HOST owns the reads: it calls `ctx.get("sessionPersistence").inspect`
+   * for every persisted session of this workspace (the same API
+   * `workspaceTickets` uses) and hands the inspected logs in here, shaped
+   * as `BackfillSessionLog`. The store owns the write: every imported
+   * ticket is renumbered into the workspace id space through the same port
+   * counter every create uses (so ids can never collide across sessions or
+   * with tickets created later), keeps its origin `(sessionId, localSeq)`
+   * on every row the import flushes, and has its dependency references and
+   * evidence rows rewritten through the renumbering map.
+   *
+   * RUNS ONCE. The import lands inside ONE storage transaction bracket and
+   * finishes with a `backfill/completed` marker event. The marker in the
+   * log IS the record that the backfill ran: any later call — same store
+   * or a reopen that replays the log — sees it and imports nothing. A crash
+   * midway rolls the uncommitted bracket back, so no marker lands, nothing
+   * half-imported survives, and the next open retries the whole import:
+   * at-least-once attempts, exactly-once effect.
+   *
+   * Import shape per source ticket, respecting the create invariants
+   * (a create is revision 1, open, createdAt = at): one `create` carrying
+   * the ticket's content, then its live evidence rows and comments
+   * (ascending `at`, the order the source's Rule 7 already guarantees),
+   * then one `set` carrying the final snapshot — final state, remapped
+   * dependencies, folded tags — at revision 2. Origin stamping: each
+   * imported row carries the source session id and the seq of the source
+   * event that produced it, so every row traces back to the log it came
+   * from.
+   */
+  backfillSessionLogs(projectId, logs) {
+    if (this._log.some((event) => event.kind === "backfill/completed")) {
+      return { alreadyRan: true, sessionIds: [], tickets: 0, evidence: 0, comments: 0 };
+    }
+    const project = this._state.projects.get(projectId);
+    if (!project) {
+      throw new UnknownProject(projectId);
+    }
+    const workspaceKey = workspaceKeyFromPath(project.absPath);
+    const folded = logs.map(foldSessionLog);
+    const newIdOf = /* @__PURE__ */ new Map();
+    for (const fold of folded) {
+      for (const localId of sortedLocalIds(fold)) {
+        let newId;
+        try {
+          newId = this._storage.allocateTicketId();
+        } catch (error51) {
+          throw new StoreWriteRefused(error51);
+        }
+        newIdOf.set(`${fold.sessionId}#${localId}`, newId);
+      }
+    }
+    const slugOf = /* @__PURE__ */ new Map();
+    const takenSlugs = /* @__PURE__ */ new Set();
+    for (const snapshot of this._state.tickets.values()) {
+      if (snapshot.workspaceKey === workspaceKey) {
+        takenSlugs.add(snapshot.slug);
+      }
+    }
+    for (const fold of folded) {
+      for (const localId of sortedLocalIds(fold)) {
+        const final = fold.state.tickets.get(localId);
+        let slug = final.slug;
+        let suffix = 2;
+        while (takenSlugs.has(slug)) {
+          slug = `${final.slug}-${suffix}`;
+          suffix += 1;
+        }
+        takenSlugs.add(slug);
+        slugOf.set(`${fold.sessionId}#${localId}`, slug);
+      }
+    }
+    const storage = this._storage;
+    const transactional = typeof storage.beginTransaction === "function" && typeof storage.commitTransaction === "function";
+    if (transactional) {
+      storage.beginTransaction();
+    }
+    const logLengthBefore = this._log.length;
+    let tickets = 0;
+    let evidence = 0;
+    let comments = 0;
+    try {
+      for (const fold of folded) {
+        const rows = importedRowsOf(fold);
+        for (const localId of sortedLocalIds(fold)) {
+          const key = `${fold.sessionId}#${localId}`;
+          const newId = newIdOf.get(key);
+          const slug = slugOf.get(key);
+          const final = fold.state.tickets.get(localId);
+          const origin = (localSeq) => ({
+            sessionId: fold.sessionId,
+            localSeq
+          });
+          const ticketOrigin = origin(fold.seqOfTicket.get(localId) ?? null);
+          this._emit(
+            {
+              kind: "ticket/change",
+              version: 1,
+              operation: "create",
+              ticket: {
+                id: newId,
+                projectId,
+                title: final.title,
+                description: final.description,
+                body: final.body,
+                criteria: final.criteria,
+                phase: final.phase,
+                order: final.order,
+                state: "open",
+                dependsOn: [],
+                allowlist: [...final.allowlist],
+                tags: [...final.tags],
+                slug,
+                workspaceKey,
+                revision: 1,
+                createdAt: final.createdAt,
+                updatedAt: final.createdAt
+              },
+              at: final.createdAt
+            },
+            ticketOrigin
+          );
+          const writes = [
+            ...rows.evidence.filter((row) => row.ticketId === localId).map((row) => ({ at: row.row.at, kind: "evidence", row })),
+            ...rows.comments.filter((comment) => comment.record.ticketId === localId).map((comment) => ({ at: comment.record.at, kind: "comment", comment }))
+          ].sort((a, b) => a.at - b.at);
+          let lastWriteAt = final.createdAt;
+          for (const write of writes) {
+            lastWriteAt = Math.max(lastWriteAt, write.at);
+            if (write.kind === "evidence") {
+              this._emit(
+                {
+                  kind: "evidence/attached",
+                  version: 1,
+                  ticketId: newId,
+                  row: deepClone(write.row.row)
+                },
+                origin(write.row.originSeq)
+              );
+              evidence += 1;
+            } else {
+              this._emit(
+                {
+                  kind: "comment/added",
+                  version: 1,
+                  ticketId: newId,
+                  text: write.comment.record.text,
+                  author: write.comment.record.author,
+                  at: write.comment.record.at
+                },
+                origin(write.comment.originSeq)
+              );
+              comments += 1;
+            }
+          }
+          const setAt = Math.max(final.updatedAt, lastWriteAt);
+          this._emit(
+            {
+              kind: "ticket/change",
+              version: 1,
+              operation: "set",
+              ticket: {
+                ...final,
+                id: newId,
+                projectId,
+                workspaceKey,
+                slug,
+                dependsOn: final.dependsOn.map((ref) => this._remapDependency(ref, fold, folded, newIdOf, workspaceKey)).filter((ref) => ref !== null),
+                revision: 2,
+                updatedAt: setAt
+              },
+              at: setAt
+            },
+            ticketOrigin
+          );
+          tickets += 1;
+        }
+      }
+      this._emit({
+        kind: "backfill/completed",
+        version: 1,
+        sessionIds: folded.map((fold) => fold.sessionId),
+        tickets,
+        evidence,
+        comments,
+        at: this._nowFn()
+      });
+      if (transactional) {
+        storage.commitTransaction();
+      }
+    } catch (error51) {
+      this._log.length = logLengthBefore;
+      this.replay();
+      if (transactional) {
+        storage.rollbackTransaction?.();
+      }
+      throw new StoreWriteRefused(error51);
+    }
+    return {
+      alreadyRan: false,
+      sessionIds: folded.map((fold) => fold.sessionId),
+      tickets,
+      evidence,
+      comments
+    };
+  }
+  /**
+   * Rewrite one `workspaceKey:localId` (or `sessionId:localId`) dependency
+   * reference through the renumbering map. The reference resolves within
+   * its own session's log first; when the prefix names ANOTHER imported
+   * session, that session's mapping answers. A reference whose target no
+   * imported log holds is dropped — keeping it raw would leave a local id
+   * pointing at whatever new ticket later claims that number.
+   */
+  _remapDependency(ref, own, folded, newIdOf, workspaceKey) {
+    const colon = ref.lastIndexOf(":");
+    if (colon < 0) {
+      return null;
+    }
+    const localId = Number(ref.slice(colon + 1));
+    if (!Number.isInteger(localId) || localId < 1) {
+      return null;
+    }
+    const prefix = ref.slice(0, colon);
+    const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
+    const newId = newIdOf.get(`${source.sessionId}#${localId}`);
+    return newId === void 0 ? null : `${workspaceKey}:${newId}`;
+  }
+  // ---- projects ----
+  createProject(absPath, name) {
+    let max = 0;
+    for (const id of this._state.projects.keys()) {
+      if (id > max) {
+        max = id;
+      }
+    }
+    const projectId = max + 1;
+    this._append({
+      kind: "project/created",
+      version: 1,
+      projectId,
+      absPath,
+      name,
+      at: this._nowFn()
+    });
+    return projectId;
+  }
+  moveProject(projectId, absPath) {
+    const current = this._state.projects.get(projectId);
+    if (!current) {
+      throw new UnknownProject(projectId);
+    }
+    this._append({
+      kind: "project/moved",
+      version: 1,
+      projectId,
+      absPath,
+      name: current.name,
+      at: this._nowFn()
+    });
+  }
+  getProject(projectId) {
+    const project = this._state.projects.get(projectId);
+    if (!project) {
+      throw new UnknownProject(projectId);
+    }
+    return { id: projectId, absPath: project.absPath, name: project.name };
+  }
+  /** Every project, sorted by id. */
+  projects() {
+    return [...this._state.projects.entries()].sort((a, b) => a[0] - b[0]).map(([id, project]) => ({
+      id,
+      absPath: project.absPath,
+      name: project.name
+    }));
+  }
+  /** The id of the project at one path, or null. */
+  findProject(absPath) {
+    for (const [id, project] of this._state.projects) {
+      if (project.absPath === absPath) {
+        return id;
+      }
+    }
+    return null;
+  }
+  // ---- phases ----
+  setPhase(projectId, number4, opts) {
+    if (!this._state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const current = this._state.phases.get(projectId)?.get(number4);
+    this._append({
+      kind: "phase/set",
+      version: 1,
+      projectId,
+      number: number4,
+      title: opts?.title ?? current?.title ?? "",
+      state: opts?.state ?? current?.state ?? "open",
+      at: this._nowFn()
+    });
+  }
+  getPhase(projectId, number4) {
+    if (!this._state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const phase = this._state.phases.get(projectId)?.get(number4);
+    return {
+      projectId,
+      number: number4,
+      title: phase?.title ?? "",
+      state: phase?.state ?? "open"
+    };
+  }
+  /** Every phase of one project, sorted by number. */
+  phasesFor(projectId) {
+    const phases = this._state.phases.get(projectId);
+    if (!phases) {
+      return [];
+    }
+    return [...phases.entries()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({
+      projectId,
+      number: number4,
+      title: phase.title,
+      state: phase.state
+    }));
+  }
+  // ---- plan meta ----
+  setPlanMeta(projectId, opts) {
+    if (!this._state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const current = this._state.plans.get(projectId) ?? EMPTY_PLAN;
+    const next = {
+      frontmatter: opts.frontmatter ?? current.frontmatter,
+      context: {
+        preamble: opts.preamble ?? current.context.preamble,
+        contextSections: (opts.contextSections ?? current.context.contextSections).map(
+          (section) => ({ ...section })
+        )
+      },
+      rules: opts.rules ?? current.rules
+    };
+    const lines = planContextLineCount(next);
+    if (lines > PLAN_CONTEXT_LIMIT) {
+      throw new ContextTooLongError(lines - PLAN_CONTEXT_LIMIT);
+    }
+    this._append({
+      kind: "plan/change",
+      version: 1,
+      projectId,
+      plan: next,
+      at: this._nowFn()
+    });
+  }
+  /** Replace only the rules of a plan. One whole-value event. */
+  setRules(projectId, rules, actor) {
+    if (!this._state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const current = this._state.plans.get(projectId) ?? EMPTY_PLAN;
+    this._append({
+      kind: "plan/change",
+      version: 1,
+      projectId,
+      plan: { ...current, rules },
+      at: this._nowFn()
+    });
+  }
+  getPlanMeta(projectId) {
+    if (!this._state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const plan = this._state.plans.get(projectId);
+    if (!plan) {
+      return { frontmatter: "", preamble: "", contextSections: [], rules: "" };
+    }
+    return {
+      frontmatter: plan.frontmatter,
+      preamble: plan.context.preamble,
+      contextSections: plan.context.contextSections.map((section) => ({
+        ...section
+      })),
+      rules: plan.rules
+    };
+  }
+  // ---- tickets ----
+  createTicket(projectId, title, description, opts) {
+    if (!this._state.projects.has(projectId)) {
+      throw new UnknownProject(projectId);
+    }
+    const workspaceKey = workspaceKeyFromPath(this._state.projects.get(projectId).absPath);
+    const base = opts?.slug?.trim() || slugFromTitle(title);
+    if (base !== "" && this._slugTaken(workspaceKey, base, null)) {
+      throw new DuplicateSlug(base, workspaceKey);
+    }
+    const ticketId = this._nextTicketId();
+    const slug = base || `ticket-${ticketId}`;
+    if (base === "" && this._slugTaken(workspaceKey, slug, null)) {
+      throw new DuplicateSlug(slug, workspaceKey);
+    }
+    const phase = opts?.phase ?? 1;
+    const order = opts?.order ?? this._nextOrder(projectId, phase);
+    const at = this._nowFn();
+    const snapshot = {
+      id: ticketId,
+      projectId,
+      title,
+      description,
+      body: opts?.body ?? "",
+      criteria: opts?.criteria ?? "",
+      phase,
+      order,
+      state: "open",
+      allowlist: [...opts?.allowlist ?? []],
+      dependsOn: [...opts?.dependsOn ?? []],
+      slug,
+      // #180: a new ticket starts untagged; tags arrive only as deltas.
+      tags: [],
+      workspaceKey,
+      revision: 1,
+      createdAt: at,
+      updatedAt: at
+    };
+    this._append({
+      kind: "ticket/change",
+      version: 1,
+      operation: "create",
+      ticket: snapshot,
+      at
+    });
+    return ticketId;
+  }
+  setTicket(ticketId, opts) {
+    const prev = this._state.tickets.get(ticketId);
+    if (!prev) {
+      throw new UnknownTicket(ticketId);
+    }
+    const nextSlug = opts.slug?.trim() ?? prev.slug;
+    if (nextSlug !== prev.slug && this._slugTaken(prev.workspaceKey, nextSlug, ticketId)) {
+      throw new DuplicateSlug(nextSlug, prev.workspaceKey);
+    }
+    const at = this._atFor(ticketId, prev.updatedAt);
+    const snapshot = {
+      ...prev,
+      title: opts.title ?? prev.title,
+      description: opts.description ?? prev.description,
+      body: opts.body ?? prev.body,
+      criteria: opts.criteria ?? prev.criteria,
+      phase: opts.phase ?? prev.phase,
+      order: opts.order ?? prev.order,
+      allowlist: opts.allowlist ? [...opts.allowlist] : prev.allowlist,
+      dependsOn: opts.dependsOn ? [...opts.dependsOn] : prev.dependsOn,
+      slug: nextSlug,
+      revision: prev.revision + 1,
+      updatedAt: at
+    };
+    this._append({
+      kind: "ticket/change",
+      version: 1,
+      operation: "set",
+      ticket: snapshot,
+      at
+    });
+  }
+  getTicket(ticketId) {
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    return this._row(snapshot);
+  }
+  /** Every ticket of one project, in phase and order. */
+  ticketsFor(projectId) {
+    const rows = [];
+    for (const snapshot of this._state.tickets.values()) {
+      if (snapshot.projectId === projectId) {
+        rows.push(this._row(snapshot));
+      }
+    }
+    rows.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    return rows;
+  }
+  ticketsPage(opts) {
+    const sort = opts?.sort ?? "id";
+    const descending = opts?.descending ?? false;
+    const limit = opts?.limit ?? 20;
+    const offset = opts?.offset ?? 0;
+    const columns = SORT_COLUMNS[sort];
+    if (!columns) {
+      throw new Error(`unknown sort key: '${sort}'`);
+    }
+    const matching = [];
+    for (const snapshot of this._state.tickets.values()) {
+      if (opts?.projectId !== void 0 && snapshot.projectId !== opts.projectId) {
+        continue;
+      }
+      const evidence = this._state.evidence.get(snapshot.id) ?? [];
+      matching.push({
+        ...this._row(snapshot),
+        score: confidenceScoreOf(this.config, evidence),
+        gateFraction: gateFractionOf(this.config, snapshot, evidence)
+      });
+    }
+    const total = matching.length;
+    const direction = descending ? -1 : 1;
+    matching.sort((a, b) => {
+      for (const get of columns) {
+        const order = compareValues(get(a), get(b));
+        if (order !== 0) {
+          return order * direction;
+        }
+      }
+      return (a.id - b.id) * direction;
+    });
+    return {
+      page: matching.slice(offset, offset + limit),
+      total
+    };
+  }
+  /**
+   * Substring search over title, description, and criteria (the same three
+   * columns the SQLite FTS table indexes, plus comment text there). The
+   * search itself folds from state so both ports answer identically — the
+   * FTS table is the future acceleration path and the external query
+   * surface, not a second source of truth. Empty query matches nothing;
+   * at most 50 hits, in ticket id order.
+   */
+  searchTickets(query, opts) {
+    const needle = (query ?? "").toLowerCase().trim();
+    if (needle === "") {
+      return [];
+    }
+    const hits = [];
+    for (const snapshot of this._state.tickets.values()) {
+      if (opts?.projectId !== void 0 && snapshot.projectId !== opts.projectId) {
+        continue;
+      }
+      const haystacks = [snapshot.title, snapshot.description, snapshot.criteria];
+      if (!haystacks.some((field) => field.toLowerCase().includes(needle))) {
+        continue;
+      }
+      hits.push({
+        ticketId: snapshot.id,
+        projectId: snapshot.projectId,
+        title: snapshot.title,
+        state: snapshot.state,
+        workspaceKey: snapshot.workspaceKey
+      });
+    }
+    hits.sort((a, b) => a.ticketId - b.ticketId);
+    return hits.slice(0, 50);
+  }
+  // ---- evidence ----
+  attachEvidence(ticketId, kind, payload, actor) {
+    const def = this.config.kinds.find((candidate) => candidate.id === kind);
+    if (!def) {
+      throw new UnknownKind(kind);
+    }
+    if (!def.allowedAuthors.includes(actor)) {
+      throw new EvidenceAuthorRefused(kind, actor);
+    }
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    const at = this._atFor(ticketId);
+    this._append({
+      kind: "evidence/attached",
+      version: 1,
+      ticketId,
+      row: {
+        kind,
+        author: actor,
+        at,
+        payload: deepClone(payload)
+      }
+    });
+  }
+  /** Every evidence row on one ticket, oldest first. */
+  evidenceFor(ticketId) {
+    const rows = this._state.evidence.get(ticketId);
+    if (!rows) {
+      return [];
+    }
+    return rows.map((row) => ({
+      kind: row.kind,
+      payload: deepClone(row.payload),
+      author: row.author,
+      createdAt: row.at
+    }));
+  }
+  /** Sum one weight per kind per distinct author. Advisory only. */
+  confidenceScore(ticketId) {
+    return confidenceScoreOf(this.config, this._state.evidence.get(ticketId) ?? []);
+  }
+  /**
+   * Remove one evidence row the board shows, named by its stamped `at` plus
+   * its kind (the same identity the fold drops by). The log keeps both the
+   * attachment and this detachment as history — nothing is ever removed
+   * from the log, so un-retiring (`builtin:retired` detached) restores the
+   * exact prior state. Unknown ticket or no live row throws; the log
+   * changes only on allow.
+   *
+   * No actor parameter, mirroring the host: detach has no agent path —
+   * evidence is append-only for the agent — so the only honest caller is
+   * the human, and inventing a parameter to check would imply a path that
+   * does not exist.
+   */
+  detachEvidence(ticketId, at, rowKind) {
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    const rows = this._state.evidence.get(ticketId) ?? [];
+    const index = rows.findIndex((row) => row.at === at && row.kind === rowKind);
+    if (index < 0) {
+      throw new UnknownEvidenceRow(ticketId, at, rowKind);
+    }
+    this._append({
+      kind: "evidence/detached",
+      version: 1,
+      ticketId,
+      at,
+      rowKind
+    });
+  }
+  /**
+   * Link one existing evidence row to one criterion line of the ticket's
+   * criteria (`criterion: null` clears the link, committing the same empty
+   * sentinel the host writes). A non-empty criterion must be one of the
+   * ticket's verbatim criterion lines; anything else — unknown ticket, no
+   * live row, empty or foreign criterion — throws and the log is untouched.
+   * The agent has no link path (payload edits stay user-owned, per the same
+   * rule as detach), so like detach this takes no actor.
+   */
+  linkEvidence(ticketId, at, rowKind, criterion) {
+    const snapshot = this._state.tickets.get(ticketId);
+    if (!snapshot) {
+      throw new UnknownTicket(ticketId);
+    }
+    const rows = this._state.evidence.get(ticketId) ?? [];
+    const row = rows.find((candidate) => candidate.at === at && candidate.kind === rowKind);
+    if (!row) {
+      throw new UnknownEvidenceRow(ticketId, at, rowKind);
+    }
+    if (criterion === null) {
+      this._append({
+        kind: "evidence/linked",
+        version: 1,
+        ticketId,
+        at,
+        rowKind,
+        criterion: ""
+      });
+      return;
+    }
+    const trimmed = criterion.trim();
+    if (trimmed === "") {
+      throw new Error("the criterion must be a non-empty line of the ticket's criteria, or null to unlink");
+    }
+    const valid = snapshot.criteria.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+    if (!valid.includes(trimmed)) {
+      throw new Error(
+        `evidence criterion ${JSON.stringify(criterion)} is not one of the ticket's criteria`
+      );
+    }
+    this._append({
+      kind: "evidence/linked",
+      version: 1,
+      ticketId,
+      at,
+      rowKind,
+      criterion: trimmed
+    });
+  }
+  addComment(ticketId, text, author) {
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    this._append({
+      kind: "comment/added",
+      version: 1,
+      ticketId,
+      text,
+      author,
+      at: this._atFor(ticketId)
+    });
+  }
+  /** Every comment on one ticket, oldest first. Copies, like every read. */
+  commentsFor(ticketId) {
+    if (!this._state.tickets.has(ticketId)) {
+      throw new UnknownTicket(ticketId);
+    }
+    return (this._state.comments.get(ticketId) ?? []).map((record2) => ({ ...record2 }));
+  }
+  // ---- transitions ----
+  moveTicket(ticketId, toState, actor) {
+    const ticket = this._state.tickets.get(ticketId);
+    if (!ticket) {
+      throw new UnknownTicket(ticketId);
+    }
+    const fromState = ticket.state;
+    if (!isLegalTransition(fromState, toState)) {
+      this._appendRefusal(
+        ticketId,
+        fromState,
+        toState,
+        actor,
+        "no gate configured for this transition"
+      );
+      throw new GateRefused({ noGate: true, fromState, toState, actor });
+    }
+    const evidence = this._state.evidence.get(ticketId) ?? [];
+    try {
+      checkGate(this.config, ticket, evidence, toState, actor);
+    } catch (error51) {
+      if (error51 instanceof GateRefused) {
+        this._appendRefusal(
+          ticketId,
+          fromState,
+          toState,
+          actor,
+          refusalReason(error51.missingKinds, error51.allowedActors)
+        );
+        throw error51;
+      }
+      throw error51;
+    }
+    const at = this._atFor(ticketId, ticket.updatedAt);
+    const snapshot = {
+      ...ticket,
+      state: toState,
+      revision: ticket.revision + 1,
+      updatedAt: at
+    };
+    this._append({
+      kind: "ticket/change",
+      version: 1,
+      operation: "move",
+      ticket: snapshot,
+      at
+    });
+  }
+  _appendRefusal(ticketId, fromState, toState, actor, reason) {
+    this._append({
+      kind: "aidos/refusal",
+      version: 1,
+      ticketId,
+      fromState,
+      toState,
+      actor,
+      reason,
+      at: this._nowFn()
+    });
+  }
+};
 
 // src/host/aidos-core.ts
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
@@ -28926,20 +30270,26 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     /** In-memory pending approvals keyed by request id. Restarts drop them. */
     __publicField(this, "_pendingApprovals", /* @__PURE__ */ new Map());
     __publicField(this, "_approvalSeq", 0);
-    /**
-     * Closed-session folds for the workspace merge, keyed by session id.
-     * Populated and read in `workspaceTickets`; see the loop there for the
-     * exactness argument (invalidate-on-live plus TTL) and the #198
-     * stale-while-revalidate split.
+    /*
+     * #42: the workspace STORE replaces the closed-fold cache. The old
+     * `_closedFolds` / `_closedFoldRefreshes` maps and their inspect helpers
+     * are gone with the cold scan they served; `_workspaceStores` below holds
+     * one opened Store per workspace path instead, and `_backfillRuns` makes
+     * the one-time import single-flight.
      */
-    __publicField(this, "_closedFolds", /* @__PURE__ */ new Map());
     /**
-     * #198: background refreshes currently running for stale closed-fold
-     * entries, keyed by session id. The set both deduplicates (two merges
-     * hitting the same stale entry schedule ONE refresh) and lets tests and
-     * the sweep await or spare an in-flight refresh deterministically.
+     * One opened workspace Store per workspace path, with the project row the
+     * backfill and every store read key through. Open is lazy (the SQLite
+     * handle is touched on first board read) and the map entry lives for the
+     * process: `openWorkspaceStorage` hands back the shared per-path handle,
+     * so two sessions of one workspace share one Store-port pair.
      */
-    __publicField(this, "_closedFoldRefreshes", /* @__PURE__ */ new Map());
+    __publicField(this, "_workspaceStores", /* @__PURE__ */ new Map());
+    /**
+     * The in-flight one-time backfill per workspace path, so concurrent board
+     * reads share one import instead of racing two.
+     */
+    __publicField(this, "_backfillRuns", /* @__PURE__ */ new Map());
     /**
      * #197: the board version, a monotonically growing string, plus the time
      * it was last CONFIRMED by a full merge compute.
@@ -29330,41 +30680,48 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return results.slice(0, 50);
   }
   coldTickets(agent, args) {
+    const rows = [];
+    const liveIdentities = /* @__PURE__ */ new Set();
     const session = this.ctx.sessions.get(args.sessionId);
-    if (!session) return [];
-    let snap;
-    try {
-      snap = this.ctx.sessionProjections.snapshot(session);
-    } catch (error51) {
-      this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
-      return [];
+    if (session) {
+      let snap;
+      try {
+        snap = this.ctx.sessionProjections.snapshot(session);
+      } catch (error51) {
+        this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        snap = void 0;
+      }
+      if (snap) {
+        const tickets = snap.values["aidos.tickets"];
+        if (tickets) {
+          const evidenceSnap = snap.values["aidos.evidence"];
+          let live = Object.values(tickets).filter(
+            (ticket) => !isRetired(evidenceSnap?.[String(ticket.id)])
+          );
+          if (args.states && args.states.length > 0) {
+            live = live.filter((ticket) => args.states.includes(ticket.state));
+          }
+          for (const ticket of live) {
+            liveIdentities.add(ticket.workspaceKey + ":" + ticket.slug);
+            rows.push(ticket);
+          }
+        }
+      }
     }
-    const tickets = snap.values["aidos.tickets"];
-    if (!tickets) return [];
-    const evidenceSnap = snap.values["aidos.evidence"];
-    let rows = Object.values(tickets).filter(
-      (ticket) => !isRetired(evidenceSnap?.[String(ticket.id)])
-    );
-    if (args.states && args.states.length > 0) {
-      rows = rows.filter((ticket) => args.states.includes(ticket.state));
+    const workspaceStore = this._workspaceStore(agent);
+    if (workspaceStore !== null) {
+      const storeState = workspaceStore.store.state;
+      for (const view of ticketsProjection(storeState, this._resolvedConfig).values()) {
+        if (view.projectId !== workspaceStore.projectId) continue;
+        if (liveIdentities.has(view.workspaceKey + ":" + view.slug)) continue;
+        if (this._isRetired(storeState, view.id)) continue;
+        if (args.states && args.states.length > 0 && !args.states.includes(view.state)) continue;
+        rows.push(view);
+      }
     }
     return rows;
   }
   // ---- cross-session board (workspace merge) ----
-  /**
-   * One source session's contribution to the workspace board: the ticket
-   * views of one session log plus its evidence and comments maps. The
-   * session that owns a log is the only writer to it (owner routing);
-   * every other session's board shows these rows read-only.
-   */
-  _foldExternalLog(meta3, events) {
-    const state = createInitialState();
-    for (const event of events) {
-      foldSessionEvent(state, event);
-    }
-    void meta3;
-    return { state };
-  }
   /**
    * Every live session bound to the agent's workspace path, excluding the
    * caller's own session. Live sessions fold from the in-memory log.
@@ -29386,6 +30743,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /**
    * The ids of every persisted session whose header cwd matches the agent's
    * workspace path, excluding the caller's own session and every live one.
+   *
+   * #42: null when the list itself failed — the caller must tell "no closed
+   * sessions" from "could not ask", because an empty backfill would land the
+   * completion marker and lose every closed log, while a failed list must
+   * leave the marker absent so the next open retries.
    */
   async _closedWorkspaceSessionIds(agent, exclude) {
     const persistence = this.ctx.get("sessionPersistence");
@@ -29396,7 +30758,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       headers = await persistence.list();
     } catch (error51) {
       this.ctx.logger?.warn?.(`aidos: persistence.list failed in workspace merge: ${error51 instanceof Error ? error51.message : String(error51)}`);
-      return [];
+      return null;
     }
     const ids = [];
     for (const header of headers) {
@@ -29447,9 +30809,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       comments[key] = [...cache.state.comments.get(view.id) ?? []];
     }
     const liveSessions = this._liveWorkspaceSessions(agent);
-    const liveIds = /* @__PURE__ */ new Set();
     for (const session of liveSessions) {
-      liveIds.add(session.id);
       learnLabel(session);
       const state = this._cache(session).state;
       this._sync(session, this._caches.get(session));
@@ -29467,55 +30827,27 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         comments[key] = [...state.comments.get(view.id) ?? []];
       }
     }
-    const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
-    const now = Date.now();
-    for (const liveId of liveIds) this._closedFolds.delete(liveId);
-    const fresh = [];
-    const stale = [];
-    const misses = [];
-    for (const id of closedIds) {
-      const hit = this._closedFolds.get(id);
-      if (hit === void 0) {
-        misses.push(id);
-      } else if (now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
-        fresh.push([id, hit]);
-      } else {
-        stale.push([id, hit]);
-      }
-    }
-    const renderClosed = (id, entry) => {
-      for (const view of [...entry.views].sort(ownSort)) {
-        if (!includeRetired && entry.retired.has(view.id)) continue;
-        const key = id + ":" + view.id;
-        tickets.push({
+    const workspaceStore = this._workspaceStore(agent);
+    if (workspaceStore !== null) {
+      await this._backfillRun(agent, workspaceStore);
+      const storeState = workspaceStore.store.state;
+      const storeViews = ticketsProjection(storeState, this._resolvedConfig);
+      for (const view of [...storeViews.values()].sort(ownSort)) {
+        if (view.projectId !== workspaceStore.projectId) continue;
+        if (!includeRetired && this._isRetired(storeState, view.id)) continue;
+        const origin = workspaceStore.store.originSessionOf(view.id);
+        const sourceSessionId = origin ?? agent.session.id;
+        const foreign = origin !== null && origin !== agent.session.id;
+        const row = {
           ...view,
           id: view.id,
-          sourceSessionId: id,
-          foreign: true
-        });
-        evidence[key] = [...entry.evidence.get(view.id) ?? []];
-        comments[key] = [...entry.comments.get(view.id) ?? []];
-      }
-    };
-    for (const [id, entry] of fresh) renderClosed(id, entry);
-    for (const [id, entry] of stale) {
-      renderClosed(id, entry);
-      this._refreshClosedFold(id);
-    }
-    let poolCursor = 0;
-    const poolWorker = async () => {
-      while (poolCursor < misses.length) {
-        const id = misses[poolCursor++];
-        const entry = await this._inspectClosedFold(id, now);
-        if (entry !== null) renderClosed(id, entry);
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, misses.length) }, poolWorker)
-    );
-    for (const [cachedId, entry] of this._closedFolds) {
-      if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS && !this._closedFoldRefreshes.has(cachedId)) {
-        this._closedFolds.delete(cachedId);
+          sourceSessionId,
+          foreign
+        };
+        tickets.push(row);
+        const key = boardKeyText(row);
+        evidence[key] = [...storeState.evidence.get(view.id) ?? []];
+        comments[key] = [...storeState.comments.get(view.id) ?? []];
       }
     }
     const deduped = dedupeBoardRows(tickets);
@@ -29686,57 +31018,135 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return this._attachEvidence(agent, args, "agent");
   }
   /**
-   * #198: inspect one closed session's log, fold it, and cache the derived
-   * views. Returns the fresh entry, or null when the inspect or the fold
-   * failed — a failure is logged and skips the row, exactly as the old
-   * inline path did. Never throws.
+   * #42: the workspace store for one agent's workspace, opened on first use
+   * with its project row ensured. Returns null — never throws — when the
+   * store cannot be opened or replayed: the board degrades to the live
+   * folds (a warning is logged) rather than refusing every read because
+   * durable storage is broken.
    */
-  async _inspectClosedFold(id, now) {
-    let inspection;
+  _workspaceStore(agent) {
+    let path;
     try {
-      const persistence = this.ctx.get("sessionPersistence");
-      inspection = await persistence.inspect(id);
-    } catch (error51) {
-      this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      path = this._workspacePath(agent);
+    } catch {
       return null;
     }
-    const { state } = this._foldExternalLog(inspection.meta, inspection.events);
-    const views = [...ticketsProjection(state, this._resolvedConfig).values()];
-    const retired = /* @__PURE__ */ new Set();
-    for (const view of views) {
-      if (this._isRetired(state, view.id)) retired.add(view.id);
+    const cached2 = this._workspaceStores.get(path);
+    if (cached2 !== void 0) return cached2;
+    let storage;
+    try {
+      storage = openWorkspaceStorage(path);
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: cannot open the workspace store for ${path}: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+      return null;
     }
-    const entry = {
-      at: now,
-      views,
-      evidence: state.evidence,
-      comments: state.comments,
-      retired
-    };
-    this._closedFolds.set(id, entry);
-    return entry;
+    try {
+      const store = new Store(this._resolvedConfig, { storage });
+      const projectId = store.findProject(path) ?? store.createProject(path, basename(path));
+      const entry = { store, projectId };
+      this._workspaceStores.set(path, entry);
+      return entry;
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: cannot open the workspace store for ${path}: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+      try {
+        storage.close();
+      } catch {
+      }
+      return null;
+    }
   }
   /**
-   * #198: re-inspect one stale closed-fold entry in the background. At most
-   * one refresh per id runs at a time; a failed refresh drops the expired
-   * entry (it is garbage past the TTL — serving it forever would pin a
-   * vanished session's rows to the board) instead of leaving it to be
-   * re-attempted on every merge.
+   * #42: the single-flight wrapper around the one-time backfill. Concurrent
+   * board reads of the same workspace await ONE import; the store's own
+   * `backfill/completed` marker makes every later call (and every later
+   * process) skip the work entirely.
    */
-  _refreshClosedFold(id) {
-    if (this._closedFoldRefreshes.has(id)) return;
-    const run = (async () => {
-      try {
-        const entry = await this._inspectClosedFold(id, Date.now());
-        if (entry === null) this._closedFolds.delete(id);
-      } catch (error51) {
-        this.ctx.logger?.debug?.(`aidos: closed-fold refresh failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
-        this._closedFolds.delete(id);
-      } finally {
-        this._closedFoldRefreshes.delete(id);
+  _backfillRun(agent, entry) {
+    let path;
+    try {
+      path = this._workspacePath(agent);
+    } catch {
+      return Promise.resolve();
+    }
+    const inFlight = this._backfillRuns.get(path);
+    if (inFlight !== void 0) return inFlight;
+    const run = this._ensureWorkspaceBackfill(agent, entry).finally(() => {
+      this._backfillRuns.delete(path);
+    });
+    this._backfillRuns.set(path, run);
+    return run;
+  }
+  /**
+   * #42: THE first-open wiring #41's report left as this ticket's seam. If
+   * the store has no `backfill/completed` marker, list every persisted
+   * session of this workspace, inspect each closed log (the same
+   * `sessionPersistence` API the old cold scan used — one last time, once),
+   * and hand the logs to `Store.backfillSessionLogs`. THE STORE OWNS THE
+   * WRITE: renumbering, dependency rewriting, origin stamping, the marker,
+   * and the single transaction bracket are all #41's, unchanged.
+   *
+   * Failure handling, per piece:
+   *  - no persistence service: skip, no marker — the next open retries;
+   *  - the list itself fails: skip, no marker — running an empty backfill
+   *    here would land the marker and LOSE every closed log;
+   *  - one log's inspect fails: that log is skipped (warned), the rest
+   *    still import and the marker lands — resilience over completeness;
+   *    a log that stays unreadable past the one-time import is the same
+   *    gap as a log that closes after it (see the merge above);
+   *  - the import itself refuses (StoreWriteRefused): warn and return — the
+   *    marker never landed, so the NEXT open retries the whole import;
+   *    this read continues with whatever rows the store already holds.
+   * A failed backfill never fails the board read.
+   */
+  async _ensureWorkspaceBackfill(agent, entry) {
+    if (entry.store.hasBackfillCompleted()) return;
+    const persistence = this.ctx.get("sessionPersistence");
+    if (persistence === void 0) return;
+    const liveIds = /* @__PURE__ */ new Set([agent.session.id]);
+    for (const session of this._liveWorkspaceSessions(agent)) liveIds.add(session.id);
+    const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
+    if (closedIds === null) return;
+    const logs = [];
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < closedIds.length) {
+        const id = closedIds[cursor++];
+        try {
+          const inspection = await persistence.inspect(id);
+          logs.push({
+            sessionId: id,
+            events: inspection.events.map((event) => ({
+              seq: event.seq,
+              type: event.type,
+              data: event.data
+            }))
+          });
+        } catch (error51) {
+          this.ctx.logger?.warn?.(
+            `aidos: backfill inspect failed for ${id}, skipping it: ${error51 instanceof Error ? error51.message : String(error51)}`
+          );
+        }
       }
-    })();
-    this._closedFoldRefreshes.set(id, run);
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, closedIds.length) }, worker)
+    );
+    try {
+      const result = entry.store.backfillSessionLogs(entry.projectId, logs);
+      if (!result.alreadyRan) {
+        this.ctx.logger?.info?.(
+          `aidos: backfill imported ${result.tickets} ticket(s), ${result.evidence} evidence row(s), ${result.comments} comment(s) from ${result.sessionIds.length} log(s)`
+        );
+      }
+    } catch (error51) {
+      this.ctx.logger?.warn?.(
+        `aidos: workspace backfill refused (the next open retries it): ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
   }
   /** Record that a full merge compute confirmed the world at `at`. */
   _stampBoardVersion(at) {

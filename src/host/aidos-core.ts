@@ -54,40 +54,23 @@ import {
 const WORKTREE_TIMEOUT_MS = 120000;
 
 /**
- * How long a closed session's fold stays cached in the workspace merge
- * (user-reported 2026-09-10: the merge re-inspected 225 logs per call and
- * tool-card actions timed out). A closed log cannot grow while its session
- * stays dead, so the cache is exact in-process; the TTL only bounds the
- * cross-process edge of another dsh writing to a session this one sees as
- * closed. Reopen-then-close with new events is handled by dropping the entry
- * the moment the session is live, not by this TTL.
+ * #42: how long the board version stays fresh for the `sinceVersion` gate
+ * (formerly the closed-fold cache TTL — the cold scan it bounded is gone;
+ * the store answers closed sessions now). The gate keeps the same window
+ * for the same cross-process reason: another dsh process can append to a
+ * session this one considers closed, and this process cannot see it.
  */
 const CLOSED_FOLD_CACHE_TTL_MS = 60000;
 
 /**
- * #198: how many closed-session logs the merge inspects at once. The cold
- * path used to await each inspect in sequence, so a cold board load paid the
- * SUM of every log's parse time; the pool pays roughly the SLOWEST log per
- * wave instead. Bounded, not unbounded: each inspect parses megabytes, and
- * forty concurrent parses would storm the event loop and the disk cache the
- * same way the sequential loop stormed the latency.
+ * #42: how many closed-session logs the ONE-TIME backfill inspects at once.
+ * Still bounded, for the same reason #198 bounded the old merge pool: each
+ * inspect parses megabytes, and forty concurrent parses would storm the
+ * event loop. Unlike the old pool this runs ONCE per workspace — the marker
+ * in the store means no board read ever reaches here again.
  */
 const CLOSED_INSPECT_CONCURRENCY = 4;
 
-/**
- * #198: one cached closed-session fold in the workspace merge — the derived
- * views only, never the full fold (see the merge loop for why). `at` is the
- * wall clock the entry was produced at; past the TTL the entry goes stale:
- * the merge still SERVES it (stale-while-revalidate) while a background
- * refresh re-inspects.
- */
-type ClosedFoldEntry = {
-  at: number;
-  views: TicketView[];
-  evidence: Map<number, EvidenceRow[]>;
-  comments: Map<number, CommentRecord[]>;
-  retired: Set<number>;
-};
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { reviewChainOf } from "../kernel/gates";
@@ -121,6 +104,10 @@ import {
 } from "../kernel/retirement";
 import type { RetirementInfo } from "../kernel/retirement";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
+// #42: the workspace store the board reads.
+import { Store } from "../kernel/store";
+import type { BackfillSessionLog } from "../kernel/backfill";
+import { openWorkspaceStorage } from "./storage-sqlite";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
@@ -2125,60 +2112,72 @@ registerAidosSessionEventTypes(ctx);
   /**
    * The cross-workspace board read, exported over the typert Remote surface.
    * Reads one session's tickets by its session id, through the live session
-   * store and the aidos.tickets projection. The board UI (U2d) calls this
-   * with a session id it does not itself own, so the arg carries the id
-   * instead of the calling agent. Only live sessions are reachable: a
-   * session that is not open right now has no disk-scan path and returns an
-   * empty board (the client treats that as "session not open").
+   * store and the aidos.tickets projection.
+   *
+   * #42: no longer limited to live sessions. The workspace STORE is queried
+   * too — the rows the one-time backfill imported — so a closed session's
+   * board comes from the store, and a session whose log is gone entirely
+   * still resolves. The live session's fold (when it IS live) is
+   * authoritative: a store row whose slug identity the live fold already
+   * returned is skipped, never a stale store copy shadowing a live one.
+   * A session that is not live and has no store rows still returns an empty
+   * board (the client treats that as "session not open").
    */
   @Remote("coldTickets")
   coldTickets(agent: Agent, args: { sessionId: string; states?: string[] }): TicketView[] {
+    const rows: TicketView[] = [];
+    const liveIdentities = new Set<string>();
     const session = this.ctx.sessions.get(args.sessionId as any);
-    if (!session) return [];
-    let snap;
-    try {
-      snap = this.ctx.sessionProjections.snapshot(session);
-    } catch (error) {
-      this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
-      return [];
+    if (session) {
+      let snap;
+      try {
+        snap = this.ctx.sessionProjections.snapshot(session);
+      } catch (error) {
+        this.ctx.logger?.debug?.(`aidos: no projection snapshot for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
+        snap = undefined;
+      }
+      if (snap) {
+        const tickets = snap.values["aidos.tickets"];
+        if (tickets) {
+          /*
+           * #108: a cold board read hides retired tickets, exactly as the
+           * live merge does — the two surfaces must not disagree about what
+           * a board holds.
+           */
+          const evidenceSnap = snap.values["aidos.evidence"] as
+            | Record<string, EvidenceRow[]>
+            | undefined;
+          let live = Object.values(tickets).filter(
+            (ticket) => !isRetired(evidenceSnap?.[String(ticket.id)]),
+          );
+          if (args.states && args.states.length > 0) {
+            live = live.filter((ticket) => (args.states as string[]).includes(ticket.state));
+          }
+          for (const ticket of live) {
+            liveIdentities.add(ticket.workspaceKey + ":" + ticket.slug);
+            rows.push(ticket);
+          }
+        }
+      }
     }
-    const tickets = snap.values["aidos.tickets"];
-    if (!tickets) return [];
-    /*
-     * #108: a cold board read hides retired tickets, exactly as the live
-     * merge does — the two surfaces must not disagree about what a board
-     * holds.
-     */
-    const evidenceSnap = snap.values["aidos.evidence"] as
-      | Record<string, EvidenceRow[]>
-      | undefined;
-    let rows = Object.values(tickets).filter(
-      (ticket) => !isRetired(evidenceSnap?.[String(ticket.id)]),
-    );
-    if (args.states && args.states.length > 0) {
-      rows = rows.filter((ticket) => (args.states as string[]).includes(ticket.state));
+    // #42: the store query. No persistence access, no log scan — closed
+    // sessions' rows are served from the workspace store the backfill
+    // imported, so a deleted log changes nothing here.
+    const workspaceStore = this._workspaceStore(agent);
+    if (workspaceStore !== null) {
+      const storeState = workspaceStore.store.state;
+      for (const view of ticketsProjection(storeState, this._resolvedConfig).values()) {
+        if (view.projectId !== workspaceStore.projectId) continue;
+        if (liveIdentities.has(view.workspaceKey + ":" + view.slug)) continue;
+        if (this._isRetired(storeState, view.id)) continue;
+        if (args.states && args.states.length > 0 && !args.states.includes(view.state)) continue;
+        rows.push(view);
+      }
     }
     return rows;
   }
 
   // ---- cross-session board (workspace merge) ----
-
-  /**
-   * One source session's contribution to the workspace board: the ticket
-   * views of one session log plus its evidence and comments maps. The
-   * session that owns a log is the only writer to it (owner routing);
-   * every other session's board shows these rows read-only.
-   */
-  private _foldExternalLog(meta: SessionHeader, events: readonly SessionEvent[]): {
-    state: AidosState;
-  } {
-    const state = createInitialState();
-    for (const event of events) {
-      foldSessionEvent(state, event);
-    }
-    void meta;
-    return { state };
-  }
 
   /**
    * Every live session bound to the agent's workspace path, excluding the
@@ -2202,11 +2201,16 @@ registerAidosSessionEventTypes(ctx);
   /**
    * The ids of every persisted session whose header cwd matches the agent's
    * workspace path, excluding the caller's own session and every live one.
+   *
+   * #42: null when the list itself failed — the caller must tell "no closed
+   * sessions" from "could not ask", because an empty backfill would land the
+   * completion marker and lose every closed log, while a failed list must
+   * leave the marker absent so the next open retries.
    */
   private async _closedWorkspaceSessionIds(
     agent: Agent,
     exclude: Set<string>,
-  ): Promise<SessionId[]> {
+  ): Promise<SessionId[] | null> {
     const persistence = this.ctx.get("sessionPersistence") as
       | {
           list: () => Promise<SessionHeader[]>;
@@ -2219,7 +2223,7 @@ registerAidosSessionEventTypes(ctx);
       headers = await persistence.list();
     } catch (error) {
       this.ctx.logger?.warn?.(`aidos: persistence.list failed in workspace merge: ${error instanceof Error ? error.message : String(error)}`);
-      return [];
+      return null;
     }
     const ids: SessionId[] = [];
     for (const header of headers) {
@@ -2235,9 +2239,9 @@ registerAidosSessionEventTypes(ctx);
   /**
    * The workspace board: the caller's own tickets plus every ticket held in
    * another session's log of the SAME workspace path — live sessions fold
-   * from memory, closed sessions from a persistence inspect (never a live
-   * log). Ticket ids collide across sessions, so each foreign row is
-   * re-keyed `<sourceSessionId>:<ticketId>` and carries `sourceSessionId`
+   * from memory, closed sessions from the WORKSPACE STORE (#42: the one-time
+   * backfill imports them on first open; no per-read log scan). Ticket ids
+   * collide across sessions, so each foreign row carries `sourceSessionId`
    * for the board badge and for owner-routed writes. Own rows keep plain
    * numeric ids and carry no source marker.
    */
@@ -2357,9 +2361,7 @@ registerAidosSessionEventTypes(ctx);
     }
 
     const liveSessions = this._liveWorkspaceSessions(agent);
-    const liveIds = new Set<string>();
     for (const session of liveSessions) {
-      liveIds.add(session.id);
       learnLabel(session as unknown as { header?: { cwd?: string } });
       const state = this._cache(session).state;
       this._sync(session, this._caches.get(session)!);
@@ -2378,94 +2380,48 @@ registerAidosSessionEventTypes(ctx);
       }
     }
 
-    const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
     /*
-     * USER-REPORTED 2026-09-10: opening a tool-card action timed out after
-     * 15s. The check behind it calls this merge, and this loop re-inspected
-     * AND re-folded every closed session log on every call — measured at 225
-     * persisted sessions in this workspace, the largest a 62M log. The parse
-     * and fold of hundreds of megabytes, sequentially, is the timeout.
+     * #42: closed sessions are answered by the WORKSPACE STORE, not by a
+     * scan of their logs. On the first board open the one-time backfill
+     * imports every closed session log of this workspace into the store
+     * (renumbered into the workspace id space, origin stamped); from then
+     * on the marker in the store means a board read performs ZERO
+     * persistence inspects — the 119-log stall this merge used to pay, and
+     * the #198 stale-while-revalidate machinery that bounded it, are both
+     * gone. The store is the source of truth for closed rows: a log deleted
+     * after its import changes nothing, because nothing here ever reads
+     * logs as a fallback.
      *
-     * A closed log cannot grow while its session stays dead: no live agent
-     * holds it, so no one appends to it. Its fold is therefore cached by
-     * session id. Two invalidations keep the cache exact:
-     *  - a session that is live now is folded live below AND its entry is
-     *    dropped, so a reopen-close cycle with new events re-inspects;
-     *  - a TTL backstops the one case this process cannot see — ANOTHER
-     *    process appending to a session this one considers closed — bounding
-     *    that staleness to the TTL rather than eliminating it.
-     * Only the derived views are cached, never the full fold: a 62M log is
-     * mostly tool-call payloads, while its ticket views are kilobytes, so
-     * pinning 225 folds would trade a timeout for a memory leak.
-     *
-     * #198 de-storms what remained. Before this change a cold cache awaited
-     * each inspect IN SEQUENCE — a cold board load paid the sum of every
-     * log's parse time — and an expired entry blocked the merge on its
-     * re-inspect too. Now the ids split three ways:
-     *  - fresh hits render from cache, as before;
-     *  - EXPIRED hits render stale AT ONCE and refresh in the background
-     *    (stale-while-revalidate): the merge never waits on the slowest log
-     *    it already has a frame for, and the in-flight set keeps concurrent
-     *    merges from piling duplicate refreshes onto one id;
-     *  - true misses (nothing cached) go through a bounded-concurrency pool,
-     *    because a cold board load must return every row THIS call — merge
-     *    correctness — but nothing forces the inspects to serialize.
-     * The staleness window is the refresh duration, not the TTL: a refresh
-     * replaces the entry, and a refresh whose inspect FAILS drops the
-     * expired entry rather than serving it forever.
+     * Live rows (the caller's own and other live sessions') stay fold-driven
+     * above: a live session is the only writer to its log, and the store
+     * does not hold its post-backfill rows until the write path moves to the
+     * store (#43/#45). Dedupe below collapses a store copy against a live
+     * copy of the same identity — the newer updatedAt wins, so a reopened
+     * session's live rows shadow their imported snapshots.
      */
-    const now = Date.now();
-    for (const liveId of liveIds) this._closedFolds.delete(liveId);
-    const fresh: Array<[string, ClosedFoldEntry]> = [];
-    const stale: Array<[string, ClosedFoldEntry]> = [];
-    const misses: string[] = [];
-    for (const id of closedIds) {
-      const hit = this._closedFolds.get(id);
-      if (hit === undefined) {
-        misses.push(id);
-      } else if (now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
-        fresh.push([id, hit]);
-      } else {
-        stale.push([id, hit]);
-      }
-    }
-    const renderClosed = (id: string, entry: ClosedFoldEntry): void => {
-      for (const view of [...entry.views].sort(ownSort)) {
-        if (!includeRetired && entry.retired.has(view.id)) continue;
-        const key = id + ":" + view.id;
-        tickets.push({
+    const workspaceStore = this._workspaceStore(agent);
+    if (workspaceStore !== null) {
+      await this._backfillRun(agent, workspaceStore);
+      const storeState = workspaceStore.store.state;
+      const storeViews = ticketsProjection(storeState, this._resolvedConfig);
+      for (const view of [...storeViews.values()].sort(ownSort)) {
+        if (view.projectId !== workspaceStore.projectId) continue;
+        if (!includeRetired && this._isRetired(storeState, view.id)) continue;
+        const origin = workspaceStore.store.originSessionOf(view.id);
+        const sourceSessionId = origin ?? agent.session.id;
+        const foreign = origin !== null && origin !== agent.session.id;
+        // #165: the map key is the canonical board key, derived by the
+        // kernel rule — never rebuilt by hand here.
+        const row = {
           ...view,
           id: view.id,
-          sourceSessionId: id,
-          foreign: true,
-        } as BoardTicketView);
-        evidence[key] = [...(entry.evidence.get(view.id) ?? [])];
-        comments[key] = [...(entry.comments.get(view.id) ?? [])];
-      }
-    };
-    for (const [id, entry] of fresh) renderClosed(id, entry);
-    for (const [id, entry] of stale) {
-      renderClosed(id, entry);
-      this._refreshClosedFold(id);
-    }
-    let poolCursor = 0;
-    const poolWorker = async (): Promise<void> => {
-      while (poolCursor < misses.length) {
-        const id = misses[poolCursor++]!;
-        const entry = await this._inspectClosedFold(id, now);
-        if (entry !== null) renderClosed(id, entry);
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, misses.length) }, poolWorker),
-    );
-    // Entries for sessions that vanished or went quiet are dropped as
-    // they age out, so the map tracks the workspace rather than growing
-    // without bound across reopen cycles. An entry mid-refresh is kept:
-    // the refresh replaces it (or drops it, on failure).
-    for (const [cachedId, entry] of this._closedFolds) {
-      if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS && !this._closedFoldRefreshes.has(cachedId)) {
-        this._closedFolds.delete(cachedId);
+          sourceSessionId,
+          foreign,
+        } as BoardTicketView;
+        tickets.push(row);
+        const key = boardKeyText(row);
+        evidence[key] = [...(storeState.evidence.get(view.id) ?? [])];
+        comments[key] = [...(storeState.comments.get(view.id) ?? [])];
       }
     }
 
@@ -2700,82 +2656,177 @@ registerAidosSessionEventTypes(ctx);
   private readonly _pendingApprovals = new Map<string, PendingApproval>();
   private _approvalSeq = 0;
 
-  /**
-   * Closed-session folds for the workspace merge, keyed by session id.
-   * Populated and read in `workspaceTickets`; see the loop there for the
-   * exactness argument (invalidate-on-live plus TTL) and the #198
-   * stale-while-revalidate split.
+  /*
+   * #42: the workspace STORE replaces the closed-fold cache. The old
+   * `_closedFolds` / `_closedFoldRefreshes` maps and their inspect helpers
+   * are gone with the cold scan they served; `_workspaceStores` below holds
+   * one opened Store per workspace path instead, and `_backfillRuns` makes
+   * the one-time import single-flight.
    */
-  private readonly _closedFolds = new Map<string, ClosedFoldEntry>;
 
   /**
-   * #198: background refreshes currently running for stale closed-fold
-   * entries, keyed by session id. The set both deduplicates (two merges
-   * hitting the same stale entry schedule ONE refresh) and lets tests and
-   * the sweep await or spare an in-flight refresh deterministically.
+   * One opened workspace Store per workspace path, with the project row the
+   * backfill and every store read key through. Open is lazy (the SQLite
+   * handle is touched on first board read) and the map entry lives for the
+   * process: `openWorkspaceStorage` hands back the shared per-path handle,
+   * so two sessions of one workspace share one Store-port pair.
    */
-  private readonly _closedFoldRefreshes = new Map<string, Promise<void>>();
+  private readonly _workspaceStores = new Map<
+    string,
+    { store: Store; projectId: ProjectId }
+  >();
 
   /**
-   * #198: inspect one closed session's log, fold it, and cache the derived
-   * views. Returns the fresh entry, or null when the inspect or the fold
-   * failed — a failure is logged and skips the row, exactly as the old
-   * inline path did. Never throws.
+   * The in-flight one-time backfill per workspace path, so concurrent board
+   * reads share one import instead of racing two.
    */
-  private async _inspectClosedFold(id: string, now: number): Promise<ClosedFoldEntry | null> {
-    let inspection: { meta: SessionHeader; events: readonly SessionEvent[] };
+  private readonly _backfillRuns = new Map<string, Promise<void>>();
+
+  /**
+   * #42: the workspace store for one agent's workspace, opened on first use
+   * with its project row ensured. Returns null — never throws — when the
+   * store cannot be opened or replayed: the board degrades to the live
+   * folds (a warning is logged) rather than refusing every read because
+   * durable storage is broken.
+   */
+  private _workspaceStore(
+    agent: Agent,
+  ): { store: Store; projectId: ProjectId } | null {
+    let path: string;
     try {
-      const persistence = this.ctx.get("sessionPersistence") as {
-        inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
-      };
-      // The id came from persistence.list via _closedWorkspaceSessionIds, so
-      // it already satisfies the branded shape; SessionId() is type-only here.
-      inspection = await persistence.inspect(id as SessionId);
-    } catch (error) {
-      this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      path = this._workspacePath(agent);
+    } catch {
       return null;
     }
-    const { state } = this._foldExternalLog(inspection.meta, inspection.events);
-    const views = [...ticketsProjection(state, this._resolvedConfig).values()];
-    // The retire check needs the full fold, which is NOT cached — so the
-    // retired ids are resolved here, once per inspect, and the entry
-    // carries the answer rather than the state that produced it.
-    const retired = new Set<number>();
-    for (const view of views) {
-      if (this._isRetired(state, view.id)) retired.add(view.id);
+    const cached = this._workspaceStores.get(path);
+    if (cached !== undefined) return cached;
+    let storage;
+    try {
+      storage = openWorkspaceStorage(path);
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: cannot open the workspace store for ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
     }
-    const entry: ClosedFoldEntry = {
-      at: now,
-      views,
-      evidence: state.evidence,
-      comments: state.comments,
-      retired,
-    };
-    this._closedFolds.set(id, entry);
-    return entry;
+    try {
+      const store = new Store(this._resolvedConfig, { storage });
+      const projectId = store.findProject(path) ?? store.createProject(path, basename(path));
+      const entry = { store, projectId };
+      this._workspaceStores.set(path, entry);
+      return entry;
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: cannot open the workspace store for ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      try {
+        storage.close();
+      } catch {
+        // Already unusable; nothing further to release.
+      }
+      return null;
+    }
   }
 
   /**
-   * #198: re-inspect one stale closed-fold entry in the background. At most
-   * one refresh per id runs at a time; a failed refresh drops the expired
-   * entry (it is garbage past the TTL — serving it forever would pin a
-   * vanished session's rows to the board) instead of leaving it to be
-   * re-attempted on every merge.
+   * #42: the single-flight wrapper around the one-time backfill. Concurrent
+   * board reads of the same workspace await ONE import; the store's own
+   * `backfill/completed` marker makes every later call (and every later
+   * process) skip the work entirely.
    */
-  private _refreshClosedFold(id: string): void {
-    if (this._closedFoldRefreshes.has(id)) return;
-    const run = (async (): Promise<void> => {
-      try {
-        const entry = await this._inspectClosedFold(id, Date.now());
-        if (entry === null) this._closedFolds.delete(id);
-      } catch (error) {
-        this.ctx.logger?.debug?.(`aidos: closed-fold refresh failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
-        this._closedFolds.delete(id);
-      } finally {
-        this._closedFoldRefreshes.delete(id);
+  private _backfillRun(agent: Agent, entry: { store: Store; projectId: ProjectId }): Promise<void> {
+    let path: string;
+    try {
+      path = this._workspacePath(agent);
+    } catch {
+      return Promise.resolve();
+    }
+    const inFlight = this._backfillRuns.get(path);
+    if (inFlight !== undefined) return inFlight;
+    const run = this._ensureWorkspaceBackfill(agent, entry).finally(() => {
+      this._backfillRuns.delete(path);
+    });
+    this._backfillRuns.set(path, run);
+    return run;
+  }
+
+  /**
+   * #42: THE first-open wiring #41's report left as this ticket's seam. If
+   * the store has no `backfill/completed` marker, list every persisted
+   * session of this workspace, inspect each closed log (the same
+   * `sessionPersistence` API the old cold scan used — one last time, once),
+   * and hand the logs to `Store.backfillSessionLogs`. THE STORE OWNS THE
+   * WRITE: renumbering, dependency rewriting, origin stamping, the marker,
+   * and the single transaction bracket are all #41's, unchanged.
+   *
+   * Failure handling, per piece:
+   *  - no persistence service: skip, no marker — the next open retries;
+   *  - the list itself fails: skip, no marker — running an empty backfill
+   *    here would land the marker and LOSE every closed log;
+   *  - one log's inspect fails: that log is skipped (warned), the rest
+   *    still import and the marker lands — resilience over completeness;
+   *    a log that stays unreadable past the one-time import is the same
+   *    gap as a log that closes after it (see the merge above);
+   *  - the import itself refuses (StoreWriteRefused): warn and return — the
+   *    marker never landed, so the NEXT open retries the whole import;
+   *    this read continues with whatever rows the store already holds.
+   * A failed backfill never fails the board read.
+   */
+  private async _ensureWorkspaceBackfill(
+    agent: Agent,
+    entry: { store: Store; projectId: ProjectId },
+  ): Promise<void> {
+    if (entry.store.hasBackfillCompleted()) return;
+    const persistence = this.ctx.get("sessionPersistence") as
+      | {
+          list: () => Promise<SessionHeader[]>;
+          inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
+        }
+      | undefined;
+    if (persistence === undefined) return;
+    const liveIds = new Set<string>([agent.session.id]);
+    for (const session of this._liveWorkspaceSessions(agent)) liveIds.add(session.id);
+    const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
+    // A failed list must NOT run an empty backfill: the marker would land
+    // and every closed log would be lost. Leave the import for the next open.
+    if (closedIds === null) return;
+    const logs: BackfillSessionLog[] = [];
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < closedIds.length) {
+        const id = closedIds[cursor++]!;
+        try {
+          const inspection = await persistence.inspect(id as SessionId);
+          logs.push({
+            sessionId: id,
+            events: inspection.events.map((event) => ({
+              seq: event.seq,
+              type: event.type,
+              data: event.data,
+            })),
+          });
+        } catch (error) {
+          this.ctx.logger?.warn?.(
+            `aidos: backfill inspect failed for ${id}, skipping it: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-    })();
-    this._closedFoldRefreshes.set(id, run);
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, closedIds.length) }, worker),
+    );
+    try {
+      const result = entry.store.backfillSessionLogs(entry.projectId, logs);
+      if (!result.alreadyRan) {
+        this.ctx.logger?.info?.(
+          `aidos: backfill imported ${result.tickets} ticket(s), ${result.evidence} evidence row(s), ${result.comments} comment(s) from ${result.sessionIds.length} log(s)`,
+        );
+      }
+    } catch (error) {
+      this.ctx.logger?.warn?.(
+        `aidos: workspace backfill refused (the next open retries it): ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

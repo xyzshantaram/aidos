@@ -1,17 +1,23 @@
 /**
- * User-reported 2026-09-10: a tool-card action timed out after 15s.
- * `checkInlineActionAvailable` calls the workspace merge, and the merge
- * re-inspected AND re-folded every closed session log on every call —
- * measured at 225 persisted sessions in the reporter's workspace, the
- * largest a 62M log. Sequential parse+fold of hundreds of megabytes per
- * click is the timeout.
+ * #42 replaces the closed-session fold cache with the workspace store.
  *
- * The rule: a closed session's fold is cached by session id. A closed log
- * cannot grow while its session stays dead, so the second merge must not
- * re-inspect; a session that goes live drops its entry, so a reopen-close
- * cycle with new events re-inspects; entries older than the TTL re-inspect.
+ * The pre-#42 merge cached each closed session's fold (and, after #198,
+ * served stale frames while background-refreshing them) because every board
+ * read re-inspected every closed log. That whole layer is gone: the first
+ * board open backfills closed logs into the workspace store once, and every
+ * later read is a store query that performs ZERO inspects.
+ *
+ * The tests below pin the NEW shape:
+ *  - the second merge does not re-inspect a still-closed session (kept from
+ *    the original suite — the store serves the row, not a cache);
+ *  - the cache and refresh maps no longer exist on the service;
+ *  - the reopen-close gap is stated, not hidden: a ticket written to a
+ *    closed log AFTER the one-time backfill is not on the board, because
+ *    the write path still targets session logs (host write mirroring is
+ *    #43/#45's work). The backfill marker is once-and-done by #41's design,
+ *    so no re-scan picks the late row up.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
 
 import { createHarness } from "./b1-harness";
@@ -45,24 +51,34 @@ function countingHarness() {
   return { harness, inspectCount: () => inspects };
 }
 
-describe("closed-session fold cache", () => {
+describe("closed sessions are answered by the store, not a fold cache", () => {
   it("the second merge does not re-inspect a still-closed session", async () => {
     const { harness, inspectCount } = countingHarness();
     const first = await harness.service.workspaceTickets(harness.asAgent());
     expect(first.tickets.map((row) => row.title)).toContain("closed ticket");
+    // The single inspect is the one-time backfill, not a per-read scan.
     expect(inspectCount()).toBe(1);
     const second = await harness.service.workspaceTickets(harness.asAgent());
     expect(second.tickets.map((row) => row.title)).toContain("closed ticket");
     expect(inspectCount()).toBe(1);
   });
 
-  it("a reopen-close cycle with new events re-inspects and shows them", async () => {
+  it("the fold cache and refresh maps are gone from the service", () => {
+    const { harness } = countingHarness();
+    const internals = harness.service as unknown as Record<string, unknown>;
+    expect(internals._closedFolds).toBeUndefined();
+    expect(internals._closedFoldRefreshes).toBeUndefined();
+  });
+
+  it("a ticket written to a closed log after the backfill is not on the board", async () => {
+    // #42's known gap, stated so no later test can silently assume it away:
+    // the backfill marker is once-and-done (#41), the write path still
+    // targets session logs, and nothing re-scans — so a session that closes
+    // again with NEW events leaves those rows out of the store until the
+    // host write path moves to the store (#43/#45).
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
     let inspects = 0;
-    const seen: unknown[][] = [];
-    // One session object throughout: its id counter continues across the
-    // reopen, exactly as a real resumed session's log does.
     const peer = harness.makeAgent({ id: CLOSED_ID });
     (peer.session.header as { cwd?: string }).cwd = WS;
     const service = harness.service;
@@ -74,104 +90,19 @@ describe("closed-session fold cache", () => {
         if (id !== CLOSED_ID) throw new Error("not found");
         inspects += 1;
         const events = [...peer.session.events];
-        seen.push(events);
         return { meta: { id: CLOSED_ID, cwd: WS }, events };
       },
     });
     await service.workspaceTickets(harness.asAgent());
     expect(inspects).toBe(1);
-    // The session comes back to life: the merge folds it live and drops the
-    // cached entry, so no inspect happens for it on this call.
+    // The session comes back to life and writes again, then closes.
     harness.agents.push(peer);
-    await service.workspaceTickets(harness.asAgent());
-    expect(inspects).toBe(1);
-    // It closes again with a second ticket in its log: the merge must see it.
     service.userSetTicket(harness.asAgent(peer), { title: "reopened ticket" });
     harness.agents.splice(harness.agents.indexOf(peer), 1);
     const after = await service.workspaceTickets(harness.asAgent());
-    expect(inspects).toBe(2);
+    expect(inspects).toBe(1);
     const titles = after.tickets.map((row) => row.title);
     expect(titles).toContain("closed ticket");
-    expect(titles).toContain("reopened ticket");
-  });
-
-  it("an entry older than the TTL re-inspects", async () => {
-    vi.useFakeTimers();
-    try {
-      const { harness, inspectCount } = countingHarness();
-      await harness.service.workspaceTickets(harness.asAgent());
-      expect(inspectCount()).toBe(1);
-      await vi.advanceTimersByTimeAsync(61000);
-      await harness.service.workspaceTickets(harness.asAgent());
-      // #198: the expired entry is served stale and re-inspected in the
-      // background — await the refresh before counting.
-      await Promise.all([...(harness.service as unknown as { _closedFoldRefreshes: Map<string, Promise<void>> })._closedFoldRefreshes.values()]);
-      expect(inspectCount()).toBe(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("a closed session that vanishes from persistence is evicted as it ages out", async () => {
-    // Mutation run mutdirect-*: deleting the anti-growth sweep keeps the
-    // suite green — every existing test watches inspect COUNTS, and a
-    // lingering entry is never re-inspected, so counts cannot see it. The
-    // pin is the map itself: two cached sessions, one deleted from
-    // persistence, both aged past the TTL — the survivor re-caches, the
-    // vanished one is swept instead of lingering without bound.
-    const ID_A = "session-evict-a";
-    const ID_B = "session-evict-b";
-    const harness = createHarness(undefined, { cwd: WS });
-    harness.installService();
-    const inspects = { a: 0, b: 0 };
-    const peerA = harness.makeAgent({ id: ID_A });
-    (peerA.session.header as { cwd?: string }).cwd = WS;
-    harness.service.userSetTicket(harness.asAgent(peerA), { title: "ticket from A" });
-    const eventsA = [...peerA.session.events];
-    harness.agents.splice(harness.agents.indexOf(peerA), 1);
-    const peerB = harness.makeAgent({ id: ID_B });
-    (peerB.session.header as { cwd?: string }).cwd = WS;
-    harness.service.userSetTicket(harness.asAgent(peerB), { title: "ticket from B" });
-    const eventsB = [...peerB.session.events];
-    harness.agents.splice(harness.agents.indexOf(peerB), 1);
-    let listed = [ID_A, ID_B];
-    harness.ctx.reflect.provide("sessionPersistence", {
-      list: async () => listed.map((id) => ({ id: SessionId(id), cwd: WS })),
-      inspect: async (id: string) => {
-        if (id === ID_A) {
-          inspects.a += 1;
-          return { meta: { id: ID_A, cwd: WS }, events: [...eventsA] };
-        }
-        if (id === ID_B) {
-          inspects.b += 1;
-          return { meta: { id: ID_B, cwd: WS }, events: [...eventsB] };
-        }
-        throw new Error("not found");
-      },
-    });
-    const foldsOf = (svc: unknown): Map<string, unknown> =>
-      (svc as unknown as { _closedFolds: Map<string, unknown> })._closedFolds;
-    const refreshesOf = (svc: unknown): Map<string, Promise<void>> =>
-      (svc as unknown as { _closedFoldRefreshes: Map<string, Promise<void>> })._closedFoldRefreshes;
-    vi.useFakeTimers();
-    try {
-      await harness.service.workspaceTickets(harness.asAgent());
-      expect(inspects).toEqual({ a: 1, b: 1 });
-      expect(foldsOf(harness.service).size).toBe(2);
-      // B's log is deleted from persistence; both entries age past the TTL.
-      listed = [ID_A];
-      await vi.advanceTimersByTimeAsync(61000);
-      await harness.service.workspaceTickets(harness.asAgent());
-      // #198: the expired entries refresh in the background — await both.
-      await Promise.all([...refreshesOf(harness.service).values()]);
-      // A re-inspects and re-caches; B is never touched again — and its
-      // stale entry is swept rather than kept.
-      expect(inspects).toEqual({ a: 2, b: 1 });
-      expect(foldsOf(harness.service).has(ID_A)).toBe(true);
-      expect(foldsOf(harness.service).has(ID_B)).toBe(false);
-      expect(foldsOf(harness.service).size).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(titles).not.toContain("reopened ticket");
   });
 });

@@ -168,7 +168,13 @@ export class Store {
     this._originSessionId = options?.originSessionId;
     // An explicit log seeds the fold; otherwise the storage's own rows are
     // the durable truth (a reopen replays them). Never both — see StoreOptions.
-    const seed = options?.log ?? this._storage.readAll().map((stored) => stored.event);
+    const storedRows = options?.log === undefined ? this._storage.readAll() : undefined;
+    if (storedRows !== undefined) {
+      for (const stored of storedRows) {
+        this._noteOrigin(stored);
+      }
+    }
+    const seed = options?.log ?? storedRows!.map((stored) => stored.event);
     this._log = deepClone(seed) as AidosEvent[];
     this.replay();
     // #40: an explicit log together with a storage port is the reopen after
@@ -187,6 +193,23 @@ export class Store {
   private _originSeq = 0;
   private readonly _log: AidosEvent[] = [];
   private _state: AidosState = createInitialState();
+  /**
+   * #42: source session of every imported ticket, by its WORKSPACE id. The
+   * board renders a store row with the session that log came from, so the
+   * read needs the create event's origin columns without re-walking the
+   * storage rows on every board read. Filled from the storage rows on open
+   * and from every origin-stamped append (the backfill is the only writer
+   * that passes one); a ticket created directly in the store has no origin.
+   */
+  private readonly _originSessionOfTicket = new Map<TicketId, string>();
+
+  /** Record one stored row's origin when it is a ticket create. */
+  private _noteOrigin(stored: StoredEvent): void {
+    if (stored.sessionId === null) return;
+    const event = stored.event;
+    if (event.kind !== "ticket/change" || event.operation !== "create") return;
+    this._originSessionOfTicket.set(event.ticket.id, stored.sessionId);
+  }
 
   /**
    * Rebuild the derived state from the log. Construction folds
@@ -203,6 +226,32 @@ export class Store {
   /** The whole log, oldest first, as a frozen copy. */
   events(): readonly AidosEvent[] {
     return deepFreeze(deepClone(this._log));
+  }
+
+  /**
+   * #42: the folded state, for the host wrapper's read projections. Read
+   * only — the host derives views through `ticketsProjection` and never
+   * mutates; a mutating caller would corrupt the store's own fold.
+   */
+  get state(): AidosState {
+    return this._state;
+  }
+
+  /**
+   * #42: whether the one-time backfill marker is in the log. The host
+   * checks this BEFORE gathering any logs, so a board read after the first
+   * open never touches the persistence inspect path at all.
+   */
+  hasBackfillCompleted(): boolean {
+    return this._log.some((event) => event.kind === "backfill/completed");
+  }
+
+  /**
+   * #42: the session id whose log this ticket was imported from, or null
+   * when the ticket was created directly in the store.
+   */
+  originSessionOf(ticketId: TicketId): string | null {
+    return this._originSessionOfTicket.get(ticketId) ?? null;
   }
 
   // ---- internal ----
@@ -237,6 +286,9 @@ export class Store {
       // the log does not hold.
       const originValue = origin();
       if (originValue) {
+        if (originValue.sessionId !== undefined) {
+          this._noteOrigin({ seq: 0, event, sessionId: originValue.sessionId, localSeq: originValue.localSeq ?? null });
+        }
         storage.append(event, originValue);
       } else {
         storage.append(event);
@@ -285,6 +337,7 @@ export class Store {
     validateAidosEvent(this._state, event);
     this._log.push(event);
     if (origin) {
+      this._noteOrigin({ seq: 0, event, sessionId: origin.sessionId, localSeq: origin.localSeq });
       this._storage.append(event, origin);
     } else {
       this._storage.append(event);

@@ -1021,6 +1021,17 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
     subagents: ctx.subagents,
 
     installService() {
+      /*
+       * #42: the service now opens a durable workspace store — a SQLite file
+       * under dshHomePath("aidos", "storage", ...), resolved from
+       * process.env.DSH_HOME at open time. A test run must never touch the
+       * real ~/.dsh (harness sessions carry the REAL repo cwd, so without
+       * this the opener would write the developer's own store), so every
+       * harness gets a throwaway home. Assigned on every install, not just
+       * when unset — each harness is a fresh store, and harnesses sharing
+       * one file never see each other's backfill marker.
+       */
+      process.env.DSH_HOME = mkdtempSync(join(tmpdir(), "aidos-harness-home-"));
       if (!provided.aidos) {
         new AidosService(ctx as unknown as Context, config);
       }

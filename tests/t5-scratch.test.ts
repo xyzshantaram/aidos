@@ -296,6 +296,13 @@ describe("the scratch tools", () => {
      * must give one answer.
      */
     const single = scratchHarness();
+    /*
+     * #42: each harness install gets its own throwaway DSH_HOME, but this
+     * test needs BOTH harnesses on ONE home — the read compares what two
+     * writers wrote to the same file. Pin the first harness's home before
+     * the second install overwrites it.
+     */
+    const sharedHome = process.env.DSH_HOME;
     await single.runTool("scratch_write", { path: "s.txt", content: "a world b\n" });
     await single.runTool("scratch_edit", {
       path: "s.txt",
@@ -303,6 +310,7 @@ describe("the scratch tools", () => {
       new_string: "[$&]",
     });
     const all = scratchHarness();
+    process.env.DSH_HOME = sharedHome;
     await all.runTool("scratch_write", { path: "s.txt", content: "a world b\n" });
     await all.runTool("scratch_edit", {
       path: "s.txt",
