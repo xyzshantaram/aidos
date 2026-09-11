@@ -28,6 +28,7 @@
 import type { Context } from "@deepseek-ai/cordis";
 
 import { DEFAULT_REVIEW_CHAIN } from "../kernel/review-provenance";
+import type { Actor } from "../kernel/types";
 
 /** The subagent type name the model sees. */
 export const PARTNER_REVIEW_TYPE = "partner_review";
@@ -173,4 +174,81 @@ export function configuredReviewChain(config: unknown): string {
     if (typeof value === "string" && value !== "") return value;
   }
   return DEFAULT_REVIEW_CHAIN;
+}
+
+/*
+ * ---- #126: the stamp writer -------------------------------------------
+ *
+ * The stamp on an evidence row is written HERE, from harness session state,
+ * and never from the agent's payload: a payload key named `model`, `chain`,
+ * `sessionId`, or `stamp` is data the agent composed, so honoring it as
+ * provenance would let provenance be forged. Where chainProvenance exists,
+ * the stamp records chain + rungsUsed so a run that started at the chain
+ * head and finished several rungs down is recorded truthfully; where the
+ * service is absent (an older harness), the stamp degrades to whatever IS
+ * available and never throws.
+ */
+
+/** The shape of one route in a chainProvenance record, as far as stamps read. */
+interface StampRecord {
+  chain?: unknown;
+  rungsUsed?: unknown;
+}
+
+/**
+ * The host-written provenance stamp for one row attached by `sessionId`.
+ *
+ * Total and never throwing: an absent service, a throwing reader, or a
+ * malformed record each degrade the stamp to the facts that ARE available —
+ * at minimum the session id and the actor — because a stamp that could fail
+ * the attach would put provenance in the critical path, and provenance is a
+ * reliability aid, not a precondition.
+ */
+export function evidenceStamp(
+  ctx: Context,
+  sessionId: string | undefined,
+  actor: Actor,
+): {
+  sessionId?: string;
+  actor: Actor;
+  chain?: string;
+  models?: string[];
+  rungsUsed?: Array<{ provider: string; model: string }>;
+} {
+  const stamp: ReturnType<typeof evidenceStamp> = { actor };
+  if (sessionId !== undefined && sessionId !== "") {
+    stamp.sessionId = sessionId;
+  }
+  const service = serviceOf<ChainProvenanceService>(ctx, "chainProvenance");
+  if (service === undefined || typeof service.forSession !== "function") {
+    return stamp;
+  }
+  let record: unknown;
+  try {
+    record = sessionId === undefined ? undefined : service.forSession(sessionId);
+  } catch {
+    /* A throwing reader is a broken reader, not a bad row. */
+    return stamp;
+  }
+  if (typeof record !== "object" || record === null) return stamp;
+  const { chain, rungsUsed } = record as StampRecord;
+  if (typeof chain === "string" && chain !== "") {
+    stamp.chain = chain;
+  }
+  if (Array.isArray(rungsUsed)) {
+    const routes: Array<{ provider: string; model: string }> = [];
+    for (const rung of rungsUsed) {
+      if (typeof rung !== "object" || rung === null) continue;
+      const provider = (rung as { provider?: unknown }).provider;
+      const model = (rung as { model?: unknown }).model;
+      if (typeof provider === "string" && typeof model === "string") {
+        routes.push({ provider, model });
+      }
+    }
+    if (routes.length > 0) {
+      stamp.rungsUsed = routes;
+      stamp.models = [...new Set(routes.map((route) => route.model))];
+    }
+  }
+  return stamp;
 }

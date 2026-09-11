@@ -41,12 +41,18 @@ const REVIEW_SESSION = "sess-reviewer-1";
 const ticket = (): TicketSnapshot =>
   ({ id: 1, state: "in_progress" }) as unknown as TicketSnapshot;
 
-/** A stamped review_pass: the stamp is host-written, never agent-supplied. */
+/**
+ * A stamped review_pass: the stamp is host-written, never agent-supplied.
+ * #126 moved the stamp onto the ROW (`row.stamp`) so it cannot ride the
+ * agent-composed payload into model context; these rows mimic what the host
+ * writes.
+ */
 const reviewRow = (sessionId: string | undefined = REVIEW_SESSION): EvidenceRow => ({
   kind: "builtin:review_pass",
   author: "agent",
   at: 1,
-  payload: sessionId === undefined ? {} : { stamp: { sessionId } },
+  payload: {},
+  ...(sessionId === undefined ? {} : { stamp: { sessionId } }),
 });
 
 /*
@@ -167,7 +173,8 @@ describe("#136 chain containment", () => {
       kind: "builtin:automated_check",
       author: "agent",
       at: 2,
-      payload: { stamp: { sessionId: REVIEW_SESSION } },
+      payload: {},
+      stamp: { sessionId: REVIEW_SESSION },
     };
     // An off-chain record for the same session must not drop the check row.
     const refusal = moveToAwaiting([check, commitRow()], () => record({ contained: false }));
@@ -377,7 +384,7 @@ describe("#136 the verified mark degrades progressively and stays out of model c
 
   it("gives the verified mark a tooltip that names the chain", () => {
     const judgement = judgeReviewRow(
-      { kind: "builtin:review_pass", payload: { stamp: { sessionId: REVIEW_SESSION } } },
+      { kind: "builtin:review_pass", payload: {}, stamp: { sessionId: REVIEW_SESSION } },
       "frontier",
       () => ({ chain: "frontier", contained: true, rungsDeclared: [], rungsUsed: [] }),
     );

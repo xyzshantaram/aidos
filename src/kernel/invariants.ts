@@ -47,6 +47,13 @@ const EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 const EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
 const EVIDENCE_LINKED_KEYS = ["kind", "version", "ticketId", "at", "rowKind", "criterion"];
 const EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
+/**
+ * #126: the host-written provenance stamp is OPTIONAL on an evidence row —
+ * absent on every legacy row, and absence is not a finding (it judges as
+ * unverified, #129). When present, its shape is validated here so a corrupt
+ * stamp is a rejected log rather than a gate reading garbage.
+ */
+const EVIDENCE_ROW_STAMP_KEYS = ["sessionId", "actor", "chain", "models", "rungsUsed"];
 const PLAN_CHANGE_KEYS = ["kind", "version", "projectId", "plan", "at"];
 const PLAN_KEYS = ["frontmatter", "context", "rules"];
 const PLAN_CONTEXT_KEYS = ["preamble", "contextSections"];
@@ -383,7 +390,56 @@ function validateEvidence(
   if (!isPlainObject(row)) {
     invariant("evidence/attached row must be an object");
   }
-  expectKeys(row, EVIDENCE_ROW_KEYS, "evidence row");
+  // #126: same exactness as expectKeys, except the stamp is OPTIONAL —
+  // absent on every legacy row, present-and-exact on stamped ones.
+  for (const key of Object.keys(row)) {
+    if (!EVIDENCE_ROW_KEYS.includes(key) && key !== "stamp") {
+      invariant(`evidence row has an unknown key ${key}`);
+    }
+  }
+  for (const key of EVIDENCE_ROW_KEYS) {
+    if (!(key in row)) {
+      invariant(`evidence row is missing key ${key}`);
+    }
+  }
+  if ("stamp" in row) {
+    // #126: optional, but when present its shape is exact.
+    const stamp = row.stamp;
+    if (!isPlainObject(stamp)) {
+      invariant("evidence row stamp must be an object");
+    }
+    for (const key of Object.keys(stamp)) {
+      if (!EVIDENCE_ROW_STAMP_KEYS.includes(key)) {
+        invariant(`evidence row stamp has an unknown key ${key}`);
+      }
+    }
+    if (stamp.sessionId !== undefined) expectString(stamp.sessionId, "evidence row stamp sessionId");
+    if (stamp.actor !== undefined) expectActor(stamp.actor, "evidence row stamp actor");
+    if (stamp.chain !== undefined) expectString(stamp.chain, "evidence row stamp chain");
+    if (stamp.models !== undefined) {
+      if (!Array.isArray(stamp.models)) {
+        invariant("evidence row stamp models must be an array");
+      }
+      for (const model of stamp.models) expectString(model, "evidence row stamp model");
+    }
+    if (stamp.rungsUsed !== undefined) {
+      if (!Array.isArray(stamp.rungsUsed)) {
+        invariant("evidence row stamp rungsUsed must be an array");
+      }
+      for (const rung of stamp.rungsUsed) {
+        if (!isPlainObject(rung)) {
+          invariant("evidence row stamp rung must be an object");
+        }
+        for (const key of Object.keys(rung)) {
+          if (key !== "provider" && key !== "model") {
+            invariant(`evidence row stamp rung has an unknown key ${key}`);
+          }
+        }
+        expectString(rung.provider, "evidence row stamp rung provider");
+        expectString(rung.model, "evidence row stamp rung model");
+      }
+    }
+  }
   expectString(row.kind, "evidence kind");
   if ((row.kind as string).length === 0) {
     invariant("evidence kind must not be empty");

@@ -135,7 +135,7 @@ export function judgeReviewProvenance(
     return {
       standing: "invalidated",
       reason:
-        "this review ran outside the chain it declared" +
+        "OFF-CHAIN: this review ran outside the chain it declared" +
         (chain === undefined ? "" : " (" + chain + ")") +
         " — the result is invalid and the review should be re-run",
       ...(chain === undefined ? {} : { chain }),
@@ -151,7 +151,7 @@ export function judgeReviewProvenance(
     return {
       standing: "invalidated",
       reason:
-        "this review ran on chain " +
+        "OFF-CHAIN: this review ran on chain " +
         (chain === undefined ? "(unnamed)" : chain) +
         ", not the configured review chain " +
         configuredChain +
@@ -170,19 +170,27 @@ export function judgeReviewProvenance(
 /**
  * The reviewer session id stamped on an evidence row, or undefined.
  *
- * Host-written (#126), never accepted from the agent. A row without one is
- * a legacy row and judges as `unverified` — deliberately: legacy
- * `review_pass` rows are automatically promoted and keep satisfying the
- * gate. There is no migration, no backfill, and no grandfather flag, and
- * the risk of that (an old self-reviewed pass stays valid forever) was
- * accepted in writing rather than overlooked.
+ * #126: the stamp is HOST-written and lives on the ROW (`row.stamp`), never
+ * inside the payload — the payload is agent-composed data, so a payload key
+ * named `stamp`, `model`, `chain`, or `sessionId` is data, and reading it as
+ * provenance would let provenance be forged. A row without one is a legacy
+ * row and judges as `unverified` — deliberately: legacy `review_pass` rows
+ * are automatically promoted and keep satisfying the gate. There is no
+ * migration, no backfill, and no grandfather flag, and the risk of that (an
+ * old self-reviewed pass stays valid forever) was accepted in writing rather
+ * than overlooked.
  */
 export function reviewSessionIdOf(row: {
   payload?: Record<string, unknown>;
+  stamp?: { sessionId?: unknown };
 }): string | undefined {
-  const payload = row.payload ?? {};
-  const stamp = payload.stamp;
-  if (isRecordLike(stamp) && typeof stamp.sessionId === "string" && stamp.sessionId !== "") {
+  const stamp = row.stamp;
+  if (
+    stamp !== undefined &&
+    typeof stamp === "object" &&
+    typeof stamp.sessionId === "string" &&
+    stamp.sessionId !== ""
+  ) {
     return stamp.sessionId;
   }
   return undefined;
@@ -194,7 +202,7 @@ export function reviewSessionIdOf(row: {
  * as an exception.
  */
 export function judgeReviewRow(
-  row: { kind: string; payload?: Record<string, unknown> },
+  row: { kind: string; payload?: Record<string, unknown>; stamp?: { sessionId?: unknown } },
   configuredChain: string,
   lookup: ((sessionId: string) => unknown) | undefined,
 ): ReviewJudgement {
@@ -223,7 +231,7 @@ export function judgeReviewRow(
  * it counts today.
  */
 export function isInvalidatedReview(
-  row: { kind: string; payload?: Record<string, unknown> },
+  row: { kind: string; payload?: Record<string, unknown>; stamp?: { sessionId?: unknown } },
   configuredChain: string,
   lookup: ((sessionId: string) => unknown) | undefined,
 ): boolean {

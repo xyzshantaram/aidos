@@ -25945,14 +25945,14 @@ function judgeReviewProvenance(record2, configuredChain) {
   if (!contained) {
     return {
       standing: "invalidated",
-      reason: "this review ran outside the chain it declared" + (chain === void 0 ? "" : " (" + chain + ")") + " \u2014 the result is invalid and the review should be re-run",
+      reason: "OFF-CHAIN: this review ran outside the chain it declared" + (chain === void 0 ? "" : " (" + chain + ")") + " \u2014 the result is invalid and the review should be re-run",
       ...chain === void 0 ? {} : { chain }
     };
   }
   if (chain !== configuredChain) {
     return {
       standing: "invalidated",
-      reason: "this review ran on chain " + (chain === void 0 ? "(unnamed)" : chain) + ", not the configured review chain " + configuredChain + " \u2014 the result is invalid and the review should be re-run",
+      reason: "OFF-CHAIN: this review ran on chain " + (chain === void 0 ? "(unnamed)" : chain) + ", not the configured review chain " + configuredChain + " \u2014 the result is invalid and the review should be re-run",
       ...chain === void 0 ? {} : { chain }
     };
   }
@@ -25963,9 +25963,8 @@ function judgeReviewProvenance(record2, configuredChain) {
   };
 }
 function reviewSessionIdOf(row) {
-  const payload = row.payload ?? {};
-  const stamp = payload.stamp;
-  if (isRecordLike(stamp) && typeof stamp.sessionId === "string" && stamp.sessionId !== "") {
+  const stamp = row.stamp;
+  if (stamp !== void 0 && typeof stamp === "object" && typeof stamp.sessionId === "string" && stamp.sessionId !== "") {
     return stamp.sessionId;
   }
   return void 0;
@@ -26117,6 +26116,7 @@ var EVIDENCE_KEYS = ["kind", "version", "ticketId", "row"];
 var EVIDENCE_DETACHED_KEYS = ["kind", "version", "ticketId", "at", "rowKind"];
 var EVIDENCE_LINKED_KEYS = ["kind", "version", "ticketId", "at", "rowKind", "criterion"];
 var EVIDENCE_ROW_KEYS = ["kind", "author", "at", "payload"];
+var EVIDENCE_ROW_STAMP_KEYS = ["sessionId", "actor", "chain", "models", "rungsUsed"];
 var PLAN_CHANGE_KEYS = ["kind", "version", "projectId", "plan", "at"];
 var PLAN_KEYS = ["frontmatter", "context", "rules"];
 var PLAN_CONTEXT_KEYS = ["preamble", "contextSections"];
@@ -26369,7 +26369,53 @@ function validateEvidence(state, raw) {
   if (!isPlainObject2(row)) {
     invariant("evidence/attached row must be an object");
   }
-  expectKeys(row, EVIDENCE_ROW_KEYS, "evidence row");
+  for (const key of Object.keys(row)) {
+    if (!EVIDENCE_ROW_KEYS.includes(key) && key !== "stamp") {
+      invariant(`evidence row has an unknown key ${key}`);
+    }
+  }
+  for (const key of EVIDENCE_ROW_KEYS) {
+    if (!(key in row)) {
+      invariant(`evidence row is missing key ${key}`);
+    }
+  }
+  if ("stamp" in row) {
+    const stamp = row.stamp;
+    if (!isPlainObject2(stamp)) {
+      invariant("evidence row stamp must be an object");
+    }
+    for (const key of Object.keys(stamp)) {
+      if (!EVIDENCE_ROW_STAMP_KEYS.includes(key)) {
+        invariant(`evidence row stamp has an unknown key ${key}`);
+      }
+    }
+    if (stamp.sessionId !== void 0) expectString(stamp.sessionId, "evidence row stamp sessionId");
+    if (stamp.actor !== void 0) expectActor(stamp.actor, "evidence row stamp actor");
+    if (stamp.chain !== void 0) expectString(stamp.chain, "evidence row stamp chain");
+    if (stamp.models !== void 0) {
+      if (!Array.isArray(stamp.models)) {
+        invariant("evidence row stamp models must be an array");
+      }
+      for (const model of stamp.models) expectString(model, "evidence row stamp model");
+    }
+    if (stamp.rungsUsed !== void 0) {
+      if (!Array.isArray(stamp.rungsUsed)) {
+        invariant("evidence row stamp rungsUsed must be an array");
+      }
+      for (const rung of stamp.rungsUsed) {
+        if (!isPlainObject2(rung)) {
+          invariant("evidence row stamp rung must be an object");
+        }
+        for (const key of Object.keys(rung)) {
+          if (key !== "provider" && key !== "model") {
+            invariant(`evidence row stamp rung has an unknown key ${key}`);
+          }
+        }
+        expectString(rung.provider, "evidence row stamp rung provider");
+        expectString(rung.model, "evidence row stamp rung model");
+      }
+    }
+  }
   expectString(row.kind, "evidence kind");
   if (row.kind.length === 0) {
     invariant("evidence kind must not be empty");
@@ -26846,6 +26892,43 @@ function configuredReviewChain(config2) {
     if (typeof value === "string" && value !== "") return value;
   }
   return DEFAULT_REVIEW_CHAIN;
+}
+function evidenceStamp(ctx, sessionId, actor) {
+  const stamp = { actor };
+  if (sessionId !== void 0 && sessionId !== "") {
+    stamp.sessionId = sessionId;
+  }
+  const service = serviceOf(ctx, "chainProvenance");
+  if (service === void 0 || typeof service.forSession !== "function") {
+    return stamp;
+  }
+  let record2;
+  try {
+    record2 = sessionId === void 0 ? void 0 : service.forSession(sessionId);
+  } catch {
+    return stamp;
+  }
+  if (typeof record2 !== "object" || record2 === null) return stamp;
+  const { chain, rungsUsed } = record2;
+  if (typeof chain === "string" && chain !== "") {
+    stamp.chain = chain;
+  }
+  if (Array.isArray(rungsUsed)) {
+    const routes = [];
+    for (const rung of rungsUsed) {
+      if (typeof rung !== "object" || rung === null) continue;
+      const provider = rung.provider;
+      const model = rung.model;
+      if (typeof provider === "string" && typeof model === "string") {
+        routes.push({ provider, model });
+      }
+    }
+    if (routes.length > 0) {
+      stamp.rungsUsed = routes;
+      stamp.models = [...new Set(routes.map((route) => route.model))];
+    }
+  }
+  return stamp;
 }
 
 // src/kernel/projections.ts
@@ -31207,11 +31290,15 @@ ${detail}`
         }
       }
     }
+    const stampable = deepClone(payload);
+    delete stampable.stamp;
+    const sessionId = agent.id;
     const row = {
       kind,
       author: actor,
       at: this._atFor(agent.session, ticketId),
-      payload: deepClone(payload)
+      payload: stampable,
+      stamp: evidenceStamp(this.ctx, sessionId, actor)
     };
     this._commit(agent, {
       kind: "evidence/attached",

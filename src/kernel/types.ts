@@ -65,12 +65,50 @@ export interface TicketSnapshot {
   updatedAt: number;
 }
 
+/**
+ * #126: the harness-supplied provenance stamp on one evidence row.
+ *
+ * Every value here comes from the HOST's own session state — never from the
+ * agent's payload, which is data the agent composes and therefore cannot be
+ * provenance. The stamp is host-side only: it rides the log for the board and
+ * the UI, and no tool, prompt section, or tool-result text exposes it to a
+ * model.
+ */
+export interface EvidenceStamp {
+  /** The session id whose run produced the row, from the harness session. */
+  sessionId?: string;
+  /** The actor the row was attached as — "user" on a human-attached row. */
+  actor?: Actor;
+  /**
+   * The declared chain NAME, where the harness's chainProvenance service
+   * supplied one. A name, never a model, and never resolved again.
+   */
+  chain?: string;
+  /**
+   * The model ids that actually served requests in the run (the `model` of
+   * each route in the record's rungsUsed), so a run that failed over several
+   * rungs is recorded as what it was, not as what it declared.
+   */
+  models?: string[];
+  /** The routes that actually served, verbatim from the record's rungsUsed. */
+  rungsUsed?: Array<{ provider: string; model: string }>;
+}
+
 /** One evidence row. The author is stamped, never read from the payload. */
 export interface EvidenceRow {
   kind: string;
   author: Actor;
   at: number;
   payload: Record<string, unknown>;
+  /**
+   * #126: host-written provenance, present only on rows created after
+   * stamping landed. Absent on every legacy row, and absent is not a finding:
+   * a row without a stamp judges as unverified, never as invalid (#129).
+   * Payload keys named `stamp`, `model`, `chain`, or `sessionId` are data and
+   * are NEVER read as provenance — the stamp is written by the host over the
+   * payload, not out of it.
+   */
+  stamp?: EvidenceStamp;
 }
 
 /** One plan context section. The heading keeps its "##" prefix. */

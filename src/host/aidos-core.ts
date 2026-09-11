@@ -92,7 +92,7 @@ import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { reviewChainOf } from "../kernel/gates";
 import { judgeReviewRow } from "../kernel/review-provenance";
-import { reviewProvenanceReader } from "./partner-review";
+import { evidenceStamp, reviewProvenanceReader } from "./partner-review";
 import { validateAidosEvent, planContextLineCount } from "../kernel/invariants";
 import { checkGate, isLegalTransition } from "../kernel/gates";
 import {
@@ -5810,11 +5810,25 @@ registerAidosSessionEventTypes(ctx);
         }
       }
     }
+    /*
+     * #126: the provenance stamp is HOST-written, from harness session state.
+     * A payload-crafted `stamp` key is a forgery attempt: it is dropped, and
+     * the harness value (or its honest absence) is what lands on the row.
+     * Other payload keys that merely LOOK like provenance (`model`, `chain`,
+     * `sessionId`) are left as the data they are — they are never read for
+     * stamping. The stamp itself lives on the row, never inside the payload,
+     * so the tool surface (which returns payloads) cannot leak it into model
+     * context; humans see it on the board/UI.
+     */
+    const stampable = deepClone(payload);
+    delete stampable.stamp;
+    const sessionId = agent.id;
     const row: EvidenceRow = {
       kind,
       author: actor,
       at: this._atFor(agent.session, ticketId),
-      payload: deepClone(payload),
+      payload: stampable,
+      stamp: evidenceStamp(this.ctx, sessionId, actor),
     };
     this._commit(agent, {
       kind: "evidence/attached",
