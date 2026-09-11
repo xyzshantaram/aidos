@@ -11,6 +11,29 @@ calls the `aidos.planImport` Remote, which parses the document with `parsePlan`
 and creates one ticket per plan ticket. This skill tells you how to write a
 PLAN.md that `parsePlan` accepts.
 
+The format is literate markdown with fenced YAML blocks: each ticket is a
+`## Ticket <id> — <title>` heading (em dash) followed by one ` ```yaml ` block
+carrying the ticket's structured fields. The prose around the blocks is
+frontmatter, preamble, and context sections. A pre-literacy document in the old
+`- [ ] **Ticket ID: Title.**` line format still parses through the legacy
+path, so yesterday's plans import; the renderer only ever emits the literate
+shape, so importing a legacy plan and exporting it converts it.
+
+## Which grammar reads your document
+
+`parsePlan` sniffs the whole document first: if any line is a legacy ticket
+line, the whole document parses as legacy. Otherwise, if a `## Ticket`
+heading is present, it parses as literate. A document with neither shape falls
+to the legacy parser, whose refusals name the first bad line.
+
+Two consequences:
+
+- Never paste a `- [ ] **Ticket ...` line into a literate plan, not even
+  inside a fenced code block or a YAML description. One such line anywhere
+  flips the entire document to the legacy grammar.
+- A `## Ticket <id> — <title>` line inside a fenced code block still opens a
+  ticket. Fences do not hide headings from the parser.
+
 ## The import contract
 
 - Import needs an EMPTY project. If the project already has tickets, import
@@ -24,20 +47,16 @@ PLAN.md that `parsePlan` accepts.
   git checks. A refusal imports nothing and deletes nothing. If the file
   cannot be deleted after a successful import, the result says so
   (`deleted: false`, `deletionError`) and the tickets still stand.
-- Every ticket lands in the `open` state. The checkbox mark (`[x]`, `[~]`, `?`,
-  ` `) does not set the live state. The mark becomes one `builtin:imported_state`
-  evidence row per ticket, authored by `system`. It records the claimed state.
+- The plan is flat. Every ticket imports as phase 1, in document order. A
+  `## Phase N: <title>` heading sets no phase; it is kept as context-section
+  prose, like any other `## ` heading.
+- Every ticket lands in the `open` state. The claimed `state` word does not
+  set the live state. It becomes one `builtin:imported_state` evidence row per
+  ticket, authored by `system`. It records the claimed state.
 - `parsePlan` runs first. A parse error imports nothing.
-- The ticket body becomes the ticket description, shown in the detail view.
-  The body before the marker becomes the ticket description, shown in the
-  detail view. The criterion list after the marker becomes the criteria. The
-  title becomes the title.
-- A `## Phase N: <title>` heading sets the phase number and the phase title of
-  every ticket after it. A ticket under any other heading imports as phase 1.
-  Document order decides the ticket order across the whole project.
-- The criteria sit after an `**Evaluate:**` marker on its own continuation
-  line. Each criterion starts with `- `. A criterion may wrap across lines.
-  The parser joins a wrapped criterion with one space.
+- The `description` becomes the ticket description, shown in the detail view.
+  The `criteria` list becomes the criteria. The heading's title becomes the
+  title.
 - Frontmatter, preamble, and `## ` context sections are stored as plan meta.
 
 ## The document format
@@ -55,63 +74,79 @@ line is not `---`, there is no frontmatter and those lines are preamble.
 
 ### Preamble
 
-Text before the first `## ` heading or the first ticket is the preamble. It can
-hold anything.
+Text before the first `## ` heading is the preamble. It can hold anything.
 
 ### Context sections
 
-A line that starts with `## ` (two hashes, then a space) opens a context section.
-All following lines until the next `## ` heading or the next ticket are that
-section's text. Bullet lists, tables, and code fences are fine inside a section.
+A line that starts with `## ` (two hashes, then a space) opens a context
+section, unless it is a ticket heading (see below). All following lines until
+the next `## ` heading or the next ticket heading are that section's text.
+Bullet lists, tables, and code fences are fine inside a section.
 
-A `### ` (three hashes) line is NOT a heading. The parser treats it as plain
-text. Use `## ` for any heading you want the parser to recognize.
+A `### ` (three hashes) line is NOT a heading. Inside a section it is plain
+text; anywhere else it is a parse error. Use `## ` for any heading you want
+the parser to recognize.
 
 ### Tickets (the one hard rule)
 
-Each ticket is one line plus optional continuation lines:
+Each ticket is a heading plus one fenced block:
 
-    - [ ] **Ticket ID: Title.** One sentence of scope prose. The prose may wrap
+    ## Ticket U2d — Global cross-workspace tickets entry.
+
+    ```yaml
+    state: open
+    description: |
+      The sidebar entry opens a board of every live session's tickets.
+    criteria:
+      - the entry lists tickets from two workspaces
+      - the entry badges each ticket by workspace, and the badge survives
+        a page reload
+    ```
 
 Rules:
 
-- The line starts with `- [MARK] **Ticket ID: Title.**`. MARK is one of
-  ` ` (open), `~` (in_progress), `?` (awaiting_verification), `x` (done).
-- The ID has no colon.
-- The title ends with a period before the closing `**`.
-- The body can span more lines. Each continuation line starts with two spaces.
-- Every ticket MUST contain the marker `**Evaluate:**`. A ticket without
-  `**Evaluate:**` throws a parse error.
-- The marker sits alone on its own continuation line. Criterion text on the
-  marker line is a parse error. The old format put text after the marker on
-  the ticket line. That format is refused.
-- After the marker, the first non-empty line must start with `- `. Each `- `
-  line starts one criterion. A following non-empty line that does not start
-  with `- ` wraps the criterion before it. The parser joins the wrap with one
-  space.
-- A ticket with no criteria after the marker throws a parse error.
-- Blank lines between tickets are allowed.
+- The heading matches `## Ticket <id> — <title>`, with an em dash (—)
+  between the id and the title. The id is the text up to the first ` — `;
+  the rest is the title.
+- After the heading, blank lines may follow. Then exactly one ` ```yaml `
+  block must follow. A ticket heading with no ` ```yaml ` block after it is
+  a parse error naming the heading line.
+- The opening fence is ` ```yaml ` (trailing spaces allowed). The block ends
+  at the next ` ``` ` line. A block that never closes names the opening
+  fence line.
+- The block holds a mapping with these fields, and no others:
+  - `state` (required): one of `open`, `in_progress`,
+    `awaiting_verification`, `done`, spelled out. Anything else names the
+    fence line.
+  - `description` (optional): prose. A literal block (`|`) keeps multi-line
+    prose readable. It becomes the ticket description.
+  - `criteria` (required): a non-empty list of non-empty criterion lines.
+    A missing or empty list names the fence line.
+- An unknown field names the fence line and lists the offending field.
+- A block that is not valid YAML, or not a mapping, names the fence line.
+- Any other line — prose sitting outside a section, between tickets — is a
+  parse error naming the line. Keep prose in the preamble or under a `## `
+  heading.
+- Document order decides the ticket order across the whole project.
 
-Example with a continuation line and the marker:
+### Legacy plans
 
-    - [ ] **Ticket U2d: Global cross-workspace tickets entry.** The sidebar entry
-      opens a board of every live session's tickets.
+A pre-literacy plan — `- [ ] **Ticket ID: Title.**` lines with an
+`**Evaluate:**` marker — still imports through the legacy path, exactly as it
+did before. The renderer never emits that shape again. To convert: import the
+legacy plan, export it, and re-import the export.
 
-      **Evaluate:**
-
-      - the entry lists tickets from two workspaces
-      - the entry badges each ticket by workspace, and the badge survives a
-        page reload
 ## Verify before you import
 
-Run the bundled checker. It mirrors `src/plan/plan.ts` and reports the same
-errors without the aidos build.
+Run the bundled checker. It runs `src/plan/plan.ts` itself when the aidos
+checkout is above it, and otherwise mirrors both grammars. It reports the
+same errors without the aidos build.
 
     node skills/aidos-plan/verify-plan.mjs PLAN.md
 
-Exit code 0 means the document parses. Exit code 1 lists the bad lines.
+Exit code 0 means the document parses. Exit code 1 names the bad line.
 
 ## Start from the template
 
-Copy `PLAN_IMPORT_TEMPLATE.md` and fill it in. It shows the format with example
-tickets that all carry the `**Evaluate:**` marker.
+Copy `PLAN_IMPORT_TEMPLATE.md` and fill it in. It is a literate plan with
+example tickets in each claimed state.
