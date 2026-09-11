@@ -5,10 +5,16 @@
  * THIS FILE (attach is agent-only; detach/migrate/delete are the
  * user-authored remotes), and the approval cards resolve through resolveApproval.
  *
+ * #184: the expanded tag shows a per-ticket Detach button beside every
+ * ticket carrying it — removing ONE tag from ONE ticket through the existing
+ * `userDetachTags` host Remote, called as-is. The modal commits no tag
+ * event itself; removal travels only through the human remotes.
+ *
  * The panel lists every tag in the workspace with its count (scrollable, so
  * a long list stays readable); clicking a tag expands it in place: the
- * tickets carrying it, the migrate and delete actions with their approvals,
- * and any pending agent proposals for the tag as approve/reject cards.
+ * tickets carrying it (each with its own detach), the migrate and delete
+ * actions with their approvals, and any pending agent proposals for the tag
+ * as approve/reject cards.
  */
 
 import react from "react";
@@ -48,7 +54,7 @@ export interface TagRowLike {
 export interface TagProposalLike {
   id: string;
   kind: string;
-  payload: { tag?: unknown; to?: unknown; reason?: unknown };
+  payload: { tag?: unknown; to?: unknown; ticketId?: unknown; reason?: unknown };
   prompt?: unknown;
 }
 
@@ -101,7 +107,8 @@ export function filterTagRows(rows: readonly TagRowLike[], query: string): TagRo
 
 /**
  * The pending agent proposals ABOUT one tag, oldest first. A proposal whose
- * payload names a different tag is not this tag's business.
+ * payload names a different tag is not this tag's business. #184: detach
+ * proposals name a tag AND a ticket, so they belong to the tag's card too.
  */
 export function proposalsForTag(
   approvals: readonly TagProposalLike[],
@@ -109,18 +116,27 @@ export function proposalsForTag(
 ): TagProposalLike[] {
   return approvals.filter(
     (approval) =>
-      (approval.kind === "tag-delete" || approval.kind === "tag-migrate") &&
+      (approval.kind === "tag-delete" ||
+        approval.kind === "tag-migrate" ||
+        approval.kind === "tag-detach") &&
       approval.payload.tag === tag,
   );
 }
 
 /**
- * Render one proposal's action line: "delete" or "A → B", from the payload
- * rather than the prompt (the prompt is prose; the payload is the contract).
+ * Render one proposal's action line: "delete", "A → B", or
+ * "detach A from #N" — from the payload rather than the prompt (the prompt
+ * is prose; the payload is the contract).
  */
 export function proposalAction(proposal: TagProposalLike): string {
   if (proposal.kind === "tag-migrate" && typeof proposal.payload.to === "string") {
     return `${String(proposal.payload.tag)} → ${proposal.payload.to}`;
+  }
+  if (proposal.kind === "tag-detach") {
+    const ticketId = proposal.payload.ticketId;
+    return typeof ticketId === "number" || typeof ticketId === "string"
+      ? `detach ${String(proposal.payload.tag)} from #${ticketId}`
+      : `detach ${String(proposal.payload.tag)}`;
   }
   return `delete ${String(proposal.payload.tag)}`;
 }
@@ -158,7 +174,7 @@ export function TagsModal(props: TagsModalProps) {
             list.filter((entry): entry is TagProposalLike => {
               if (entry === null || typeof entry !== "object") return false;
               const kind = (entry as { kind?: unknown }).kind;
-              return kind === "tag-delete" || kind === "tag-migrate";
+              return kind === "tag-delete" || kind === "tag-migrate" || kind === "tag-detach";
             }),
           );
         })
@@ -257,19 +273,37 @@ export function TagsModal(props: TagsModalProps) {
               {selectedRow.tag} — {selectedRow.count} ticket(s)
             </h4>
             {selectedRow.tickets.map((ticket) => (
-              <TicketStrip
-                key={ticket.boardKey}
-                ticket={{
-                  id: ticket.id,
-                  title: ticket.title,
-                  state: ticket.state as TicketView["state"],
-                  slug: ticket.slug,
-                  workspaceKey: ticket.workspaceKey,
-                }}
-                onOpen={() => {
-                  props.onOpen(ticket.boardKey as BoardKey);
-                }}
-              />
+              <div key={ticket.boardKey} className="aidos-tags-ticket">
+                <TicketStrip
+                  ticket={{
+                    id: ticket.id,
+                    title: ticket.title,
+                    state: ticket.state as TicketView["state"],
+                    slug: ticket.slug,
+                    workspaceKey: ticket.workspaceKey,
+                  }}
+                  onOpen={() => {
+                    props.onOpen(ticket.boardKey as BoardKey);
+                  }}
+                />
+                <span className="aidos-tags-actions">
+                  <button
+                    className="aidos-btn"
+                    disabled={working !== null}
+                    onClick={() => {
+                      void act(
+                        "userDetachTags",
+                        { ticketId: ticket.id, tags: [selectedRow.tag] },
+                        `Detached ${selectedRow.tag} from #${ticket.id}`,
+                      );
+                    }}
+                    title={`Remove ${selectedRow.tag} from this ticket only`}
+                    data-dsh-tip=""
+                  >
+                    Detach
+                  </button>
+                </span>
+              </div>
             ))}
             <div className="aidos-tags-actions">
               <div className="aidos-search-box">
