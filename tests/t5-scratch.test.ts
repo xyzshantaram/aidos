@@ -157,6 +157,45 @@ describe("the scratch tools", () => {
     expect((tail.value as { content: string }).content).toBe("four\nfive");
   });
 
+  it("scratch_read forwards offset/limit to a backend that pages itself", async () => {
+    /*
+     * The other half of the proxy contract: when the resolved `read` tool
+     * declares offset/limit, the wrapper forwards them and passes the
+     * backend-paged text through untouched (no double paging).
+     */
+    const harness = scratchHarness();
+    const seen: Record<string, unknown>[] = [];
+    harness.ctx.tools.register(
+      defineTool({
+        name: "read",
+        description: "a test read backend that pages itself",
+        parameters: {
+          file_path: { type: "string", required: true },
+          offset: { type: "integer" },
+          limit: { type: "integer" },
+        } as never,
+        output: {
+          schema: { type: "object", additionalProperties: true },
+          render: (_args, value) => [{ type: "text", text: (value as { text: string }).text }],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          seen.push(args);
+          const lines = ["one", "two", "three", "four", "five"];
+          const start = args.offset === undefined ? 0 : (args.offset as number) - 1;
+          const end = args.limit === undefined ? lines.length : start + (args.limit as number);
+          return { text: lines.slice(start, end).join("\n") };
+        },
+      }) as never,
+    );
+    const out = await harness.runTool("scratch_read", { path: "any.md", offset: 2, limit: 2 });
+    expect(out.isError, JSON.stringify(out.error)).toBe(false);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].offset).toBe(2);
+    expect(seen[0].limit).toBe(2);
+    expect(typeof seen[0].file_path).toBe("string");
+    expect((out.value as { content: string }).content).toBe("two\nthree");
+  });
+
   it("scratch_edit still edits when NO edit tool is in scope", async () => {
     /*
      * This asserted the opposite -- that a missing backend refuses -- which
