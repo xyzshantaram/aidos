@@ -3,33 +3,32 @@
  * gate fraction, the confidence, evidence tags, and dependency chips.
  * The active marker names the in_progress ticket with the latest update.
  *
- * #194: the tile also carries the ticket's human-action buttons, derived
- * from the SAME `actionsFor` availability the detail panel's action bar
- * uses -- a button is shown if and only if the action is currently legal,
- * with no agent nomination involved. The buttons ARE the shared `ActionBar`
- * (grey with tooltip, exactly as the panel shows them: no third treatment),
- * and every click re-checks eligibility against the board BEFORE any flow
- * opens, so a stale card refuses with the reason writing nothing (the #177
- * lesson). The flows are the SAME components the detail panel opens --
- * `SignoffDialog`, `VerifyModal`, `SendBackModal`, `MarkDoneModal`,
- * `AllowlistEditor` -- never a second implementation of a write (#170);
- * submit for review calls the panel's shared `submitTicketForReview`.
+ * #194, REVERSED (owner, 2026-09-12: "Ticket actions bar is appearing in
+ * local view - remove it"): the tile carries NO action chrome. Not fewer
+ * buttons -- none. The first cut mounted the shared `ActionBar` here, which
+ * imported the DETAIL PANEL's visibility rule (always visible, every action
+ * present, unavailable ones greyed with unlock tooltips) onto the tile grid:
+ * six mostly-greyed buttons on every tile of a 206-ticket board. The settled
+ * rule is that always-visible-greyed is a PANEL affordance -- there you are
+ * deciding about one ticket and the greyed button teaches you why it is
+ * locked. The grid is a SCANNING surface; its tiles render chips and text
+ * only. A ticket's human actions live in the detail panel's action bar
+ * (`action-bar.tsx`), which keeps the #62 treatment and the #177 click-time
+ * re-check; the tile implements no flow of its own and opens no dialog.
  *
- * The root used to be a <button>. Action buttons cannot live inside a
- * button (nested interactive content: the inner click also selects the
- * tile), so the root is a div wearing the button's role, focusability, and
- * keyboard (Enter/Space select). The action row and every dialog sit in a
- * wrapper that stops propagation, so acting never selects.
+ * The tile root is a <button> again. It had been a div wearing the button
+ * role only because action buttons cannot nest inside a button; with the
+ * action row gone that exception is dead, and the native element restores
+ * the semantics (Enter/Space select for free, no key handler to maintain).
  *
- * #199: a poll tick used to re-render EVERY tile. The exported TicketTile
- * is now a thin wrapper that (a) always calls the hooks, in a stable
- * order, and (b) returns a CACHED element when nothing that shapes the
- * markup changed. A cached return is what React's bail-out needs (same
- * element reference -> the subtree is not reconciled), and keeping the
- * hooks in the wrapper keeps hook order legal on every render. The cache
- * is keyed by ticket (session-stamped id) and validated against the props
- * that reach the markup; onSelect is deliberately excluded -- see the
- * note above tilePropsEqual. Live updates propagate because any tick
+ * #199: the exported TicketTile is a thin wrapper that (a) always calls the
+ * hooks, in a stable order, and (b) returns a CACHED element when nothing
+ * that shapes the markup changed. A cached return is what React's bail-out
+ * needs (same element reference -> the subtree is not reconciled), and
+ * keeping the hooks in the wrapper keeps hook order legal on every render.
+ * The cache is keyed by ticket (session-stamped id) and validated against
+ * the props that reach the markup; onSelect is deliberately excluded -- see
+ * the note above tilePropsEqual. Live updates propagate because any tick
  * carrying new data for a row hands the tile a NEW ticket object, which
  * fails the identity check and rebuilds.
  */
@@ -51,17 +50,6 @@ import {
 } from "./board-logic";
 import { EvidenceTags } from "./evidence-tags";
 import { AlertCircleIcon, CompassIcon, ForkIcon, KeyholeIcon } from "./icons";
-import { ActionBar } from "./action-bar";
-import { checkBoardActionAvailable } from "./inline-actions";
-import { submitTicketForReview } from "./detail-panel";
-import type { ActionId } from "./action-visibility";
-import { SignoffDialog } from "./signoff-dialog";
-import { VerifyModal } from "./evidence-attach";
-import { SendBackModal } from "./send-back-modal";
-import { MarkDoneModal } from "./mark-done-modal";
-import { AllowlistEditor } from "./allowlist-editor";
-import { AidosRemoteError } from "./remote";
-import { showToast } from "./toast-store";
 
 import type { TicketView } from "../kernel/projections";
 import type { EvidenceRow } from "../kernel/types";
@@ -115,83 +103,26 @@ export interface TicketTileProps {
    * row deliberately is not.
    */
   awaitingApproval?: boolean;
-  /**
-   * #194: the board write identity, as the detail panel receives it: the
-   * session the guard READ and the dialogs' writes route through, and the
-   * ticket's board key. Explicit props win; both fall back to the row (see
-   * below), so the board -- which cannot pass new props without touching
-   * ticket-view.tsx -- gets working buttons with no caller change, and
-   * tests address the tile exactly.
-   */
-  agentId?: string;
-  ticketIdKey?: string;
   onSelect: () => void;
 }
 
 export function TicketTile(props: TicketTileProps) {
   /*
-   * #199: the dialog state is the ONLY hookful part of the tile, and it
-   * lives here in the wrapper so it is called on EVERY render -- including
-   * the renders that then return a cached element. A cache hit skips the
-   * body below entirely; skipping hook calls would be the illegal kind of
-   * conditional hook order, so the hooks must not live in the body.
-   *
-   * The flows' open state lives in plain useState, deliberately NOT in the
-   * store-backed detail-modal store: that store is keyed by ticket, so a
-   * tile copy would share open-state with the detail panel's copy and open
-   * the SAME dialog twice. A board refresh keeps these (same-key
-   * re-render); only unmounting the tile closes them.
+   * #199: the cache is the reason this wrapper exists. The hooks it used to
+   * carry (the #194 dialog state) left with the action row; the wrapper and
+   * its stable call pattern stay, so the memoisation contract -- always call
+   * the same hooks in the same order, return a cached element on a hit --
+   * holds without a conditional-hook hazard ever being one edit away.
    */
-  const [signoffOpen, setSignoffOpen] = react.useState(false);
-  const [verifyOpen, setVerifyOpen] = react.useState(false);
-  const [sendBackOpen, setSendBackOpen] = react.useState(false);
-  const [markDoneOpen, setMarkDoneOpen] = react.useState(false);
-  const [allowlistOpen, setAllowlistOpen] = react.useState(false);
-  const [submitting, setSubmitting] = react.useState(false);
-  const controls: TileControls = {
-    signoffOpen,
-    setSignoffOpen,
-    verifyOpen,
-    setVerifyOpen,
-    sendBackOpen,
-    setSendBackOpen,
-    markDoneOpen,
-    setMarkDoneOpen,
-    allowlistOpen,
-    setAllowlistOpen,
-    submitting,
-    setSubmitting,
-  };
-
   const key = tileCacheKey(props.ticket);
   const hit = tileMarkupCache.get(key);
-  if (
-    hit !== undefined &&
-    tilePropsEqual(hit.props, props) &&
-    tileControlsEqual(hit.controls, controls)
-  ) {
+  if (hit !== undefined && tilePropsEqual(hit.props, props)) {
     return hit.element;
   }
-  const element = renderTicketTile(props, controls);
+  const element = renderTicketTile(props);
   if (tileMarkupCache.size >= TILE_CACHE_LIMIT) tileMarkupCache.clear();
-  tileMarkupCache.set(key, { props, controls, element });
+  tileMarkupCache.set(key, { props, element });
   return element;
-}
-
-/** The dialog open-state the wrapper owns and the body reads. */
-interface TileControls {
-  signoffOpen: boolean;
-  setSignoffOpen: (open: boolean) => void;
-  verifyOpen: boolean;
-  setVerifyOpen: (open: boolean) => void;
-  sendBackOpen: boolean;
-  setSendBackOpen: (open: boolean) => void;
-  markDoneOpen: boolean;
-  setMarkDoneOpen: (open: boolean) => void;
-  allowlistOpen: boolean;
-  setAllowlistOpen: (open: boolean) => void;
-  submitting: boolean;
-  setSubmitting: (submitting: boolean) => void;
 }
 
 /**
@@ -203,7 +134,7 @@ interface TileControls {
 const TILE_CACHE_LIMIT = 1024;
 const tileMarkupCache = new Map<
   string,
-  { props: TicketTileProps; controls: TileControls; element: react.ReactElement }
+  { props: TicketTileProps; element: react.ReactElement }
 >();
 
 /** The cache key: one ticket in one owning session. */
@@ -236,26 +167,11 @@ function tilePropsEqual(a: TicketTileProps, b: TicketTileProps): boolean {
     a.selected === b.selected &&
     (a.active ?? false) === (b.active ?? false) &&
     (a.awaitingApproval ?? false) === (b.awaitingApproval ?? false) &&
-    a.ownWorkspaceKey === b.ownWorkspaceKey &&
-    (a.agentId ?? null) === (b.agentId ?? null) &&
-    (a.ticketIdKey ?? null) === (b.ticketIdKey ?? null)
+    a.ownWorkspaceKey === b.ownWorkspaceKey
   );
 }
 
-/** The state flags shape the markup; the setters do not (React's useState
- *  setters are stable, so the live component's are already identical). */
-function tileControlsEqual(a: TileControls, b: TileControls): boolean {
-  return (
-    a.signoffOpen === b.signoffOpen &&
-    a.verifyOpen === b.verifyOpen &&
-    a.sendBackOpen === b.sendBackOpen &&
-    a.markDoneOpen === b.markDoneOpen &&
-    a.allowlistOpen === b.allowlistOpen &&
-    a.submitting === b.submitting
-  );
-}
-
-function renderTicketTile(props: TicketTileProps, controls: TileControls) {
+function renderTicketTile(props: TicketTileProps) {
   const ticket = props.ticket;
   /*
    * #83: other session copies of this same ticket, which the workspace merge
@@ -289,104 +205,8 @@ function renderTicketTile(props: TicketTileProps, controls: TileControls) {
     hasCriteria(ticket),
   );
 
-  /*
-   * #194: who the tile acts AS, and ON.
-   *
-   * The tile cannot know the VIEWING session -- its caller passes no
-   * session, and no store names a current one -- so it addresses its ticket
-   * in the OWNER's space: the board stamps every row (own and foreign) with
-   * the owning session in `sourceSessionId`, and the plain id names the
-   * ticket there. For own rows that session IS the viewing session, so the
-   * tile's address is exactly the detail panel's; for foreign rows the
-   * guard READ and the dialogs' writes route through the owner, landing on
-   * the same ticket the composite key would name.
-   *
-   * When neither the prop nor the stamp names a session, the buttons still
-   * render (their grey state needs no session) but every click refuses
-   * through the guard -- a click that cannot check must never open a flow
-   * that would write before discovering it is stale.
-   */
-  const stampedSession = (ticket as { sourceSessionId?: unknown }).sourceSessionId;
-  const agentId =
-    props.agentId ?? (typeof stampedSession === "string" ? stampedSession : null);
-  const ticketIdKey = props.ticketIdKey ?? String(ticket.id);
-
-  /*
-   * #199: the hooks moved UP into TicketTile (the wrapper) so a cache-hit
-   * render can skip this body without skipping hook calls. The flags and
-   * setters arrive through `controls`.
-   */
-  const {
-    signoffOpen,
-    setSignoffOpen,
-    verifyOpen,
-    setVerifyOpen,
-    sendBackOpen,
-    setSendBackOpen,
-    markDoneOpen,
-    setMarkDoneOpen,
-    allowlistOpen,
-    setAllowlistOpen,
-    submitting,
-    setSubmitting,
-  } = controls;
-
-  /*
-   * #194: the click-time re-check. The bar renders from render-time
-   * descriptors; the grid can sit unrefreshed while the ticket moves, so
-   * the click re-derives from the board and refuses -- writing nothing --
-   * when the action no longer applies.
-   */
-  function checkAction(id: ActionId): Promise<string | null> {
-    if (agentId === null) {
-      return Promise.resolve(
-        "the board session for this ticket is unknown, so the action cannot be checked",
-      );
-    }
-    return checkBoardActionAvailable(agentId, ticketIdKey, id);
-  }
-
-  function showSubmitError(error: unknown) {
-    if (error instanceof AidosRemoteError) {
-      showToast(error.message, "refusal");
-    } else {
-      showToast(String(error), "refusal");
-    }
-  }
-
-  function openSubmitForReview() {
-    if (agentId === null || submitting) return;
-    const agent = agentId;
-    const key = ticketIdKey;
-    setSubmitting(true);
-    void submitTicketForReview(agent, key)
-      .catch((error: unknown) => {
-        showSubmitError(error);
-      })
-      .finally(() => {
-        setSubmitting(false);
-      });
-  }
-
-  function onTileKeyDown(event: react.KeyboardEvent) {
-    // Keyboard parity with the old <button> root, without hijacking the
-    // action buttons' own keys: only a keypress ON the tile selects it.
-    if (event.target !== event.currentTarget) return;
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      props.onSelect();
-    }
-  }
-
   return (
-
-    <div
-      className={className}
-      onClick={props.onSelect}
-      role="button"
-      tabIndex={0}
-      onKeyDown={onTileKeyDown}
-    >
+    <button className={className} onClick={props.onSelect}>
       <div className="aidos-tile-meta">
         <span
           className="aidos-chip aidos-chip-id"
@@ -522,111 +342,6 @@ function renderTicketTile(props: TicketTileProps, controls: TileControls) {
           <span className="aidos-chip-value">{ringPercent(ticket.confidenceScore) + "%"}</span>
         </span>
       </div>
-      {/*
-        * #194: the tile's action row. The SHARED ActionBar, so the card and
-        * the panel can never disagree about what is available or how an
-        * unavailable action reads (grey with the unlock reason as tooltip).
-        * Clicks stop here: acting must never select the tile underneath.
-        */}
-      <div
-        className="aidos-tile-actions"
-        onClick={(event) => {
-          event.stopPropagation();
-        }}
-      >
-        <ActionBar
-          ticket={ticket}
-          evidence={props.evidence}
-          checkAction={checkAction}
-          onOpenSignoff={() => {
-            if (agentId === null) return;
-            setSignoffOpen(true);
-          }}
-          onOpenVerify={() => {
-            if (agentId === null) return;
-            setVerifyOpen(true);
-          }}
-          onOpenSendBack={() => {
-            if (agentId === null) return;
-            setSendBackOpen(true);
-          }}
-          onOpenMarkDone={() => {
-            if (agentId === null) return;
-            setMarkDoneOpen(true);
-          }}
-          onOpenSubmitForReview={openSubmitForReview}
-          onOpenAllowlist={() => {
-            if (agentId === null) return;
-            setAllowlistOpen(true);
-          }}
-        />
-        {signoffOpen && agentId !== null ? (
-          <SignoffDialog
-            open
-            ticketId={ticketIdKey}
-            ticketTitle={ticket.title}
-            agentId={agentId}
-            onClose={() => {
-              setSignoffOpen(false);
-            }}
-            onSignedOff={() => {
-              setSignoffOpen(false);
-            }}
-          />
-        ) : null}
-        {verifyOpen && agentId !== null ? (
-          <VerifyModal
-            ticketId={ticketIdKey}
-            agentId={agentId}
-            onClose={() => {
-              setVerifyOpen(false);
-            }}
-          />
-        ) : null}
-        {sendBackOpen && agentId !== null ? (
-          <SendBackModal
-            open
-            ticketId={ticketIdKey}
-            agentId={agentId}
-            onClose={() => {
-              setSendBackOpen(false);
-            }}
-            onSentBack={() => {
-              setSendBackOpen(false);
-            }}
-          />
-        ) : null}
-        {markDoneOpen && agentId !== null ? (
-          <MarkDoneModal
-            open
-            ticketId={ticketIdKey}
-            ticket={ticket}
-            evidence={props.evidence}
-            agentId={agentId}
-            onClose={() => {
-              setMarkDoneOpen(false);
-            }}
-            onMarkedDone={() => {
-              setMarkDoneOpen(false);
-            }}
-          />
-        ) : null}
-        {allowlistOpen && agentId !== null ? (
-          <AllowlistEditor
-            open
-            ticketId={ticket.id}
-            ticketIdKey={ticketIdKey}
-            currentAllowlist={ticket.allowlist ?? []}
-            agentId={agentId}
-            onClose={() => {
-              setAllowlistOpen(false);
-            }}
-            onSaved={() => {
-              // The projection frame re-renders the new value automatically.
-            }}
-          />
-        ) : null}
-      </div>
-    </div>
+    </button>
   );
 }

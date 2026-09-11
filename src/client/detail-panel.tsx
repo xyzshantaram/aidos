@@ -87,8 +87,13 @@ export interface DetailPanelProps {
   onViewEvidence?: (row: EvidenceRowLike) => void;
   /** Always-present action descriptors with unlock reasons (#62). */
   actionHints?: Record<string, string>;
-  /** Opens the retire dialog (#108); the dialog state lives in DetailView. */
-  onOpenRetire?: () => void;
+  /*
+   * #194 reversal: there is NO onOpenRetire prop here any more. Retire
+   * moved off the flat actions row into the overflow kebab at the bar's
+   * right-hand end, so DetailView wires it straight into the ActionBar it
+   * already builds (`onOpenRetire` on ActionBarProps); the panel body no
+   * longer renders its own Retire button beside {props.actions}.
+   */
   /** Every board-known ticket view keyed for dependency cards. */
   ticketsByKey?: Map<string, TicketView>;
   /** Jump the board's selection to another ticket (dependency cards). */
@@ -949,22 +954,11 @@ export function DetailPanel(props: DetailPanelBodyProps) {
       />
       {props.actions}
       {/*
-        * #108: the retire entry, beside the lifecycle actions rather than
-        * inside them. Retirement is ORTHOGONAL to the state axis — it is
-        * available in every state, including done — so it is not an
-        * ActionDescriptor and greying rules do not apply to it. The dialog
-        * it opens is the ONE retire surface on the ticket.
+        * #194 reversal: the flat "Retire…" button that used to sit here is
+        * gone. Retire now lives in the ActionBar's overflow kebab at this
+        * row's right-hand end; DetailView passes `onOpenRetire` to the bar
+        * it builds, and the RetireDialog state is unchanged below.
         */}
-      {props.onOpenRetire !== undefined ? (
-        <button
-          className="aidos-btn"
-          title="Hide this ticket everywhere. Reversible from the Retired panel."
-          data-dsh-tip=""
-          onClick={props.onOpenRetire}
-        >
-          {"Retire\u2026"}
-        </button>
-      ) : null}
       <DescriptionPanel
         ticket={ticket}
         ticketIdKey={props.ticketIdKey}
@@ -1141,11 +1135,15 @@ export function DetailView(props: DetailViewProps) {
             onOpenAllowlist={() => {
               setAllowlistOpen(true);
             }}
+            /*
+             * #194 reversal: retire rides the bar's overflow kebab at the
+             * right-hand end of this row, no longer a flat sibling button.
+             */
+            onOpenRetire={() => {
+              setRetireOpen(true);
+            }}
           />
         }
-        onOpenRetire={() => {
-          setRetireOpen(true);
-        }}
       />
       <EvidenceViewer
         row={viewingEvidence}
