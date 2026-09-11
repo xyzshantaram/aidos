@@ -99,8 +99,14 @@ describe("p14 frontmatter", () => {
     const doc = parsePlan(FRONTMATTER_PLAN);
     expect(doc.frontmatter).toBe(FRONTMATTER_BLOCK);
 
+    // #153: the renderer now emits the literate format, so the round trip
+    // is not byte-identical for a legacy document — the frontmatter block
+    // is, and the rendered document re-parses to the same frontmatter data.
     const rendered = renderPlan(doc);
-    expect(rendered).toBe(FRONTMATTER_PLAN);
+    expect(rendered.startsWith(FRONTMATTER_BLOCK)).toBe(true);
+    expect(frontmatterDataOf(parsePlan(rendered))).toEqual(
+      frontmatterDataOf(doc),
+    );
   });
 
   it("a frontmatter that is not valid YAML is refused with a message that names the frontmatter", () => {

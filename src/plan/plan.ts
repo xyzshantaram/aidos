@@ -1,7 +1,17 @@
 /**
- * The plan document format. A verbatim port of prototype/aidos_proto/plan.py.
- * Pure functions. PLAN.md / SPEC.md section 12 is the contract.
- * If you change this parser, also update skills/aidos-plan/verify-plan.mjs, which mirrors it (and vice versa): keep the two in sync. */
+ * The plan document format: literate markdown with fenced YAML blocks,
+ * the same family as the checklist (#134) and the review file (#151).
+ * #153. Each ticket is a `## Ticket <id> — <title>` heading followed by one
+ * ```yaml block carrying the ticket's structured fields; the prose around
+ * the blocks is frontmatter, preamble, and context sections.
+ *
+ * The fenced-YAML-block handling itself is shared: src/plan/yaml-blocks.ts
+ * is the family's one reader for a fenced block, and this parser consumes
+ * it rather than re-implementing fence scanning or YAML parsing.
+ *
+ * Pure functions. If you change this parser, also update
+ * skills/aidos-plan/verify-plan.mjs, which mirrors it (and vice versa):
+ * keep the two in sync. */
 
 import matter from "gray-matter";
 import YAML from "yaml";
@@ -9,7 +19,21 @@ import YAML from "yaml";
 import type { ContextSection, TicketState } from "../kernel/types";
 import { PlanParseError } from "../kernel/types";
 
-/** The mark that each line carries, and the state the mark claims. */
+import { isYamlFence, parseYamlBlock, takeYamlBlock } from "./yaml-blocks";
+
+/** The states a ticket may claim, and their literate spellings. */
+export const TICKET_STATES: readonly TicketState[] = [
+  "open",
+  "in_progress",
+  "awaiting_verification",
+  "done",
+];
+
+/**
+ * The mark each legacy line carries, and the state the mark claims. The
+ * literate format spells the state out in the ticket's YAML block; the marks
+ * remain the migration path's input and the legacy parser's contract.
+ */
 export const MARK_STATES: Record<string, TicketState> = {
   " ": "open",
   "~": "in_progress",
@@ -44,19 +68,20 @@ const PHASE_STATE_SUFFIX = / — `[^`]+`$/;
 // The prefix of a continuation line.
 const CONTINUATION_PREFIX = "  ";
 
-// The marker that separates the body of a ticket from its criteria.
+// The marker that separates the body of a legacy ticket from its criteria.
 const CRITERIA_MARKER = "**Evaluate:**";
 // M6 fix: title may contain dots; the split between title and body is the
 // last ".\*\*" before body, not the first dot. Capture title greedily up to
 // the final ".\*\*" on the line; verify by requiring the trailing ".\*\*".
 const TICKET_LINE = /^- \[([ ~?x])\] \*\*Ticket ([^:]+): (.+)\.\*\*\s?(.*)$/;
 
-/**
- * #5/P11: deleted from the format. The document shape is flat — tickets in
- * document order, no phase grouping, no `## Phase N` headings. (The type is
- * kept as a deprecated alias below only so older imports keep compiling
- * until their callers move; the parser never produces one.)
- */
+// The heading that opens one literate ticket: `## Ticket <id> — <title>`.
+const LITERATE_TICKET_HEADING = /^## Ticket (.+?) — (.+)$/;
+
+// The fields a literate ticket's yaml block may carry. Anything else is a
+// refusal that names the field, not a silent ignore.
+const TICKET_FIELDS: readonly string[] = ["state", "description", "criteria"];
+
 /** @deprecated the format is flat; PlanPhase is no longer part of a document. */
 export interface PlanPhase {
   number: number;
@@ -94,15 +119,50 @@ interface RawTicket {
   phase: number;
 }
 
-/** Read one plan document. Throws PlanParseError on the first bad line. */
+/** Read one plan document. Throws PlanParseError on the first bad line.
+ *
+ * #153 migration: a document in the pre-literacy format — `- [x] **Ticket
+ * ID: Title.**` lines with an `**Evaluate:**` marker — still parses, through
+ * the legacy path below, so yesterday's plans import instead of silently
+ * failing. The literate format is the primary grammar and the only one the
+ * renderer emits; an import of a legacy document followed by an export is
+ * the stated conversion procedure, and both halves are tested.
+ */
 export function parsePlan(text: string): PlanDocument {
   const lines = text.split("\n");
+  if (_isLiterate(lines)) {
+    return _parseLiterate(lines);
+  }
+  return _parseLegacy(lines);
+}
+
+/**
+ * Say whether a document is in the literate format: it holds a
+ * `## Ticket <id> — <title>` heading and no legacy ticket line. A legacy
+ * line wins the sniff, so an old document is never half-read by the new
+ * parser; a document with neither shape falls to the legacy parser, whose
+ * refusals name the first bad line.
+ */
+function _isLiterate(lines: readonly string[]): boolean {
+  let legacy = false;
+  let literate = false;
+  for (const line of lines) {
+    if (TICKET_LINE.test(line)) {
+      legacy = true;
+    }
+    if (LITERATE_TICKET_HEADING.test(line)) {
+      literate = true;
+    }
+  }
+  return literate && !legacy;
+}
+
+/** Read one literate plan document. Throws PlanParseError on the first bad line. */
+function _parseLiterate(lines: readonly string[]): PlanDocument {
   const frontmatter = _takeFrontmatter(lines);
-  const preamble = _takePreamble(lines, frontmatter.index);
+  const preamble = _takePreambleLiterate(lines, frontmatter.index);
   const contextSections: ContextSection[] = [];
-  const rawTickets: RawTicket[] = [];
-  // #5/P11: flat format. Every ticket takes the kernel's default phase (1);
-  // there is no current-phase state to carry through the document.
+  const tickets: PlanTicket[] = [];
   let index = preamble.index;
   while (index < lines.length) {
     const line = lines[index];
@@ -111,51 +171,148 @@ export function parsePlan(text: string): PlanDocument {
       continue;
     }
     if (_isHeading(line)) {
-      // #5/P11: EVERY heading is a context section now. A legacy
-      // `## Phase N: ...` heading keeps its text as the section heading, so a
-      // pre-flat document imports with its headings visible instead of
-      // vanishing, and no phase/set event ever fires from a document.
+      const ticketHeading = LITERATE_TICKET_HEADING.exec(line);
+      if (ticketHeading) {
+        tickets.push(
+          _takeLiterateTicket(lines, index, ticketHeading, tickets.length + 1),
+        );
+        index = _endOfLiterateTicket(lines, index);
+        continue;
+      }
       const section = _takeContextSection(lines, index, contextSections.length);
       contextSections.push(section.section);
       index = section.index;
       continue;
     }
-    if (line.startsWith(CONTINUATION_PREFIX)) {
-      if (rawTickets.length === 0) {
-        throw new PlanParseError(
-          index + 1,
-          `line ${index + 1} continues a ticket, but the document holds no ticket yet`,
-        );
-      }
-      rawTickets[rawTickets.length - 1].lines.push(line.trim());
-      index += 1;
-      continue;
-    }
-    const ticketMatch = TICKET_LINE.exec(line);
-    if (!ticketMatch) {
-      throw new PlanParseError(
-        index + 1,
-        `line ${index + 1} is neither a ticket line nor a continuation line`,
-      );
-    }
-    rawTickets.push(
-      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, 1),
+    throw new PlanParseError(
+      index + 1,
+      `line ${index + 1} is neither a ticket heading nor a context section heading`,
     );
-    index += 1;
   }
   return {
     frontmatter: frontmatter.text,
     frontmatterData: _parseFrontmatterData(frontmatter.text),
     preamble: preamble.text,
     contextSections,
-    tickets: rawTickets.map((raw) => _finishTicket(raw)),
+    tickets,
   };
 }
 
 /**
- * Write one plan document (#5/P11, flat shape): frontmatter, preamble,
- * context sections, then every ticket in document order. No `## Phase N`
- * heading is ever emitted — the exported state mark is the only state text.
+ * Read one literate ticket: the heading, then, after blank lines, one fenced
+ * yaml block. The block must carry `state`, may carry `description`, and must
+ * carry `criteria`. Every refusal names the offending line.
+ */
+function _takeLiterateTicket(
+  lines: readonly string[],
+  headingIndex: number,
+  heading: RegExpExecArray,
+  order: number,
+): PlanTicket {
+  const id = heading[1].trim();
+  const title = heading[2].trim();
+  let index = headingIndex + 1;
+  while (index < lines.length && lines[index].trim() === "") {
+    index += 1;
+  }
+  if (index >= lines.length || !isYamlFence(lines[index])) {
+    throw new PlanParseError(
+      headingIndex + 1,
+      `line ${headingIndex + 1} opens ticket ${id} but no \`\`\`yaml block follows it`,
+    );
+  }
+  const block = takeYamlBlock(lines, index);
+  const data = _ticketDataOf(block.raw, index);
+  const unknown = Object.keys(data).filter(
+    (key) => !TICKET_FIELDS.includes(key),
+  );
+  if (unknown.length > 0) {
+    throw new PlanParseError(
+      index + 1,
+      `line ${index + 1} holds ticket ${id} with unknown field(s) ${unknown
+        .map((key) => `\`${key}\``)
+        .join(", ")}`,
+    );
+  }
+  const state = data.state;
+  if (typeof state !== "string" || !TICKET_STATES.includes(state as TicketState)) {
+    throw new PlanParseError(
+      index + 1,
+      `line ${index + 1} holds ticket ${id} with a \`state\` that is not one of ${TICKET_STATES.join(", ")}`,
+    );
+  }
+  const description = data.description ?? "";
+  if (typeof description !== "string") {
+    throw new PlanParseError(
+      index + 1,
+      `line ${index + 1} holds ticket ${id} with a \`description\` that is not text`,
+    );
+  }
+  const criteria = data.criteria;
+  if (
+    !Array.isArray(criteria) ||
+    criteria.length === 0 ||
+    criteria.some((item) => typeof item !== "string" || item.trim() === "")
+  ) {
+    throw new PlanParseError(
+      index + 1,
+      `line ${index + 1} holds ticket ${id} with \`criteria\` that is not a non-empty list of criteria text`,
+    );
+  }
+  return {
+    id,
+    title,
+    body: description.trim(),
+    criteria: (criteria as string[]).map((item) => item.trim()).join("\n"),
+    claimedState: state as TicketState,
+    order,
+    phase: 1,
+  };
+}
+
+/** The index of the first line after one literate ticket's yaml block. */
+function _endOfLiterateTicket(
+  lines: readonly string[],
+  headingIndex: number,
+): number {
+  let index = headingIndex + 1;
+  while (index < lines.length && lines[index].trim() === "") {
+    index += 1;
+  }
+  const block = takeYamlBlock(lines, index);
+  return block.end;
+}
+
+/** Parse one ticket block's yaml through the shared reader, mapping errors. */
+function _ticketDataOf(raw: string, fenceLine: number): Record<string, unknown> {
+  try {
+    return parseYamlBlock(raw, fenceLine + 1);
+  } catch (error) {
+    if (error && typeof error === "object" && "line" in error) {
+      const blockError = error as { line: number; message: string };
+      throw new PlanParseError(blockError.line, blockError.message);
+    }
+    throw error;
+  }
+}
+
+/** The preamble text and the index of the first heading, for a literate document. */
+function _takePreambleLiterate(
+  lines: readonly string[],
+  start: number,
+): { text: string; index: number } {
+  let index = start;
+  while (index < lines.length && !_isHeading(lines[index])) {
+    index += 1;
+  }
+  return { text: _trimBlankLines(lines.slice(start, index)), index };
+}
+
+/**
+ * Write one plan document in the literate format: frontmatter, preamble,
+ * context sections, then every ticket as a `## Ticket <id> — <title>`
+ * heading with one fenced yaml block, in document order. Re-importing the
+ * output yields the same tickets, in the same order, with the same fields.
  */
 export function renderPlan(doc: PlanDocument): string {
   const blocks: string[] = [];
@@ -171,7 +328,7 @@ export function renderPlan(doc: PlanDocument): string {
     blocks.push(_renderContextSection(section));
   }
   for (const ticket of doc.tickets) {
-    blocks.push(_renderTicket(ticket).join("\n"));
+    blocks.push(_renderLiterateTicket(ticket));
   }
   if (blocks.length === 0) {
     return "";
@@ -221,7 +378,7 @@ function _parseFrontmatterData(raw: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-/** The preamble text and the index of the first heading or ticket. */
+/** The preamble text and the index of the first heading or ticket (legacy). */
 function _takePreamble(
   lines: readonly string[],
   start: number,
@@ -237,19 +394,17 @@ function _takePreamble(
   return { text: _trimBlankLines(lines.slice(start, index)), index };
 }
 
-
 /** One context section and the index of the line that ends it. */
 function _takeContextSection(
   lines: readonly string[],
   start: number,
   sectionNumber: number,
 ): { section: ContextSection; index: number } {
+  const isEnd = (line: string): boolean =>
+    _isHeading(line) || TICKET_LINE.test(line) ||
+    LITERATE_TICKET_HEADING.test(line);
   let index = start + 1;
-  while (
-    index < lines.length &&
-    !_isHeading(lines[index]) &&
-    !TICKET_LINE.test(lines[index])
-  ) {
+  while (index < lines.length && !isEnd(lines[index])) {
     index += 1;
   }
   return {
@@ -339,6 +494,67 @@ function _finishTicket(raw: RawTicket): PlanTicket {
   };
 }
 
+/**
+ * The legacy parser: the pre-literacy flat format (#5/P11), kept as the
+ * migration path so a plan written before #153 still imports. It parses
+ * exactly what it parsed before; the renderer never emits this shape again.
+ */
+function _parseLegacy(lines: readonly string[]): PlanDocument {
+  const frontmatter = _takeFrontmatter(lines);
+  const preamble = _takePreamble(lines, frontmatter.index);
+  const contextSections: ContextSection[] = [];
+  const rawTickets: RawTicket[] = [];
+  // #5/P11: flat format. Every ticket takes the kernel's default phase (1);
+  // there is no current-phase state to carry through the document.
+  let index = preamble.index;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (line.trim() === "") {
+      index += 1;
+      continue;
+    }
+    if (_isHeading(line)) {
+      // #5/P11: EVERY heading is a context section now. A legacy
+      // `## Phase N: ...` heading keeps its text as the section heading, so a
+      // pre-flat document imports with its headings visible instead of
+      // vanishing, and no phase/set event ever fires from a document.
+      const section = _takeContextSection(lines, index, contextSections.length);
+      contextSections.push(section.section);
+      index = section.index;
+      continue;
+    }
+    if (line.startsWith(CONTINUATION_PREFIX)) {
+      if (rawTickets.length === 0) {
+        throw new PlanParseError(
+          index + 1,
+          `line ${index + 1} continues a ticket, but the document holds no ticket yet`,
+        );
+      }
+      rawTickets[rawTickets.length - 1].lines.push(line.trim());
+      index += 1;
+      continue;
+    }
+    const ticketMatch = TICKET_LINE.exec(line);
+    if (!ticketMatch) {
+      throw new PlanParseError(
+        index + 1,
+        `line ${index + 1} is neither a ticket line nor a continuation line`,
+      );
+    }
+    rawTickets.push(
+      _startTicket(ticketMatch, index + 1, rawTickets.length + 1, 1),
+    );
+    index += 1;
+  }
+  return {
+    frontmatter: frontmatter.text,
+    frontmatterData: _parseFrontmatterData(frontmatter.text),
+    preamble: preamble.text,
+    contextSections,
+    tickets: rawTickets.map((raw) => _finishTicket(raw)),
+  };
+}
+
 /** Say whether one line opens a phase or a context section. */
 function _isHeading(line: string): boolean {
   return line.startsWith(HEADING_PREFIX);
@@ -386,28 +602,38 @@ function _renderContextSection(section: ContextSection): string {
   return `${section.heading}\n\n${text}`;
 }
 
-
-/**
- * The lines of one ticket. The body lines after the first carry two spaces.
- * The marker and every criteria line carry two spaces, and a blank line sits
- * between the body, the marker, and the criteria list. The document then
- * re-imports to the same fields.
+/** The yaml block of one literate ticket, without its fences.
+ *
+ * The description renders as a literal block (readable prose lines), the
+ * criteria as a list, the state as one plain word. The yaml library owns the
+ * scalar quoting, so the output always re-parses to the same fields.
  */
-function _renderTicket(ticket: PlanTicket): string[] {
-  const head = `- [${STATE_MARKS[ticket.claimedState]}] **Ticket ${ticket.id}: ${ticket.title}.**`;
-  const body = ticket.body.trim();
-  const bodyLines = body ? body.split("\n") : [];
-  const lines = [`${head} ${bodyLines[0] ?? ""}`.trimEnd()];
-  for (const part of bodyLines.slice(1)) {
-    lines.push(CONTINUATION_PREFIX + part.trim());
+function _renderLiterateTicketBody(ticket: PlanTicket): string {
+  const doc = new YAML.Document();
+  doc.contents = doc.createNode({
+    state: ticket.claimedState,
+    description: ticket.body.trim(),
+    criteria: ticket.criteria.trim().split("\n").map((item) => item.trim()),
+  });
+  // The description renders as a literal block, so the prose stays readable
+  // lines; the library owns the indentation indicator, so the output always
+  // re-parses to the same fields.
+  const descriptionNode = doc.contents.get("description", true);
+  if (descriptionNode) {
+    descriptionNode.type = "BLOCK_LITERAL";
   }
-  lines.push("");
-  lines.push(CONTINUATION_PREFIX + CRITERIA_MARKER);
-  lines.push("");
-  for (const criterion of ticket.criteria.trim().split("\n")) {
-    lines.push(`${CONTINUATION_PREFIX}- ${criterion.trim()}`);
-  }
-  return lines;
+  return YAML.stringify(doc, { lineWidth: 0 }).trimEnd();
+}
+
+/** The text of one literate ticket: heading, blank line, fenced yaml block. */
+function _renderLiterateTicket(ticket: PlanTicket): string {
+  return [
+    `${HEADING_PREFIX}Ticket ${ticket.id} — ${ticket.title}`,
+    "",
+    "```yaml",
+    _renderLiterateTicketBody(ticket),
+    "```",
+  ].join("\n");
 }
 
 export { PlanParseError };
