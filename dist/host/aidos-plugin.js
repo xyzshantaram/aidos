@@ -29166,32 +29166,11 @@ var Store = class {
   }
 };
 
-// src/host/aidos-core.ts
-import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
-
-// src/tools/scratch.ts
-import { isAbsolute, relative, resolve } from "node:path";
-import { mkdirSync } from "node:fs";
-import { HarnessError } from "@deepseek-ai/dsh-llm";
-import { defineTool } from "@deepseek-ai/dsh-tools";
-import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
-function scratchRootForAgent(agent) {
-  const cwd = agent?.session?.header?.cwd;
-  if (!cwd) {
-    throw new HarnessError(
-      JSON.stringify({ ok: false, error: "no_workspace_cwd", message: "the session has no cwd; scratch requires a workspace" }),
-      "AIDOS_NO_WORKSPACE_CWD"
-    );
-  }
-  const workspaceKey = workspaceKeyFromPath(cwd);
-  return dshHomePath("aidos", "scratch", workspaceKey);
-}
-
 // src/host/storage-sqlite.ts
-import { mkdirSync as mkdirSync2 } from "node:fs";
-import { dirname, resolve as resolve2 } from "node:path";
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { dshHomePath as dshHomePath2 } from "@deepseek-ai/dsh-home-paths";
+import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 
 // src/kernel/storage.ts
 var STORE_SCHEMA_VERSION = 1;
@@ -29199,7 +29178,7 @@ var STORE_SCHEMA_VERSION = 1;
 // src/host/storage-sqlite.ts
 var STORE_FILE_NAME = "board.db";
 function storePathForWorkspace(cwd) {
-  return dshHomePath2("aidos", "storage", workspaceKeyFromPath(cwd), STORE_FILE_NAME);
+  return dshHomePath("aidos", "storage", workspaceKeyFromPath(cwd), STORE_FILE_NAME);
 }
 function eventAt(event) {
   if (event.kind === "evidence/attached") {
@@ -29294,7 +29273,7 @@ var SqliteStorage = class {
   _db = null;
   _closed = false;
   constructor(path) {
-    this._path = resolve2(path);
+    this._path = resolve(path);
   }
   /** The resolved database file this handle writes. */
   get path() {
@@ -29317,7 +29296,7 @@ var SqliteStorage = class {
       throw new Error("storage is closed");
     }
     if (this._db === null) {
-      mkdirSync2(dirname(this._path), { recursive: true });
+      mkdirSync(dirname(this._path), { recursive: true });
       const db = new DatabaseSync(this._path);
       db.exec(`PRAGMA journal_mode = WAL;`);
       db.exec(`PRAGMA busy_timeout = 5000;`);
@@ -29596,7 +29575,7 @@ var SqliteStorage = class {
 };
 var _registry = /* @__PURE__ */ new Map();
 function openSqliteStorage(path) {
-  const resolved = resolve2(path);
+  const resolved = resolve(path);
   const live = _registry.get(resolved);
   if (live !== void 0) {
     return live;
@@ -29607,6 +29586,27 @@ function openSqliteStorage(path) {
 }
 function openWorkspaceStorage(cwd) {
   return openSqliteStorage(storePathForWorkspace(cwd));
+}
+
+// src/host/aidos-core.ts
+import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
+
+// src/tools/scratch.ts
+import { isAbsolute, relative, resolve as resolve2 } from "node:path";
+import { mkdirSync as mkdirSync2 } from "node:fs";
+import { HarnessError } from "@deepseek-ai/dsh-llm";
+import { defineTool } from "@deepseek-ai/dsh-tools";
+import { dshHomePath as dshHomePath2 } from "@deepseek-ai/dsh-home-paths";
+function scratchRootForAgent(agent) {
+  const cwd = agent?.session?.header?.cwd;
+  if (!cwd) {
+    throw new HarnessError(
+      JSON.stringify({ ok: false, error: "no_workspace_cwd", message: "the session has no cwd; scratch requires a workspace" }),
+      "AIDOS_NO_WORKSPACE_CWD"
+    );
+  }
+  const workspaceKey = workspaceKeyFromPath(cwd);
+  return dshHomePath2("aidos", "scratch", workspaceKey);
 }
 
 // src/host/invariant.ts

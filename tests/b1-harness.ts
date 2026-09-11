@@ -23,6 +23,18 @@
 
 import { expect } from "vitest";
 
+/**
+ * Every DSH_HOME this harness has minted itself (#42/#44 collision fix).
+ *
+ * installService needs to tell two cases apart that look identical in the
+ * environment: a home a TEST pinned deliberately (honour it -- #44 seeds a
+ * store there and then installs the service to read it), and a home a
+ * PREVIOUS install left behind (replace it -- #42 requires each harness to
+ * get its own store, or two harnesses share one backfill marker). Only the
+ * harness knows which values are its own, so it remembers them.
+ */
+const HARNESS_OWNED_HOMES = new Set<string>();
+
 import type { Context } from "@deepseek-ai/cordis";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { CallId, HarnessError } from "@deepseek-ai/dsh-llm";
@@ -1027,11 +1039,36 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
        * process.env.DSH_HOME at open time. A test run must never touch the
        * real ~/.dsh (harness sessions carry the REAL repo cwd, so without
        * this the opener would write the developer's own store), so every
-       * harness gets a throwaway home. Assigned on every install, not just
-       * when unset — each harness is a fresh store, and harnesses sharing
-       * one file never see each other's backfill marker.
+       * harness gets a throwaway home by DEFAULT — each harness is a fresh
+       * store, and harnesses sharing one file never see each other's
+       * backfill marker.
+       *
+       * An EXPLICIT pin wins, though. #42 and #44 landed in parallel and
+       * collided exactly here: #44 seeds a store under its own temp home and
+       * then installs the service to read it, and t5-scratch pins two
+       * harnesses to one home on purpose. Overwriting unconditionally
+       * orphaned the seeded store and failed seven #44 tests with an empty
+       * result rather than an error — the silent shape.
+       *
+       * Honouring the pin keeps #42's real safety property intact: the
+       * danger it guards against is writing the developer's REAL ~/.dsh,
+       * and the only thing that pre-sets DSH_HOME in a test run is a test
+       * pinning its own throwaway directory (both current pinners restore
+       * the previous value in a finally block).
        */
-      process.env.DSH_HOME = mkdtempSync(join(tmpdir(), "aidos-harness-home-"));
+      const pinned = process.env.DSH_HOME;
+      if (pinned === undefined || pinned === "" || HARNESS_OWNED_HOMES.has(pinned)) {
+        /*
+         * Unset, or a home THIS harness minted on an earlier install. The
+         * second case is what keeps #42's isolation: a leftover value from
+         * the previous installService in the same file is not a pin, and
+         * reusing it would let two harnesses share one store and one
+         * backfill marker.
+         */
+        const fresh = mkdtempSync(join(tmpdir(), "aidos-harness-home-"));
+        HARNESS_OWNED_HOMES.add(fresh);
+        process.env.DSH_HOME = fresh;
+      }
       if (!provided.aidos) {
         new AidosService(ctx as unknown as Context, config);
       }

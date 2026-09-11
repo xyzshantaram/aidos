@@ -107,13 +107,16 @@ import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 // #42: the workspace store the board reads.
 import { Store } from "../kernel/store";
 import type { BackfillSessionLog } from "../kernel/backfill";
-import { openWorkspaceStorage } from "./storage-sqlite";
+// #44 shares this import: the workspace store's FTS index backs the
+// dependency search, and storePathForWorkspace is how a search checks for a
+// store WITHOUT creating one. Merged into one statement when #42 and #44
+// landed together -- both fronts added their own copy, which is a duplicate
+// identifier, not two different symbols.
+import { openWorkspaceStorage, storePathForWorkspace } from "./storage-sqlite";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { scratchRootForAgent } from "../tools/scratch";
-// #44: the workspace store's FTS index backs the dependency search.
-import { openWorkspaceStorage, storePathForWorkspace } from "./storage-sqlite";
 import type {
   Actor,
   AidosConfig,
