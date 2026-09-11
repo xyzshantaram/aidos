@@ -63,6 +63,31 @@ const WORKTREE_TIMEOUT_MS = 120000;
  * the moment the session is live, not by this TTL.
  */
 const CLOSED_FOLD_CACHE_TTL_MS = 60000;
+
+/**
+ * #198: how many closed-session logs the merge inspects at once. The cold
+ * path used to await each inspect in sequence, so a cold board load paid the
+ * SUM of every log's parse time; the pool pays roughly the SLOWEST log per
+ * wave instead. Bounded, not unbounded: each inspect parses megabytes, and
+ * forty concurrent parses would storm the event loop and the disk cache the
+ * same way the sequential loop stormed the latency.
+ */
+const CLOSED_INSPECT_CONCURRENCY = 4;
+
+/**
+ * #198: one cached closed-session fold in the workspace merge — the derived
+ * views only, never the full fold (see the merge loop for why). `at` is the
+ * wall clock the entry was produced at; past the TTL the entry goes stale:
+ * the merge still SERVES it (stale-while-revalidate) while a background
+ * refresh re-inspects.
+ */
+type ClosedFoldEntry = {
+  at: number;
+  views: TicketView[];
+  evidence: Map<number, EvidenceRow[]>;
+  comments: Map<number, CommentRecord[]>;
+  retired: Set<number>;
+};
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { reviewChainOf } from "../kernel/gates";
@@ -2163,55 +2188,41 @@ registerAidosSessionEventTypes(ctx);
      * Only the derived views are cached, never the full fold: a 62M log is
      * mostly tool-call payloads, while its ticket views are kilobytes, so
      * pinning 225 folds would trade a timeout for a memory leak.
+     *
+     * #198 de-storms what remained. Before this change a cold cache awaited
+     * each inspect IN SEQUENCE — a cold board load paid the sum of every
+     * log's parse time — and an expired entry blocked the merge on its
+     * re-inspect too. Now the ids split three ways:
+     *  - fresh hits render from cache, as before;
+     *  - EXPIRED hits render stale AT ONCE and refresh in the background
+     *    (stale-while-revalidate): the merge never waits on the slowest log
+     *    it already has a frame for, and the in-flight set keeps concurrent
+     *    merges from piling duplicate refreshes onto one id;
+     *  - true misses (nothing cached) go through a bounded-concurrency pool,
+     *    because a cold board load must return every row THIS call — merge
+     *    correctness — but nothing forces the inspects to serialize.
+     * The staleness window is the refresh duration, not the TTL: a refresh
+     * replaces the entry, and a refresh whose inspect FAILS drops the
+     * expired entry rather than serving it forever.
      */
     const now = Date.now();
     for (const liveId of liveIds) this._closedFolds.delete(liveId);
+    const fresh: Array<[string, ClosedFoldEntry]> = [];
+    const stale: Array<[string, ClosedFoldEntry]> = [];
+    const misses: string[] = [];
     for (const id of closedIds) {
       const hit = this._closedFolds.get(id);
-      let views: TicketView[];
-      let stateEvidence: Map<number, EvidenceRow[]>;
-      let stateComments: Map<number, CommentRecord[]>;
-      let retired: Set<number>;
-      if (hit !== undefined && now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
-        ({ views, evidence: stateEvidence, comments: stateComments, retired } = hit);
+      if (hit === undefined) {
+        misses.push(id);
+      } else if (now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
+        fresh.push([id, hit]);
       } else {
-        let inspection: { meta: SessionHeader; events: readonly SessionEvent[] };
-        try {
-          const persistence = this.ctx.get("sessionPersistence") as {
-            inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
-          };
-          inspection = await persistence.inspect(id);
-        } catch (error) {
-          this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
-          continue;
-        }
-        const { state } = this._foldExternalLog(inspection.meta, inspection.events);
-        views = [...ticketsProjection(state, this._resolvedConfig).values()];
-        stateEvidence = state.evidence;
-        stateComments = state.comments;
-        // The retire check needs the full fold, which is NOT cached — so the
-        // retired ids are resolved here, once per inspect, and the entry
-        // carries the answer rather than the state that produced it.
-        retired = new Set<number>();
-        for (const view of views) {
-          if (this._isRetired(state, view.id)) retired.add(view.id);
-        }
-        this._closedFolds.set(id, {
-          at: now,
-          views,
-          evidence: stateEvidence,
-          comments: stateComments,
-          retired,
-        });
-        // Entries for sessions that vanished or went quiet are dropped as
-        // they age out, so the map tracks the workspace rather than growing
-        // without bound across reopen cycles.
-        for (const [cachedId, entry] of this._closedFolds) {
-          if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS) this._closedFolds.delete(cachedId);
-        }
+        stale.push([id, hit]);
       }
-      for (const view of [...views].sort(ownSort)) {
-        if (!includeRetired && retired.has(view.id)) continue;
+    }
+    const renderClosed = (id: string, entry: ClosedFoldEntry): void => {
+      for (const view of [...entry.views].sort(ownSort)) {
+        if (!includeRetired && entry.retired.has(view.id)) continue;
         const key = id + ":" + view.id;
         tickets.push({
           ...view,
@@ -2219,8 +2230,33 @@ registerAidosSessionEventTypes(ctx);
           sourceSessionId: id,
           foreign: true,
         } as BoardTicketView);
-        evidence[key] = [...(stateEvidence.get(view.id) ?? [])];
-        comments[key] = [...(stateComments.get(view.id) ?? [])];
+        evidence[key] = [...(entry.evidence.get(view.id) ?? [])];
+        comments[key] = [...(entry.comments.get(view.id) ?? [])];
+      }
+    };
+    for (const [id, entry] of fresh) renderClosed(id, entry);
+    for (const [id, entry] of stale) {
+      renderClosed(id, entry);
+      this._refreshClosedFold(id);
+    }
+    let poolCursor = 0;
+    const poolWorker = async (): Promise<void> => {
+      while (poolCursor < misses.length) {
+        const id = misses[poolCursor++]!;
+        const entry = await this._inspectClosedFold(id, now);
+        if (entry !== null) renderClosed(id, entry);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, misses.length) }, poolWorker),
+    );
+    // Entries for sessions that vanished or went quiet are dropped as
+    // they age out, so the map tracks the workspace rather than growing
+    // without bound across reopen cycles. An entry mid-refresh is kept:
+    // the refresh replaces it (or drops it, on failure).
+    for (const [cachedId, entry] of this._closedFolds) {
+      if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS && !this._closedFoldRefreshes.has(cachedId)) {
+        this._closedFolds.delete(cachedId);
       }
     }
 
@@ -2446,18 +2482,80 @@ registerAidosSessionEventTypes(ctx);
   /**
    * Closed-session folds for the workspace merge, keyed by session id.
    * Populated and read in `workspaceTickets`; see the loop there for the
-   * exactness argument (invalidate-on-live plus TTL).
+   * exactness argument (invalidate-on-live plus TTL) and the #198
+   * stale-while-revalidate split.
    */
-  private readonly _closedFolds = new Map<
-    string,
-    {
-      at: number;
-      views: TicketView[];
-      evidence: Map<number, EvidenceRow[]>;
-      comments: Map<number, CommentRecord[]>;
-      retired: Set<number>;
+  private readonly _closedFolds = new Map<string, ClosedFoldEntry>;
+
+  /**
+   * #198: background refreshes currently running for stale closed-fold
+   * entries, keyed by session id. The set both deduplicates (two merges
+   * hitting the same stale entry schedule ONE refresh) and lets tests and
+   * the sweep await or spare an in-flight refresh deterministically.
+   */
+  private readonly _closedFoldRefreshes = new Map<string, Promise<void>>();
+
+  /**
+   * #198: inspect one closed session's log, fold it, and cache the derived
+   * views. Returns the fresh entry, or null when the inspect or the fold
+   * failed — a failure is logged and skips the row, exactly as the old
+   * inline path did. Never throws.
+   */
+  private async _inspectClosedFold(id: string, now: number): Promise<ClosedFoldEntry | null> {
+    let inspection: { meta: SessionHeader; events: readonly SessionEvent[] };
+    try {
+      const persistence = this.ctx.get("sessionPersistence") as {
+        inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
+      };
+      // The id came from persistence.list via _closedWorkspaceSessionIds, so
+      // it already satisfies the branded shape; SessionId() is type-only here.
+      inspection = await persistence.inspect(id as SessionId);
+    } catch (error) {
+      this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     }
-  >;
+    const { state } = this._foldExternalLog(inspection.meta, inspection.events);
+    const views = [...ticketsProjection(state, this._resolvedConfig).values()];
+    // The retire check needs the full fold, which is NOT cached — so the
+    // retired ids are resolved here, once per inspect, and the entry
+    // carries the answer rather than the state that produced it.
+    const retired = new Set<number>();
+    for (const view of views) {
+      if (this._isRetired(state, view.id)) retired.add(view.id);
+    }
+    const entry: ClosedFoldEntry = {
+      at: now,
+      views,
+      evidence: state.evidence,
+      comments: state.comments,
+      retired,
+    };
+    this._closedFolds.set(id, entry);
+    return entry;
+  }
+
+  /**
+   * #198: re-inspect one stale closed-fold entry in the background. At most
+   * one refresh per id runs at a time; a failed refresh drops the expired
+   * entry (it is garbage past the TTL — serving it forever would pin a
+   * vanished session's rows to the board) instead of leaving it to be
+   * re-attempted on every merge.
+   */
+  private _refreshClosedFold(id: string): void {
+    if (this._closedFoldRefreshes.has(id)) return;
+    const run = (async (): Promise<void> => {
+      try {
+        const entry = await this._inspectClosedFold(id, Date.now());
+        if (entry === null) this._closedFolds.delete(id);
+      } catch (error) {
+        this.ctx.logger?.debug?.(`aidos: closed-fold refresh failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
+        this._closedFolds.delete(id);
+      } finally {
+        this._closedFoldRefreshes.delete(id);
+      }
+    })();
+    this._closedFoldRefreshes.set(id, run);
+  }
 
   /**
    * The AGENT surface (#51): propose an allowlist for one ticket. Validates
