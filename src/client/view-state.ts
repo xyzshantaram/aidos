@@ -37,6 +37,9 @@ export function cloneAppliedState(state: AppliedState): AppliedState {
     sortKey: state.sortKey,
     descending: state.descending,
     search: state.search,
+    // #138 follow-up: the tag filter must survive the copy, or a staged tag
+    // filter never reaches the applied state (and thus the live board).
+    tags: state.tags === undefined ? undefined : [...state.tags],
   };
 }
 

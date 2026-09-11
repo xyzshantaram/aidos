@@ -6,7 +6,7 @@
 import react from "react";
 
 import type { BoardKey } from "./board-logic";
-import { STATE_CHECKLIST_ORDER, autocompleteTickets, fullTicketId, idColor, stateLabel, ticketChipLabel, boardKeyOf } from "./board-logic";
+import { STATE_CHECKLIST_ORDER, autocompleteTickets, fullTicketId, idColor, stateLabel, tagCounts, ticketChipLabel, boardKeyOf } from "./board-logic";
 import { logDebug } from "./log";
 import type { AppliedState } from "./view-state";
 import {
@@ -44,6 +44,13 @@ function statesEqual(a: AppliedState, b: AppliedState): boolean {
     for (let i = 0; i < a.projectIds.length; i += 1) {
       if (a.projectIds[i] !== b.projectIds[i]) return false;
     }
+  }
+  // #138: an absent tag selection and an empty one both mean "all tags".
+  const aTags = a.tags ?? [];
+  const bTags = b.tags ?? [];
+  if (aTags.length !== bTags.length) return false;
+  for (let i = 0; i < aTags.length; i += 1) {
+    if (aTags[i] !== bTags[i]) return false;
   }
   return true;
 }
@@ -99,7 +106,15 @@ function FilterApplyStatus(props: { pending: boolean; dirty: boolean }) {
 export function FilterPanel(props: FilterPanelProps) {
   const sessionId = props.sessionId;
   const stagedRef = react.useRef(getStagedState(sessionId));
-  const [staged, setStaged] = react.useState(stagedRef.current);
+  /*
+   * #138: the tag selection rides the same staged object. Normalised to an
+   * array up front (absent means "all tags", same as empty), so every
+   * toggle below spreads a defined list rather than re-deriving it.
+   */
+  const [staged, setStaged] = react.useState<AppliedState>(() => ({
+    ...stagedRef.current,
+    tags: stagedRef.current.tags ?? props.applied.tags ?? [],
+  }));
   const [searchInput, setSearchInput] = react.useState(stagedRef.current.search);
   const [focused, setFocused] = react.useState(false);
   const debounceRef = react.useRef<number | null>(null);
@@ -200,6 +215,19 @@ export function FilterPanel(props: FilterPanelProps) {
       : [...current, projectId];
     const projectIds = next.length === all.length ? null : next;
     updateStaged({ ...staged, projectIds });
+  }
+
+  /*
+   * #138: toggle one tag in the staged selection. Nothing selected means
+   * "all tags" (see TicketFilter.tags), so the first tick narrows from the
+   * whole board and unticking the last one restores it.
+   */
+  function toggleTag(tag: string) {
+    const current = staged.tags ?? [];
+    const next = current.includes(tag)
+      ? current.filter((t) => t !== tag)
+      : [...current, tag];
+    updateStaged({ ...staged, tags: next });
   }
 
   function reset() {
@@ -397,10 +425,44 @@ export function FilterPanel(props: FilterPanelProps) {
     </div>
   );
 
+  /*
+   * #138: the tag filter. Counts come from the rows the panel was handed
+   * (tagCounts, same order as the Tags browser), and the selection stages
+   * like every other control. Rendered only when a tag exists at all: an
+   * untagged workspace gets no empty section.
+   */
+  const availableTags = tagCounts(props.tickets);
+  const selectedTags = staged.tags ?? [];
+  const tagChips =
+    availableTags.length === 0 ? null : (
+      <div className="aidos-filter-chips" role="group" aria-label="Tags">
+        {availableTags.map(({ tag, count }) => {
+          const checked = selectedTags.includes(tag);
+          return (
+            <button
+              key={tag}
+              className={
+                "aidos-filter-chip" + (checked ? " aidos-filter-chip-on" : "")
+              }
+              title={count + " ticket(s) carry this tag"}
+              data-dsh-tip=""
+              onClick={() => {
+                toggleTag(tag);
+              }}
+            >
+              {tag}
+              <span className="aidos-check-count">{String(count)}</span>
+            </button>
+          );
+        })}
+      </div>
+    );
+
   return (
     <div className="aidos-filterbar">
       <div className="aidos-filterbar-left">
         {stateChips}
+        {tagChips}
         {props.projects === undefined ? null : props.projects.length === 0 ? null : (
           <select
             className="aidos-filter-project"

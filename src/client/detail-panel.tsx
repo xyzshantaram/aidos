@@ -32,6 +32,7 @@ import {
 import { FieldEditor } from "./field-editor";
 import { ActionBar } from "./action-bar";
 import { CommentsSection } from "./comments-section";
+import { TicketTagChips } from "./ticket-tile";
 import { EvidenceAttach, VerifyModal } from "./evidence-attach";
 import { AllowlistRequestCard } from "./allowlist-request-card";
 import { EvidenceStrip } from "./evidence-strip";
@@ -873,6 +874,7 @@ export function DetailPanel(props: DetailPanelBodyProps) {
           {ticketChipLabel(ticket)}
         </span>
         <span className={badge}>{stateLabel(ticket.state)}</span>
+        <TicketTagChips tags={ticket.tags ?? []} />
       </div>
       <dl className="aidos-facts">
         <div className="aidos-facts-row">

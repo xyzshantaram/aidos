@@ -233,6 +233,12 @@ export interface TicketSortable {
 export interface TicketFilterable extends TicketSortable {
   state: string;
   projectId: number;
+  /**
+   * #138: the freeform tags a row carries. OPTIONAL so rows that predate
+   * tags (and minimal test rows) still filter; absent reads as untagged,
+   * never as a crash.
+   */
+  tags?: readonly string[];
 }
 
 /** One full filter and sort request, mirror of the board FilterPanel. */
@@ -252,6 +258,17 @@ export interface TicketFilter {
   projectIds?: readonly number[] | null;
   /** Substring match over title or id; empty matches everything. */
   search?: string;
+  /**
+   * #138: tag filter. Absent or EMPTY means all tickets (no narrowing).
+   *
+   * Deliberately unlike stateIds, where an empty array matches NOTHING (see
+   * the note above): the FilterPanel starts with no tags selected and must
+   * show the whole board, so "nothing selected" cannot mean "nothing shown".
+   * A ticket matches when it carries ANY of the named tags.
+   *
+   * Group-by-tag is explicitly deferred: this narrows, never groups.
+   */
+  tags?: readonly string[];
   sortKey?: TicketSortKey;
   descending?: boolean;
 }
@@ -330,11 +347,27 @@ export function filterTicketViews<T extends TicketFilterable>(
   const stateSet = filter.stateIds ? new Set<string>(filter.stateIds) : null;
   const projectSet = filter.projectIds ? new Set<number>(filter.projectIds) : null;
   const search = filter.search ?? "";
+  // #138: absent or empty means "all tags" (see TicketFilter.tags).
+  const tagSet =
+    filter.tags !== undefined && filter.tags.length > 0
+      ? new Set<string>(filter.tags)
+      : null;
   const out: T[] = [];
   for (const ticket of views) {
     if (stateSet !== null && !stateSet.has(ticket.state)) continue;
     if (projectSet !== null && !projectSet.has(ticket.projectId)) continue;
     if (!ticketMatchesSearch(ticket, search)) continue;
+    if (tagSet !== null) {
+      const names = ticket.tags ?? [];
+      let carries = false;
+      for (const name of names) {
+        if (tagSet.has(name)) {
+          carries = true;
+          break;
+        }
+      }
+      if (!carries) continue;
+    }
     out.push(ticket);
   }
   out.sort((a, b) =>
