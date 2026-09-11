@@ -15,6 +15,16 @@
  *
  * The strip renders no action of its own and knows no board verbs, so
  * adding a consumer never means editing this file.
+ *
+ * #199: the strip's markup is cached and keyed by CONTENT. Every tick used
+ * to re-execute every strip on screen, including the tool-call cards
+ * (#73) whose ticket data had not changed -- the card re-renders because
+ * its row of the transcript re-renders, not because the ticket moved. The
+ * exported TicketStrip now returns a cached element when the ticket's
+ * read fields and the caller-supplied nodes are unchanged, so an
+ * unchanged row costs a comparison instead of a render. A tick carrying
+ * new data fails the comparison and rebuilds, so live updates propagate.
+ * The strip has no hooks, so the cache needs no hook-order care.
  */
 import react from "react";
 
@@ -87,7 +97,67 @@ export interface TicketStripProps {
   awaitingApproval?: boolean;
 }
 
+/**
+ * #199: rendered strip markup, keyed by ticket id and validated by
+ * stripPropsEqual. Bounded the same way the tile cache is: at the limit
+ * it drops wholesale and the next render rebuilds cold, which is correct.
+ */
+const STRIP_CACHE_LIMIT = 1024;
+const stripMarkupCache = new Map<
+  string,
+  { props: TicketStripProps; element: react.ReactElement }
+>();
+
 export function TicketStrip(props: TicketStripProps) {
+  const key = String(props.ticket.id);
+  const hit = stripMarkupCache.get(key);
+  if (hit !== undefined && stripPropsEqual(hit.props, props)) {
+    return hit.element;
+  }
+  const element = renderTicketStrip(props);
+  if (stripMarkupCache.size >= STRIP_CACHE_LIMIT) stripMarkupCache.clear();
+  stripMarkupCache.set(key, { props, element });
+  return element;
+}
+
+/**
+ * The comparison. The ticket is compared by the fields the strip READS
+ * (content, not identity: callers build fresh row objects on every
+ * render, and #73's tool cards are exactly the case where identity always
+ * changes but content does not). The caller-supplied nodes -- meta,
+ * actions, actionIcon -- are compared by identity: building them is the
+ * caller's per-render work, and the caller that hands a NEW node usually
+ * has new content in it. onOpen and onToggleActions are excluded: the
+ * grid and the queue pass fresh closures every render, and a row's
+ * closure only ever names ITS OWN ticket key, which the compared fields
+ * already pin (the one state-dependent toggle reads `expanded`, which is
+ * compared).
+ */
+function stripPropsEqual(a: TicketStripProps, b: TicketStripProps): boolean {
+  const ta = a.ticket as Partial<TicketStripTicket>;
+  const tb = b.ticket as Partial<TicketStripTicket>;
+  return (
+    ta.id === tb.id &&
+    ta.title === tb.title &&
+    ta.state === tb.state &&
+    ta.slug === tb.slug &&
+    ta.workspaceKey === tb.workspaceKey &&
+    (ta.gatePresent ?? null) === (tb.gatePresent ?? null) &&
+    (ta.gateTotal ?? null) === (tb.gateTotal ?? null) &&
+    (ta.criteria ?? null) === (tb.criteria ?? null) &&
+    (a.showState ?? null) === (b.showState ?? null) &&
+    a.meta === b.meta &&
+    a.actions === b.actions &&
+    a.actionIcon === b.actionIcon &&
+    (a.actionHint ?? null) === (b.actionHint ?? null) &&
+    (a.expanded ?? false) === (b.expanded ?? false) &&
+    (a.working ?? false) === (b.working ?? false) &&
+    (a.highlighted ?? false) === (b.highlighted ?? false) &&
+    (a.awaitingApproval ?? false) === (b.awaitingApproval ?? false)
+  );
+}
+
+function renderTicketStrip(props: TicketStripProps) {
   const ticket = props.ticket;
   const full = fullTicketId(ticket as TicketView);
   const className =
