@@ -171,43 +171,118 @@ function guardRow(
   };
 }
 
-function registerScratchRows(slots: SlotRegistry): () => void {
-  const disposers: Array<() => void> = [];
-  /*
-   * #73: the aidos tools' own rows register through the same seam. Priority
-   * -100 shadows BELOW the rows dsh ships, so a client update that adds a
-   * shipped row for one of these names wins rather than colliding -- which
-   * is #73's "survives a dsh client update" criterion.
-   */
-  for (const [key, Row] of [...SCRATCH_ROWS, ...AIDOS_ROWS] as ReadonlyArray<
+/*
+ * #183: exported ONLY so the regression suite can drive it against a fake
+ * registry (tests/u183-toolview-inject.test.ts). The runtime entry point is
+ * still the ctx.effect in apply().
+ */
+export function registerScratchRows(slots: SlotRegistry): () => void {
+  const rows = [...SCRATCH_ROWS, ...AIDOS_ROWS] as ReadonlyArray<
     [string, (props: never) => unknown]
-  >) {
+  >;
+  const disposers: Array<() => void> = [];
+  let failures = 0;
+  /*
+   * #183: `tool.call.toolview` is a CHILD slot, declared by the tool-call
+   * chat-node entry's children table in dsh-client-ui-tool. A bare
+   * `slots.register` at apply time raced that declaration and threw
+   * "slot \"tool.call.toolview\" is not declared" for EVERY row, on every
+   * load -- sixteen console lines, and every board tool rendered as a raw
+   * JSON envelope.
+   *
+   * `slots.inject` is the documented fix (the same seam dsh-client-ui-tool
+   * itself and dotfiles-ai tool-render both use): the callback runs
+   * synchronously when the slot is already declared, and otherwise runs
+   * inside the declaring `register()` call after the declaration commits.
+   * Each row waits on the SAME declaration; the parent declares once and
+   * all sixteen callbacks then run.
+   *
+   * Disposal: the inject disposer covers BOTH the pending wait and the
+   * active registration (and the registration's own disposer is returned
+   * from the callback, so a declaration collapse also unregisters). The
+   * ctx.effect in apply() still owns all of them -- nothing leaks.
+   *
+   * Priority -100 and per-tool-name keys are UNCHANGED from #73: a shipped
+   * row for one of these names still wins, and the whole tool-call node is
+   * never shadowed (SlotCore throws on a second declaration of a child
+   * slot, so a whole-node row is not even possible here -- the per-name
+   * keys are the contract regardless).
+   */
+  for (const [key, Row] of rows) {
     /*
-     * PER-ROW ISOLATION. One failing registration used to take the rest of
-     * the loop with it, and the loop registers fifteen rows.
+     * PER-ROW ISOLATION, unchanged: one failing registration must not cost
+     * the other fifteen, and a row is a rendering nicety that must never
+     * cost the page.
      *
-     * That failure mode is silent and looks exactly like the user's report:
-     * the rows registered BEFORE the throw render, every row after it is
-     * simply absent, and the only symptom is "some tool cards have no UI".
-     * Registration order then decides which tools work, which is not a
-     * property anyone would think to check.
+     * What CHANGED (#183): the old code stopped at the warn, so a TOTAL
+     * failure -- all sixteen rows throwing, which is exactly what the race
+     * produced -- shipped as sixteen console lines nobody acted on. Now the
+     * count is kept. When the slot is ALREADY declared, every callback runs
+     * synchronously inside inject, so a total failure is complete before
+     * the loop ends and is THROWN below -- loud, straight into the effect's
+     * caller -- instead of quietly degrading every card.
      *
-     * A row is a rendering nicety. It must never cost another row, and it
-     * must never cost the page.
+     * When the slot is NOT yet declared, the callbacks run later inside the
+     * parent's register call; a total failure THERE cannot be thrown (this
+     * code would be executing inside the parent's register and must not
+     * break it), so the catch that completes the set raises an
+     * unmistakable console.error. With the inject wrapper in place the
+     * declaration wait removes the race that produced the total failure,
+     * so the deferred path is a backstop, not the expected route.
      */
     try {
       disposers.push(
-        slots.register(
-          { name: "tool.call.toolview", key, priority: -100 } as never,
-          guardRow(key, Row) as never,
-        ),
+        /*
+         * The key cast mirrors the existing `as never` on the register
+         * spec: "tool.call.toolview" is declared by dsh-client-ui-tool,
+         * which is not a dependency here, so its SlotMap augmentation is
+         * invisible to the typechecker. The runtime key is exactly what the
+         * shipped parent entry declares.
+         */
+        slots.inject("tool.call.toolview" as never, () => {
+          try {
+            return slots.register(
+              { name: "tool.call.toolview", key, priority: -100 } as never,
+              guardRow(key, Row) as never,
+            );
+          } catch (error) {
+            failures += 1;
+            if (failures === rows.length) {
+              console.error(
+                `aidos: ALL ${rows.length} tool rows failed to register on ` +
+                  '"tool.call.toolview"; every board tool will render as ' +
+                  "raw JSON",
+              );
+            }
+            console.warn(
+              `aidos: the ${key} tool row could not register; the other rows continue`,
+              error,
+            );
+            return () => {};
+          }
+        }),
       );
     } catch (error) {
+      failures += 1;
       console.warn(
         `aidos: the ${key} tool row could not register; the other rows continue`,
         error,
       );
     }
+  }
+  if (failures === rows.length) {
+    /*
+     * LOUD, #183's whole point: the race shipped as sixteen quiet console
+     * lines and every board tool rendered raw JSON for weeks. Zero of N
+     * registered is not a degraded state, it is the outage itself. (If the
+     * slot was undeclared at apply time this check passes vacuously over a
+     * zero count -- the deferred path is handled in the catch above.)
+     */
+    throw new Error(
+      `aidos: all ${rows.length} tool rows failed to register on ` +
+        '"tool.call.toolview" -- total registration failure is loud, never ' +
+        "a console line",
+    );
   }
   return function () {
     for (const dispose of disposers) dispose();
