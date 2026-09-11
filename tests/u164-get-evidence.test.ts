@@ -144,6 +144,17 @@ describe("#164 get_evidence returns what get_ticket cannot", () => {
     expect(withComments.comments[0].body).toBe("the comment body");
   });
 
+  it("a composite id resolves exactly like get_ticket", async () => {
+    const harness = riggedHarness();
+    const id = ticketWithEvidence(harness);
+    const composite = `${String(harness.agent.session.id)}:${id}`;
+    const viaComposite = successJson(
+      await harness.runTool("get_evidence", { ticketId: composite }, { agent: harness.agent }),
+    ) as { evidence: EvidenceRowOut[] };
+    expect(viaComposite.evidence).toHaveLength(2);
+    expect((viaComposite.evidence[0].payload as { note: string }).note).toBe(LONG_NOTE);
+  });
+
   it("is a declared READ a dispatched subagent can call", async () => {
     const harness = riggedHarness();
     const id = ticketWithEvidence(harness);

@@ -745,7 +745,7 @@ function registerGetTicket(ctx: Context): void {
         "'<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
       parameters: {
         ticketId: {
-          type: "integer",
+          oneOf: [{ type: "integer" }, { type: "string" }],
           description: "The ticket to read. A composite id may be passed as a string.",
           required: true as const,
         },
@@ -924,7 +924,7 @@ function registerGetEvidence(ctx: Context): void {
         "'<sourceSessionId>:<ticketId>' like get_ticket.",
       parameters: {
         ticketId: {
-          type: "integer",
+          oneOf: [{ type: "integer" }, { type: "string" }],
           description:
             "The ticket whose evidence to fetch. A composite id may be passed as a string.",
           required: true as const,
