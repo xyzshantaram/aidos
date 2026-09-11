@@ -41,7 +41,7 @@ import {
   resolveSelection,
 } from "./board-logic";
 import { ModalShell } from "./ui";
-import { agentAskCount, queuePollMs } from "./human-queue";
+import { agentAskCount, getQueueSnapshot, publishQueueSnapshot, queuePollMs } from "./human-queue";
 import type { ModalKey } from "./view-state";
 import type { Nomination, PendingApprovalLike, QueueEntry } from "./human-queue";
 import { asBoardKey, fullTicketId } from "./board-logic";
@@ -659,7 +659,17 @@ function ProjectionReader(props: ProjectionReaderProps) {
        */
       void callAidosRemote("actionNominations", {}, sessionId)
         .then((rows) => {
-          setNominations((rows as unknown as Nomination[]) ?? []);
+          const list = (rows as unknown as Nomination[]) ?? [];
+          setNominations(list);
+          // #200: publish the merged refresh — this half is new, the other
+          // half is the latest known, so this fetch can never erase the
+          // approvals a simultaneous failure (or a slower answer) owns.
+          const previous = getQueueSnapshot();
+          publishQueueSnapshot({
+            nominations: list,
+            approvals: previous?.approvals ?? [],
+            at: Date.now(),
+          });
         })
         .catch((error: unknown) => {
           /*
@@ -682,7 +692,16 @@ function ProjectionReader(props: ProjectionReaderProps) {
         });
       void callAidosRemote("pendingApprovals", {}, sessionId)
         .then((rows) => {
-          setApprovals((rows as unknown as PendingApprovalLike[]) ?? []);
+          const list = (rows as unknown as PendingApprovalLike[]) ?? [];
+          setApprovals(list);
+          // #200: same merge rule as the nominations half above, mirrored —
+          // a fresh approvals list must not drop the nominations.
+          const previous = getQueueSnapshot();
+          publishQueueSnapshot({
+            nominations: previous?.nominations ?? [],
+            approvals: list,
+            at: Date.now(),
+          });
         })
         .catch((error: unknown) => {
           // Same rule as the nominations fetch above: an outage must not
@@ -711,6 +730,26 @@ function ProjectionReader(props: ProjectionReaderProps) {
    * looked. So the fetch runs on mount and keeps running while closed --
    * slowly, because a closed queue needs freshness measured in glances, not
    * in seconds, and this is a poll against a remote rather than a push.
+   *
+   * #200: THIS EFFECT IS THE ONE QUEUE POLL. Every queue refresh in the
+   * client starts here — the queue panel, the toolbar badge, the
+   * ticket-strip flags, and the AllowlistRequestCards all read what this
+   * publishes to the shared snapshot (human-queue.ts) rather than fetching
+   * themselves.
+   *
+   * BEFORE: the board fetched nominations + approvals on this cadence AND
+   * every mounted card fetched its own ticket every 2s — one open card plus
+   * a shut queue cost ~36 remotes/minute (30 card + 3 ticks x 2), an open
+   * queue ~60/minute, each extra card +30. AFTER: the card costs zero, so
+   * one refresh costs the two remotes below — 6/minute shut, 30/minute open.
+   *
+   * One refresh still costs TWO remotes (nominations + approvals) because no
+   * single host remote returns both halves; collapsing that last double
+   * needs a host `queueState` remote returning both together, which this
+   * ticket's allowlist cannot add. When it lands, only refreshNominations
+   * changes — every consumer already reads the published snapshot. Until
+   * then the two fetches stay INDEPENDENT (see below): one failing remote
+   * must not wipe the other half's list.
    */
   react.useEffect(
     function () {

@@ -3,13 +3,21 @@
  * renders whatever the pending request carries (allowlist paths first;
  * signoff requests, criteria confirmations, and future agent-to-user asks
  * ride the same queue -> card -> resolve path). The detail panel mounts one
- * per open ticket and polls while mounted; the agent is steered with the
+ * per open ticket and each card reads the board's shared queue snapshot
+ * while mounted (#200: no card-local poll); the agent is steered with the
  * outcome through the existing digest when the user resolves.
  */
 import react from "react";
 
 import { callAidosRemote } from "./remote";
 import { resolveApprovalRequest } from "./approval-resolution";
+import {
+  cardPathsAfterPoll,
+  getQueueSnapshot,
+  selectCardApproval,
+  subscribeQueueSnapshot,
+} from "./human-queue";
+import type { PendingApprovalLike, QueueSnapshot } from "./human-queue";
 
 interface PendingApproval {
   id: string;
@@ -71,39 +79,89 @@ export function AllowlistRequestCard(props: {
   const [request, setRequest] = react.useState<PendingApproval | null>(null);
   const [paths, setPaths] = react.useState<string[]>([]);
   const [working, setWorking] = react.useState(false);
-  // Finding 4 (#51 review): the 2s poll must not clobber edits typed between
+  // Finding 4 (#51 review): the refresh must not clobber edits typed between
   // intervals — the dirty flag latches on the first keystroke and resets
   // only when the request is replaced.
+  //
+  // #200: the SOURCE of the refresh changed (shared snapshot, not a 2s
+  // self-poll) but this rule did not. The adoption still goes through
+  // cardPathsAfterPoll, which is this flag made testable: dirty keeps the
+  // typed text, clean adopts the refresh. Do not reintroduce an interval
+  // here — the board's queue effect is the one poll, and this card reads it.
   const dirtyRef = react.useRef(false);
   // Finding 8: the dead `tick` state is gone.
 
-  // Poll while mounted. The request is a peek, not a pop: re-renders and
-  // polling never lose it; only an explicit resolve does.
+  /*
+   * #200: NO POLL HERE. The board's queue effect (local-ticket-view) is the
+   * one poll: it publishes every refresh to the shared snapshot, and this
+   * card selects its own row out of it — the same oldest-for-this-ticket
+   * answer the per-ticket `pendingApproval` poll used to give, via
+   * selectCardApproval. One mounted card used to cost 30 remotes/minute;
+   * now it costs zero.
+   *
+   * The one-shot fetch below is NOT a poll: it covers only a mount with no
+   * publisher (no board yet, or a future surface outside it). The moment the
+   * board publishes, the subscription takes over and this never fires again.
+   */
+  const [snapshot, setSnapshot] = react.useState<QueueSnapshot | null>(() => getQueueSnapshot());
   react.useEffect(function () {
-    let cancelled = false;
-    async function poll() {
-      try {
-        const result = await callAidosRemote("pendingApproval", { ticketId: props.ticketId }, props.agentId);
-        if (cancelled) return;
-        const row =
-          result !== null && typeof result === "object" && !Array.isArray(result)
-            ? (result as unknown as PendingApproval)
-            : null;
-        setRequest(row);
-        if (row !== null && !dirtyRef.current && Array.isArray(row.payload?.paths)) {
-          setPaths((row.payload as { paths: string[] }).paths);
-        }
-      } catch {
-        // Polling is best-effort; a failed poll retries on the next tick.
-      }
-    }
-    void poll();
-    const timer = setInterval(() => void poll(), 2000);
-    return function () {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [props.ticketId, props.agentId]);
+    return subscribeQueueSnapshot(setSnapshot);
+  }, []);
+  react.useEffect(
+    function () {
+      if (getQueueSnapshot() !== null) return;
+      let cancelled = false;
+      void callAidosRemote("pendingApproval", { ticketId: props.ticketId }, props.agentId)
+        .then((result) => {
+          if (cancelled) return;
+          // A publish landing mid-fetch wins: the subscription above owns
+          // the state from here on, so a late answer must not overwrite it.
+          if (getQueueSnapshot() !== null) return;
+          const row =
+            result !== null && typeof result === "object" && !Array.isArray(result)
+              ? (result as unknown as PendingApproval)
+              : null;
+          const dirty = dirtyRef.current;
+          setRequest(row);
+          setPaths((prev) => cardPathsAfterPoll(prev, row?.payload?.paths, dirty));
+        })
+        .catch(() => {
+          // Best-effort, as the old poll was; the subscription still covers
+          // every board-driven refresh.
+        });
+      return function () {
+        cancelled = true;
+      };
+    },
+    [props.ticketId, props.agentId],
+  );
+
+  // Adopt the shared row. Runs on every publish — i.e. on the board's
+  // cadence, not on a card-local one — and the dirty flag still guards the
+  // textarea (see cardPathsAfterPoll).
+  react.useEffect(
+    function () {
+      if (snapshot === null) return;
+      const dirty = dirtyRef.current;
+      const shared: PendingApprovalLike | null = selectCardApproval(snapshot, props.ticketId);
+      const row =
+        shared === null
+          ? null
+          : {
+              id: shared.id,
+              // Number-coerced, as the host's per-ticket remote is: the
+              // selector matched on Number() equality, so this is finite.
+              ticketId: Number(shared.ticketId),
+              kind: shared.kind,
+              prompt: shared.prompt,
+              payload: shared.payload ?? {},
+              at: shared.at,
+            };
+      setRequest(row);
+      setPaths((prev) => cardPathsAfterPoll(prev, row?.payload?.paths, dirty));
+    },
+    [snapshot, props.ticketId],
+  );
 
   async function resolve(approved: boolean) {
     if (request === null || working) return;

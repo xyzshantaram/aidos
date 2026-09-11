@@ -473,6 +473,118 @@ export function queuePollMs(queueOpen: boolean): number {
 }
 
 /**
+ * #200: the SHARED queue snapshot — the one poll's result, read by many.
+ *
+ * Three surfaces used to poll for the same truth on their own cadences: the
+ * board's queue effect fetched `actionNominations` + `pendingApprovals` every
+ * 4s open / 20s shut, and every mounted AllowlistRequestCard fetched
+ * `pendingApproval` for its own ticket every 2s. So one open card plus a shut
+ * queue cost ~36 remotes/minute (30 card + 3 ticks x 2), and an open queue
+ * cost ~60/minute — each extra card adding another 30.
+ *
+ * Now the board's effect is the ONLY poll: it publishes every refresh here,
+ * and the card selects its row out of the published approvals instead of
+ * fetching. One refresh costs the two remotes the effect already made
+ * (nominations + approvals), so a shut queue costs 6/minute and an open one
+ * 30 — and the card costs zero. When the host ships a single `queueState`
+ * remote returning both halves together (see the note on the board's
+ * effect), that call site collapses to one remote per refresh with no
+ * consumer changing: shut 3/minute, open 15.
+ *
+ * A module-level store rather than props because the card's parents
+ * (detail-panel, inline-actions) are not this ticket's to rewire: the card
+ * subscribes here directly, so no intermediate component passes anything
+ * down. No React, no DOM — the same rule the rest of this module follows,
+ * so the selectors stay unit testable.
+ */
+export interface QueueSnapshot {
+  /** The latest nominations list from `actionNominations`. */
+  nominations: Nomination[];
+  /** The latest approvals list from `pendingApprovals`. */
+  approvals: PendingApprovalLike[];
+  /** Wall-clock ms of the refresh that produced it. */
+  at: number;
+}
+
+let currentSnapshot: QueueSnapshot | null = null;
+const snapshotListeners = new Set<(snapshot: QueueSnapshot | null) => void>();
+
+/** The last published refresh, or null when the board has not polled yet. */
+export function getQueueSnapshot(): QueueSnapshot | null {
+  return currentSnapshot;
+}
+
+/**
+ * Publish one refresh. Called by the board's poll effect after every
+ * successful fetch — separately per half, each carrying the latest of the
+ * other, because the two fetches are independent and neither may erase the
+ * other's result (the same rule the effect's own state follows).
+ */
+export function publishQueueSnapshot(snapshot: QueueSnapshot): void {
+  currentSnapshot = snapshot;
+  for (const listener of [...snapshotListeners]) listener(currentSnapshot);
+}
+
+/** Subscribe to refreshes. Returns an unsubscribe for the effect cleanup. */
+export function subscribeQueueSnapshot(
+  listener: (snapshot: QueueSnapshot | null) => void,
+): () => void {
+  snapshotListeners.add(listener);
+  return function () {
+    snapshotListeners.delete(listener);
+  };
+}
+
+/**
+ * #200: the card's row out of the shared snapshot.
+ *
+ * The SAME semantics as the host's per-ticket `pendingApproval` remote the
+ * card used to poll: the oldest approval for this ticket. The host coerces
+ * the ticket id with Number() and scopes by session; the snapshot is already
+ * session-scoped (the board publishes only its own session's fetch), and
+ * Number() here mirrors the coercion — a foreign-shaped key (`sess:12`)
+ * coerces to NaN and matches nothing, exactly as the remote answers null
+ * for it.
+ */
+export function selectCardApproval(
+  snapshot: QueueSnapshot | null,
+  ticketId: number | string,
+): PendingApprovalLike | null {
+  if (snapshot === null) return null;
+  const wanted = Number(ticketId);
+  if (!Number.isFinite(wanted)) return null;
+  let best: PendingApprovalLike | null = null;
+  for (const row of snapshot.approvals) {
+    if (Number(row.ticketId) !== wanted) continue;
+    if (best === null || row.at < best.at) best = row;
+  }
+  return best;
+}
+
+/**
+ * #51 no-clobber rule, as a pure function (#200 extraction).
+ *
+ * A refresh must never clobber text typed between polls: the dirty flag
+ * latches on the first keystroke (see the card), and while it is set the
+ * current textarea content stands — whatever the refresh carried. When
+ * clean, a refresh carrying a paths array is adopted; a refresh with no row
+ * (resolved elsewhere) or a malformed payload keeps what is shown.
+ *
+ * Extracted so the RULE is testable: the component's only job is to pass
+ * its flag and apply the answer.
+ */
+export function cardPathsAfterPoll(
+  current: readonly string[],
+  incomingPaths: unknown,
+  dirty: boolean,
+): string[] {
+  if (!dirty && Array.isArray(incomingPaths)) {
+    return [...(incomingPaths as string[])];
+  }
+  return [...current];
+}
+
+/**
  * #141: one click of an armed-reject button, as a decision rather than a
  * branch buried in JSX.
  *
