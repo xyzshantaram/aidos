@@ -112,6 +112,76 @@ function intersectProjectIds(
   return kept;
 }
 
+/**
+ * #199: ROW STABILIZATION -- the content-hash cache that makes tile/strip
+ * memoization actually hit.
+ *
+ * Every render used to rebuild every row object (`Object.values(...).map(...)
+ * spread`), so even a ticket whose data had not changed arrived at the tile
+ * as a NEW object and the tile re-rendered. Between rows here and markup
+ * caches in ticket-tile/ticket-strip, this file owns the identity half: a
+ * row is re-wrapped only when its CONTENT hash changes. A poll tick that
+ * carries new data for one ticket produces exactly one new row object; the
+ * other rows keep their previous identity and their tiles bail out.
+ *
+ * The cache lives at module scope on purpose: the badge remount (#100)
+ * rebuilds this whole component, and a component-level cache would hand the
+ * fresh mount all-new identities, re-rendering the board the mount was
+ * meant to keep still. Bounded: churn beyond the limit drops the cache and
+ * the board rebuilds cold -- correct, merely slower.
+ */
+type BoardRow = TicketViewType & { sourceSessionId?: string; foreign?: boolean };
+const ROW_CACHE_LIMIT = 4096;
+const stableRowCache = new Map<string, { hash: string; row: BoardRow }>();
+
+function stabilizeBoardRows(
+  rows: readonly TicketViewType[],
+  sessionId: string,
+  foreign: boolean,
+): BoardRow[] {
+  return rows.map((raw) => {
+    const owner = foreign
+      ? ((raw as { sourceSessionId?: unknown }).sourceSessionId as string | undefined) ?? ""
+      : sessionId;
+    const key = owner + ":" + String(raw.id);
+    // The content hash: the row's own data plus where it is shown from.
+    // JSON stringify of one projection row is far cheaper than re-rendering
+    // the tile, and it is exactly the "new data?" test the cache needs.
+    const hash = JSON.stringify(raw) + "|" + owner + "|" + String(foreign);
+    const hit = stableRowCache.get(key);
+    if (hit !== undefined && hit.hash === hash) return hit.row;
+    const row: BoardRow = foreign
+      ? { ...raw }
+      : { ...raw, sourceSessionId: sessionId, foreign: false };
+    if (stableRowCache.size >= ROW_CACHE_LIMIT) stableRowCache.clear();
+    stableRowCache.set(key, { hash, row });
+    return row;
+  });
+}
+
+/** Same treatment for the per-ticket evidence arrays: hash-keyed identity,
+ *  so an unchanged evidence list keeps its array object across ticks. */
+const EVIDENCE_CACHE_LIMIT = 4096;
+const stableEvidenceCache = new Map<string, { hash: string; rows: EvidenceRow[] }>();
+
+function stabilizeEvidence(
+  evidence: Record<string, EvidenceRow[]>,
+): Record<string, EvidenceRow[]> {
+  const out: Record<string, EvidenceRow[]> = {};
+  for (const [key, rows] of Object.entries(evidence)) {
+    const hash = JSON.stringify(rows);
+    const hit = stableEvidenceCache.get(key);
+    if (hit !== undefined && hit.hash === hash) {
+      out[key] = hit.rows;
+      continue;
+    }
+    if (stableEvidenceCache.size >= EVIDENCE_CACHE_LIMIT) stableEvidenceCache.clear();
+    stableEvidenceCache.set(key, { hash, rows });
+    out[key] = rows;
+  }
+  return out;
+}
+
 /** Read the persisted filter. Falls back to defaults on any failure. */
 // Exported for #138's follow-up tests: the tag filter has to survive the
 // restore, and a pure function is the only honest way to pin that.
@@ -430,13 +500,24 @@ function ProjectionReader(props: ProjectionReaderProps) {
   // Own rows always render from the live projection (goal-domain pattern):
   // the merge cache contributes foreign rows only, so own-session writes
   // show instantly and a stale merge can never shadow them (#46/#48).
-  const ownRows: Array<TicketViewType & { sourceSessionId?: string; foreign?: boolean }> =
-    Object.values(ticketsProjection as Record<string, TicketViewType> | undefined ?? {}).map(
-      (row) => ({ ...row, sourceSessionId: sessionId, foreign: false }),
-    );
-  const foreignRows =
+  /*
+   * #199: own rows go through the content-hash stabilizer, so a tick that
+   * changed nothing about a row hands the tile the SAME object it had
+   * before. (The old inline `.map(row => ({...row, ...}))` produced a new
+   * identity every render and made every downstream memo useless.)
+   */
+  const ownRows: BoardRow[] = stabilizeBoardRows(
+    Object.values(ticketsProjection as Record<string, TicketViewType> | undefined ?? {}),
+    sessionId,
+    false,
+  );
+  const foreignRows: BoardRow[] =
     merge !== null
-      ? merge.tickets.filter((row) => row.sourceSessionId !== sessionId)
+      ? stabilizeBoardRows(
+          merge.tickets.filter((row) => row.sourceSessionId !== sessionId),
+          sessionId,
+          true,
+        )
       : [];
   /*
    * #21: the viewing session's OWN workspace, taken from its own rows --
@@ -488,7 +569,12 @@ function ProjectionReader(props: ProjectionReaderProps) {
       if (!key.startsWith(sessionId + ":")) foreignComments[key] = value;
     }
   }
-  const rawEvidence: Record<string, EvidenceRow[]> = { ...foreignEvidence, ...ownEvidence };
+  // #199: per-key identity stabilization for the evidence lists too, so an
+  // unchanged list keeps its array object into the tile props.
+  const rawEvidence: Record<string, EvidenceRow[]> = stabilizeEvidence({
+    ...foreignEvidence,
+    ...ownEvidence,
+  });
   const rawComments: Record<string, CommentRecord[]> = { ...foreignComments, ...ownComments };
   /*
    * #108: THE one hiding point for the merged board. Every surface below —

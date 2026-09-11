@@ -20,6 +20,18 @@
  * tile), so the root is a div wearing the button's role, focusability, and
  * keyboard (Enter/Space select). The action row and every dialog sit in a
  * wrapper that stops propagation, so acting never selects.
+ *
+ * #199: a poll tick used to re-render EVERY tile. The exported TicketTile
+ * is now a thin wrapper that (a) always calls the hooks, in a stable
+ * order, and (b) returns a CACHED element when nothing that shapes the
+ * markup changed. A cached return is what React's bail-out needs (same
+ * element reference -> the subtree is not reconciled), and keeping the
+ * hooks in the wrapper keeps hook order legal on every render. The cache
+ * is keyed by ticket (session-stamped id) and validated against the props
+ * that reach the markup; onSelect is deliberately excluded -- see the
+ * note above tilePropsEqual. Live updates propagate because any tick
+ * carrying new data for a row hands the tile a NEW ticket object, which
+ * fails the identity check and rebuilds.
  */
 
 import react from "react";
@@ -117,6 +129,133 @@ export interface TicketTileProps {
 }
 
 export function TicketTile(props: TicketTileProps) {
+  /*
+   * #199: the dialog state is the ONLY hookful part of the tile, and it
+   * lives here in the wrapper so it is called on EVERY render -- including
+   * the renders that then return a cached element. A cache hit skips the
+   * body below entirely; skipping hook calls would be the illegal kind of
+   * conditional hook order, so the hooks must not live in the body.
+   *
+   * The flows' open state lives in plain useState, deliberately NOT in the
+   * store-backed detail-modal store: that store is keyed by ticket, so a
+   * tile copy would share open-state with the detail panel's copy and open
+   * the SAME dialog twice. A board refresh keeps these (same-key
+   * re-render); only unmounting the tile closes them.
+   */
+  const [signoffOpen, setSignoffOpen] = react.useState(false);
+  const [verifyOpen, setVerifyOpen] = react.useState(false);
+  const [sendBackOpen, setSendBackOpen] = react.useState(false);
+  const [markDoneOpen, setMarkDoneOpen] = react.useState(false);
+  const [allowlistOpen, setAllowlistOpen] = react.useState(false);
+  const [submitting, setSubmitting] = react.useState(false);
+  const controls: TileControls = {
+    signoffOpen,
+    setSignoffOpen,
+    verifyOpen,
+    setVerifyOpen,
+    sendBackOpen,
+    setSendBackOpen,
+    markDoneOpen,
+    setMarkDoneOpen,
+    allowlistOpen,
+    setAllowlistOpen,
+    submitting,
+    setSubmitting,
+  };
+
+  const key = tileCacheKey(props.ticket);
+  const hit = tileMarkupCache.get(key);
+  if (
+    hit !== undefined &&
+    tilePropsEqual(hit.props, props) &&
+    tileControlsEqual(hit.controls, controls)
+  ) {
+    return hit.element;
+  }
+  const element = renderTicketTile(props, controls);
+  if (tileMarkupCache.size >= TILE_CACHE_LIMIT) tileMarkupCache.clear();
+  tileMarkupCache.set(key, { props, controls, element });
+  return element;
+}
+
+/** The dialog open-state the wrapper owns and the body reads. */
+interface TileControls {
+  signoffOpen: boolean;
+  setSignoffOpen: (open: boolean) => void;
+  verifyOpen: boolean;
+  setVerifyOpen: (open: boolean) => void;
+  sendBackOpen: boolean;
+  setSendBackOpen: (open: boolean) => void;
+  markDoneOpen: boolean;
+  setMarkDoneOpen: (open: boolean) => void;
+  allowlistOpen: boolean;
+  setAllowlistOpen: (open: boolean) => void;
+  submitting: boolean;
+  setSubmitting: (submitting: boolean) => void;
+}
+
+/**
+ * #199: rendered tile markup, keyed by the session-stamped ticket id and
+ * validated by tilePropsEqual. Bounded: a board churn (tickets created and
+ * retired across sessions) can only grow the key set, so at the limit the
+ * cache drops wholesale -- a cold rebuild is correct, merely slower.
+ */
+const TILE_CACHE_LIMIT = 1024;
+const tileMarkupCache = new Map<
+  string,
+  { props: TicketTileProps; controls: TileControls; element: react.ReactElement }
+>();
+
+/** The cache key: one ticket in one owning session. */
+function tileCacheKey(ticket: TicketView): string {
+  const stamped = (ticket as { sourceSessionId?: unknown }).sourceSessionId;
+  return (typeof stamped === "string" ? stamped : "") + ":" + String(ticket.id);
+}
+
+/** Two empty evidence arrays (the common case: `?? []` at the call site)
+ *  are the same markup even though they are different array objects. */
+function tileEvidenceEqual(
+  a: readonly EvidenceRow[],
+  b: readonly EvidenceRow[],
+): boolean {
+  return a === b || (a.length === 0 && b.length === 0);
+}
+
+/**
+ * The props that reach the markup. onSelect is DELIBERATELY excluded: the
+ * grid passes a fresh closure every render, so including it would void the
+ * cache entirely. A stale onSelect is safe to keep: its only state-dependent
+ * behaviour is the toggle-shut check, which reads the closure's selectedKey
+ * -- and the only tile whose behaviour changes when the selection moves is
+ * the selected tile, whose `selected` prop flips and forces a rebuild.
+ */
+function tilePropsEqual(a: TicketTileProps, b: TicketTileProps): boolean {
+  return (
+    a.ticket === b.ticket &&
+    tileEvidenceEqual(a.evidence, b.evidence) &&
+    a.selected === b.selected &&
+    (a.active ?? false) === (b.active ?? false) &&
+    (a.awaitingApproval ?? false) === (b.awaitingApproval ?? false) &&
+    a.ownWorkspaceKey === b.ownWorkspaceKey &&
+    (a.agentId ?? null) === (b.agentId ?? null) &&
+    (a.ticketIdKey ?? null) === (b.ticketIdKey ?? null)
+  );
+}
+
+/** The state flags shape the markup; the setters do not (React's useState
+ *  setters are stable, so the live component's are already identical). */
+function tileControlsEqual(a: TileControls, b: TileControls): boolean {
+  return (
+    a.signoffOpen === b.signoffOpen &&
+    a.verifyOpen === b.verifyOpen &&
+    a.sendBackOpen === b.sendBackOpen &&
+    a.markDoneOpen === b.markDoneOpen &&
+    a.allowlistOpen === b.allowlistOpen &&
+    a.submitting === b.submitting
+  );
+}
+
+function renderTicketTile(props: TicketTileProps, controls: TileControls) {
   const ticket = props.ticket;
   /*
    * #83: other session copies of this same ticket, which the workspace merge
@@ -173,18 +312,24 @@ export function TicketTile(props: TicketTileProps) {
   const ticketIdKey = props.ticketIdKey ?? String(ticket.id);
 
   /*
-   * The flows' open state lives in plain useState, deliberately NOT in the
-   * store-backed detail-modal store: that store is keyed by ticket, so a
-   * tile copy would share open-state with the detail panel's copy and open
-   * the SAME dialog twice. A board refresh keeps these (same-key
-   * re-render); only unmounting the tile closes them.
+   * #199: the hooks moved UP into TicketTile (the wrapper) so a cache-hit
+   * render can skip this body without skipping hook calls. The flags and
+   * setters arrive through `controls`.
    */
-  const [signoffOpen, setSignoffOpen] = react.useState(false);
-  const [verifyOpen, setVerifyOpen] = react.useState(false);
-  const [sendBackOpen, setSendBackOpen] = react.useState(false);
-  const [markDoneOpen, setMarkDoneOpen] = react.useState(false);
-  const [allowlistOpen, setAllowlistOpen] = react.useState(false);
-  const [submitting, setSubmitting] = react.useState(false);
+  const {
+    signoffOpen,
+    setSignoffOpen,
+    verifyOpen,
+    setVerifyOpen,
+    sendBackOpen,
+    setSendBackOpen,
+    markDoneOpen,
+    setMarkDoneOpen,
+    allowlistOpen,
+    setAllowlistOpen,
+    submitting,
+    setSubmitting,
+  } = controls;
 
   /*
    * #194: the click-time re-check. The bar renders from render-time
