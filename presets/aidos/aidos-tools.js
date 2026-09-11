@@ -28280,6 +28280,7 @@ function aidosSessionEventTypesRegistered() {
 // src/host/aidos-core.ts
 var WORKTREE_TIMEOUT_MS = 12e4;
 var CLOSED_FOLD_CACHE_TTL_MS = 6e4;
+var CLOSED_INSPECT_CONCURRENCY = 4;
 var BadPayloadError = class extends Error {
   constructor(message) {
     super(message);
@@ -28826,9 +28827,17 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     /**
      * Closed-session folds for the workspace merge, keyed by session id.
      * Populated and read in `workspaceTickets`; see the loop there for the
-     * exactness argument (invalidate-on-live plus TTL).
+     * exactness argument (invalidate-on-live plus TTL) and the #198
+     * stale-while-revalidate split.
      */
     __publicField(this, "_closedFolds", /* @__PURE__ */ new Map());
+    /**
+     * #198: background refreshes currently running for stale closed-fold
+     * entries, keyed by session id. The set both deduplicates (two merges
+     * hitting the same stale entry schedule ONE refresh) and lets tests and
+     * the sweep await or spare an in-flight refresh deterministically.
+     */
+    __publicField(this, "_closedFoldRefreshes", /* @__PURE__ */ new Map());
     // ---- the action-nomination store (#93) --------------------------------
     /**
      * Session-scoped nominations, keyed by id. Decided with the user
@@ -29301,44 +29310,22 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
     const now = Date.now();
     for (const liveId of liveIds) this._closedFolds.delete(liveId);
+    const fresh = [];
+    const stale = [];
+    const misses = [];
     for (const id of closedIds) {
       const hit = this._closedFolds.get(id);
-      let views;
-      let stateEvidence;
-      let stateComments;
-      let retired;
-      if (hit !== void 0 && now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
-        ({ views, evidence: stateEvidence, comments: stateComments, retired } = hit);
+      if (hit === void 0) {
+        misses.push(id);
+      } else if (now - hit.at < CLOSED_FOLD_CACHE_TTL_MS) {
+        fresh.push([id, hit]);
       } else {
-        let inspection;
-        try {
-          const persistence = this.ctx.get("sessionPersistence");
-          inspection = await persistence.inspect(id);
-        } catch (error51) {
-          this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
-          continue;
-        }
-        const { state } = this._foldExternalLog(inspection.meta, inspection.events);
-        views = [...ticketsProjection(state, this._resolvedConfig).values()];
-        stateEvidence = state.evidence;
-        stateComments = state.comments;
-        retired = /* @__PURE__ */ new Set();
-        for (const view of views) {
-          if (this._isRetired(state, view.id)) retired.add(view.id);
-        }
-        this._closedFolds.set(id, {
-          at: now,
-          views,
-          evidence: stateEvidence,
-          comments: stateComments,
-          retired
-        });
-        for (const [cachedId, entry] of this._closedFolds) {
-          if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS) this._closedFolds.delete(cachedId);
-        }
+        stale.push([id, hit]);
       }
-      for (const view of [...views].sort(ownSort)) {
-        if (!includeRetired && retired.has(view.id)) continue;
+    }
+    const renderClosed = (id, entry) => {
+      for (const view of [...entry.views].sort(ownSort)) {
+        if (!includeRetired && entry.retired.has(view.id)) continue;
         const key = id + ":" + view.id;
         tickets.push({
           ...view,
@@ -29346,8 +29333,29 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
           sourceSessionId: id,
           foreign: true
         });
-        evidence[key] = [...stateEvidence.get(view.id) ?? []];
-        comments[key] = [...stateComments.get(view.id) ?? []];
+        evidence[key] = [...entry.evidence.get(view.id) ?? []];
+        comments[key] = [...entry.comments.get(view.id) ?? []];
+      }
+    };
+    for (const [id, entry] of fresh) renderClosed(id, entry);
+    for (const [id, entry] of stale) {
+      renderClosed(id, entry);
+      this._refreshClosedFold(id);
+    }
+    let poolCursor = 0;
+    const poolWorker = async () => {
+      while (poolCursor < misses.length) {
+        const id = misses[poolCursor++];
+        const entry = await this._inspectClosedFold(id, now);
+        if (entry !== null) renderClosed(id, entry);
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, misses.length) }, poolWorker)
+    );
+    for (const [cachedId, entry] of this._closedFolds) {
+      if (now - entry.at >= CLOSED_FOLD_CACHE_TTL_MS && !this._closedFoldRefreshes.has(cachedId)) {
+        this._closedFolds.delete(cachedId);
       }
     }
     const deduped = dedupeBoardRows(tickets);
@@ -29504,6 +29512,59 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent, args) {
     return this._attachEvidence(agent, args, "agent");
+  }
+  /**
+   * #198: inspect one closed session's log, fold it, and cache the derived
+   * views. Returns the fresh entry, or null when the inspect or the fold
+   * failed — a failure is logged and skips the row, exactly as the old
+   * inline path did. Never throws.
+   */
+  async _inspectClosedFold(id, now) {
+    let inspection;
+    try {
+      const persistence = this.ctx.get("sessionPersistence");
+      inspection = await persistence.inspect(id);
+    } catch (error51) {
+      this.ctx.logger?.debug?.(`aidos: inspect failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+      return null;
+    }
+    const { state } = this._foldExternalLog(inspection.meta, inspection.events);
+    const views = [...ticketsProjection(state, this._resolvedConfig).values()];
+    const retired = /* @__PURE__ */ new Set();
+    for (const view of views) {
+      if (this._isRetired(state, view.id)) retired.add(view.id);
+    }
+    const entry = {
+      at: now,
+      views,
+      evidence: state.evidence,
+      comments: state.comments,
+      retired
+    };
+    this._closedFolds.set(id, entry);
+    return entry;
+  }
+  /**
+   * #198: re-inspect one stale closed-fold entry in the background. At most
+   * one refresh per id runs at a time; a failed refresh drops the expired
+   * entry (it is garbage past the TTL — serving it forever would pin a
+   * vanished session's rows to the board) instead of leaving it to be
+   * re-attempted on every merge.
+   */
+  _refreshClosedFold(id) {
+    if (this._closedFoldRefreshes.has(id)) return;
+    const run = (async () => {
+      try {
+        const entry = await this._inspectClosedFold(id, Date.now());
+        if (entry === null) this._closedFolds.delete(id);
+      } catch (error51) {
+        this.ctx.logger?.debug?.(`aidos: closed-fold refresh failed for ${id}: ${error51 instanceof Error ? error51.message : String(error51)}`);
+        this._closedFolds.delete(id);
+      } finally {
+        this._closedFoldRefreshes.delete(id);
+      }
+    })();
+    this._closedFoldRefreshes.set(id, run);
   }
   requestAllowlist(agent, args) {
     const cwd = agent.session?.header?.cwd ?? "";

@@ -103,6 +103,9 @@ describe("closed-session fold cache", () => {
       expect(inspectCount()).toBe(1);
       await vi.advanceTimersByTimeAsync(61000);
       await harness.service.workspaceTickets(harness.asAgent());
+      // #198: the expired entry is served stale and re-inspected in the
+      // background — await the refresh before counting.
+      await Promise.all([...(harness.service as unknown as { _closedFoldRefreshes: Map<string, Promise<void>> })._closedFoldRefreshes.values()]);
       expect(inspectCount()).toBe(2);
     } finally {
       vi.useRealTimers();
@@ -148,6 +151,8 @@ describe("closed-session fold cache", () => {
     });
     const foldsOf = (svc: unknown): Map<string, unknown> =>
       (svc as unknown as { _closedFolds: Map<string, unknown> })._closedFolds;
+    const refreshesOf = (svc: unknown): Map<string, Promise<void>> =>
+      (svc as unknown as { _closedFoldRefreshes: Map<string, Promise<void>> })._closedFoldRefreshes;
     vi.useFakeTimers();
     try {
       await harness.service.workspaceTickets(harness.asAgent());
@@ -157,6 +162,8 @@ describe("closed-session fold cache", () => {
       listed = [ID_A];
       await vi.advanceTimersByTimeAsync(61000);
       await harness.service.workspaceTickets(harness.asAgent());
+      // #198: the expired entries refresh in the background — await both.
+      await Promise.all([...refreshesOf(harness.service).values()]);
       // A re-inspects and re-caches; B is never touched again — and its
       // stale entry is swept rather than kept.
       expect(inspects).toEqual({ a: 2, b: 1 });
