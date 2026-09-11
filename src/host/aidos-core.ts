@@ -3657,8 +3657,14 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * The BOARD surface: bulk migration, per approved proposal. Every ticket
-   * in the caller's own session log carrying `from` gets `to` instead —
-   * the detach half and the attach half each run through `_applyTags`.
+   * in the live workspace carrying `from` gets `to` instead — the caller's
+   * own log plus every live sibling session's log, so the write agrees with
+   * the `workspaceTags` listing ("on every ticket carrying it"). Each ticket
+   * is written through its owning session, keeping one authoritative log per
+   * ticket; the detach half and the attach half each run through `_applyTags`.
+   * Closed sessions have no live owner and are not reachable (the same
+   * boundary `searchTickets` states). `tickets` holds numeric ids across
+   * those logs, so one id may repeat when two sessions share it.
    */
   @Remote("userMigrateTag")
   userMigrateTag(
@@ -3670,13 +3676,16 @@ registerAidosSessionEventTypes(ctx);
     if (from === to) {
       throw new BadPayloadError("migration needs two different tag names");
     }
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
     const affected: number[] = [];
-    for (const snapshot of cache.state.tickets.values()) {
-      if ((snapshot.tags ?? []).includes(from)) {
-        this._applyTags(agent, snapshot.id, { add: [to], remove: [from] }, "user");
-        affected.push(snapshot.id);
+    for (const session of [agent.session, ...this._liveWorkspaceSessions(agent)]) {
+      const owner = (session === agent.session ? agent : { ...agent, session }) as Agent;
+      const cache = this._cache(session);
+      this._sync(session, cache);
+      for (const snapshot of cache.state.tickets.values()) {
+        if ((snapshot.tags ?? []).includes(from)) {
+          this._applyTags(owner, snapshot.id, { add: [to], remove: [from] }, "user");
+          affected.push(snapshot.id);
+        }
       }
     }
     if (affected.length === 0) {
@@ -3691,18 +3700,27 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * The BOARD surface: delete one tag, per approved proposal. Removes it
-   * from every ticket in the caller's log that carries it.
+   * from every ticket in the live workspace that carries it — the caller's
+   * own log plus every live sibling session's log, so the write agrees with
+   * the `workspaceTags` listing ("from every ticket carrying it"). Each
+   * ticket is written through its owning session. Closed sessions have no
+   * live owner and are not reachable (the same boundary `searchTickets`
+   * states). `tickets` holds numeric ids across those logs, so one id may
+   * repeat when two sessions share it.
    */
   @Remote("userDeleteTag")
   userDeleteTag(agent: Agent, args: { tag: string }): { tag: string; tickets: number[] } {
     const name = this._cleanTagNames([args.tag])[0];
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
     const affected: number[] = [];
-    for (const snapshot of cache.state.tickets.values()) {
-      if ((snapshot.tags ?? []).includes(name)) {
-        this._applyTags(agent, snapshot.id, { add: [], remove: [name] }, "user");
-        affected.push(snapshot.id);
+    for (const session of [agent.session, ...this._liveWorkspaceSessions(agent)]) {
+      const owner = (session === agent.session ? agent : { ...agent, session }) as Agent;
+      const cache = this._cache(session);
+      this._sync(session, cache);
+      for (const snapshot of cache.state.tickets.values()) {
+        if ((snapshot.tags ?? []).includes(name)) {
+          this._applyTags(owner, snapshot.id, { add: [], remove: [name] }, "user");
+          affected.push(snapshot.id);
+        }
       }
     }
     if (affected.length === 0) {
@@ -3716,16 +3734,21 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
-   * Every tag name the caller's workspace carries right now.
-   * Read over the caller's own log; the workspace merge's union comes from
-   * the `workspaceTags` Remote below.
+   * Every tag name the live workspace carries right now: the caller's own
+   * log plus every live sibling session's log. `agentAttachTags` measures
+   * creation against this set and `requestTagChange` checks existence
+   * against it, so both agree with the `workspaceTags` listing. Closed
+   * sessions are not folded here (that merge is async); the `workspaceTags`
+   * Remote below is the full merge.
    */
   private _workspaceTagSet(agent: Agent): Set<string> {
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
     const out = new Set<string>();
-    for (const snapshot of cache.state.tickets.values()) {
-      for (const tag of snapshot.tags ?? []) out.add(tag);
+    for (const session of [agent.session, ...this._liveWorkspaceSessions(agent)]) {
+      const cache = this._cache(session);
+      this._sync(session, cache);
+      for (const snapshot of cache.state.tickets.values()) {
+        for (const tag of snapshot.tags ?? []) out.add(tag);
+      }
     }
     return out;
   }
