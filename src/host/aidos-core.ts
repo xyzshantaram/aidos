@@ -1288,6 +1288,28 @@ const NOMINATION_ACTION_STATE: Record<string, string> = {
 };
 
 /**
+ * #203: which cap family a nomination action counts against. The families
+ * are the queue's own tabs (queueTabOf in src/client/human-queue.ts):
+ * signoff is permission to start; verify and mark-done are both checks on
+ * finished work. The allowlist family has no nomination action today —
+ * allowlist asks ride pending approvals, capped at requestAllowlist — but
+ * the bucket exists so the mapping stays TOTAL: an actionId nobody has
+ * invented yet lands in verify, exactly where the queue would show it,
+ * rather than falling through uncapped, and no action is ever counted
+ * twice.
+ */
+type NominationCategory = "signoff" | "verify" | "allowlist";
+const NOMINATION_CATEGORY_CAP = 10;
+const NOMINATION_CATEGORY_OF: Record<string, NominationCategory> = {
+  signoff: "signoff",
+  verify: "verify",
+  "mark-done": "verify",
+};
+function nominationCategoryOf(actionId: string): NominationCategory {
+  return NOMINATION_CATEGORY_OF[actionId] ?? "verify";
+}
+
+/**
  * Lifecycle order, so PAST can be told from NOT YET.
  *
  * #160 nearly shipped without this distinction and a test caught it: a
@@ -2502,11 +2524,12 @@ registerAidosSessionEventTypes(ctx);
         `ticket ${args.ticketId} is retired; it takes no allowlist requests until it is un-retired`,
       );
     }
-    // A per-session cap bounds a looping agent (finding 6).
+    // A per-session cap bounds a looping agent (finding 6). #203: 10, in
+    // step with the per-category nomination caps.
     const sessionId = String(agent.session.id);
     const mine = [...this._pendingApprovals.values()].filter((row) => row.sessionId === sessionId);
-    if (mine.length >= 5) {
-      throw new Error("too many pending allowlist requests (5); resolve some on the board first");
+    if (mine.length >= 10) {
+      throw new Error("too many pending allowlist requests (10); resolve some on the board first");
     }
     this._approvalSeq += 1;
     const id = `req-${Date.now()}-${this._approvalSeq}`;
@@ -2943,8 +2966,10 @@ registerAidosSessionEventTypes(ctx);
      * re-nomination look like a new one, so at the cap an agent could never
      * revise the reason on an ask it had already made -- it could only be
      * refused, forever.
+     *
+     * Counted PER CATEGORY (#203): each family gets its own 10, so a burst
+     * of verify asks can never starve signoff asks.
      */
-    const cap = 20;
     /*
      * #160: count only the nominations still ASKING for something. This
      * used to count every row in the store, including asks the human had
@@ -2953,19 +2978,39 @@ registerAidosSessionEventTypes(ctx);
      * told it that acting on one would make room. It would not have.
      *
      * Same function the queue reads, so the count and the list cannot
-     * drift apart again.
+     * drift apart again. Split by family (#203): a fulfilled signoff frees
+     * a signoff slot and nothing else.
      */
     const mine = this._liveNominations(agent);
-    const existingPairs = new Set(mine.map((n) => `${n.ticketId}|${n.actionId}`));
-    const incomingNew = new Set(
-      suggestions
-        .map((sug) => `${Number(sug.ticketId)}|${sug.actionId}`)
-        .filter((pair) => !existingPairs.has(pair)),
-    );
-    if (mine.length + incomingNew.size > cap) {
-      throw new Error(
-        `too many nominations (cap ${cap}); the human dismisses or acts on them to make room`,
-      );
+    const existingByCategory = new Map<NominationCategory, Set<string>>();
+    for (const nomination of mine) {
+      const category = nominationCategoryOf(nomination.actionId);
+      let pairs = existingByCategory.get(category);
+      if (pairs === undefined) {
+        pairs = new Set();
+        existingByCategory.set(category, pairs);
+      }
+      pairs.add(`${nomination.ticketId}|${nomination.actionId}`);
+    }
+    const incomingByCategory = new Map<NominationCategory, Set<string>>();
+    for (const suggestion of suggestions) {
+      const pair = `${Number(suggestion.ticketId)}|${suggestion.actionId}`;
+      const category = nominationCategoryOf(suggestion.actionId);
+      if (existingByCategory.get(category)?.has(pair) === true) continue;
+      let incoming = incomingByCategory.get(category);
+      if (incoming === undefined) {
+        incoming = new Set();
+        incomingByCategory.set(category, incoming);
+      }
+      incoming.add(pair);
+    }
+    for (const [category, incoming] of incomingByCategory) {
+      const existing = existingByCategory.get(category)?.size ?? 0;
+      if (existing + incoming.size > NOMINATION_CATEGORY_CAP) {
+        throw new Error(
+          `too many nominations (${category} cap ${NOMINATION_CATEGORY_CAP}); the human dismisses or acts on them to make room`,
+        );
+      }
     }
     const state = this._cache(agent.session).state;
 
