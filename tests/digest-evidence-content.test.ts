@@ -42,9 +42,10 @@ describe("the board-update digest carries evidence content", () => {
     const long = lines2.find((line) => line.includes("xxx"));
     expect(long).toBeDefined();
     // The note is now an indented BLOCKQUOTE continuation rather than a
-    // quoted field, so it ends at the ellipsis. What is asserted is
-    // unchanged: the text is marked as truncated, not silently cut.
-    expect((long as string).endsWith("…")).toBe(true);
+    // quoted field. Since #174 the line carries the ticket's next step after
+    // the quote, so the ellipsis no longer ends the line — what is asserted
+    // is unchanged: the text is marked as truncated, not silently cut.
+    expect(long as string).toContain("…");
     expect(long as string).toContain("\n  > ");
   });
 

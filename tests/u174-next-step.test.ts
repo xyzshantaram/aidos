@@ -18,6 +18,8 @@ import { checkGate } from "../src/kernel/gates";
 import { nextStep } from "../src/kernel/next-step";
 import { GateRefused } from "../src/kernel/types";
 import type { EvidenceRow, TicketSnapshot, TicketState } from "../src/kernel/types";
+import { apply } from "../src/tools/aidos-tools";
+import { asContext, createHarness, successJson } from "./b1-harness";
 
 const ticket = (state: TicketState, over: Partial<TicketSnapshot> = {}): TicketSnapshot =>
   ({
@@ -184,6 +186,42 @@ describe("#174 one derivation, two consumers", () => {
     expect(tools).not.toContain('from "../kernel/next-step"');
   });
 
+  it("every gate-relevant tool result goes through it — four call sites, no more", () => {
+    /*
+     * The tool half of "every board tool result that changes gate-relevant
+     * state carries next_step". Exactly the four writers that move the gate
+     * — set_ticket (create and edit), attach_commit, attach_evidence,
+     * move_ticket — and every call is the service derivation, never a
+     * second sentence written in the tool layer. A fifth call site, or a
+     * dropped one, fails here instead of shipping a result without
+     * guidance.
+     *
+     * This is the next-step uniqueness pin, and it lives in THIS file — not
+     * in #170's pin (tests/u98-signoff-one-flow.test.ts), which counts
+     * CLIENT writers of board actions. That file proves one flow per user
+     * action; this file proves one derivation of next_step. A criterion
+     * citing "#170's uniqueness test" for this property names the wrong
+     * file; the honest citation is this block.
+     */
+    const calls = tools.match(/ctx\.aidos\.nextStepFor\(/g) ?? [];
+    expect(calls).toHaveLength(4);
+  });
+
+  it("the general evidence-attach digest line carries it too", () => {
+    /*
+     * The move and criterion-link lines already rode _nextStepSuffix while
+     * the general evidence-attach line — the most common gate-relevant
+     * digest line — appended only the evidence suffix. All three now carry
+     * the same guidance, on the INSTRUCTION side so lines needing the same
+     * thing still coalesce.
+     */
+    const start = core.indexOf("private _attachEvidenceInternal(");
+    expect(start).toBeGreaterThan(-1);
+    const tail = core.slice(start);
+    const body = tail.slice(0, tail.indexOf("return row.payload;"));
+    expect(body).toContain("_nextStepSuffix");
+  });
+
   it("rides the digest's INSTRUCTION side, so grouping stays honest", () => {
     /*
      * Coalescing (#174's neighbour) merges lines with identical
@@ -201,5 +239,93 @@ describe("#174 one derivation, two consumers", () => {
     // has no next step, and a decoration must never fail an attach or a move.
     const body = core.slice(core.indexOf("nextStepFor(agent: Agent"));
     expect(body.slice(0, 500)).toContain("catch");
+  });
+});
+
+/**
+ * Gaps 1–2 (verifier round): set_ticket and move_ticket answered with no
+ * nextStep, so the motivating case — creating a ticket — never surfaced the
+ * open-ticket guidance the kernel already derives. These drive the REAL
+ * tools over the REAL service and assert the step rides each result, agrees
+ * with the gate at each state, and goes quiet exactly when nothing is
+ * missing.
+ */
+describe("#174 creation and moves answer with the step", () => {
+  function setup() {
+    const harness = createHarness();
+    harness.installService();
+    apply(asContext(harness.ctx), {});
+    return harness;
+  }
+
+  it("creating a bare ticket answers with the new-ticket step", async () => {
+    const harness = setup();
+    const created = successJson(await harness.runTool("set_ticket", { title: "Fresh" }));
+    // No criteria yet: the open-ticket guidance names criteria first,
+    // including what the ticket is NOT addressing.
+    expect(String(created.nextStep ?? "")).toContain("criteria");
+  });
+
+  it("grilling the criteria moves the step to the allowlist", async () => {
+    const harness = setup();
+    const created = successJson(await harness.runTool("set_ticket", { title: "Scoped" }));
+    const edited = successJson(
+      await harness.runTool("set_ticket", {
+        ticketId: created.ticketId as number,
+        criteria: "- it works",
+      }),
+    );
+    // The allowlist field is still empty: signoff alone would grant write
+    // access to nothing, so the step says so where it is actionable.
+    expect(String(edited.nextStep ?? "")).toMatch(/grants write access to nothing/);
+  });
+
+  it("a move answers with what the new state still needs", async () => {
+    const harness = setup();
+    const created = successJson(
+      await harness.runTool("set_ticket", { title: "Walker", criteria: "- it works" }),
+    );
+    const ticketId = created.ticketId as number;
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_signoff");
+    const moved = successJson(
+      await harness.runTool("move_ticket", { ticketId, to: "in_progress" }),
+    );
+    // In progress with no evidence: the submit gate's missing kinds, named
+    // with who supplies them — the same sentence the kernel derives.
+    expect(String(moved.nextStep ?? "")).toMatch(/still needs/);
+    expect(String(moved.nextStep ?? "")).toContain("review_pass");
+  });
+
+  it("guidance tracks the gate to the end, then goes absent — not empty", async () => {
+    const harness = setup();
+    const created = successJson(
+      await harness.runTool("set_ticket", { title: "Finisher", criteria: "- it works" }),
+    );
+    const ticketId = created.ticketId as number;
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_signoff");
+    successJson(await harness.runTool("move_ticket", { ticketId, to: "in_progress" }));
+    successJson(
+      await harness.runTool("attach_evidence", { ticketId, kind: "builtin:automated_check" }),
+    );
+    successJson(
+      await harness.runTool("attach_evidence", { ticketId, kind: "builtin:review_pass" }),
+    );
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_commit", {
+      commit: "seeded-setup-row",
+      subject: "setup scaffolding, not a resolved commit",
+    });
+    const moved = successJson(
+      await harness.runTool("move_ticket", { ticketId, to: "awaiting_verification" }),
+    );
+    // Landing in awaiting_verification leaves the human's verify step: the
+    // move result names it rather than going quiet one state early.
+    expect(String(moved.nextStep ?? "")).toContain("user_verified");
+    // Once the human verifies, nothing is missing and the step is ABSENT —
+    // a caller can branch on the key rather than parsing an empty string.
+    harness.seedEvidence(harness.agent, ticketId, "builtin:user_verified");
+    const edited = successJson(
+      await harness.runTool("set_ticket", { ticketId, title: "Finisher (touched)" }),
+    );
+    expect("nextStep" in edited).toBe(false);
   });
 });

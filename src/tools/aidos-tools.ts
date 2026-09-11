@@ -1073,6 +1073,14 @@ function registerSetTicket(ctx: Context): void {
             gateTotal: { oneOf: [{ type: "number" }, { type: "null" }], required: true },
             confidenceScore: { type: "number", required: true },
             updatedAt: { type: "number", required: true },
+            /*
+             * #174: what the ticket needs NOW, derived from the gate the
+             * board just re-evaluated. Absent when it needs nothing, so a
+             * reader can branch on it rather than parsing an empty string.
+             * On create this is the new-ticket step (criteria, then the
+             * allowlist, then mark_ready); on edit it reflects the change.
+             */
+            nextStep: { type: "string" },
           },
         },
         render: renderJson,
@@ -1103,6 +1111,17 @@ function registerSetTicket(ctx: Context): void {
             gateTotal: view.gateTotal,
             confidenceScore: view.confidenceScore,
             updatedAt: view.updatedAt,
+            /*
+             * #174: creating a ticket is the motivating case for the next
+             * step — the kernel already derives the open-ticket guidance
+             * (criteria, then the allowlist, then mark_ready) but nothing
+             * surfaced it in this result. Edits re-read the same derivation,
+             * so a criteria or allowlist change is reflected at once.
+             */
+            ...(function () {
+              const step = ctx.aidos.nextStepFor(agent, view.id);
+              return step === undefined ? {} : { nextStep: step };
+            })(),
           };
         } catch (error) {
           refusal(error);
@@ -1338,6 +1357,12 @@ function registerMoveTicket(ctx: Context): void {
             ticketId: { type: "integer", required: true },
             fromState: { ...STATE_SCHEMA, required: true },
             toState: { ...STATE_SCHEMA, required: true },
+            /*
+             * #174: what the ticket needs NOW, derived from the gate the
+             * board just re-evaluated. Absent when it needs nothing, so a
+             * reader can branch on it rather than parsing an empty string.
+             */
+            nextStep: { type: "string" },
           },
         },
         render: renderJson,
@@ -1349,7 +1374,22 @@ function registerMoveTicket(ctx: Context): void {
         try {
           const moved = ctx.aidos.agentMoveTicket(agent, { ticketId: args.ticketId, to: args.to });
           ctx.logger?.info?.(`aidos: move_ticket moved ticket ${moved.ticketId} ${moved.fromState} -> ${moved.toState}`);
-          return { ok: true, ticketId: moved.ticketId, fromState: moved.fromState, toState: moved.toState };
+          return {
+            ok: true,
+            ticketId: moved.ticketId,
+            fromState: moved.fromState,
+            toState: moved.toState,
+            /*
+             * #174: a move is when the gate's answer changes, so it is when
+             * the next step is most worth stating — including the case that
+             * costs the most, where the ticket just landed in
+             * awaiting_verification with nothing left to ask for (absent).
+             */
+            ...(function () {
+              const step = ctx.aidos.nextStepFor(agent, moved.ticketId);
+              return step === undefined ? {} : { nextStep: step };
+            })(),
+          };
         } catch (error) {
           refusal(error);
         }

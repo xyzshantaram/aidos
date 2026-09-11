@@ -5826,7 +5826,12 @@ registerAidosSessionEventTypes(ctx);
       const title = cache.state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
         agent.session,
-        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(kind)} by ${actor}` + _evidenceDigestSuffix(kind, payload),
+        `${_mdTicketHead(ticketId, title)} \u2014 evidence ${_mdCode(kind)} by ${actor}` +
+          _evidenceDigestSuffix(kind, payload) +
+          // #174: the same guidance the move and criterion-link lines carry —
+          // what this ticket needs next, on the INSTRUCTION side so lines
+          // needing the same thing still coalesce.
+          this._nextStepSuffix(agent, ticketId),
       );
     }
     return row.payload;
