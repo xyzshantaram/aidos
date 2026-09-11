@@ -1,8 +1,9 @@
 /**
  * The per-ticket allowlist guard. The write boundary enforces the union
  * of the in-progress tickets' allowlists; a write outside the union is
- * refused and names the in-progress ticket whose allowlist would need to
- * cover it. Subagents get the same path predicate as a child-scope guard.
+ * refused with a remedy the reader can actually perform (#159: never a
+ * single arbitrary ticket id, never an action the reader's own session
+ * forbids). Subagents get the same path predicate as a child-scope guard.
  * SPEC-B1.md sections 4b and 4 are the contract.
  */
 
