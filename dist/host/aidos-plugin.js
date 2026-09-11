@@ -28407,6 +28407,24 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
      * the sweep await or spare an in-flight refresh deterministically.
      */
     __publicField(this, "_closedFoldRefreshes", /* @__PURE__ */ new Map());
+    /**
+     * #197: the board version, a monotonically growing string, plus the time
+     * it was last CONFIRMED by a full merge compute.
+     *
+     * `_boardVersionSeq` increments in `_sync` whenever any session's fold
+     * actually consumes new events (and in `_cache` when a brand-new session
+     * seeds with events) — that is the one place every board mutation passes
+     * through, so nothing else has to remember to invalidate. The string form
+     * is the seq at last compute, NOT recomputed per pull, so concurrent
+     * viewers that pulled the same world share one version and all gate.
+     *
+     * Over-invalidation is the safe direction: a change in ANY workspace
+     * invalidates every gate in this process, costing one extra full pull —
+     * never a missed change.
+     */
+    __publicField(this, "_boardVersionSeq", 0);
+    __publicField(this, "_boardVersion", "0");
+    __publicField(this, "_boardVersionAt", 0);
     // ---- the action-nomination store (#93) --------------------------------
     /**
      * Session-scoped nominations, keyed by id. Decided with the user
@@ -28832,6 +28850,19 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   async workspaceTickets(agent, args) {
     const includeRetired = args?.includeRetired === true;
+    const nowGate = Date.now();
+    const versionFresh = nowGate - this._boardVersionAt < CLOSED_FOLD_CACHE_TTL_MS;
+    const currentVersion = String(this._boardVersionSeq);
+    if (!includeRetired && typeof args?.sinceVersion === "string" && args.sinceVersion === currentVersion && versionFresh) {
+      return {
+        tickets: [],
+        evidence: {},
+        comments: {},
+        workspaceLabels: {},
+        version: currentVersion,
+        unchanged: true
+      };
+    }
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const workspaceLabels = {};
@@ -28947,10 +28978,22 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-      return { tickets: out, evidence: keptEvidence, comments: keptComments, workspaceLabels };
+      return {
+        tickets: out,
+        evidence: keptEvidence,
+        comments: keptComments,
+        workspaceLabels,
+        version: this._stampBoardVersion(nowGate)
+      };
     }
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-    return { tickets, evidence, comments, workspaceLabels };
+    return {
+      tickets,
+      evidence,
+      comments,
+      workspaceLabels,
+      version: this._stampBoardVersion(nowGate)
+    };
   }
   async retiredTickets(agent, args) {
     void args;
@@ -29134,6 +29177,12 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       }
     })();
     this._closedFoldRefreshes.set(id, run);
+  }
+  /** Record that a full merge compute confirmed the world at `at`. */
+  _stampBoardVersion(at) {
+    this._boardVersion = String(this._boardVersionSeq);
+    this._boardVersionAt = at;
+    return this._boardVersion;
   }
   requestAllowlist(agent, args) {
     const cwd = agent.session?.header?.cwd ?? "";
@@ -30079,11 +30128,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     }
     cache = { state, observedSeq: session.events.length };
     this._caches.set(session, cache);
+    if (session.events.length > 0) this._boardVersionSeq += 1;
     return cache;
   }
   /** Fold the events appended since the last observation. */
   _sync(session, cache) {
     const events = session.events;
+    if (events.length > cache.observedSeq) this._boardVersionSeq += 1;
     for (let index = cache.observedSeq; index < events.length; index += 1) {
       foldSessionEvent(cache.state, events[index]);
     }

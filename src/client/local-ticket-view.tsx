@@ -75,6 +75,27 @@ function filterStorageKey(workspaceKey: string): string {
   return "aidos:board:local:filter:" + workspaceKey;
 }
 
+/*
+ * #197 VERSION-GATED PULLS, client half.
+ *
+ * `boardVersions` remembers, per session, the board version the host
+ * stamped on the last FULL workspaceTickets reply. The next pull sends it
+ * back as `sinceVersion`; when the board has not moved the host replies
+ * `unchanged` with NO rows, and the merge cache stays as it is. view-state
+ * is allowlist-frozen, so the map lives here beside its only reader.
+ */
+const boardVersions = new Map<string, string>();
+
+/**
+ * #197: re-pulls AFTER the first merge coalesce on this debounce. A
+ * tool-call burst changes the board many times a second; each change used
+ * to fire its own full POST. With a merge already on screen the foreign
+ * rows can wait a beat, so the burst lands as ONE call — and that call is
+ * version-gated on top, so an unchanged board gets an empty reply.
+ */
+const MERGE_PULL_DEBOUNCE_MS = 300;
+
+
 /**
  * Intersect a stored project selection with the projects actually present.
  * Null covers every present project.
@@ -331,9 +352,21 @@ function ProjectionReader(props: ProjectionReaderProps) {
     if (getPulledVersion(sessionId) === ownVersion) return;
     setMergePending(getMerge(sessionId) === null);
     let cancelled = false;
+    let timer = 0;
     const pull = async function () {
       try {
-        const result = await callAidosRemote("workspaceTickets", {}, sessionId);
+        /*
+         * #197: send the last-seen board version. A full reply carries a
+         * fresh one; an `unchanged` reply carries none and NO rows — the
+         * merge cache stays exactly as it is and only the local fingerprint
+         * advances, so the effect goes quiet until the board really moves.
+         */
+        const sinceVersion = boardVersions.get(sessionId);
+        const result = await callAidosRemote(
+          "workspaceTickets",
+          sinceVersion === undefined ? {} : { sinceVersion },
+          sessionId,
+        );
         /*
          * #139: learn the real directory name of every workspace this merge
          * touched, BEFORE the rows render. The workspace key cannot be
@@ -349,14 +382,19 @@ function ProjectionReader(props: ProjectionReaderProps) {
             rememberWorkspaceLabel(key, label);
           }
         }
-        // Write the module cache even when this mount was torn down
-        // mid-pull: the remount skips re-pulling for the same version, so
-        // the cache write is what delivers the merge across the remount.
-        setMerge(sessionId, result as unknown as WorkspaceMerge);
+        const gated = (result as unknown as { unchanged?: unknown }).unchanged === true;
+        if (!gated) {
+          // Write the module cache even when this mount was torn down
+          // mid-pull: the remount skips re-pulling for the same version, so
+          // the cache write is what delivers the merge across the remount.
+          setMerge(sessionId, result as unknown as WorkspaceMerge);
+          const version = (result as unknown as { version?: unknown }).version;
+          if (typeof version === "string") boardVersions.set(sessionId, version);
+        }
         setMergePulling(sessionId, false);
         setPulledVersion(sessionId, ownVersion);
         if (cancelled) return;
-        setMergeState(result as unknown as WorkspaceMerge);
+        if (!gated) setMergeState(result as unknown as WorkspaceMerge);
         setMergePending(false);
         // A signal that arrived mid-pull was folded into ownVersion; the
         // effect reruns and pulls the fresher merge. The stale marker no
@@ -367,9 +405,22 @@ function ProjectionReader(props: ProjectionReaderProps) {
         setMergePending(false);
       }
     };
-    void pull();
+    /*
+     * #197: the first pull runs at once (the board has nothing to show
+     * otherwise); a refresh pull waits out the debounce, so a burst of
+     * board changes lands as ONE call instead of one per change.
+     */
+    if (getMerge(sessionId) === null) {
+      void pull();
+    } else {
+      timer = window.setTimeout(function () {
+        timer = 0;
+        void pull();
+      }, MERGE_PULL_DEBOUNCE_MS);
+    }
     return function () {
       cancelled = true;
+      if (timer !== 0) window.clearTimeout(timer);
     };
   }, [loaded, sessionId, ownVersion]);
 

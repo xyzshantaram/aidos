@@ -2195,7 +2195,17 @@ registerAidosSessionEventTypes(ctx);
    * numeric ids and carry no source marker.
    */
   @Remote("workspaceTickets")
-  async workspaceTickets(agent: Agent, args?: { includeRetired?: boolean }): Promise<{
+  async workspaceTickets(agent: Agent, args?: {
+    includeRetired?: boolean;
+    /**
+     * #197: the board version the caller last saw. When it matches the
+     * current version and that version is fresh (see the TTL below), the
+     * board has not moved and the reply carries NO rows: the caller keeps
+     * its merge. This is what stops every board change from dragging a
+     * full world re-pull over this remote.
+     */
+    sinceVersion?: string;
+  }): Promise<{
     tickets: BoardTicketView[];
     evidence: Record<string, EvidenceRow[]>;
     comments: Record<string, CommentRecord[]>;
@@ -2215,14 +2225,58 @@ registerAidosSessionEventTypes(ctx);
      * label as soon as its session is visible.
      */
     workspaceLabels: Record<string, string>;
+    /**
+     * #197: the current board version, echoed on every full reply so the
+     * next pull can gate on it. `unchanged` marks the gated empty reply.
+     */
+    version: string;
+    unchanged?: true;
   }> {
+    /*
+     * #197 VERSION GATE. The caller's last-seen version matched and the
+     * version is still fresh, so nothing observable has moved: reply with
+     * no rows at all. The payload collapses from the whole merged board
+     * (tickets + evidence + comments) to a handful of bytes, and the merge
+     * body — every live fold and every closed-session inspect — never runs.
+     *
+     * The freshness window is the SAME TTL the closed-fold cache uses, and
+     * for the same reason: another process can append to a session this one
+     * considers closed, and this process cannot see the append. After the
+     * TTL the gate opens (a full compute runs, which refreshes the fold
+     * cache AND the timestamp), bounding cross-process staleness exactly
+     * like the fold cache does instead of eliminating it.
+     */
+    const includeRetired = args?.includeRetired === true;
+    const nowGate = Date.now();
+    const versionFresh = nowGate - this._boardVersionAt < CLOSED_FOLD_CACHE_TTL_MS;
+    /*
+     * The CURRENT version is the live seq, not the last-stamped string: a
+     * mutation bumps the seq without pulling, so a caller still holding the
+     * stamped token must get a FULL reply, never a false `unchanged`.
+     */
+    const currentVersion = String(this._boardVersionSeq);
+    if (
+      !includeRetired &&
+      typeof args?.sinceVersion === "string" &&
+      args.sinceVersion === currentVersion &&
+      versionFresh
+    ) {
+      return {
+        tickets: [],
+        evidence: {},
+        comments: {},
+        workspaceLabels: {},
+        version: currentVersion,
+        unchanged: true,
+      };
+    }
+
     /*
      * #108: retired tickets are HIDDEN from the merge by default and the
      * Retired panel asks for them by name (`includeRetired: true`, via the
      * retiredTickets Remote). Every row dropped here also drops its
      * evidence and comment entries, so the maps never orphan a key.
      */
-    const includeRetired = args?.includeRetired === true;
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     /*
@@ -2411,11 +2465,23 @@ registerAidosSessionEventTypes(ctx);
       );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-      return { tickets: out, evidence: keptEvidence, comments: keptComments, workspaceLabels };
+      return {
+        tickets: out,
+        evidence: keptEvidence,
+        comments: keptComments,
+        workspaceLabels,
+        version: this._stampBoardVersion(nowGate),
+      };
     }
 
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
-    return { tickets, evidence, comments, workspaceLabels };
+    return {
+      tickets,
+      evidence,
+      comments,
+      workspaceLabels,
+      version: this._stampBoardVersion(nowGate),
+    };
   }
 
   /**
@@ -2663,6 +2729,32 @@ registerAidosSessionEventTypes(ctx);
       }
     })();
     this._closedFoldRefreshes.set(id, run);
+  }
+
+  /**
+   * #197: the board version, a monotonically growing string, plus the time
+   * it was last CONFIRMED by a full merge compute.
+   *
+   * `_boardVersionSeq` increments in `_sync` whenever any session's fold
+   * actually consumes new events (and in `_cache` when a brand-new session
+   * seeds with events) — that is the one place every board mutation passes
+   * through, so nothing else has to remember to invalidate. The string form
+   * is the seq at last compute, NOT recomputed per pull, so concurrent
+   * viewers that pulled the same world share one version and all gate.
+   *
+   * Over-invalidation is the safe direction: a change in ANY workspace
+   * invalidates every gate in this process, costing one extra full pull —
+   * never a missed change.
+   */
+  private _boardVersionSeq = 0;
+  private _boardVersion = "0";
+  private _boardVersionAt = 0;
+
+  /** Record that a full merge compute confirmed the world at `at`. */
+  private _stampBoardVersion(at: number): string {
+    this._boardVersion = String(this._boardVersionSeq);
+    this._boardVersionAt = at;
+    return this._boardVersion;
   }
 
   /**
@@ -4192,12 +4284,19 @@ registerAidosSessionEventTypes(ctx);
     }
     cache = { state, observedSeq: session.events.length };
     this._caches.set(session, cache);
+    // #197: a brand-new session with events changes the board it joins —
+    // its tickets become merge-visible — so the version must move.
+    if (session.events.length > 0) this._boardVersionSeq += 1;
     return cache;
   }
 
   /** Fold the events appended since the last observation. */
   private _sync(session: Session, cache: SessionCache): void {
     const events = session.events;
+    // #197: new events are the ONE funnel every board change passes
+    // through (mutators fold after append), so this bump is the
+    // invalidation for the workspaceTickets version gate.
+    if (events.length > cache.observedSeq) this._boardVersionSeq += 1;
     for (let index = cache.observedSeq; index < events.length; index += 1) {
       foldSessionEvent(cache.state, events[index]);
     }
