@@ -52,8 +52,12 @@ import {
   SignoffIcon,
   ToolRenderChevron,
 } from "./icons";
-import { asBoardKey, badgeClass, stateLabel } from "./board-logic";
-import { setSelection, ticketTitle } from "./view-state";
+import { asBoardKey, badgeClass, boardKeyOf, fullTicketId, stateLabel } from "./board-logic";
+import { getMerge, setSelection, ticketTitle } from "./view-state";
+import type { WorkspaceMerge } from "./view-state";
+import { DetailView } from "./detail-panel";
+import type { TicketView } from "../kernel/projections";
+import type { CommentRecord, EvidenceRow } from "../kernel/types";
 import {
   allowlistFacts,
   boardQuerySummary,
@@ -113,6 +117,59 @@ function ticketIdOf(args: Record<string, unknown> | null, result: unknown): stri
     if (typeof value === "number" || typeof value === "string") return String(value);
   }
   return null;
+}
+
+/** The full-detail inputs for the click-through modal, or null. */
+export interface ModalTicket {
+  ticket: TicketView;
+  /** The board key: plain id for own rows, <sourceSessionId>:<id> for foreign. */
+  boardKey: string;
+  evidence: readonly EvidenceRow[];
+  comments: CommentRecord[];
+  /** Every known ticket, first-write-wins exactly like the board builds it. */
+  ticketsByKey: Map<string, TicketView>;
+}
+
+/*
+ * Resolve the click-through modal's ticket from the session's cached merge.
+ *
+ * Pure (the module store arrives as an argument) so the two-board cases are
+ * unit tested rather than left to a browser: an own row matches by bare id,
+ * a foreign row only by its composite key, and anything absent is null --
+ * the caller keeps the thin strip peek for that case, never another board's
+ * ticket.
+ *
+ * Evidence and comments ride the SAME board key the board itself reads
+ * (local-ticket-view's selectedEvidence/selectedComments), because anything
+ * addressing a board row uses boardKeyOf (#93 review).
+ */
+export function modalTicketFor(
+  merge: WorkspaceMerge | null,
+  ticketId: string | null | undefined,
+): ModalTicket | null {
+  if (merge === null || ticketId === null || ticketId === undefined || ticketId === "") {
+    return null;
+  }
+  const key = asBoardKey(ticketId);
+  const ticket = merge.tickets.find((row) => boardKeyOf(row) === key) ?? null;
+  if (ticket === null) return null;
+  const boardKey = boardKeyOf(ticket);
+  const ticketsByKey = new Map<string, TicketView>();
+  const remember = (rememberKey: string, view: TicketView) => {
+    if (!ticketsByKey.has(rememberKey)) ticketsByKey.set(rememberKey, view);
+  };
+  for (const view of merge.tickets) {
+    remember(boardKeyOf(view), view);
+    remember(String(view.id), view);
+    remember(view.workspaceKey + ":" + String(view.id), view);
+  }
+  return {
+    ticket,
+    boardKey,
+    evidence: merge.evidence[boardKey] ?? [],
+    comments: merge.comments[boardKey] ?? [],
+    ticketsByKey,
+  };
 }
 
 /** The tool's JSON result, or null when it has not settled or is not JSON. */
@@ -196,6 +253,8 @@ export function selectTitle(summaryText: string): string {
 function AidosRow(props: RowProps) {
   const [expanded, setExpanded] = react.useState(false);
   const [peekOpen, setPeekOpen] = react.useState(false);
+  // #114: the modal's evidence section starts expanded; toggled in-modal.
+  const [evidenceCollapsed, setEvidenceCollapsed] = react.useState(false);
   /*
    * #135: the open-on-board action's honest refusal. When the Tickets tab
    * button cannot be found (single-view screen, strip not rendered), the
@@ -295,6 +354,17 @@ function AidosRow(props: RowProps) {
     props.useProjection !== undefined
       ? ticketFromProjection(props.useProjection("aidos.tickets"), props.ticketId)
       : null;
+  /*
+   * #114: the full-detail inputs, read from the session's cached merge at
+   * render time -- opening the modal re-renders, so it picks up the latest
+   * pull. Null whenever the board has not loaded in this session (or the
+   * ticket is foreign to it): the modal keeps the thin strip peek, which is
+   * also what a no-projection card shows.
+   */
+  const modalTicket = modalTicketFor(
+    props.sessionId === undefined ? null : getMerge(props.sessionId),
+    props.ticketId,
+  );
 
   return (
     <div className="tool-render-card" data-error={props.state === "error" || undefined}>
@@ -372,8 +442,51 @@ function AidosRow(props: RowProps) {
         </div>
       ) : null}
       {peekOpen ? (
-        <ModalShell title="Ticket" onClose={() => setPeekOpen(false)}>
-          {peeked !== null ? (
+        <ModalShell
+          title={
+            modalTicket !== null
+              ? `#${modalTicket.ticket.id} ${modalTicket.ticket.title}`
+              : "Ticket"
+          }
+          wide={modalTicket !== null}
+          onClose={() => setPeekOpen(false)}
+        >
+          {modalTicket !== null && props.sessionId !== undefined ? (
+            <>
+              {/*
+               * #114: the click-through modal renders the board's REAL detail
+               * panel -- evidence, criteria, comments, actions -- off the
+               * same cached merge the board reads, addressed by the same
+               * board key. The session doubles as the write identity exactly
+               * as on the board (agentId={sessionId}). A dependency-card jump
+               * writes the selection and closes: the board adopts it on
+               * mount and on change (the #73/#100 seam). Takes the LARGE
+               * size: it now holds the full panel, not a strip plus excerpt.
+               */}
+              <DetailView
+                key={fullTicketId(modalTicket.ticket)}
+                ticket={modalTicket.ticket}
+                ticketIdKey={modalTicket.boardKey}
+                evidence={modalTicket.evidence}
+                comments={modalTicket.comments}
+                evidenceCollapsed={evidenceCollapsed}
+                onToggleEvidence={() => {
+                  setEvidenceCollapsed((v) => !v);
+                }}
+                onClose={() => setPeekOpen(false)}
+                agentId={props.sessionId}
+                onFieldSaved={() => {
+                  // The board re-pulls on its own tick; the modal shows the
+                  // cached merge until it is closed and reopened.
+                }}
+                ticketsByKey={modalTicket.ticketsByKey}
+                onJump={(key) => {
+                  setSelection(props.sessionId as string, key);
+                  setPeekOpen(false);
+                }}
+              />
+            </>
+          ) : peeked !== null ? (
             <>
               <TicketStrip ticket={peeked} />
               {/*
