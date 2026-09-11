@@ -151,6 +151,26 @@ export interface TagsDetachedEvent {
   at: number;
 }
 
+/**
+ * #41: the one-time backfill's completion marker. The importer appends it
+ * ONCE, after every session log has been flushed into the store inside ONE
+ * storage transaction. Its presence in the log IS the "the backfill ran"
+ * record: a reopen replays the log, sees the marker, and never imports
+ * again. A crash midway rolls the uncommitted transaction back, so no
+ * marker lands and the next open retries the whole import — at-least-once
+ * attempts, exactly-once effect.
+ */
+export interface BackfillCompletedEvent {
+  kind: "backfill/completed";
+  version: 1;
+  /** The session ids the import flushed, in import order. */
+  sessionIds: string[];
+  tickets: number;
+  evidence: number;
+  comments: number;
+  at: number;
+}
+
 /** Every event the aidos log can hold. */
 export type AidosEvent =
   | TicketChangeEvent
@@ -164,4 +184,5 @@ export type AidosEvent =
   | RefusalEvent
   | ProjectCreatedEvent
   | ProjectMovedEvent
-  | PhaseSetEvent;
+  | PhaseSetEvent
+  | BackfillCompletedEvent;

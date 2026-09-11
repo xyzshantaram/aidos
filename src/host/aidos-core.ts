@@ -4481,7 +4481,14 @@ registerAidosSessionEventTypes(ctx);
       }) as typeof session.append;
       (session as unknown as { __aidosPatched: boolean }).__aidosPatched = true;
     }
-    session.append(event.kind, event);
+    // #41: the kernel event union now includes the "backfill/completed"
+    // marker, which the host's own _commit never emits — the Store's
+    // backfill writes it straight to the workspace store, never to a
+    // session log. The casts only widen the envelope type and data.
+    session.append(
+      event.kind as SessionEvent["type"],
+      event as SessionEvent["data"],
+    );
     this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
     this._sync(session, cache);
   }

@@ -26140,6 +26140,15 @@ var PROJECT_CREATED_KEYS = ["kind", "version", "projectId", "absPath", "name", "
 var PROJECT_MOVED_KEYS = ["kind", "version", "projectId", "absPath", "name", "at"];
 var PHASE_SET_KEYS = ["kind", "version", "projectId", "number", "title", "state", "at"];
 var TAGS_KEYS = ["kind", "version", "ticketId", "names", "at"];
+var BACKFILL_KEYS = [
+  "kind",
+  "version",
+  "sessionIds",
+  "tickets",
+  "evidence",
+  "comments",
+  "at"
+];
 function invariant(message) {
   throw new InvariantError(message);
 }
@@ -26635,6 +26644,19 @@ function validatePhaseSet(state, raw) {
     invariant(`project ${raw.projectId} does not exist`);
   }
 }
+function validateBackfillCompleted(raw) {
+  expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
+  if (raw.version !== 1) {
+    invariant("backfill/completed version must be 1");
+  }
+  if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
+    invariant("backfill/completed sessionIds must be an array of strings");
+  }
+  expectInt(raw.tickets, "backfill tickets", 0);
+  expectInt(raw.evidence, "backfill evidence", 0);
+  expectInt(raw.comments, "backfill comments", 0);
+  expectNumber(raw.at, "backfill/completed at");
+}
 function validateAidosEvent(state, event) {
   if (!isPlainObject2(event)) {
     invariant("event must be an object");
@@ -26680,6 +26702,9 @@ function validateAidosEvent(state, event) {
       return;
     case "phase/set":
       validatePhaseSet(state, raw);
+      return;
+    case "backfill/completed":
+      validateBackfillCompleted(raw);
       return;
     default:
       invariant(`unknown event kind: ${String(kind)}`);
@@ -26820,6 +26845,9 @@ function foldAidosEvents(state, event) {
         state.phases.set(event.projectId, perProject);
       }
       perProject.set(event.number, { title: event.title, state: event.state });
+      return state;
+    }
+    case "backfill/completed": {
       return state;
     }
   }
@@ -30773,7 +30801,10 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       });
       session.__aidosPatched = true;
     }
-    session.append(event.kind, event);
+    session.append(
+      event.kind,
+      event
+    );
     this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
     this._sync(session, cache);
   }

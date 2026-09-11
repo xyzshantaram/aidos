@@ -185,5 +185,10 @@ export function foldAidosEvents(state: AidosState, event: AidosEvent): AidosStat
       perProject.set(event.number, { title: event.title, state: event.state });
       return state;
     }
+    case "backfill/completed": {
+      // #41: append-only history — the marker records that the one-time
+      // backfill ran; it carries no board state to fold.
+      return state;
+    }
   }
 }

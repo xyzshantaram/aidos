@@ -418,9 +418,11 @@ export class SqliteStorage implements StoragePort {
       }
       case "plan/change":
       case "phase/set":
-      case "aidos/refusal": {
+      case "aidos/refusal":
+      case "backfill/completed": {
         // Log-only for the materialized views: plan and phase state fold
-        // from the events rows; refusals are history, never projection.
+        // from the events rows; refusals are history, never projection;
+        // the #41 backfill marker is history too.
         break;
       }
     }

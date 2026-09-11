@@ -9,6 +9,8 @@
 import type { AidosEvent } from "./events";
 import { foldAidosEvents, createInitialState } from "./fold";
 import type { AidosState } from "./fold";
+import { foldSessionLog, importedRowsOf } from "./backfill";
+import type { BackfillSessionLog, FoldedSessionLog } from "./backfill";
 import { checkGate, isLegalTransition } from "./gates";
 import { planContextLineCount, validateAidosEvent } from "./invariants";
 import { confidenceScoreOf, gateFractionOf } from "./projections";
@@ -85,6 +87,15 @@ export interface TicketSearchHit {
   workspaceKey: string;
 }
 
+/** What one backfill run did. Zeros plus `alreadyRan` when it skipped. */
+export interface BackfillResult {
+  alreadyRan: boolean;
+  sessionIds: string[];
+  tickets: number;
+  evidence: number;
+  comments: number;
+}
+
 /** The plan of a project that never held one. */
 const EMPTY_PLAN: PlanValue = {
   frontmatter: "",
@@ -106,6 +117,11 @@ function deepFreeze<T>(value: T): T {
 
 /** One column getter of the tickets page sort. */
 type RowGetter = (row: TicketPageRow) => unknown;
+
+/** One folded log's local ticket ids, ascending — the deterministic import order. */
+function sortedLocalIds(fold: FoldedSessionLog): TicketId[] {
+  return [...fold.state.tickets.keys()].sort((a, b) => a - b);
+}
 
 /** The sort columns per key, mirroring the prototype's _SORT_COLUMNS. */
 const SORT_COLUMNS: Record<SortKey, RowGetter[]> = {
@@ -256,6 +272,24 @@ export class Store {
       storage.rollbackTransaction?.();
       throw new StoreWriteRefused(error);
     }
+  }
+
+  /**
+   * #41: one validated append WITHOUT its own transaction bracket — the
+   * bracket belongs to the caller. The backfill uses this to flush a whole
+   * import inside ONE bracket, so a crash midway leaves nothing behind and
+   * the next open retries cleanly. Order matches _append: log push, store
+   * append, fold. Throws whatever fails; the caller owns the rollback.
+   */
+  private _emit(event: AidosEvent, origin?: EventOrigin): void {
+    validateAidosEvent(this._state, event);
+    this._log.push(event);
+    if (origin) {
+      this._storage.append(event, origin);
+    } else {
+      this._storage.append(event);
+    }
+    foldAidosEvents(this._state, event);
   }
 
   /**
@@ -511,6 +545,282 @@ export class Store {
       at: this._atFor(ticketId),
     });
     return { detached: present };
+  }
+
+  // ---- backfill (#41) ----
+
+  /**
+   * #41: the one-time import of the workspace's existing session logs.
+   *
+   * The HOST owns the reads: it calls `ctx.get("sessionPersistence").inspect`
+   * for every persisted session of this workspace (the same API
+   * `workspaceTickets` uses) and hands the inspected logs in here, shaped
+   * as `BackfillSessionLog`. The store owns the write: every imported
+   * ticket is renumbered into the workspace id space through the same port
+   * counter every create uses (so ids can never collide across sessions or
+   * with tickets created later), keeps its origin `(sessionId, localSeq)`
+   * on every row the import flushes, and has its dependency references and
+   * evidence rows rewritten through the renumbering map.
+   *
+   * RUNS ONCE. The import lands inside ONE storage transaction bracket and
+   * finishes with a `backfill/completed` marker event. The marker in the
+   * log IS the record that the backfill ran: any later call — same store
+   * or a reopen that replays the log — sees it and imports nothing. A crash
+   * midway rolls the uncommitted bracket back, so no marker lands, nothing
+   * half-imported survives, and the next open retries the whole import:
+   * at-least-once attempts, exactly-once effect.
+   *
+   * Import shape per source ticket, respecting the create invariants
+   * (a create is revision 1, open, createdAt = at): one `create` carrying
+   * the ticket's content, then its live evidence rows and comments
+   * (ascending `at`, the order the source's Rule 7 already guarantees),
+   * then one `set` carrying the final snapshot — final state, remapped
+   * dependencies, folded tags — at revision 2. Origin stamping: each
+   * imported row carries the source session id and the seq of the source
+   * event that produced it, so every row traces back to the log it came
+   * from.
+   */
+  backfillSessionLogs(
+    projectId: ProjectId,
+    logs: readonly BackfillSessionLog[],
+  ): BackfillResult {
+    // Once and only once: the marker in the log is the record.
+    if (this._log.some((event) => event.kind === "backfill/completed")) {
+      return { alreadyRan: true, sessionIds: [], tickets: 0, evidence: 0, comments: 0 };
+    }
+    const project = this._state.projects.get(projectId);
+    if (!project) {
+      throw new UnknownProject(projectId);
+    }
+    const workspaceKey = workspaceKeyFromPath(project.absPath);
+
+    const folded = logs.map(foldSessionLog);
+
+    // Pass 1 — renumber. One workspace-unique id per imported ticket, from
+    // the same port counter every create uses; two logs may both hold a
+    // local ticket 1, and they leave here with different ids.
+    const newIdOf = new Map<string, TicketId>();
+    for (const fold of folded) {
+      for (const localId of sortedLocalIds(fold)) {
+        let newId: TicketId;
+        try {
+          newId = this._storage.allocateTicketId();
+        } catch (error) {
+          throw new StoreWriteRefused(error);
+        }
+        newIdOf.set(`${fold.sessionId}#${localId}`, newId);
+      }
+    }
+
+    // Pass 2 — slugs. The workspace slug is unique per workspace; two
+    // sessions can hold the same slug, so later collisions get a numeric
+    // suffix, deterministically in import order.
+    const slugOf = new Map<string, string>();
+    const takenSlugs = new Set<string>();
+    for (const snapshot of this._state.tickets.values()) {
+      if (snapshot.workspaceKey === workspaceKey) {
+        takenSlugs.add(snapshot.slug);
+      }
+    }
+    for (const fold of folded) {
+      for (const localId of sortedLocalIds(fold)) {
+        const final = fold.state.tickets.get(localId)!;
+        let slug = final.slug;
+        let suffix = 2;
+        while (takenSlugs.has(slug)) {
+          slug = `${final.slug}-${suffix}`;
+          suffix += 1;
+        }
+        takenSlugs.add(slug);
+        slugOf.set(`${fold.sessionId}#${localId}`, slug);
+      }
+    }
+
+    // Pass 3 — flush, all inside one bracket.
+    const storage = this._storage;
+    const transactional =
+      typeof storage.beginTransaction === "function" &&
+      typeof storage.commitTransaction === "function";
+    if (transactional) {
+      storage.beginTransaction!();
+    }
+    const logLengthBefore = this._log.length;
+    let tickets = 0;
+    let evidence = 0;
+    let comments = 0;
+    try {
+      for (const fold of folded) {
+        const rows = importedRowsOf(fold);
+        for (const localId of sortedLocalIds(fold)) {
+          const key = `${fold.sessionId}#${localId}`;
+          const newId = newIdOf.get(key)!;
+          const slug = slugOf.get(key)!;
+          const final = fold.state.tickets.get(localId)!;
+          const origin = (localSeq: number | null): EventOrigin => ({
+            sessionId: fold.sessionId,
+            localSeq,
+          });
+          const ticketOrigin = origin(fold.seqOfTicket.get(localId) ?? null);
+
+          // The create: content as-is, but a create is open, revision 1,
+          // createdAt = at — the invariants' only legal birth.
+          this._emit(
+            {
+              kind: "ticket/change",
+              version: 1,
+              operation: "create",
+              ticket: {
+                id: newId,
+                projectId,
+                title: final.title,
+                description: final.description,
+                body: final.body,
+                criteria: final.criteria,
+                phase: final.phase,
+                order: final.order,
+                state: "open",
+                dependsOn: [],
+                allowlist: [...final.allowlist],
+                tags: [...final.tags],
+                slug,
+                workspaceKey,
+                revision: 1,
+                createdAt: final.createdAt,
+                updatedAt: final.createdAt,
+              },
+              at: final.createdAt,
+            },
+            ticketOrigin,
+          );
+
+          // The ticket's live writes, ascending at — the order the source
+          // log's Rule 7 guarantees, so no at falls.
+          const writes = [
+            ...rows.evidence
+              .filter((row) => row.ticketId === localId)
+              .map((row) => ({ at: row.row.at, kind: "evidence" as const, row })),
+            ...rows.comments
+              .filter((comment) => comment.record.ticketId === localId)
+              .map((comment) => ({ at: comment.record.at, kind: "comment" as const, comment })),
+          ].sort((a, b) => a.at - b.at);
+          let lastWriteAt = final.createdAt;
+          for (const write of writes) {
+            lastWriteAt = Math.max(lastWriteAt, write.at);
+            if (write.kind === "evidence") {
+              this._emit(
+                {
+                  kind: "evidence/attached",
+                  version: 1,
+                  ticketId: newId,
+                  row: deepClone(write.row.row),
+                },
+                origin(write.row.originSeq),
+              );
+              evidence += 1;
+            } else {
+              this._emit(
+                {
+                  kind: "comment/added",
+                  version: 1,
+                  ticketId: newId,
+                  text: write.comment.record.text,
+                  author: write.comment.record.author,
+                  at: write.comment.record.at,
+                },
+                origin(write.comment.originSeq),
+              );
+              comments += 1;
+            }
+          }
+
+          // The set: the final snapshot — final state, remapped deps,
+          // folded tags — at revision 2, no earlier than any write.
+          const setAt = Math.max(final.updatedAt, lastWriteAt);
+          this._emit(
+            {
+              kind: "ticket/change",
+              version: 1,
+              operation: "set",
+              ticket: {
+                ...final,
+                id: newId,
+                projectId,
+                workspaceKey,
+                slug,
+                dependsOn: final.dependsOn
+                  .map((ref) => this._remapDependency(ref, fold, folded, newIdOf, workspaceKey))
+                  .filter((ref): ref is string => ref !== null),
+                revision: 2,
+                updatedAt: setAt,
+              },
+              at: setAt,
+            },
+            ticketOrigin,
+          );
+          tickets += 1;
+        }
+      }
+      // The marker: the record that this backfill ran, committed in the
+      // same bracket as the rows it vouches for.
+      this._emit({
+        kind: "backfill/completed",
+        version: 1,
+        sessionIds: folded.map((fold) => fold.sessionId),
+        tickets,
+        evidence,
+        comments,
+        at: this._nowFn(),
+      });
+      if (transactional) {
+        storage.commitTransaction!();
+      }
+    } catch (error) {
+      // Nothing half-imported survives: give the log rows back, rebuild the
+      // fold, roll the bracket back, and refuse with the cause.
+      this._log.length = logLengthBefore;
+      this.replay();
+      if (transactional) {
+        storage.rollbackTransaction?.();
+      }
+      throw new StoreWriteRefused(error);
+    }
+    return {
+      alreadyRan: false,
+      sessionIds: folded.map((fold) => fold.sessionId),
+      tickets,
+      evidence,
+      comments,
+    };
+  }
+
+  /**
+   * Rewrite one `workspaceKey:localId` (or `sessionId:localId`) dependency
+   * reference through the renumbering map. The reference resolves within
+   * its own session's log first; when the prefix names ANOTHER imported
+   * session, that session's mapping answers. A reference whose target no
+   * imported log holds is dropped — keeping it raw would leave a local id
+   * pointing at whatever new ticket later claims that number.
+   */
+  private _remapDependency(
+    ref: string,
+    own: FoldedSessionLog,
+    folded: readonly FoldedSessionLog[],
+    newIdOf: Map<string, TicketId>,
+    workspaceKey: string,
+  ): string | null {
+    const colon = ref.lastIndexOf(":");
+    if (colon < 0) {
+      return null;
+    }
+    const localId = Number(ref.slice(colon + 1));
+    if (!Number.isInteger(localId) || localId < 1) {
+      return null;
+    }
+    const prefix = ref.slice(0, colon);
+    const source =
+      folded.find((fold) => fold.sessionId === prefix) ?? own;
+    const newId = newIdOf.get(`${source.sessionId}#${localId}`);
+    return newId === undefined ? null : `${workspaceKey}:${newId}`;
   }
 
   // ---- projects ----

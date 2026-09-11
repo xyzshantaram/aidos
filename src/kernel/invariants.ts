@@ -73,6 +73,15 @@ const PROJECT_CREATED_KEYS = ["kind", "version", "projectId", "absPath", "name",
 const PROJECT_MOVED_KEYS = ["kind", "version", "projectId", "absPath", "name", "at"];
 const PHASE_SET_KEYS = ["kind", "version", "projectId", "number", "title", "state", "at"];
 const TAGS_KEYS = ["kind", "version", "ticketId", "names", "at"];
+const BACKFILL_KEYS = [
+  "kind",
+  "version",
+  "sessionIds",
+  "tickets",
+  "evidence",
+  "comments",
+  "at",
+];
 
 // ---- checks ----
 
@@ -712,9 +721,23 @@ function validatePhaseSet(
 }
 
 /**
- * Validate one event against the current state.
- * Throws InvariantError on the first violation.
+ * #41: the backfill marker carries no board state, so there is nothing to
+ * check against the fold — only its own shape. The marker is append-only
+ * history like a refusal: replay keeps it, the projection ignores it.
  */
+function validateBackfillCompleted(raw: Record<string, unknown>): void {
+  expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
+  if (raw.version !== 1) {
+    invariant("backfill/completed version must be 1");
+  }
+  if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
+    invariant("backfill/completed sessionIds must be an array of strings");
+  }
+  expectInt(raw.tickets, "backfill tickets", 0);
+  expectInt(raw.evidence, "backfill evidence", 0);
+  expectInt(raw.comments, "backfill comments", 0);
+  expectNumber(raw.at, "backfill/completed at");
+}
 export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
   if (!isPlainObject(event)) {
     invariant("event must be an object");
@@ -760,6 +783,9 @@ export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
       return;
     case "phase/set":
       validatePhaseSet(state, raw);
+      return;
+    case "backfill/completed":
+      validateBackfillCompleted(raw);
       return;
     default:
       invariant(`unknown event kind: ${String(kind)}`);
