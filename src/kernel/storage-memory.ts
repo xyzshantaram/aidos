@@ -55,4 +55,34 @@ export class MemoryStorage implements StoragePort {
   close(): void {
     this._closed = true;
   }
+
+  // ---- #40: the transaction bracket (no-ops — the fake is always
+  // consistent with itself — but the nesting guard keeps the bracket
+  // contract honest, so the same Store path runs against both ports) ----
+
+  private _inTransaction = false;
+
+  beginTransaction(): void {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    if (this._inTransaction) {
+      throw new Error("a storage transaction is already open");
+    }
+    this._inTransaction = true;
+  }
+
+  commitTransaction(): void {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    if (!this._inTransaction) {
+      throw new Error("no storage transaction is open");
+    }
+    this._inTransaction = false;
+  }
+
+  rollbackTransaction(): void {
+    this._inTransaction = false;
+  }
 }

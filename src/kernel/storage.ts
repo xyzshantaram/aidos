@@ -83,6 +83,26 @@ export interface StoragePort {
   allocateTicketId(): TicketId;
   /** Every stored event, oldest first. */
   readAll(): StoredEvent[];
+  /**
+   * #40: the transaction bracket of the mirrored write path. The Store
+   * opens the store's transaction, appends to the log, then commits; a
+   * failure at any step refuses the whole write, so the log and the store
+   * can never disagree. OPTIONAL on the port: a port without these
+   * methods keeps the pre-#40 persist-first order (persist, then fold),
+   * which is still all-or-nothing from the fold's side; both shipped
+   * implementations implement the bracket, so the mirrored order is what
+   * runs everywhere in production and in the conformance suite.
+   *
+   * beginTransaction throws if the bracket is already open (no nesting);
+   * rollbackTransaction is best-effort — it may itself fail when the
+   * failed statement already rolled the transaction back, and the caller
+   * treats either outcome as "nothing persisted".
+   */
+  beginTransaction?(): void;
+  /** #40: commit the bracket opened by beginTransaction. Throws to refuse. */
+  commitTransaction?(): void;
+  /** #40: best-effort rollback of the open bracket. */
+  rollbackTransaction?(): void;
   /** Release the underlying handle. Idempotent: closing twice is silent. */
   close(): void;
 }

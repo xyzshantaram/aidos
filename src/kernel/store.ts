@@ -14,12 +14,14 @@ import { planContextLineCount, validateAidosEvent } from "./invariants";
 import { confidenceScoreOf, gateFractionOf } from "./projections";
 import { PLAN_CONTEXT_LIMIT } from "./constants";
 import { MemoryStorage } from "./storage-memory";
-import type { StoragePort } from "./storage";
+import type { EventOrigin, StoredEvent, StoragePort } from "./storage";
 import {
   ContextTooLongError,
   EvidenceAuthorRefused,
   DuplicateSlug,
   GateRefused,
+  InvariantError,
+  StoreWriteRefused,
   UnknownEvidenceRow,
   UnknownKind,
   UnknownProject,
@@ -153,6 +155,12 @@ export class Store {
     const seed = options?.log ?? this._storage.readAll().map((stored) => stored.event);
     this._log = deepClone(seed) as AidosEvent[];
     this.replay();
+    // #40: an explicit log together with a storage port is the reopen after
+    // a failed commit — the log holds events the store lacks. Repair that
+    // one surviving window here, before the board is served.
+    if (options?.log !== undefined) {
+      this._repairStorage();
+    }
   }
 
   readonly config: AidosConfig;
@@ -183,23 +191,131 @@ export class Store {
 
   // ---- internal ----
 
-  /** Validate, then persist, then fold. The log changes only on allow. */
+  /**
+   * Validate, then persist, then fold. The log changes only on allow.
+   *
+   * #40, the mirrored write path. The order is exactly the ticket's:
+   * open the store's transaction, append to the session log, then commit
+   * the transaction. A failure at ANY step refuses the whole write, so
+   * the log and the store can never disagree — the same hard-fail rule
+   * as the unregistered-event-type refusal in the host's _commit. A port
+   * without the transaction bracket keeps the pre-#40 persist-first
+   * order, which is all-or-nothing from the fold's side (see StoragePort).
+   */
   private _append(event: AidosEvent): void {
     validateAidosEvent(this._state, event);
-    // Persist BEFORE the in-memory push: a port failure (disk full, locked)
-    // throws with the fold untouched, so the store never believes a write
-    // the log does not hold.
-    if (this._originSessionId !== undefined) {
+    const storage = this._storage;
+    const origin = () => {
+      if (this._originSessionId === undefined) {
+        return undefined;
+      }
       this._originSeq += 1;
-      this._storage.append(event, {
-        sessionId: this._originSessionId,
-        localSeq: this._originSeq,
-      });
-    } else {
-      this._storage.append(event);
+      return { sessionId: this._originSessionId, localSeq: this._originSeq };
+    };
+    const mirrored =
+      typeof storage.beginTransaction === "function" &&
+      typeof storage.commitTransaction === "function";
+    if (!mirrored) {
+      // Persist BEFORE the in-memory push: a port failure (disk full, locked)
+      // throws with the fold untouched, so the store never believes a write
+      // the log does not hold.
+      const originValue = origin();
+      if (originValue) {
+        storage.append(event, originValue);
+      } else {
+        storage.append(event);
+      }
+      this._log.push(event);
+      foldAidosEvents(this._state, event);
+      return;
     }
-    this._log.push(event);
-    foldAidosEvents(this._state, event);
+    // The mirror: transaction ON, then the log append, then the commit.
+    storage.beginTransaction!();
+    let originValue: Partial<EventOrigin> | undefined;
+    try {
+      this._log.push(event);
+      originValue = origin();
+      if (originValue) {
+        storage.append(event, originValue);
+      } else {
+        storage.append(event);
+      }
+      foldAidosEvents(this._state, event);
+      storage.commitTransaction!();
+    } catch (error) {
+      // Refuse the WHOLE write: the log gives the event back and the fold
+      // is rebuilt from the remaining log (the fold is not invertible, so
+      // a replay, not an undo). The id an allocate already claimed stays
+      // claimed — the port's counter is outside the bracket, exactly like
+      // the fallback-slug consumption #39 already accepts.
+      this._log.pop();
+      this.replay();
+      if (originValue !== undefined) {
+        this._originSeq -= 1;
+      }
+      storage.rollbackTransaction?.();
+      throw new StoreWriteRefused(error);
+    }
+  }
+
+  /**
+   * #40, the repair half. A commit that failed AFTER a successful log
+   * append left log events with no store row — the one window the mirrored
+   * order cannot close while it is happening, because the log is already
+   * durable when the store refuses. Repair on the next open: if the store
+   * holds a proper PREFIX of the seeded log, append the missing tail (one
+   * bracket, so the repair is itself all-or-nothing); any other shape is
+   * a disagreement the repair refuses to paper over, and the open fails.
+   */
+  private _repairStorage(): void {
+    const storage = this._storage;
+    const stored = storage.readAll();
+    const log = this._log;
+    const shared = Math.min(stored.length, log.length);
+    const sameEvent = (a: StoredEvent, b: AidosEvent) =>
+      JSON.stringify(a.event) === JSON.stringify(b);
+    for (let index = 0; index < shared; index++) {
+      if (!sameEvent(stored[index]!, log[index]!)) {
+        throw new InvariantError(
+          `the store and the log disagree at event ${index + 1}; refusing the open rather than repairing blind`,
+        );
+      }
+    }
+    if (stored.length > log.length) {
+      throw new InvariantError(
+        `the store holds ${stored.length} events but the log holds ${log.length}; refusing the open`,
+      );
+    }
+    if (stored.length === log.length) {
+      return;
+    }
+    const transactional =
+      typeof storage.beginTransaction === "function" &&
+      typeof storage.commitTransaction === "function";
+    if (transactional) {
+      storage.beginTransaction!();
+    }
+    try {
+      for (let index = stored.length; index < log.length; index++) {
+        if (this._originSessionId !== undefined) {
+          this._originSeq += 1;
+          storage.append(log[index]!, {
+            sessionId: this._originSessionId,
+            localSeq: this._originSeq,
+          });
+        } else {
+          storage.append(log[index]!);
+        }
+      }
+      if (transactional) {
+        storage.commitTransaction!();
+      }
+    } catch (error) {
+      if (transactional) {
+        storage.rollbackTransaction?.();
+      }
+      throw new StoreWriteRefused(error);
+    }
   }
 
   /**
@@ -247,7 +363,14 @@ export class Store {
    * harness test still passes; its rescope is #42's wrapper work.
    */
   private _nextTicketId(): TicketId {
-    return Math.max(this._storage.allocateTicketId(), this._state.nextTicketId);
+    // #40: the allocation is itself a store write (UPDATE ... RETURNING),
+    // so a store failure here refuses the whole write under the same
+    // named-store rule — before any log append happens.
+    try {
+      return Math.max(this._storage.allocateTicketId(), this._state.nextTicketId);
+    } catch (error) {
+      throw new StoreWriteRefused(error);
+    }
   }
 
   /** The next free order in one phase, counted from 1. */

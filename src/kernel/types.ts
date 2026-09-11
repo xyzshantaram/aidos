@@ -424,6 +424,21 @@ export class ContextTooLongError extends Error {
   }
 }
 
+/**
+ * #40: the store refused a mirrored write, so the whole write is refused —
+ * the log gained no event and the fold did not move. The message names the
+ * store and carries the underlying cause, so at the board the failure is
+ * obviously a store problem, not a board rule.
+ */
+export class StoreWriteRefused extends Error {
+  readonly code: "STORE_WRITE_REFUSED" = "STORE_WRITE_REFUSED";
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`the store refused the write; no log event was kept: ${detail}`);
+    this.name = "StoreWriteRefused";
+  }
+}
+
 /** A log record that broke a strict replay rule. */
 export class InvariantError extends Error {
   readonly code: "INVARIANT" = "INVARIANT";

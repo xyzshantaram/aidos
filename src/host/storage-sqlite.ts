@@ -204,6 +204,54 @@ export class SqliteStorage implements StoragePort {
     return this._db;
   }
 
+  // ---- #40: the mirrored write path's transaction bracket ----
+
+  private _inTransaction = false;
+
+  /**
+   * Open the write bracket. No nesting: one bracket per append, and a
+   * nested BEGIN would silently widen the outer commit's scope.
+   */
+  beginTransaction(): void {
+    if (this._inTransaction) {
+      throw new Error("a storage transaction is already open");
+    }
+    const db = this._ensure();
+    db.exec(`BEGIN`);
+    this._inTransaction = true;
+  }
+
+  /**
+   * Commit the bracket. A failure here (read-only file, disk full, a
+   * competing writer the busy timeout expired against) is what refuses
+   * the whole mirrored write — the Store treats any throw as "nothing
+   * persisted" and rolls its log back.
+   */
+  commitTransaction(): void {
+    if (!this._inTransaction) {
+      throw new Error("no storage transaction is open");
+    }
+    this._ensure().exec(`COMMIT`);
+    this._inTransaction = false;
+  }
+
+  /**
+   * Best-effort rollback. The failed statement may have auto-rolled the
+   * transaction back already, in which case ROLLBACK itself throws —
+   * either way nothing persists, so the error is swallowed.
+   */
+  rollbackTransaction(): void {
+    if (!this._inTransaction) {
+      return;
+    }
+    this._inTransaction = false;
+    try {
+      this._db?.exec(`ROLLBACK`);
+    } catch {
+      // Already rolled back (or the handle is dead): nothing persisted.
+    }
+  }
+
   append(event: AidosEvent, origin?: Partial<EventOrigin>): StoredEvent {
     const db = this._ensure();
     const sessionId = origin?.sessionId ?? null;
