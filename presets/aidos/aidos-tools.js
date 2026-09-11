@@ -25754,13 +25754,13 @@ import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
 import {
   existsSync,
-  mkdirSync as mkdirSync2,
+  mkdirSync as mkdirSync3,
   readFileSync,
   readdirSync,
   symlinkSync,
   unlinkSync
 } from "node:fs";
-import { basename, dirname, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve2 } from "node:path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve3 } from "node:path";
 import { execFile } from "node:child_process";
 
 // src/kernel/constants.ts
@@ -26282,7 +26282,7 @@ function validateTicketChange(state, raw) {
     for (const other of state.tickets.values()) {
       nodes.add(refOf(other.workspaceKey, other.id));
     }
-    const resolve4 = (ref) => {
+    const resolve5 = (ref) => {
       const colon = ref.lastIndexOf(":");
       if (colon < 0) return null;
       const key = ref.slice(0, colon);
@@ -26296,12 +26296,12 @@ function validateTicketChange(state, raw) {
       if (other.id === id) continue;
       adjacency.set(
         refOf(other.workspaceKey, other.id),
-        (other.dependsOn ?? []).map(resolve4).filter((entry) => entry !== null)
+        (other.dependsOn ?? []).map(resolve5).filter((entry) => entry !== null)
       );
     }
     adjacency.set(
       incomingRef,
-      ticket.dependsOn.map(resolve4).filter((entry) => entry !== null)
+      ticket.dependsOn.map(resolve5).filter((entry) => entry !== null)
     );
     const color = /* @__PURE__ */ new Map();
     for (const node of nodes) color.set(node, 0);
@@ -28291,14 +28291,14 @@ function registerScratchTools(ctx) {
         if (fs?.mkdir) {
           await fs.mkdir(absPath, { recursive: true });
         } else {
-          await new Promise((resolve4, reject) => {
+          await new Promise((resolve5, reject) => {
             if (exec.signal.aborted) return reject(exec.signal.reason);
             const onAbort = () => reject(exec.signal.reason);
             exec.signal.addEventListener("abort", onAbort, { once: true });
             try {
               mkdirSync(absPath, { recursive: true });
               exec.signal.removeEventListener("abort", onAbort);
-              resolve4();
+              resolve5();
             } catch (e) {
               exec.signal.removeEventListener("abort", onAbort);
               reject(e);
@@ -28310,6 +28310,428 @@ function registerScratchTools(ctx) {
       }
     })
   );
+}
+
+// src/host/storage-sqlite.ts
+import { mkdirSync as mkdirSync2 } from "node:fs";
+import { dirname, resolve as resolve2 } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { dshHomePath as dshHomePath2 } from "@deepseek-ai/dsh-home-paths";
+
+// src/kernel/storage.ts
+var STORE_SCHEMA_VERSION = 1;
+
+// src/host/storage-sqlite.ts
+var STORE_FILE_NAME = "board.db";
+function storePathForWorkspace(cwd) {
+  return dshHomePath2("aidos", "storage", workspaceKeyFromPath(cwd), STORE_FILE_NAME);
+}
+function eventAt(event) {
+  if (event.kind === "evidence/attached") {
+    return event.row.at;
+  }
+  return event.at;
+}
+function ftsMatchExpression(query) {
+  const tokens = (query ?? "").toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+  return tokens.map((token) => `"${token}"*`).join(" ");
+}
+var SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS schema_version(
+    version INTEGER PRIMARY KEY,
+    applied_at REAL NOT NULL
+  )`,
+  // The raw aidos/* rows. origin_session/origin_seq stay NULLABLE on
+  // purpose: direct store writes have no session origin, and #41's importer
+  // backfills them for flushed session-log rows.
+  `CREATE TABLE IF NOT EXISTS events(
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    origin_session TEXT NULL,
+    origin_seq INTEGER NULL,
+    at REAL NOT NULL,
+    payload TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS events_kind_idx ON events(kind)`,
+  `CREATE TABLE IF NOT EXISTS projects(
+    project_id INTEGER PRIMARY KEY,
+    abs_path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    at REAL NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS tickets(
+    ticket_id INTEGER PRIMARY KEY,
+    project_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    criteria TEXT NOT NULL DEFAULT '',
+    phase INTEGER NOT NULL,
+    "order" INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    workspace_key TEXT NOT NULL,
+    depends_on TEXT NOT NULL DEFAULT '[]',
+    allowlist TEXT NOT NULL DEFAULT '[]',
+    revision INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    snapshot TEXT NOT NULL
+  )`,
+  // author is the ASSERTED bare Actor value ("agent" | "user" | "system"),
+  // stamped at the entry point — never verified, never proof of identity.
+  // See src/kernel/storage.ts (#111) for the recorded decision.
+  `CREATE TABLE IF NOT EXISTS evidence(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    author TEXT NOT NULL,
+    at REAL NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}'
+  )`,
+  `CREATE INDEX IF NOT EXISTS evidence_ticket_idx ON evidence(ticket_id)`,
+  `CREATE TABLE IF NOT EXISTS comments(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL,
+    author TEXT NOT NULL,
+    text TEXT NOT NULL,
+    at REAL NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS comments_ticket_idx ON comments(ticket_id)`,
+  // One row per counter; 'ticket' mirrors the fold's nextTicketId so an
+  // external reader (#41) can allocate without replaying.
+  `CREATE TABLE IF NOT EXISTS id_counter(
+    name TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+  )`,
+  // Full text over title, description, criteria, and comment text.
+  // ticket_id is stored UNINDEXED: it names the ticket, never a query term.
+  `CREATE VIRTUAL TABLE IF NOT EXISTS ticket_fts USING fts5(
+    ticket_id UNINDEXED,
+    title,
+    description,
+    criteria,
+    comment_text
+  )`
+];
+var SqliteStorage = class {
+  _path;
+  _db = null;
+  _closed = false;
+  constructor(path) {
+    this._path = resolve2(path);
+  }
+  /** The resolved database file this handle writes. */
+  get path() {
+    return this._path;
+  }
+  /**
+   * The live connection's answers: journal mode (WAL after open) and the
+   * busy-timeout milliseconds. A health check the tests also read — both
+   * are criteria on this ticket, so both stay assertable without a second
+   * connection guessing at per-connection state.
+   */
+  diagnostics() {
+    const db = this._ensure();
+    const mode = db.prepare(`PRAGMA journal_mode`).get();
+    const timeout = db.prepare(`PRAGMA busy_timeout`).get();
+    return { journalMode: mode.journal_mode, busyTimeoutMs: timeout.timeout };
+  }
+  _ensure() {
+    if (this._closed) {
+      throw new Error("storage is closed");
+    }
+    if (this._db === null) {
+      mkdirSync2(dirname(this._path), { recursive: true });
+      const db = new DatabaseSync(this._path);
+      db.exec(`PRAGMA journal_mode = WAL;`);
+      db.exec(`PRAGMA busy_timeout = 5000;`);
+      for (const statement of SCHEMA_STATEMENTS) {
+        db.exec(statement);
+      }
+      db.exec(
+        `INSERT OR IGNORE INTO schema_version(version, applied_at) VALUES (${STORE_SCHEMA_VERSION}, ${Date.now() / 1e3})`
+      );
+      db.exec(`INSERT OR IGNORE INTO id_counter(name, value) VALUES ('ticket', 1)`);
+      this._db = db;
+    }
+    return this._db;
+  }
+  // ---- #40: the mirrored write path's transaction bracket ----
+  _inTransaction = false;
+  /**
+   * Open the write bracket. No nesting: one bracket per append, and a
+   * nested BEGIN would silently widen the outer commit's scope.
+   */
+  beginTransaction() {
+    if (this._inTransaction) {
+      throw new Error("a storage transaction is already open");
+    }
+    const db = this._ensure();
+    db.exec(`BEGIN`);
+    this._inTransaction = true;
+  }
+  /**
+   * Commit the bracket. A failure here (read-only file, disk full, a
+   * competing writer the busy timeout expired against) is what refuses
+   * the whole mirrored write — the Store treats any throw as "nothing
+   * persisted" and rolls its log back.
+   */
+  commitTransaction() {
+    if (!this._inTransaction) {
+      throw new Error("no storage transaction is open");
+    }
+    this._ensure().exec(`COMMIT`);
+    this._inTransaction = false;
+  }
+  /**
+   * Best-effort rollback. The failed statement may have auto-rolled the
+   * transaction back already, in which case ROLLBACK itself throws —
+   * either way nothing persists, so the error is swallowed.
+   */
+  rollbackTransaction() {
+    if (!this._inTransaction) {
+      return;
+    }
+    this._inTransaction = false;
+    try {
+      this._db?.exec(`ROLLBACK`);
+    } catch {
+    }
+  }
+  append(event, origin) {
+    const db = this._ensure();
+    const sessionId = origin?.sessionId ?? null;
+    const localSeq = origin?.localSeq ?? null;
+    const payload = JSON.stringify(event);
+    const insert = db.prepare(
+      `INSERT INTO events(kind, origin_session, origin_seq, at, payload) VALUES (?, ?, ?, ?, ?)`
+    );
+    const outcome = insert.run(event.kind, sessionId, localSeq, eventAt(event), payload);
+    const seq = Number(outcome.lastInsertRowid);
+    this._materialize(db, event);
+    return { seq, sessionId, localSeq, event };
+  }
+  readAll() {
+    const db = this._ensure();
+    const rows = db.prepare(
+      `SELECT seq, origin_session, origin_seq, payload FROM events ORDER BY seq ASC`
+    ).all();
+    return rows.map((row) => ({
+      seq: Number(row.seq),
+      sessionId: row.origin_session,
+      localSeq: row.origin_seq,
+      event: JSON.parse(row.payload)
+    }));
+  }
+  /**
+   * #39: claim the next workspace-unique ticket id. ONE statement —
+   * UPDATE...RETURNING — so the claim is atomic across two dsh processes
+   * holding one workspace: a separate SELECT-then-UPDATE could hand both
+   * processes the same id, this cannot. A fresh database seeds the row at
+   * 1, so the first claim is 1. Lazy open applies: claiming touches the
+   * file, like any other first use.
+   */
+  allocateTicketId() {
+    const db = this._ensure();
+    db.exec(`INSERT OR IGNORE INTO id_counter(name, value) VALUES ('ticket', 1)`);
+    const row = db.prepare(
+      `UPDATE id_counter SET value = value + 1 WHERE name = 'ticket' RETURNING value`
+    ).get();
+    if (row === void 0) {
+      throw new Error("id_counter lost its 'ticket' row during allocation");
+    }
+    return row.value - 1;
+  }
+  close() {
+    if (this._closed) {
+      return;
+    }
+    this._closed = true;
+    if (this._db !== null) {
+      this._db.close();
+      this._db = null;
+    }
+    if (_registry.get(this._path) === this) {
+      _registry.delete(this._path);
+    }
+  }
+  /**
+   * Maintain the materialized projections one append at a time. The log
+   * stays the authority (the kernel folds it); these tables are what an
+   * external reader — #41's importer, a future board-read — queries without
+   * replaying.
+   */
+  _materialize(db, event) {
+    switch (event.kind) {
+      case "ticket/change": {
+        const ticket = event.ticket;
+        db.prepare(
+          `INSERT OR REPLACE INTO tickets(
+            ticket_id, project_id, title, description, body, criteria,
+            phase, "order", state, slug, workspace_key,
+            depends_on, allowlist, revision, created_at, updated_at, snapshot
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          ticket.id,
+          ticket.projectId,
+          ticket.title,
+          ticket.description,
+          ticket.body,
+          ticket.criteria,
+          ticket.phase,
+          ticket.order,
+          ticket.state,
+          ticket.slug,
+          ticket.workspaceKey,
+          JSON.stringify(ticket.dependsOn ?? []),
+          JSON.stringify(ticket.allowlist ?? []),
+          ticket.revision,
+          ticket.createdAt,
+          ticket.updatedAt,
+          JSON.stringify(ticket)
+        );
+        if (event.operation === "create") {
+          const current = db.prepare(`SELECT value FROM id_counter WHERE name = 'ticket'`).get()?.value ?? 1;
+          db.prepare(`UPDATE id_counter SET value = ? WHERE name = 'ticket'`).run(
+            Math.max(current, ticket.id + 1)
+          );
+        }
+        this._reindexTicket(db, ticket.id);
+        break;
+      }
+      case "evidence/attached": {
+        db.prepare(
+          `INSERT INTO evidence(ticket_id, kind, author, at, payload) VALUES (?, ?, ?, ?, ?)`
+        ).run(
+          event.ticketId,
+          event.row.kind,
+          event.row.author,
+          event.row.at,
+          JSON.stringify(event.row.payload ?? {})
+        );
+        break;
+      }
+      case "evidence/detached": {
+        db.prepare(
+          `DELETE FROM evidence WHERE ticket_id = ? AND at = ? AND kind = ?`
+        ).run(event.ticketId, event.at, event.rowKind);
+        break;
+      }
+      case "evidence/linked": {
+        const row = db.prepare(
+          `SELECT id, payload FROM evidence WHERE ticket_id = ? AND at = ? AND kind = ?`
+        ).get(event.ticketId, event.at, event.rowKind);
+        if (row !== void 0) {
+          const payload = JSON.parse(row.payload);
+          payload.criteria = event.criterion;
+          db.prepare(`UPDATE evidence SET payload = ? WHERE id = ?`).run(
+            JSON.stringify(payload),
+            row.id
+          );
+        }
+        break;
+      }
+      case "comment/added": {
+        db.prepare(
+          `INSERT INTO comments(ticket_id, author, text, at) VALUES (?, ?, ?, ?)`
+        ).run(event.ticketId, event.author, event.text, event.at);
+        this._reindexTicket(db, event.ticketId);
+        break;
+      }
+      case "project/created":
+      case "project/moved": {
+        db.prepare(
+          `INSERT OR REPLACE INTO projects(project_id, abs_path, name, at) VALUES (?, ?, ?, ?)`
+        ).run(event.projectId, event.absPath, event.name, event.at);
+        break;
+      }
+      case "plan/change":
+      case "phase/set":
+      case "aidos/refusal":
+      case "backfill/completed": {
+        break;
+      }
+    }
+  }
+  /**
+   * #44: the FTS5 query surface. One free-text query against ticket_fts
+   * (title, description, criteria, comment text), joined back to the
+   * materialized ticket row for the fields the dependency picker renders.
+   * Retired tickets are excluded — the dependency picker is a write
+   * surface, and the store's evidence table materializes the same
+   * `builtin:retired` rows the kernel's `isRetired` derives from, so the
+   * exclusion matches the fold's semantics. At most `limit` hits, ticket
+   * id order.
+   */
+  searchTickets(query, limit = 50) {
+    const match = ftsMatchExpression(query);
+    if (match === "") {
+      return [];
+    }
+    const db = this._ensure();
+    const rows = db.prepare(
+      `SELECT t.ticket_id, t.title, t.state, t.workspace_key, t.depends_on,
+                e.origin_session
+         FROM ticket_fts
+         JOIN tickets t ON t.ticket_id = ticket_fts.ticket_id
+         LEFT JOIN events e
+           ON e.kind = 'ticket/change'
+          AND e.origin_session IS NOT NULL
+          AND json_extract(e.payload, '$.operation') = 'create'
+          AND json_extract(e.payload, '$.ticket.id') = t.ticket_id
+         WHERE ticket_fts MATCH ?
+           AND t.ticket_id NOT IN (
+             SELECT ticket_id FROM evidence WHERE kind = 'builtin:retired'
+           )
+         ORDER BY t.ticket_id ASC
+         LIMIT ?`
+    ).all(match, limit);
+    return rows.map((row) => ({
+      ticketId: Number(row.ticket_id),
+      title: row.title,
+      state: row.state,
+      workspaceKey: row.workspace_key,
+      dependsOn: JSON.parse(row.depends_on),
+      sessionId: row.origin_session
+    }));
+  }
+  /** Rebuild one ticket's FTS row from its materialized row + comments. */
+  _reindexTicket(db, ticketId) {
+    const ticket = db.prepare(
+      `SELECT title, description, criteria FROM tickets WHERE ticket_id = ?`
+    ).get(ticketId);
+    if (ticket === void 0) {
+      return;
+    }
+    const comments = db.prepare(`SELECT text FROM comments WHERE ticket_id = ? ORDER BY id ASC`).all(
+      ticketId
+    );
+    db.prepare(`DELETE FROM ticket_fts WHERE ticket_id = ?`).run(ticketId);
+    db.prepare(
+      `INSERT INTO ticket_fts(ticket_id, title, description, criteria, comment_text) VALUES (?, ?, ?, ?, ?)`
+    ).run(
+      ticketId,
+      ticket.title,
+      ticket.description,
+      ticket.criteria,
+      comments.map((comment) => comment.text).join("\n")
+    );
+  }
+};
+var _registry = /* @__PURE__ */ new Map();
+function openSqliteStorage(path) {
+  const resolved = resolve2(path);
+  const live = _registry.get(resolved);
+  if (live !== void 0) {
+    return live;
+  }
+  const storage = new SqliteStorage(resolved);
+  _registry.set(resolved, storage);
+  return storage;
+}
+function openWorkspaceStorage(cwd) {
+  return openSqliteStorage(storePathForWorkspace(cwd));
 }
 
 // src/host/invariant.ts
@@ -28919,9 +29341,9 @@ var NOMINATION_STATE_SEQUENCE = [
   "done"
 ];
 function validateAllowlistPaths(cwd, paths) {
-  const base = resolve2(cwd);
+  const base = resolve3(cwd);
   const contains = (candidate) => {
-    const rel = relative2(base, resolve2(candidate));
+    const rel = relative2(base, resolve3(candidate));
     const norm = rel.replace(/\\/g, "/");
     return rel === "" || !norm.startsWith("../") && norm !== ".." && !isAbsolute2(rel);
   };
@@ -28942,7 +29364,7 @@ function validateAllowlistPaths(cwd, paths) {
     if (p === "") continue;
     if (seen.has(p)) continue;
     seen.add(p);
-    const abs = resolve2(cwd, p);
+    const abs = resolve3(cwd, p);
     if (!contains(abs)) {
       bad.push({ path: p, reason: "escapes the workspace" });
       continue;
@@ -29323,6 +29745,30 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const query = (args.query ?? "").toLowerCase().trim();
     if (!query) return [];
     const results = [];
+    const seen = /* @__PURE__ */ new Set();
+    const cwd = agent.session?.header?.cwd;
+    if (cwd) {
+      try {
+        if (existsSync(storePathForWorkspace(cwd))) {
+          const storage = openWorkspaceStorage(cwd);
+          for (const row of storage.searchTickets(query)) {
+            seen.add(`${row.workspaceKey}:${row.ticketId}`);
+            results.push({
+              sessionId: row.sessionId ?? "",
+              ticketId: row.ticketId,
+              title: row.title,
+              state: row.state,
+              workspaceKey: row.workspaceKey,
+              dependsOn: row.dependsOn
+            });
+          }
+        }
+      } catch (error51) {
+        this.ctx.logger?.debug?.(
+          `aidos: store search unavailable for ${cwd}: ${error51 instanceof Error ? error51.message : String(error51)}`
+        );
+      }
+    }
     for (const session of this.ctx.sessions.list()) {
       let snap;
       try {
@@ -29337,6 +29783,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       for (const [id, ticket] of Object.entries(tickets)) {
         if (!ticket.title.toLowerCase().includes(query)) continue;
         if (isRetired(evidenceSnap?.[id])) continue;
+        const ref = `${ticket.workspaceKey}:${id}`;
+        if (seen.has(ref)) continue;
+        seen.add(ref);
         results.push({
           sessionId: session.id,
           ticketId: Number(id),
@@ -30595,7 +31044,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * the gate cannot verify, so it refuses rather than deleting blindly.
    */
   async _checkPlanImportGitClean(target) {
-    const dir = dirname(target);
+    const dir = dirname2(target);
     let repoRoot;
     try {
       repoRoot = (await this._gitRawIn(dir, ["rev-parse", "--show-toplevel"])).trim();
@@ -31415,7 +31864,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const problems = [];
     let created = false;
     try {
-      mkdirSync2(dirname(path), { recursive: true });
+      mkdirSync3(dirname2(path), { recursive: true });
       if (existsSync(join(path, ".git"))) {
         await this._refreshWorktree(agent, ticketId, path, problems);
       } else {
@@ -31613,7 +32062,7 @@ ${detail}`
     for (const link of plan) {
       try {
         if (!existsSync(link.from) || existsSync(link.to)) continue;
-        mkdirSync2(dirname(link.to), { recursive: true });
+        mkdirSync3(dirname2(link.to), { recursive: true });
         symlinkSync(link.from, link.to, "dir");
       } catch (error51) {
         problems.push(
@@ -32125,7 +32574,7 @@ ${detail}`
       return file2;
     }
     const workspace = this._workspacePath(agent);
-    const target = resolve2(workspace, file2);
+    const target = resolve3(workspace, file2);
     const rel = relative2(workspace, target);
     const normRel = rel.replace(/\\/g, "/");
     if (rel !== "" && (normRel.startsWith("../") || normRel === ".." || isAbsolute2(rel))) {
@@ -32452,11 +32901,11 @@ function installAidosMask(ctx) {
 
 // src/tools/allowlist.ts
 import { delegationDepthOf as delegationDepthOf4 } from "@deepseek-ai/dsh-subagent";
-import { isAbsolute as isAbsolute3, join as join2, relative as relative3, resolve as resolve3 } from "path";
+import { isAbsolute as isAbsolute3, join as join2, relative as relative3, resolve as resolve4 } from "path";
 var WRITE_INTENT = "fs/write-intent";
 var EDIT_INTENT = "fs/edit-intent";
 function isUnder(root, candidate) {
-  const rel = relative3(resolve3(root), resolve3(candidate));
+  const rel = relative3(resolve4(root), resolve4(candidate));
   const norm = rel.replace(/\\/g, "/");
   return rel === "" || !norm.startsWith("../") && norm !== ".." && !isAbsolute3(rel);
 }
@@ -32464,7 +32913,7 @@ function pathAllowed(target, roots, base) {
   for (const root of roots) {
     const stripped = root.replace(/\/+$/, "");
     if (stripped === "") continue;
-    const resolved = base !== void 0 && !isAbsolute3(stripped) ? resolve3(base, stripped) : stripped;
+    const resolved = base !== void 0 && !isAbsolute3(stripped) ? resolve4(base, stripped) : stripped;
     if (isUnder(resolved, target)) return true;
   }
   return false;

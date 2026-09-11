@@ -64,6 +64,36 @@ function eventAt(event: AidosEvent): number {
   return event.at;
 }
 
+/**
+ * #44: one search hit read back from the FTS index and the materialized
+ * ticket row. `sessionId` is the origin session the row was imported from
+ * (#41) — null for a ticket written straight to the store, which no live
+ * session owns yet.
+ */
+export interface TicketSearchRow {
+  ticketId: number;
+  title: string;
+  state: string;
+  workspaceKey: string;
+  dependsOn: string[];
+  sessionId: string | null;
+}
+
+/**
+ * Build the FTS5 MATCH expression for one free-text query: every
+ * alphanumeric run in the input becomes a quoted prefix term, joined by
+ * implicit AND. Quoting defuses FTS5 query syntax a user query would
+ * otherwise inject (quotes, parens, NEAR, column filters); the trailing
+ * `*` makes each term a prefix match, so "paym" finds "payment". The
+ * match is TOKEN-based, not substring: "board" does not match
+ * "dashboard" — a deliberate semantic change from the old live-walk
+ * substring search (see #44).
+ */
+export function ftsMatchExpression(query: string): string {
+  const tokens = (query ?? "").toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+  return tokens.map((token) => `"${token}"*`).join(" ");
+}
+
 /** The whole schema, applied idempotently on every open. */
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS schema_version(
@@ -426,6 +456,58 @@ export class SqliteStorage implements StoragePort {
         break;
       }
     }
+  }
+
+  /**
+   * #44: the FTS5 query surface. One free-text query against ticket_fts
+   * (title, description, criteria, comment text), joined back to the
+   * materialized ticket row for the fields the dependency picker renders.
+   * Retired tickets are excluded — the dependency picker is a write
+   * surface, and the store's evidence table materializes the same
+   * `builtin:retired` rows the kernel's `isRetired` derives from, so the
+   * exclusion matches the fold's semantics. At most `limit` hits, ticket
+   * id order.
+   */
+  searchTickets(query: string, limit = 50): TicketSearchRow[] {
+    const match = ftsMatchExpression(query);
+    if (match === "") {
+      return [];
+    }
+    const db = this._ensure();
+    const rows = db
+      .prepare(
+        `SELECT t.ticket_id, t.title, t.state, t.workspace_key, t.depends_on,
+                e.origin_session
+         FROM ticket_fts
+         JOIN tickets t ON t.ticket_id = ticket_fts.ticket_id
+         LEFT JOIN events e
+           ON e.kind = 'ticket/change'
+          AND e.origin_session IS NOT NULL
+          AND json_extract(e.payload, '$.operation') = 'create'
+          AND json_extract(e.payload, '$.ticket.id') = t.ticket_id
+         WHERE ticket_fts MATCH ?
+           AND t.ticket_id NOT IN (
+             SELECT ticket_id FROM evidence WHERE kind = 'builtin:retired'
+           )
+         ORDER BY t.ticket_id ASC
+         LIMIT ?`,
+      )
+      .all(match, limit) as {
+      ticket_id: number;
+      title: string;
+      state: string;
+      workspace_key: string;
+      depends_on: string;
+      origin_session: string | null;
+    }[];
+    return rows.map((row) => ({
+      ticketId: Number(row.ticket_id),
+      title: row.title,
+      state: row.state,
+      workspaceKey: row.workspace_key,
+      dependsOn: JSON.parse(row.depends_on) as string[],
+      sessionId: row.origin_session,
+    }));
   }
 
   /** Rebuild one ticket's FTS row from its materialized row + comments. */

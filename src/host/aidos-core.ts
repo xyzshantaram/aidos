@@ -125,6 +125,8 @@ import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
 import { scratchRootForAgent } from "../tools/scratch";
+// #44: the workspace store's FTS index backs the dependency search.
+import { openWorkspaceStorage, storePathForWorkspace } from "./storage-sqlite";
 import type {
   Actor,
   AidosConfig,
@@ -2030,17 +2032,59 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * The cross-workspace dependency search, exported over the typert Remote
-   * surface. Matches one query against the title of every live session's
-   * tickets, and returns the stored reference fields the board needs to
-   * render a dependency badge and to add a dependency. Only live sessions
-   * are reachable: a session that is not open right now has no disk-scan
-   * path and contributes nothing.
+   * surface. #44: the primary path queries the workspace store's FTS5
+   * index (title, description, criteria, comment text) — so a ticket in a
+   * CLOSED session is reachable, and a word from a DESCRIPTION matches,
+   * neither of which the old live-session walk could do. The FTS match is
+   * TOKEN-based with per-token prefix matching, not substring: "board"
+   * finds "board" and "board refactor" but not "dashboard" (the old
+   * substring behavior matched it; that was a false friend, and the
+   * description coverage this ticket exists for is worth the change).
+   *
+   * The live-session walk below is a TRANSITIONAL BRIDGE (#42 retires it):
+   * until the mirrored write path lands, tickets created after the #41
+   * backfill exist only in their live session logs, and dropping the walk
+   * now would blind search to them. Store hits win; a live hit whose
+   * (workspaceKey, ticketId) the store already returned is skipped.
+   *
+   * Either path returns the stored reference fields the board needs to
+   * render a dependency badge and to add a dependency. Retired tickets are
+   * never hits (#108): the picker is a write surface.
    */
   @Remote("searchTickets")
   searchTickets(agent: Agent, args: { query: string }): TicketSearchResult[] {
     const query = (args.query ?? "").toLowerCase().trim();
     if (!query) return [];
     const results: TicketSearchResult[] = [];
+    const seen = new Set<string>();
+
+    // #44: the FTS index of this workspace's store — read-only, and only
+    // when a store already exists on disk (a search must never CREATE a
+    // store as a side effect; #42's first-open wiring owns creation).
+    const cwd = agent.session?.header?.cwd;
+    if (cwd) {
+      try {
+        if (existsSync(storePathForWorkspace(cwd))) {
+          const storage = openWorkspaceStorage(cwd);
+          for (const row of storage.searchTickets(query)) {
+            seen.add(`${row.workspaceKey}:${row.ticketId}`);
+            results.push({
+              sessionId: row.sessionId ?? "",
+              ticketId: row.ticketId,
+              title: row.title,
+              state: row.state,
+              workspaceKey: row.workspaceKey,
+              dependsOn: row.dependsOn,
+            });
+          }
+        }
+      } catch (error) {
+        this.ctx.logger?.debug?.(
+          `aidos: store search unavailable for ${cwd}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     for (const session of this.ctx.sessions.list()) {
       let snap;
       try {
@@ -2062,6 +2106,9 @@ registerAidosSessionEventTypes(ctx);
       for (const [id, ticket] of Object.entries(tickets)) {
         if (!ticket.title.toLowerCase().includes(query)) continue;
         if (isRetired(evidenceSnap?.[id])) continue;
+        const ref = `${ticket.workspaceKey}:${id}`;
+        if (seen.has(ref)) continue;
+        seen.add(ref);
         results.push({
           sessionId: session.id,
           ticketId: Number(id),
