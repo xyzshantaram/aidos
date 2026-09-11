@@ -579,6 +579,11 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
   const projectionListeners: ((session: Session, key: string, value: unknown, seq: number) => void)[] = [];
   const provided: Record<string, unknown> = {};
   let settingsValue: AidosConfig = deepClone(DEFAULT_CONFIG);
+  /**
+   * The throwaway DSH_HOME this ONE harness minted, if it has minted one.
+   * Per-harness, not per-install: see the reasoning in installService.
+   */
+  let ownHome: string | undefined;
   const tempDirs: string[] = [];
   const workspaces: FakeWorkspace[] = [];
 
@@ -1032,7 +1037,7 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
     workspaceRegistry: ctx.workspaceRegistry,
     subagents: ctx.subagents,
 
-    installService() {
+    installService(): AidosService {
       /*
        * #42: the service now opens a durable workspace store — a SQLite file
        * under dshHomePath("aidos", "storage", ...), resolved from
@@ -1057,16 +1062,25 @@ export function createHarness(config?: AidosCoreConfig, options?: HarnessOptions
        * the previous value in a finally block).
        */
       const pinned = process.env.DSH_HOME;
-      if (pinned === undefined || pinned === "" || HARNESS_OWNED_HOMES.has(pinned)) {
+      if (ownHome !== undefined && pinned === ownHome) {
         /*
-         * Unset, or a home THIS harness minted on an earlier install. The
-         * second case is what keeps #42's isolation: a leftover value from
-         * the previous installService in the same file is not a pin, and
-         * reusing it would let two harnesses share one store and one
-         * backfill marker.
+         * This harness already minted its home and nothing has moved it.
+         * Re-minting here would be the #42 review's footgun: `get service()`
+         * calls installService on EVERY access, so a per-access mint gives
+         * `harness.service` a different store each time it is touched, and a
+         * test that reads it twice silently switches stores mid-test. The
+         * home belongs to the HARNESS, not to the call.
+         */
+      } else if (pinned === undefined || pinned === "" || HARNESS_OWNED_HOMES.has(pinned)) {
+        /*
+         * Unset, or a home some OTHER harness minted. The second case is
+         * what keeps #42's isolation: a leftover value from a previous
+         * harness is not a pin, and reusing it would let two harnesses
+         * share one store and one backfill marker.
          */
         const fresh = mkdtempSync(join(tmpdir(), "aidos-harness-home-"));
         HARNESS_OWNED_HOMES.add(fresh);
+        ownHome = fresh;
         process.env.DSH_HOME = fresh;
       }
       if (!provided.aidos) {
