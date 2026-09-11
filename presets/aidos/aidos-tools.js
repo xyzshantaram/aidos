@@ -27889,6 +27889,14 @@ function resolveScratchPath(root, path) {
   }
   return candidate;
 }
+function pageLines(text, offset, limit, paged) {
+  if (paged) return text;
+  if (offset === void 0 && limit === void 0) return text;
+  const lines = text.split("\n");
+  const start = offset === void 0 ? 0 : Math.max(offset - 1, 0);
+  const end = limit === void 0 ? lines.length : start + Math.max(limit, 0);
+  return lines.slice(start, end).join("\n");
+}
 function callingAgent(exec) {
   const agent = exec.agent;
   if (!agent) {
@@ -27921,13 +27929,51 @@ function requireFs(ctx) {
 function renderJson(_args, value) {
   return [{ type: "text", text: JSON.stringify(value) }];
 }
+function mimicEditSchema(editDef) {
+  const delegate = declaredParameters(editDef);
+  const acceptsEdits = Object.hasOwn(delegate, "edits");
+  const acceptsLiteral = Object.hasOwn(delegate, "old_string") || !editDef;
+  const parameters = {
+    path: {
+      type: "string",
+      required: true,
+      description: "The file to edit, relative to the scratch root or absolute under it."
+    }
+  };
+  const grammars = [];
+  if (acceptsLiteral) {
+    grammars.push("the str_replace literal grammar (old_string/new_string, optional replace_all)");
+    parameters.old_string = { type: "string", description: "The literal text to replace." };
+    parameters.new_string = { type: "string", description: "The replacement text." };
+    parameters.replace_all = {
+      type: "boolean",
+      description: "Replace every match rather than requiring a unique one."
+    };
+  }
+  if (acceptsEdits) {
+    grammars.push(
+      "the hashline anchor grammar (edits=[[remove_from, remove_to, replacement_text], ...], 3-character anchors copied from a read or diff row)"
+    );
+    parameters.edits = {
+      type: "array",
+      required: true,
+      description: "Ordered list of edit tuples [remove_from, remove_to, replacement_text]; applied atomically, exactly as the edit backend's anchor grammar specifies.",
+      items: { type: "array" }
+    };
+  }
+  const grammarText = grammars.length > 1 ? `It accepts both grammars the backend declares: ${grammars.join("; ")}.` : `Grammar: ${grammars[0] ?? "the resolved edit tool's own"}.`;
+  const description = "Edit one file under the session workspace's scratch root by delegating to the " + (editDef ? "session's resolved `edit` tool, whose parameter schema this tool mimics" : "session's `edit` tool (default str_replace builtin)") + ", with `path` in place of its path argument and the path resolved under the scratch root. " + grammarText;
+  return { parameters, description };
+}
 function registerScratchTools(ctx) {
   ctx.tools.register(
     defineTool({
       name: "scratch_read",
-      description: "Read one file under the session workspace's scratch root. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
+      description: "Read one file under the session workspace's scratch root by delegating to the session's `read` tool, with `path` in place of its path argument and the path resolved under the scratch root. Offset/limit page the content the same way the backend pages it. A relative path resolves against the scratch root; an absolute or `../` path that escapes it is refused.",
       parameters: {
-        path: { type: "string", required: true, description: "The file to read, relative to the scratch root or absolute under it." }
+        path: { type: "string", required: true, description: "The file to read, relative to the scratch root or absolute under it." },
+        offset: { type: "integer", description: "1-based first line to return. Defaults to 1." },
+        limit: { type: "integer", description: "Maximum number of lines to return." }
       },
       output: {
         schema: {
@@ -27950,11 +27996,18 @@ function registerScratchTools(ctx) {
         const absPath = resolveScratchPath(root, args.path);
         const readDef = ctx.tools.get("read", agent);
         if (readDef) {
+          const readParams = declaredParameters(readDef);
+          const delegatedArgs = { file_path: absPath };
+          const forwardPaging = Object.hasOwn(readParams, "offset") && Object.hasOwn(readParams, "limit");
+          if (forwardPaging) {
+            if (args.offset !== void 0) delegatedArgs.offset = args.offset;
+            if (args.limit !== void 0) delegatedArgs.limit = args.limit;
+          }
           const delegated = await ctx.tools.execute({
             callId: exec.callId,
             rootCallId: exec.rootCallId,
             name: "read",
-            arguments: { file_path: absPath },
+            arguments: delegatedArgs,
             agent: exec.agent,
             parent: exec.token,
             signal: exec.signal
@@ -27962,14 +28015,14 @@ function registerScratchTools(ctx) {
           if (!delegated.isError) {
             const first = delegated.content[0];
             const text = first && first.type === "text" ? first.text : "";
-            return { ok: true, path: absPath, scratch_root: root, content: text };
+            return { ok: true, path: absPath, scratch_root: root, content: pageLines(text, args.offset, args.limit, forwardPaging) };
           }
         }
         const fs = requireFs(ctx);
         const target = await fs.resolve(absPath, { signal: exec.signal });
         const content = await fs.readText(target, exec.signal);
         ctx.logger?.info?.(`aidos: scratch_read read ${absPath}`);
-        return { ok: true, path: absPath, scratch_root: root, content };
+        return { ok: true, path: absPath, scratch_root: root, content: pageLines(content, args.offset, args.limit, false) };
       }
     })
   );
@@ -28071,34 +28124,18 @@ function registerScratchTools(ctx) {
     defineTool({
       name: "scratch_edit",
       /*
-       * #145: this schema no longer advertises the ANCHOR grammar (`edits`).
-       *
-       * It used to, and the tool then refused every call that used it:
-       * `edit_grammar_unsupported ... the resolved edit tool does not accept
-       * the anchor grammar`. The diagnosis (independent, 2026-09-07) found
-       * the schema was the liar, not the resolver. The builtin `edit` this
-       * wrapper delegates to declares only file_path/old_string/new_string/
-       * replace_all (dsh-tool-fs), and it never had `edits`. The anchor
-       * grammar came from dsh-better-edit, which was mounted once and has
-       * since been dropped.
-       *
-       * The runtime detection below is CORRECT and stays: it inspects the
-       * resolved tool's real parameters and refuses a grammar that backend
-       * cannot take. What was wrong was advertising a capability whose
-       * availability is decided at runtime in a schema that is fixed at
-       * registration. A tool that documents a grammar it usually cannot
-       * accept teaches the model to write calls that always fail.
-       *
-       * If an anchor-capable backend is mounted again, restore the
-       * parameter here — the detection already handles both.
+       * #145, owner direction: this wrapper is a thin proxy over the session's
+       * `edit` tool, so its declared schema MIMICS that tool's, not a hand-
+       * picked subset. The earlier fix (43b4697) hardcoded the literal
+       * grammar here, which refused anchor (`edits`) calls at the schema; the
+       * runtime detection further down already follows the mounted backend,
+       * and the declared schema now does too (see mimicEditSchema). The
+       * schema is fixed at registration while backend resolution is per call,
+       * so the detection and its refusals stay: if a scope resolves an edit
+       * backend whose grammar differs from what was advertised, the refusal
+       * names the grammar that scope actually accepts.
        */
-      description: "Edit one file under the session workspace's scratch root by delegating to the `edit` tool. Takes the same literal-edit arguments (old_string, new_string, replace_all) plus a scratch-relative path, which is resolved to an absolute path under the scratch root and forwarded to `edit` as file_path.",
-      parameters: {
-        path: { type: "string", required: true, description: "The file to edit, relative to the scratch root or absolute under it." },
-        old_string: { type: "string", description: "The literal text to replace." },
-        new_string: { type: "string", description: "The replacement text." },
-        replace_all: { type: "boolean", description: "Replace every match rather than requiring a unique one." }
-      },
+      ...mimicEditSchema(ctx.tools.get("edit")),
       output: {
         schema: {
           type: "object",
@@ -28113,18 +28150,19 @@ function registerScratchTools(ctx) {
         render: renderJson
       },
       execute: async (args, exec) => {
+        const a = args;
         const agent = callingAgent(exec);
         ctx.logger?.info?.(`aidos: scratch_edit called by agent ${agent.session?.id}`);
-        ctx.logger?.debug?.(`aidos: scratch_edit path ${args.path}`);
+        ctx.logger?.debug?.(`aidos: scratch_edit path ${a.path}`);
         const root = scratchRootForAgent(agent);
-        const absPath = resolveScratchPath(root, args.path);
+        const absPath = resolveScratchPath(root, a.path);
         const editDef = ctx.tools.get("edit", agent);
         if (!editDef) {
-          return await editWithoutBackend(ctx, root, absPath, args, exec);
+          return await editWithoutBackend(ctx, root, absPath, a, exec);
         }
         const editParams = declaredParameters(editDef);
         const accepts = (key) => Object.hasOwn(editParams, key);
-        const anchorEdits = args.edits;
+        const anchorEdits = a.edits;
         const wantsAnchors = Array.isArray(anchorEdits);
         const pathKey = accepts("file_path") ? "file_path" : "path";
         if (wantsAnchors && !accepts("edits")) {
@@ -28149,7 +28187,7 @@ function registerScratchTools(ctx) {
             "AIDOS_EDIT_GRAMMAR_UNSUPPORTED"
           );
         }
-        if (!wantsAnchors && typeof args.old_string !== "string") {
+        if (!wantsAnchors && typeof a.old_string !== "string") {
           throw new HarnessError(
             JSON.stringify({
               ok: false,
@@ -28161,11 +28199,11 @@ function registerScratchTools(ctx) {
         }
         const delegatedArgs = wantsAnchors ? { [pathKey]: absPath, edits: anchorEdits } : {
           [pathKey]: absPath,
-          old_string: args.old_string,
-          new_string: args.new_string ?? ""
+          old_string: a.old_string,
+          new_string: a.new_string ?? ""
         };
-        if (!wantsAnchors && args.replace_all !== void 0 && accepts("replace_all")) {
-          delegatedArgs.replace_all = args.replace_all;
+        if (!wantsAnchors && a.replace_all !== void 0 && accepts("replace_all")) {
+          delegatedArgs.replace_all = a.replace_all;
         }
         const delegated = await ctx.tools.execute({
           callId: exec.callId,

@@ -142,6 +142,21 @@ describe("the scratch tools", () => {
     expect((out.error as { message: string }).message).toMatch(/escape|outside/);
   });
 
+  it("scratch_read pages with offset/limit like the backend", async () => {
+    const harness = scratchHarness();
+    const write = await harness.runTool("scratch_write", {
+      path: "long.md",
+      content: "one\ntwo\nthree\nfour\nfive",
+    });
+    expect(write.isError).toBe(false);
+    const page = await harness.runTool("scratch_read", { path: "long.md", offset: 2, limit: 2 });
+    expect(page.isError).toBe(false);
+    expect((page.value as { content: string }).content).toBe("two\nthree");
+    const tail = await harness.runTool("scratch_read", { path: "long.md", offset: 4 });
+    expect(tail.isError).toBe(false);
+    expect((tail.value as { content: string }).content).toBe("four\nfive");
+  });
+
   it("scratch_edit still edits when NO edit tool is in scope", async () => {
     /*
      * This asserted the opposite -- that a missing backend refuses -- which
