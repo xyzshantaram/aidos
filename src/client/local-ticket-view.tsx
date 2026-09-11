@@ -92,7 +92,9 @@ function intersectProjectIds(
 }
 
 /** Read the persisted filter. Falls back to defaults on any failure. */
-function restoreFilter(
+// Exported for #138's follow-up tests: the tag filter has to survive the
+// restore, and a pure function is the only honest way to pin that.
+export function restoreFilter(
   workspaceKey: string,
   tickets: readonly TicketViewType[],
 ): AppliedState {
@@ -118,12 +120,19 @@ function restoreFilter(
       parsed.sortKey === "alpha"
         ? parsed.sortKey
         : "confidence";
+    // #138 follow-up: restore the tag filter too, validated as a string
+    // array; absent (or malformed) stays absent, which matches "all tags".
+    const tags =
+      Array.isArray(parsed.tags) && parsed.tags.every((tag) => typeof tag === "string")
+        ? [...parsed.tags]
+        : undefined;
     return {
       projectIds,
       stateIds,
       sortKey,
       descending: typeof parsed.descending === "boolean" ? parsed.descending : true,
       search: typeof parsed.search === "string" ? parsed.search : "",
+      tags,
     };
   } catch {
     return cloneAppliedState(DEFAULT_APPLIED);

@@ -16,12 +16,12 @@
  *    instead — a whole-value edit preserves folded tags.
  *  - group-by-tag. Explicitly deferred; a source guard below pins that no
  *    grouping vocabulary ships with this change.
- *  - the last runtime link of the panel filter (view-state.ts
- *    cloneAppliedState and local-ticket-view.ts restoreFilter reconstruct
- *    the applied state field-by-field, outside this ticket's allowlist, so
- *    a tags field cannot reach the board yet). Parity is proven here at the
- *    data level: the exact payload the panel emits filters identically
- *    through filterTickets, filterTicketViews, and getTickets/get_tickets.
+ *  - (follow-up fix) the last runtime link of the panel filter USED to be
+ *    open: view-state.ts cloneAppliedState and local-ticket-view.ts
+ *    restoreFilter reconstructed the applied state field-by-field and
+ *    dropped `tags`. Both now copy it through, and the "runtime link"
+ *    block below proves the panel's tag filter survives both functions
+ *    and still narrows the board.
  */
 
 import { readFileSync } from "node:fs";
@@ -39,6 +39,8 @@ import {
 import type { FilterState } from "../src/client/board-logic";
 import { TicketTagChips, TicketTile } from "../src/client/ticket-tile";
 import { parseTagInput } from "../src/client/create-ticket-modal";
+import { cloneAppliedState } from "../src/client/view-state";
+import { restoreFilter } from "../src/client/local-ticket-view";
 import type { TicketView } from "../src/kernel/projections";
 import { apply } from "../src/tools/aidos-tools";
 import { AidosService } from "../src/host/aidos-core";
@@ -472,5 +474,92 @@ describe("#138 group-by-tag stays deferred", () => {
     ]) {
       expect(read(name)).not.toMatch(/groupBy/i);
     }
+  });
+});
+
+// ---- follow-up fix: the tag filter survives view state -----------------------------
+//
+// The FilterPanel stages its filter in view-state, and the board restores a
+// persisted one from localStorage. Both paths used to rebuild the state
+// field-by-field and silently drop `tags` — the panel showed the filter,
+// the live board ignored it. These tests pin the two handoff points and
+// prove a tag-narrowed filter still narrows after each one.
+
+/**
+ * A minimal window stub whose localStorage answers ANY key with the given
+ * payload — restoreFilter keys off its own private storage key, and the
+ * tests care about what comes back, not the key it lives under.
+ */
+function fakeWindow(payload: string | null): unknown {
+  return {
+    localStorage: {
+      getItem: () => payload,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    },
+  };
+}
+
+function withWindow<T>(payload: string | null, body: () => T): T {
+  const real = globalThis.window;
+  globalThis.window = fakeWindow(payload) as unknown as typeof globalThis.window;
+  try {
+    return body();
+  } finally {
+    globalThis.window = real;
+  }
+}
+
+describe("#138 the tag filter survives the view-state handoffs", () => {
+  it("cloneAppliedState copies tags and defends the array", () => {
+    const source = panelFilter(["ui", "host"]);
+    const copy = cloneAppliedState(source);
+    expect(copy.tags).toEqual(["ui", "host"]);
+    // Defensive: mutating the copy must not reach back into the source.
+    copy.tags!.push("ghost");
+    expect(source.tags).toEqual(["ui", "host"]);
+  });
+
+  it("cloneAppliedState keeps an absent tag filter absent", () => {
+    const withEmpty = cloneAppliedState(panelFilter([]));
+    expect(withEmpty.tags).toEqual([]);
+    const without = cloneAppliedState(panelFilter());
+    expect(without.tags).toBeUndefined();
+  });
+
+  it("a cloned tag filter still narrows the board", () => {
+    const rows = [row(1, { tags: ["ui"] }), row(2, { tags: ["host"] }), row(3)];
+    const narrowed = filterTickets(rows, cloneAppliedState(panelFilter(["ui"])));
+    expect(narrowed.map((r) => r.id)).toEqual([1]);
+  });
+
+  it("restoreFilter reads tags back from localStorage as a string array", () => {
+    const restored = withWindow(JSON.stringify(panelFilter(["ui", "host"])), () =>
+      restoreFilter("ws", [row(1)] as never),
+    );
+    expect(restored.tags).toEqual(["ui", "host"]);
+  });
+
+  it("restoreFilter treats a malformed tags field as absent", () => {
+    const stored = JSON.stringify({ ...panelFilter(), tags: "ui" });
+    const restored = withWindow(stored, () => restoreFilter("ws", [row(1)] as never));
+    expect(restored.tags).toBeUndefined();
+  });
+
+  it("restoreFilter falls back to defaults when nothing is stored", () => {
+    const restored = withWindow(null, () => restoreFilter("ws", [row(1)] as never));
+    expect(restored.tags).toBeUndefined();
+    expect(restored.search).toBe("");
+  });
+
+  it("a restored tag filter still narrows the board", () => {
+    const restored = withWindow(JSON.stringify(panelFilter(["ui"])), () =>
+      restoreFilter("ws", [row(1)] as never),
+    );
+    const rows = [row(1, { tags: ["ui"] }), row(2, { tags: ["host"] }), row(3)];
+    expect(filterTickets(rows, restored).map((r) => r.id)).toEqual([1]);
   });
 });
