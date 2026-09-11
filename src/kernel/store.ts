@@ -609,6 +609,15 @@ export class Store {
     }
     const ticketId = this._nextTicketId();
     const slug = base || `ticket-${ticketId}`;
+    // #186: the empty-base fallback can still collide — a user may have
+    // claimed `ticket-5` while a later auto-generated fallback resolves
+    // to `ticket-5` too. Re-check the FINAL slug. This second refusal
+    // may consume the id it allocated, which is fine: the fallback path
+    // fires only when the caller supplied no slug, and the next create
+    // simply skips the consumed id.
+    if (base === "" && this._slugTaken(workspaceKey, slug, null)) {
+      throw new DuplicateSlug(slug, workspaceKey);
+    }
     const phase = opts?.phase ?? 1;
     const order = opts?.order ?? this._nextOrder(projectId, phase);
     const at = this._nowFn();
