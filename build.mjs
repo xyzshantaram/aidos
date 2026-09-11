@@ -590,6 +590,15 @@ await build({
   platform: "browser",
   format: "cjs",
   target: "es2022",
+  /*
+   * #201: the client bundle shipped 634KB unminified. Minification is
+   * behavior-preserving (no mangling of the window.__ModuleLoader__ facade
+   * below, which only reads the bundle's exports) and cuts roughly a
+   * third. The node bundles above stay unminified on purpose: they are
+   * read by humans during incident response, and their size was never the
+   * complaint.
+   */
+  minify: true,
   // Classic JSX: esbuild emits react.createElement(...) so the dsh client
   // runtime (which only supports createElement, not the jsx-runtime) can run
   // the bundle. The source is written in real JSX; this transform is the only
