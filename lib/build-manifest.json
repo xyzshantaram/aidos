@@ -1,9 +1,9 @@
 {
   "note": "#148: written by build.mjs. sourceDigest covers every file under src/ plus the build inputs (build.mjs itself, both tsconfigs, package.json, pnpm-lock.yaml); artifacts are the files this package ships. Two controls read it: the pre-commit hook build.mjs installs (refuses the bad commit before it exists; bypass with AIDOS_SKIP_BUNDLE_HOOK=1) and tests/u148-bundle-freshness.test.ts (catches a clone that never installed, or a --no-verify). Outside the digest by admission: the esbuild binary and the Node version. Regenerate with: node build.mjs",
-  "sourceDigest": "9f74d5d7438ea0c52762685de44d0014253db397e36d694e3a1bf4eab59da713",
+  "sourceDigest": "e3f9f87e3e24060a0d51a16f2ffa1dad7ec313c32cf2199025877cf3f753dfed",
   "artifacts": {
     "presets/aidos/aidos-tools.js": "625373ca0e984817efe755a5297d2e654ebfa5fef9f724dd8bf1d8bde0e28594",
     "dist/host/aidos-plugin.js": "440e9d1da6c8f0d784a7ec4a415588ca9e53c98b377f8f91d61e7012f66e8afb",
-    "lib/client.js": "5581b62711eb888a15b5322bf8a8e21735c9c8723fc4273ff84c858d27596d19"
+    "lib/client.js": "b794f6f67c1e3201810b0bd48fcd61e507d8fabcdda801c486ad65ff39021131"
   }
 }

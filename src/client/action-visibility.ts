@@ -125,3 +125,33 @@ export function actionsFor(
     { id: "allowlist", label: "Allowlist", unavailableReason: allowlistReason(ticket) },
   ];
 }
+
+/**
+ * #194: the click-time verdict for one board action, as a refusal reason or
+ * null when the action still applies.
+ *
+ * This is `actionsFor` -- the SAME function the action bar, the detail
+ * panel, the card, and the queue derive from -- looked up for one action.
+ * Every surface that offers a button asks this before acting, so a button
+ * rendered from a stale snapshot and a button rendered just now agree by
+ * construction rather than by coincidence (the #177 lesson: a stale offer
+ * wrote a junk user_signoff row before the move was refused).
+ *
+ * Pure, so the stale-click regression test drives the exact decider the
+ * button calls rather than re-implementing the state rule beside it. The
+ * message names the action and the unlock reason, matching the grey-button
+ * tooltip the bar shows, so the click-time refusal reads like the button
+ * it came from.
+ */
+export function refusalForAction(
+  ticket: TicketView,
+  evidenceKinds: EvidenceKinds,
+  actionId: ActionId,
+): string | null {
+  const found = actionsFor(ticket, evidenceKinds).find(
+    (action) => action.id === actionId,
+  );
+  if (found === undefined) return "unknown action " + actionId;
+  if (found.unavailableReason === undefined) return null;
+  return found.label + " is not available — " + found.unavailableReason;
+}
