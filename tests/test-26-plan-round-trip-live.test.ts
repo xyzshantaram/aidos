@@ -320,10 +320,11 @@ describe("plan round trip live", () => {
     ).content[0] as { type: "text"; text: string };
     const text = exported.text;
 
-    // Verify the three agent-reachable state marks are rendered
-    expect(text).toContain("- [ ]"); // open (ticket3Id)
-    expect(text).toContain("- [~]"); // in_progress (ticket1Id)
-    expect(text).toContain("- [?]"); // awaiting_verification (ticket2Id and newTicketId)
+    // Verify the three agent-reachable state marks are rendered. #153: the
+    // export is literate markdown; the state lives in each ticket's yaml block.
+    expect(text).toContain("state: open"); // open (ticket3Id)
+    expect(text).toContain("state: in_progress"); // in_progress (ticket1Id)
+    expect(text).toContain("state: awaiting_verification"); // ticket2Id and newTicketId
     // The imported ticket 1 claims done in its evidence but is in open state, so renders as open
     // However, we can verify the done mark is present for testing completeness
     // by checking that the original fixture's done claim is preserved in evidence

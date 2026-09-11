@@ -180,8 +180,10 @@ describe("every tool renders JSON", () => {
     expect(first.isError).toBe(false);
     const text = (first.content[0] as { type: "text"; text: string }).text;
     expect(() => JSON.parse(text)).toThrow();
-    expect(text).toContain("Ticket one");
-    expect(text).toMatch(/- \[/);
+    // #153: the export is literate markdown — a ticket heading with a
+    // fenced yaml block, not a JSON payload and not the old checkbox line.
+    expect(text).toContain("## Ticket 1 — Ticket one");
+    expect(text).toContain("```yaml");
     });
 
   it("plan is byte-identical for identical state", async () => {
