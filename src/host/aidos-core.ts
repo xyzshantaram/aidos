@@ -1048,6 +1048,92 @@ function _mdTicketHead(ticketId: number | string, title: string): string {
   return `**#${ticketId}** *${name}*`;
 }
 
+/*
+ * #156: what a change just UNLOCKED.
+ *
+ * The satisfied-definition, stated once and taken from the board's own
+ * semantics rather than invented here: a dependency reference is SATISFIED
+ * when the ticket it resolves to is `done`. That is the rule the board
+ * already applies in `_liveDependents` (#108), where a DONE dependent "does
+ * not block: it has already been satisfied, so its reference is history,
+ * not an outstanding need". A reference that resolves to nothing (dangling,
+ * or pointing into a retired ticket, which the board hides) is NOT
+ * satisfied — the same way such a reference blocks a retirement.
+ *
+ * The computation is a pure function over `dependsOn` plus the current
+ * states: `unlockedTicketIds` names every live, not-done ticket whose every
+ * dependency is satisfied. The digest plumbing computes that set before and
+ * after one change and announces only the DIFFERENCE, so a ticket that was
+ * already unblocked is never re-announced.
+ */
+
+/** One ticket as the unlock scan sees it: identity plus dependency state. */
+export interface DependencyScanEntry {
+  id: number;
+  workspaceKey: string;
+  slug: string;
+  state: TicketState;
+  dependsOn: readonly string[];
+}
+
+/**
+ * Resolve one `dependsOn` reference to its canonical `workspaceKey:id`
+ * form, exactly the way `_validatedSupersedeRefs` resolves supersede
+ * references "the same way dependsOn references are resolved":
+ * `workspaceKey:id`, `workspaceKey:slug`, or a legacy bare number/slug
+ * against the depending ticket's own workspace. Returns undefined when the
+ * reference names no ticket in the scan — an unsatisfied dependency, not an
+ * error: a pure scan cannot throw.
+ */
+export function resolveDependencyRef(
+  ref: string,
+  entries: readonly DependencyScanEntry[],
+  ownWorkspaceKey: string,
+): string | undefined {
+  const colon = ref.indexOf(":");
+  const key = colon >= 0 ? ref.slice(0, colon) : ownWorkspaceKey;
+  const tail = colon >= 0 ? ref.slice(colon + 1) : ref;
+  for (const entry of entries) {
+    if (entry.workspaceKey !== key) continue;
+    if (/^\d+$/.test(tail)) {
+      if (entry.id === Number(tail)) return `${entry.workspaceKey}:${entry.id}`;
+    } else if (entry.slug === tail) {
+      return `${entry.workspaceKey}:${entry.id}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The tickets that are CURRENTLY unblocked: live (not hidden as retired by
+ * the caller — a retired ticket takes no writes, so unlocking it says
+ * nothing), not done themselves, and every `dependsOn` reference resolved
+ * and `done`. Sorted by id so a multi-unlock line reads deterministically.
+ */
+export function unlockedTicketIds(
+  entries: readonly DependencyScanEntry[],
+): number[] {
+  const done = new Set(
+    entries.filter((e) => e.state === "done").map((e) => `${e.workspaceKey}:${e.id}`),
+  );
+  const out: number[] = [];
+  for (const entry of entries) {
+    if (entry.state === "done") continue;
+    if (entry.dependsOn.length === 0) continue;
+    let all = true;
+    for (const ref of entry.dependsOn) {
+      const target = resolveDependencyRef(ref, entries, entry.workspaceKey);
+      if (target === undefined || !done.has(target)) {
+        all = false;
+        break;
+      }
+    }
+    if (all) out.push(entry.id);
+  }
+  out.sort((a, b) => a - b);
+  return out;
+}
+
 /**
  * Whether one write should be reported to the agent (#106).
  *
@@ -4383,7 +4469,10 @@ registerAidosSessionEventTypes(ctx);
       if (changed.length > 0) {
         this._queueInjection(
           agent.session,
-          `${_mdTicketHead(ticketId, snapshot.title)} \u2014 edited by ${actor}: ${changed.map(_mdCode).join(" ")}`,
+          `${_mdTicketHead(ticketId, snapshot.title)} \u2014 edited by ${actor}: ${changed.map(_mdCode).join(" ")}` +
+            // #156: re-pointing dependencies can clear the last one, so an
+            // edit announces what it just unlocked, same as a move.
+            this._unlockDigestSuffix(cache, prev),
         );
       }
     }
@@ -4751,6 +4840,43 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
+   * #156: the digest suffix naming what one change just UNLOCKED.
+   *
+   * Computed as a DIFFERENCE of the pure scan (`unlockedTicketIds`) over
+   * the board before and after the change, so it announces the TRANSITION
+   * only: a ticket whose dependencies were already clear before this move
+   * or edit appears in both sets and is never re-announced. No newly
+   * unlocked ticket means an empty string — the digest line grows no text.
+   */
+  private _unlockDigestSuffix(
+    cache: { state: AidosState },
+    prev: TicketSnapshot,
+  ): string {
+    const scan = (changed: TicketSnapshot): DependencyScanEntry[] => {
+      const entries: DependencyScanEntry[] = [];
+      for (const snapshot of cache.state.tickets.values()) {
+        const effective = snapshot.id === changed.id ? changed : snapshot;
+        if (effective.id !== changed.id && this._isRetired(cache.state, effective.id)) continue;
+        entries.push({
+          id: effective.id,
+          workspaceKey: effective.workspaceKey,
+          slug: effective.slug,
+          state: effective.state,
+          dependsOn: effective.dependsOn ?? [],
+        });
+      }
+      return entries;
+    };
+    const current = cache.state.tickets.get(prev.id);
+    if (current === undefined) return "";
+    const after = new Set(unlockedTicketIds(scan(current)));
+    const before = new Set(unlockedTicketIds(scan(prev)));
+    const fresh = [...after].filter((id) => !before.has(id));
+    if (fresh.length === 0) return "";
+    return ` — this unlocks ${fresh.map((id) => `#${id}`).join(", ")}`;
+  }
+
+  /**
    * One gate-checked move with the actor pinned at the entry point. The
    * gate's allowedActors list decides, so a human-only edge accepts a user
    * move here and refuses an agent move on the same check.
@@ -4820,6 +4946,8 @@ registerAidosSessionEventTypes(ctx);
       this._queueInjection(
         agent.session,
         `${_mdTicketHead(ticketId, ticket.title)} \u2014 moved ${_mdCode(fromState)} \u2192 ${_mdCode(toState)} by ${actor}` +
+          // #156: name what this transition just unlocked, if anything.
+          this._unlockDigestSuffix(cache, ticket) +
           this._nextStepSuffix(agent, ticketId),
       );
     }
