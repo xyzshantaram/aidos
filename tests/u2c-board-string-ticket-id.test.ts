@@ -1,17 +1,20 @@
 /**
- * The board keys its own rows as decimal strings. `local-ticket-view`
- * builds `ticketIdKey` as `String(ticket.id)` for an own row and
- * `<sourceSessionId>:<id>` for a foreign one, and every write component of
- * the detail panel sends that key as `ticketId`. So the host resolve path
- * must read a bare decimal string as an id.
+ * The board addresses every row as a decimal string. `local-ticket-view`
+ * builds `ticketIdKey` as `String(ticket.id)` for own AND foreign rows
+ * (#45: the `<sourceSessionId>:<id>` composite is gone — a plain id is the
+ * address now), and every write component of the detail panel sends that
+ * key as `ticketId`. So the host resolve path must read a bare decimal
+ * string as an id.
  *
  * It used to read a bare string as a slug only, so Sign off on ticket 2
  * failed with `no such ticket: 2` before any gate ran. A revert of the
  * resolve fix makes both cases below throw UnknownTicket.
  *
- * The `<sessionId>:<id>` form has its own coverage in the workspace merge
- * tests; this file pins the own-row form that the board sends far more
- * often.
+ * #45 DECISION: this file is KEPT, not removed. The decimal-string form it
+ * pins is still exactly what the board sends on every write, so deleting
+ * it would be invisible coverage loss on the most-sent address shape.
+ * What changed is the paragraph below: the composite form lost its
+ * routing branch, and the third case pins that refusal.
  */
 
 import { describe, expect, it } from "vitest";
@@ -69,5 +72,20 @@ describe("a board write carries the ticket id as a decimal string", () => {
     expect(() => service.userMoveTicket(agent, { ticketId: "404", to: "in_progress" })).toThrow(
       UnknownTicket,
     );
+  });
+
+  it("a composite session-headed string is no longer an address", () => {
+    // #45: the composite form lost its session-routing branch. The board
+    // no longer sends it, and the host refuses it rather than routing it.
+    const harness = createHarness();
+    harness.settingsValue = GATE_CONFIG;
+    const service = harness.installService();
+    const agent = harness.asAgent();
+
+    service.userSetTicket(agent, { title: "Only", description: "d" });
+
+    expect(() =>
+      service.userMoveTicket(agent, { ticketId: "some-session:1", to: "in_progress" }),
+    ).toThrow(UnknownTicket);
   });
 });

@@ -236,9 +236,10 @@ export function restoreFilter(
  * #100 round 4: a BOARD KEY, not a bare id. The param is now the only
  * channel that survives a page RELOAD -- the module store is in-memory and
  * dies with the page -- so it has to address a ticket the way everything
- * else does: `sourceSessionId:id` for a foreign row, the bare id for an own
- * one (kernel/board-key.ts). A bare number still parses, so links written
- * by the previous build keep working.
+ * else does: the bare id (#45 — ids are workspace-unique, so one address
+ * serves every row). An old composite `sourceSessionId:id` link resolves
+ * through its numeric tail in resolveDeepLinkRow when it names exactly one
+ * row, so saved links keep working.
  */
 function ticketRefFromSearch(search: string): string | null {
   const match = /[?&]ticket=([^&#]+)/.exec(search);
@@ -495,8 +496,10 @@ function ProjectionReader(props: ProjectionReaderProps) {
   }, [loaded, sessionId, ownVersion]);
 
   // The effective board: the merged rows when a merge exists, else the own
-  // projection alone. Foreign rows carry key sessionId:ticketId; own rows
-  // plain ticketId.
+  // projection alone. Every row is keyed by its plain id (#45: the composite
+  // key is gone); `sourceSessionId` on a merge row is provenance only, and
+  // the filter below still uses it to exclude this session's own rows from
+  // the merge so they render from the live projection instead.
   // Own rows always render from the live projection (goal-domain pattern):
   // the merge cache contributes foreign rows only, so own-session writes
   // show instantly and a stale merge can never shadow them (#46/#48).
@@ -960,6 +963,9 @@ function ProjectionReader(props: ProjectionReaderProps) {
        *
        * The numeric fallback keeps older links working, and it is matched
        * against the ROW's own key so a foreign row still selects correctly.
+       * #45: the composite `sourceSessionId:id` form a saved link may still
+       * carry resolves in resolveDeepLinkRow when its owner AND tail name
+       * exactly one loaded row — anything else refuses, per #93/#100.
        */
       const row = resolveDeepLinkRow(ref, rawTickets);
       if (row !== null) {

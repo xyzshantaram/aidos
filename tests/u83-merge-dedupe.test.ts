@@ -101,10 +101,16 @@ describe("#83 ties break deterministically", () => {
   it("the caller's OWN row wins a tie", () => {
     // It is the log the caller can write to directly; preferring it avoids
     // handing them a row whose writes must route to another session.
-    const out = dedupeBoardRows([
-      row({ slug: "a", updatedAt: 500, sourceSessionId: "aaa-foreign", foreign: true }),
-      row({ slug: "a", updatedAt: 500, sourceSessionId: "zzz-own", foreign: false }),
-    ]);
+    // #45: the `foreign` flag is false on every row now, so the tie-break
+    // reads the caller's session id — passed explicitly because the pure
+    // dedupe cannot see the reader.
+    const out = dedupeBoardRows(
+      [
+        row({ slug: "a", updatedAt: 500, sourceSessionId: "aaa-foreign", foreign: false }),
+        row({ slug: "a", updatedAt: 500, sourceSessionId: "zzz-own", foreign: false }),
+      ],
+      "zzz-own",
+    );
     expect(out.rows[0].sourceSessionId).toBe("zzz-own");
   });
 

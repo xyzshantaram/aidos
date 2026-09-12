@@ -801,14 +801,15 @@ export interface PlanMetaSetArgs {
   contextSections?: ContextSection[];
 }
 /**
- * One board row in the workspace merge. Own rows are plain TicketViews with
- * `foreign: false`; foreign rows carry the owning session id (the writer)
- * and keep their in-log ticket id in `id`.
+ * One board row in the workspace merge. #45: ids are workspace-unique, so
+ * `sourceSessionId` is PROVENANCE (the session whose log or store origin
+ * owns the row) and `foreign` is false for every row the merge produces —
+ * the field survives only because the client's row types still read it.
  */
 export interface BoardTicketView extends TicketView {
   /** The session whose log owns this row's authoritative state. */
   sourceSessionId: string;
-  /** Whether the owning log is a different session than the reader's. */
+  /** Always false since #45; the composite-address era's flag. */
   foreign: boolean;
   /**
    * #83: the copies of this same ticket that LOST the dedupe, newest first.
@@ -897,7 +898,10 @@ export interface DedupeReport {
  * inside a Remote is logic no test can reach, which is how the allowlist
  * union and the backward-gate guard both shipped unverified.
  */
-export function dedupeBoardRows(rows: readonly BoardTicketView[]): {
+export function dedupeBoardRows(
+  rows: readonly BoardTicketView[],
+  callerSessionId?: string,
+): {
   rows: BoardTicketView[];
   reports: DedupeReport[];
 } {
@@ -924,8 +928,12 @@ export function dedupeBoardRows(rows: readonly BoardTicketView[]): {
     }
     const ranked = [...group].sort((a, b) => {
       if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
-      // Own beats foreign: it is the log the caller can write to directly.
-      if (a.foreign !== b.foreign) return a.foreign ? 1 : -1;
+      // The caller's own copy wins ties: it is the log they can actually
+      // write to. (#45: the old `foreign` flag is false on every row now,
+      // so the tie-break reads provenance instead.)
+      const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
+      const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
+      if (aOwn !== bOwn) return aOwn - bOwn;
       return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
     });
     const [winner, ...losers] = ranked;
@@ -1645,14 +1653,15 @@ registerAidosSessionEventTypes(ctx);
    * workspace holds rows. There is ONE derivation, `_workspaceBoardMerge`;
    * this method and the browser remote are its two callers.
    *
-   * Ids (#207 design decision): rows keep their NUMERIC id. Store rows are
-   * already renumbered into the workspace id space (#41), so they never
-   * collide; a live foreign row that collides with an own id carries
-   * `sourceSessionId` and `foreign: true`, and is ADDRESSED by the
-   * composite `<sourceSessionId>:<id>` string that get_ticket, get_evidence,
-   * move_ticket and attach_evidence already parse and route. A composite
-   * string in the `id` field itself would break every numeric consumer
-   * (sorting, paging, tool schemas) and is deleted outright by #45.
+   * Ids (#207 design decision, closed by #45): rows keep their NUMERIC id.
+   * Store rows are already renumbered into the workspace id space (#41),
+   * so they never collide; a live foreign row that collides with an own id
+   * is the one accepted residual the phase documents. Every row carries
+   * `sourceSessionId` provenance, `foreign` is false for all of them, and
+   * every row is ADDRESSED by its plain id — the composite
+   * `<sourceSessionId>:<id>` string the write path used to parse is deleted
+   * outright by #45. A composite string in the `id` field itself would
+   * break every numeric consumer (sorting, paging, tool schemas).
    *
    * Project scoping (#207 design decision): an ABSENT projectId means the
    * WORKSPACE — every row of the merged board, no per-session narrowing,
@@ -1731,7 +1740,9 @@ registerAidosSessionEventTypes(ctx);
    * TOOL layer, where the token cost actually lands, and this method is how a
    * caller gets everything back for the one ticket it is about to work on.
    *
-   * Accepts a composite `sessionId:id` so a foreign ticket resolves too.
+   * Accepts a plain id (number or decimal string) or a slug. A plain id the
+   * caller's fold does not hold resolves through the workspace merge to
+   * its owning session, so a foreign ticket resolves too (#45).
    */
   getTicket(
     agent: Agent,
@@ -1741,8 +1752,8 @@ registerAidosSessionEventTypes(ctx);
     evidence: EvidenceRow[];
     comments: CommentRecord[];
   } {
-    // #146: hop to the dispatching board FIRST, then apply composite
-    // `sessionId:id` routing on top of it.
+    // #146: hop to the dispatching board FIRST, then apply plain-id owner
+    // routing on top of it (#45).
     const reader = this._boardAgent(agent);
     try {
       const routed = this._routedAgent(reader, args.ticketId);
@@ -1766,9 +1777,10 @@ registerAidosSessionEventTypes(ctx);
        * fold cannot answer (OwnerUnavailable: routing only reaches live
        * owners) and the own fold never held the row (UnknownTicket). The
        * workspace store can: the one-time backfill renumbered the row into
-       * the workspace id space, so the numeric id (bare, or the tail of a
-       * composite reference) resolves without any live owner. A genuinely
-       * unknown id rethrows the original error.
+       * the workspace id space, so the plain numeric id resolves without
+       * any live owner. A genuinely unknown id rethrows the original
+       * error. (#45: the composite form is not accepted here either — a
+       * colon ref refuses, it never resolves through its tail.)
        */
       if (!(error instanceof UnknownTicket) && !(error instanceof OwnerUnavailable)) {
         throw error;
@@ -1783,8 +1795,9 @@ registerAidosSessionEventTypes(ctx);
    * #207: resolve one ticket from the workspace store — the read-side
    * fallback that lets get_ticket/get_evidence reach a CLOSED session's
    * ticket. Returns null (never throws) when no store exists, the
-   * reference is not a plain numeric or composite-with-numeric-tail id, or
-   * the id does not resolve to a row of the workspace project.
+   * reference is not a plain numeric id, or the id does not resolve to a
+   * row of the workspace project. (#45: a colon ref returns null — the
+   * composite form lost its routing branch everywhere, including here.)
    */
   private _ticketInWorkspaceStore(
     agent: Agent,
@@ -1796,10 +1809,9 @@ registerAidosSessionEventTypes(ctx);
     if (typeof ticketRef === "number") {
       id = ticketRef;
     } else {
-      const colon = ticketRef.indexOf(":");
-      const tail = colon > 0 ? ticketRef.slice(colon + 1) : ticketRef;
-      if (!/^\d+$/.test(tail)) return null;
-      id = Number(tail);
+      if (ticketRef.includes(":")) return null;
+      if (!/^\d+$/.test(ticketRef)) return null;
+      id = Number(ticketRef);
     }
     const state = entry.store.state;
     const view = ticketsProjection(state, this._resolvedConfig).get(id as TicketId);
@@ -2354,10 +2366,13 @@ registerAidosSessionEventTypes(ctx);
    * The workspace board: the caller's own tickets plus every ticket held in
    * another session's log of the SAME workspace path — live sessions fold
    * from memory, closed sessions from the WORKSPACE STORE (#42: the one-time
-   * backfill imports them on first open; no per-read log scan). Ticket ids
-   * collide across sessions, so each foreign row carries `sourceSessionId`
-   * for the board badge and for owner-routed writes. Own rows keep plain
-   * numeric ids and carry no source marker.
+   * backfill imports them on first open; no per-read log scan). #45: ids
+   * are workspace-unique (the store's port counter, #39, with every
+   * imported log renumbered into that space, #41), so every row carries
+   * only its owning session id as PROVENANCE — `foreign` is false for
+   * every row the merge produces, the evidence and comment maps are keyed
+   * by the plain `String(id)` every reader derives, and the composite
+   * `<sourceSessionId>:<id>` address is gone.
    *
    * #207: this is THE ONE DERIVATION. The browser remote (`workspaceTickets`
    * below) and the agent read path (`getTickets`, `getTicket`'s store
@@ -2431,12 +2446,13 @@ registerAidosSessionEventTypes(ctx);
       const views = ticketsProjection(state, this._resolvedConfig);
       for (const view of [...views.values()].sort(ownSort)) {
         if (!includeRetired && this._isRetired(state, view.id)) continue;
-        const key = session.id + ":" + view.id;
+        // #45: provenance only — the key is the plain id now.
+        const key = String(view.id);
         tickets.push({
           ...view,
           id: view.id,
           sourceSessionId: session.id,
-          foreign: true,
+          foreign: false,
         } as BoardTicketView);
         evidence[key] = [...(state.evidence.get(view.id) ?? [])];
         comments[key] = [...(state.comments.get(view.id) ?? [])];
@@ -2456,11 +2472,16 @@ registerAidosSessionEventTypes(ctx);
      * logs as a fallback.
      *
      * Live rows (the caller's own and other live sessions') stay fold-driven
-     * above: a live session is the only writer to its log, and the store
-     * does not hold its post-backfill rows until the write path moves to the
-     * store (#43/#45). Dedupe below collapses a store copy against a live
-     * copy of the same identity — the newer updatedAt wins, so a reopened
-     * session's live rows shadow their imported snapshots.
+     * above: a live session is the only writer to its log (#43 routes only
+     * DEAD origins to the store), and the store does not hold its
+     * post-backfill rows. Mirroring live writes needs the host create path
+     * to allocate from the store's port (#45 verdict: declined here — the
+     * host still mints ids from per-session fold counters, so a blind
+     * mirror could fold a live create over an unrelated imported ticket;
+     * owned by the follow-up that collapses the id space). Dedupe below
+     * collapses a store copy against a live copy of the same identity —
+     * the newer updatedAt wins, so a reopened session's live rows shadow
+     * their imported snapshots.
      */
     if (workspaceStore !== null) {
       const storeState = workspaceStore.store.state;
@@ -2470,14 +2491,14 @@ registerAidosSessionEventTypes(ctx);
         if (!includeRetired && this._isRetired(storeState, view.id)) continue;
         const origin = workspaceStore.store.originSessionOf(view.id);
         const sourceSessionId = origin ?? agent.session.id;
-        const foreign = origin !== null && origin !== agent.session.id;
-        // #165: the map key is the canonical board key, derived by the
-        // kernel rule — never rebuilt by hand here.
+        // #45: the composite address is gone; `foreign` is false for every
+        // row this merge produces and the map key is the plain id the
+        // kernel rule now derives for it.
         const row = {
           ...view,
           id: view.id,
           sourceSessionId,
-          foreign,
+          foreign: false,
         } as BoardTicketView;
         tickets.push(row);
         const key = boardKeyText(row);
@@ -2499,7 +2520,7 @@ registerAidosSessionEventTypes(ctx);
      * could show another copy's evidence. All three move together or the
      * dedupe is not done.
      */
-    const deduped = dedupeBoardRows(tickets);
+    const deduped = dedupeBoardRows(tickets, agent.session.id);
     if (deduped.reports.length > 0) {
       /*
        * ONE rule, imported. This was an inline copy of the client's
@@ -2705,26 +2726,41 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
-   * The agent the write should run against. A numeric ticketId (or a plain
-   * slug reference in the caller's own workspace) targets the caller's own
-   * session; a `<sourceSessionId>:<ticketId>` string routes to the owner
-   * session. Owner routing keeps one authoritative log per ticket.
+   * The agent the write should run against.
+   *
+   * #45: a bare numeric ticketId (number or decimal string — the only form
+   * the board sends now) routes to the OWNING session when the caller's own
+   * fold does not hold the id: own-first is the #93 rule, and a plain id
+   * that survives it names exactly one workspace row, whose provenance the
+   * merge carries. The owner route ends in the same place #43's orphan
+   * writes land when the origin session is dead. A slug, or a
+   * `<workspaceKey>:<slug>` reference, targets the caller's own session —
+   * workspace-key references are cross-WORKSPACE reads, not owner routes.
+   * The old `<sourceSessionId>:<ticketId>` routing is gone with the
+   * composite address itself.
    */
   private _routedAgent(agent: Agent, ticketRef: number | string | undefined): Agent {
-    if (ticketRef === undefined || typeof ticketRef === "number") return agent;
-    const colon = ticketRef.indexOf(":");
-    if (colon <= 0) return agent;
-    const head = ticketRef.slice(0, colon);
-    const tail = ticketRef.slice(colon + 1);
-    // Only a fully numeric tail routes (see _resolveTicketId): a
-    // workspaceKey:slug reference stays local.
-    if (!/^\d+$/.test(tail)) return agent;
-    return this._ownerAgent(agent, head);
+    if (ticketRef === undefined) return agent;
+    const numeric =
+      typeof ticketRef === "number"
+        ? ticketRef
+        : /^\d+$/.test(ticketRef)
+          ? Number(ticketRef)
+          : null;
+    if (numeric === null) return agent;
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    if (cache.state.tickets.has(numeric)) return agent;
+    const owner = this._workspaceOwnerOf(agent, numeric as TicketId);
+    if (owner === null || owner === agent.session.id) return agent;
+    return this._ownerAgent(agent, owner);
   }
 
   /**
-   * Resolve the writer session for a foreign ticket reference
-   * `<sourceSessionId>:<ticketId>`. A live source session returns it.
+   * Resolve the writer session that owns a ticket on the workspace board.
+   * #45 routes by PROVENANCE: the merge row for the plain id names the
+   * owning session, and this resolves it. A live source session returns
+   * it.
    *
    * #43: a CLOSED or DELETED origin no longer refuses the write. When the
    * workspace store can be opened, the write routes to a synthetic
@@ -3418,12 +3454,12 @@ registerAidosSessionEventTypes(ctx);
     args: { ticketId: TicketId | number | string; paths: string[] },
   ): { granted: string[] } {
     /*
-     * Routed exactly as every other user write is: a composite
-     * `sourceSessionId:id` sends the writes to the OWNING session, and a
-     * bare number stays here. #93's finding — a plain number made the
-     * router return the caller unchanged, so signing off foreign #12 wrote
-     * to own #12 — is why this goes through the same helper rather than
-     * resolving the id itself.
+     * Routed exactly as every other user write is: a plain id the caller's
+     * fold does not hold sends the write to the OWNING session, and an own
+     * id stays here. #93's finding — a plain number made the router return
+     * the caller unchanged, so signing off foreign #12 wrote to own #12 —
+     * is why this goes through the same helper rather than resolving the
+     * id itself.
      */
     const routed = this._routedAgent(agent, args.ticketId);
     const ticketId = this._resolveTicketId(routed, args.ticketId);
@@ -6517,26 +6553,29 @@ registerAidosSessionEventTypes(ctx);
    * A bare number, a bare decimal string, or a bare slug means the current
    * workspace; a prefixed `<workspaceKey>:<slug>` reference resolves across
    * workspaces.
+   *
+   * #45: the `<sourceSessionId>:<id>` composite is GONE. Ids are unique per
+   * workspace — the store allocates them from one port counter (#39) and
+   * renumbered every imported log into that space (#41) — so a bare number
+   * IS the address, and a plain id the caller's own fold does not hold
+   * resolves through the workspace merge to its owning session (or, for a
+   * dead origin, to the store-backed orphan session #43 built). The old
+   * session-headed branch is deleted: a colon ref with a numeric tail now
+   * falls through to the slug lookup and refuses, which is the migration
+   * contract for references written by the composite-addressing builds.
    */
   private _resolveTicketId(agent: Agent, ref: number | string): TicketId {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     if (typeof ref === "number") {
-      if (cache.state.tickets.has(ref)) {
-        return ref;
-      }
-      throw new UnknownTicket(ref);
+      return this._resolveNumericTicketId(agent, cache, ref);
     }
 
     // The board names an own row by `String(id)`, so a bare decimal string
     // is an id and not a slug. A slug is title-derived and never a bare
     // number, so no slug hides behind this branch.
     if (/^\d+$/.test(ref)) {
-      const numeric = Number(ref);
-      if (cache.state.tickets.has(numeric)) {
-        return numeric;
-      }
-      throw new UnknownTicket(ref);
+      return this._resolveNumericTicketId(agent, cache, Number(ref));
     }
 
     const current = workspaceKeyFromPath(this._workspacePath(agent));
@@ -6544,21 +6583,10 @@ registerAidosSessionEventTypes(ctx);
     if (colon >= 0) {
       const head = ref.slice(0, colon);
       const tail = ref.slice(colon + 1);
-      // A session-id-headed reference names a foreign row
-      // (<sourceSessionId>:<ticketId> as the workspaceTickets merge keys
-      // them): resolve it in the OWNER session's log, whose tickets the
-      // caller's own log never holds. Only a fully numeric tail routes —
-      // a workspaceKey:slug reference always carries a slug tail, and
-      // slugs are title-derived (never bare numbers).
-      if (/^\d+$/.test(tail)) {
-        const ownerCache = this._cache(this._ownerSession(agent, head));
-        this._sync(this._ownerSession(agent, head), ownerCache);
-        const numeric = Number(tail);
-        if (Number.isInteger(numeric) && ownerCache.state.tickets.has(numeric)) {
-          return numeric;
-        }
-        throw new UnknownTicket(ref);
-      }
+      // #45: only a `<workspaceKey>:<slug>` reference crosses a boundary
+      // now. The old `<sourceSessionId>:<ticketId>` form lost its routing
+      // branch with the composite address itself; a numeric tail finds no
+      // slug and refuses below.
       const slug = tail;
       for (const snapshot of cache.state.tickets.values()) {
         if (snapshot.workspaceKey === head && snapshot.slug === slug) {
@@ -6573,6 +6601,51 @@ registerAidosSessionEventTypes(ctx);
       }
     }
     throw new UnknownTicket(ref);
+  }
+
+  /**
+   * #45: resolve a bare numeric reference (a number or a decimal string)
+   * to a ticket id. The caller's own fold is tried first — an id the
+   * caller's log holds is the caller's ticket, which is the #93 rule kept
+   * verbatim. Only when the own fold lacks the id does the reference
+   * resolve through the workspace merge: the merge row's `sourceSessionId`
+   * names the owning session, and resolution reruns in THAT session's
+   * fold — which for a dead origin is the store-backed orphan session
+   * #43 built, so the store's renumbered workspace-unique id resolves
+   * exactly like a live peer's local one.
+   */
+  private _resolveNumericTicketId(
+    agent: Agent,
+    cache: SessionCache,
+    numeric: number,
+  ): TicketId {
+    if (cache.state.tickets.has(numeric)) {
+      return numeric;
+    }
+    const owner = this._workspaceOwnerOf(agent, numeric);
+    if (owner !== null) {
+      const ownerSession = this._ownerSession(agent, owner);
+      const ownerCache = this._cache(ownerSession);
+      this._sync(ownerSession, ownerCache);
+      if (ownerCache.state.tickets.has(numeric)) {
+        return numeric;
+      }
+    }
+    throw new UnknownTicket(numeric);
+  }
+
+  /**
+   * #45: the session that owns `ticketId` on this workspace's merged
+   * board, or null when no row carries the id. Provenance only — the
+   * merge stamps every row's owning session, live or imported, and the
+   * id space itself is the store's (#39/#41), so the row found here is
+   * the one the plain id addresses.
+   */
+  private _workspaceOwnerOf(agent: Agent, ticketId: TicketId): string | null {
+    const merged = this._workspaceBoardMerge(agent, true);
+    const row = merged.tickets.find((candidate) => candidate.id === ticketId);
+    const owner = row?.sourceSessionId;
+    return typeof owner === "string" && owner !== "" ? owner : null;
   }
 
   /** Refuse a write against a ticket whose workspace is not the current one. */

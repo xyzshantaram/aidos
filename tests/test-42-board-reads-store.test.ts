@@ -13,8 +13,9 @@
  *      timing it: after the first open every board read performs ZERO
  *      inspects (and zero lists), however many logs the workspace holds.
  *   2. a ticket from a closed session appears on the board — the closed
- *      log's ticket renders foreign with its origin session id and its
- *      evidence/comment maps keyed under it.
+ *      log's ticket renders with its origin session id and its
+ *      evidence/comment maps keyed under its plain store id (#45: the
+ *      composite address is gone, so no row renders foreign any more).
  *   3. a ticket whose session log was deleted still appears — after the
  *      import the log is removed from persistence entirely and the row is
  *      still on the board, on `workspaceTickets` and on `coldTickets`.
@@ -111,7 +112,7 @@ describe("#42 criterion 1: no cold scan on board reads", () => {
 });
 
 describe("#42 criterion 2: a closed session's ticket appears on the board", () => {
-  it("the imported row renders foreign with its origin session and its maps keyed under it", async () => {
+  it("the imported row carries its origin session and its maps keyed plainly", async () => {
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
     const closedId = "store-closed-1";
@@ -133,18 +134,20 @@ describe("#42 criterion 2: a closed session's ticket appears on the board", () =
     expect(titles).toEqual(["closed ticket", "own ticket"]);
 
     const foreign = result.tickets.find((row) => row.title === "closed ticket")!;
-    expect(foreign.foreign).toBe(true);
+    // #45: no row is foreign-flagged; the imported row traces to its
+    // origin log by provenance and is addressed by its plain store id.
+    expect(foreign.foreign).toBe(false);
     expect(foreign.sourceSessionId).toBe(closedId);
     // The one-time import is the only inspect: the board read itself scans
     // nothing.
     expect(inspects).toBe(1);
 
-    // The maps ride with the row under the same session:id key the live
-    // merge used, so the client reads them back identically.
+    // The maps ride with the row under the plain id the client derives,
+    // store row and own row identically.
     const own = result.tickets.find((row) => row.title === "own ticket")!;
     expect(result.evidence[String(own.id)]).toBeDefined();
-    expect(result.evidence[closedId + ":" + foreign.id]).toBeDefined();
-    expect(result.comments[closedId + ":" + foreign.id]).toBeDefined();
+    expect(result.evidence[String(foreign.id)]).toBeDefined();
+    expect(result.comments[String(foreign.id)]).toBeDefined();
   });
 });
 

@@ -67,12 +67,15 @@ describe("#43 criterion 1: signoff moves a closed origin's ticket", () => {
       },
     });
     const service = harness.service;
-    const ref = closedId + ":1";
 
     // The first board open backfills the closed log into the store.
     const before = await service.workspaceTickets(harness.asAgent());
     const beforeRow = before.tickets.find((row) => row.title === "orphan ticket");
     expect(beforeRow?.state).toBe("open");
+    // #45: the composite address is gone; the orphan route is addressed by
+    // the row's plain workspace-unique store id, read off the board.
+    const ref = String(beforeRow?.id);
+    expect(ref).not.toContain(":");
 
     // The gate for open -> in_progress requires a user_signoff, and the
     // move refuses while the gate is unsatisfied — the refusal itself now
@@ -163,6 +166,11 @@ describe("#43 criterion 2: a move lands after the origin log is deleted", () => 
     expect(before.tickets.find((row) => row.title === "deleted log ticket")?.state).toBe(
       "awaiting_verification",
     );
+    // #45: the composite address is gone; the write addresses the row by
+    // its renumbered store id, exactly as the board shows it.
+    const deletedRef = String(
+      before.tickets.find((row) => row.title === "deleted log ticket")?.id,
+    );
 
     // THE LOG IS DELETED FROM DISK: persistence no longer lists the
     // session and its log cannot be inspected at all.
@@ -171,7 +179,7 @@ describe("#43 criterion 2: a move lands after the origin log is deleted", () => 
     // awaiting_verification -> in_progress is user-only, kind-free: the
     // whole write must land in the store with no log behind it.
     const moved = await service.userMoveTicket(harness.asAgent(), {
-      ticketId: closedId + ":1",
+      ticketId: deletedRef,
       to: "in_progress",
     } as never);
     expect(moved.fromState).toBe("awaiting_verification");
@@ -201,8 +209,10 @@ describe("#43 criterion 3: a live origin still writes to its own log", () => {
     harness.seedEvidence(peer, row.id, "builtin:user_signoff");
 
     const logBefore = peer.session.events.length;
+    // #45: plain id. The caller's own fold is empty, so the workspace
+    // fallback routes the write to the live owner's log.
     const moved = await service.userMoveTicket(harness.asAgent(), {
-      ticketId: peer.id + ":" + row.id,
+      ticketId: String(row.id),
       to: "in_progress",
     } as never);
     expect(moved.toState).toBe("in_progress");

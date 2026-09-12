@@ -22,7 +22,7 @@ function twoAgentHarness() {
 }
 
 describe("workspaceTickets merge", () => {
-  it("shows the peer's live tickets with sourceSessionId and foreign marker", async () => {
+  it("shows the peer's live tickets with owner provenance and no foreign marker", async () => {
     const { harness, peer } = twoAgentHarness();
     const service = harness.service;
     // Create one ticket in each log.
@@ -33,26 +33,33 @@ describe("workspaceTickets merge", () => {
     const titles = result.tickets.map((row) => row.title).sort();
     expect(titles).toEqual(["own ticket", "peer ticket"]);
 
+    // #45: `foreign` is false for every row the merge produces; the merge
+    // distinguishes readers by provenance, not by a composite address.
     const own = result.tickets.find((row) => row.title === "own ticket");
     const foreign = result.tickets.find((row) => row.title === "peer ticket");
     expect(own?.foreign).toBe(false);
     expect(own?.sourceSessionId).toBe(harness.agent.id);
-    expect(foreign?.foreign).toBe(true);
+    expect(foreign?.foreign).toBe(false);
     expect(foreign?.sourceSessionId).toBe(peer.id);
   });
 
-  it("keys foreign evidence and comments under sessionId:ticketId", async () => {
+  it("keys evidence and comments under the plain ticket id", async () => {
     const { harness, peer } = twoAgentHarness();
     const service = harness.service;
     service.userSetTicket(harness.asAgent(), { title: "own" });
+    // The peer's SECOND ticket is the unambiguous one: the peer's first
+    // shares the caller's numeric id 1, the legacy live collision the
+    // phase accepts and documents rather than addresses.
+    service.userSetTicket(harness.asAgent(peer), { title: "first" });
     const peerTicket = service.userSetTicket(harness.asAgent(peer), { title: "foreign" });
     service.userAddComment(harness.asAgent(peer), { ticketId: peerTicket.id, text: "hello" });
 
     const result = await service.workspaceTickets(harness.asAgent());
-    expect(result.comments[peer.id + ":" + peerTicket.id]?.[0]?.text).toBe("hello");
-    // Own ticket 1 and the peer's ticket 1 share the numeric id; only the
-    // foreign row is keyed under the peer's session id.
-    expect(result.comments[peer.id + ":" + peerTicket.id]).toHaveLength(1);
+    expect(result.comments[String(peerTicket.id)]?.[0]?.text).toBe("hello");
+    // #45: no composite key exists anywhere in the maps.
+    for (const key of [...Object.keys(result.evidence), ...Object.keys(result.comments)]) {
+      expect(key).not.toContain(":");
+    }
   });
 
   it("includes a closed session's tickets via persistence inspect", async () => {
@@ -82,18 +89,23 @@ describe("workspaceTickets merge", () => {
     });
 
     const result = await harness.service.workspaceTickets(harness.asAgent());
-    const foreign = result.tickets.filter((row) => row.foreign);
-    expect(foreign.map((row) => row.title)).toEqual(["closed ticket"]);
-    expect(foreign[0]?.sourceSessionId).toBe(closedId);
+    // #45: closed rows trace to their owning log by provenance, not a flag.
+    const closed = result.tickets.filter((row) => row.sourceSessionId === closedId);
+    expect(closed.map((row) => row.title)).toEqual(["closed ticket"]);
+    for (const row of result.tickets) expect(row.foreign).toBe(false);
   });
 
   it("routes a user edit on a foreign ticket into the owner's log", async () => {
     const { harness, peer } = twoAgentHarness();
     const service = harness.service;
     service.userSetTicket(harness.asAgent(), { title: "own" });
+    // The peer's second ticket is the addressable foreign row: its first
+    // shares the caller's numeric id 1, and own-first resolution (#93)
+    // keeps id 1 local. #45 addresses by plain id, unambiguous here.
+    service.userSetTicket(harness.asAgent(peer), { title: "before one" });
     const peerTicket = service.userSetTicket(harness.asAgent(peer), { title: "before" });
 
-    const ref = peer.id + ":" + peerTicket.id;
+    const ref = String(peerTicket.id);
     service.userSetTicket(harness.asAgent(), {
       ticketId: ref,
       title: "after",
@@ -117,16 +129,17 @@ describe("workspaceTickets merge", () => {
     expect(ownEvents.some((t) => t?.title === "after")).toBe(false);
   });
 
-  it("refuses a foreign write when neither a live owner nor the store holds the ticket", async () => {
+  it("refuses a write for an id no workspace source holds", async () => {
     // #43 changed the closed-origin contract: the write now routes to the
     // workspace store (a store-backed orphan session) instead of refusing
-    // outright. The refusal survives for a ticket the store does not hold
-    // either — it just names the missing ticket now, not the dead session.
+    // outright. #45 deleted the composite address with it, so the stranded
+    // ref is a plain id now. The refusal survives for an id the store
+    // does not hold either — it just names the missing ticket.
     const { harness } = twoAgentHarness();
     const service = harness.service;
     expect(() =>
       service.userMoveTicket(harness.asAgent(), {
-        ticketId: "session-gone:3",
+        ticketId: "3",
         to: "in_progress",
       } as never),
     ).toThrow(/no such ticket/);

@@ -168,19 +168,32 @@ describe("#146 a subagent's reads resolve against the dispatching board", () => 
     const fork = harness.makeAgent({ depth: 0, id: "session-fork" });
     (fork.session.header as { parentSession?: string }).parentSession = harness.agent.session.id;
 
+    // The fork owns a ticket of its own, so the two candidate boards have
+    // observably different orders: the fork's board leads with the fork's
+    // rows, while a rerouted (parent) board would lead with the parent's.
+    harness.service.setTicket(harness.asAgent(fork), { title: "Fork ticket" });
+
     const payload = successJson(await harness.runTool("get_tickets", { detail: "full" }, { agent: fork })) as {
       tickets: { title: string; foreign: boolean; sourceSessionId: string }[];
     };
-    const row = payload.tickets.find((t) => t.title === "Parent ticket");
+    const parentPayload = successJson(
+      await harness.runTool("get_tickets", { detail: "full" }, { agent: harness.agent }),
+    ) as { tickets: { title: string; foreign: boolean; sourceSessionId: string }[] };
     /*
-     * #207: the fork still SEES the ticket — same workspace — but as a
-     * FOREIGN row of the parent's session, which is what proves its board
-     * was not REROUTED: a rerouted read would render the parent's ticket
-     * as the fork's OWN row (foreign: false, the fork's own session id).
+     * #207: the fork still SEES the parent's ticket — same workspace — and
+     * #45 deleted the foreign flag that used to prove whose board this is,
+     * so the proof is the ORDER: a board renders the READER's own rows
+     * first (the merge's insertion order), which a rerouted read would
+     * invert. Provenance names each row's owner either way.
      */
-    expect(row).toBeDefined();
-    expect(row?.foreign).toBe(true);
-    expect(row?.sourceSessionId).toBe(harness.agent.session.id);
+    const titles = payload.tickets.map((t) => t.title);
+    expect(titles).toContain("Parent ticket");
+    expect(titles[0]).toBe("Fork ticket");
+    const parentTitles = parentPayload.tickets.map((t) => t.title);
+    expect(parentTitles[0]).toBe("Parent ticket");
+    const byTitle = new Map(payload.tickets.map((t) => [t.title, t]));
+    expect(byTitle.get("Parent ticket")?.sourceSessionId).toBe(harness.agent.session.id);
+    expect(byTitle.get("Fork ticket")?.sourceSessionId).toBe(fork.session.id);
   });
 
   it("walks a nested child all the way to the orchestrator", async () => {

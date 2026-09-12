@@ -70,9 +70,10 @@ const DESCRIPTION_CLIP_CHARS = 800;
 export interface DetailPanelProps {
   ticket: TicketView;
   /**
-   * The board write identity: the plain id for an own ticket,
-   * `<sourceSessionId>:<id>` for a foreign one. Write components route
-   * through it; the host sends foreign writes to the owner session.
+   * The board write identity: the ticket's plain id (#45 — ids are
+   * workspace-unique, so one address serves own and foreign rows alike).
+   * Write components route through it; the host sends writes for an id
+   * the caller's fold does not hold to the owning session.
    */
   ticketIdKey: string;
   evidence: readonly EvidenceRow[];
@@ -139,9 +140,9 @@ export async function submitTicketForReview(
   await callAidosRemote(
     "userMoveTicket",
     // #93 third review, finding 1: this sent the bare `ticket.id` while
-    // every sibling write in this component uses props.ticketIdKey. For a
-    // FOREIGN row _routedAgent returns the caller unchanged for a number,
-    // so Submit for review moved the caller's OWN ticket with that id.
+    // every sibling write in this component uses props.ticketIdKey, and
+    // #45 keeps that rule — the key is the plain id now, and the host
+    // routes an id the caller's fold does not hold to its owner.
     { ticketId: ticketIdKey, to: "awaiting_verification" },
     agentId,
   );
@@ -1023,7 +1024,7 @@ export function DetailView(props: DetailViewProps) {
    *
    * They also had a remount of their own that no board-level store could
    * have covered: this component is rendered with `key={selectedBoardKey}`,
-   * and a row's board key FLIPS when it goes foreign -> own. That is #100's
+   * and a row's board key FLIPPED when it went foreign -> own (the composite-address era). That is #100's
    * second mechanism reaching the modals by a different road. The view now
    * keys on the durable identity instead, and the store below makes the
    * question moot either way.

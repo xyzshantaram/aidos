@@ -100,7 +100,10 @@ describe("#207 criterion 1+3: two closed logs, one workspace, a fresh session re
     const byTitle = new Map(rows.map((row) => [row.title, row]));
     expect(byTitle.get("ticket from log a")?.sourceSessionId).toBe("s207-log-a");
     expect(byTitle.get("ticket from log b")?.sourceSessionId).toBe("s207-log-b");
-    expect(byTitle.get("ticket from log a")?.foreign).toBe(true);
+    // #45: the composite address is gone — no row is foreign-flagged, and
+    // every row is addressed by its plain workspace-unique id.
+    expect(byTitle.get("ticket from log a")?.foreign).toBe(false);
+    expect(byTitle.get("ticket from log b")?.foreign).toBe(false);
   });
 
   it("the live-peer variant: a fresh session sees a LIVE peer's tickets synchronously", async () => {
@@ -119,7 +122,7 @@ describe("#207 criterion 1+3: two closed logs, one workspace, a fresh session re
 });
 
 describe("#207 criterion 2: the one-ticket reads resolve a foreign, CLOSED owner", () => {
-  it("get_ticket resolves by plain id AND by composite id; get_evidence rides it", async () => {
+  it("get_ticket resolves a closed owner's ticket by its plain store id; the composite refuses", async () => {
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
     const log = buildClosedLog(harness, "s207-owner", "owned by the closed log");
@@ -137,27 +140,30 @@ describe("#207 criterion 2: the one-ticket reads resolve a foreign, CLOSED owner
     const agent = harness.asAgent(reader);
     const agentCasted = agent;
 
-    // Plain numeric id: the store renumbered the row into the workspace id
-    // space, so it resolves with no live owner.
-    const plain = service.getTicket(agentCasted, { ticketId: log.ticketId });
+    // The ticket's address is its plain store id, read off the board —
+    // the caller's own fold is empty, so the write-path-shaped numeric
+    // ref resolves through the workspace merge to the store-backed row.
+    const boardId = service
+      .getTickets(agentCasted)
+      .find((row) => row.title === "owned by the closed log")!.id;
+    const plain = service.getTicket(agentCasted, { ticketId: boardId });
     expect(plain.ticket.title).toBe("owned by the closed log");
     expect(plain.evidence).toBeDefined();
 
-    // Composite `<sourceSessionId>:<id>`: the write path's address form.
-    // Pre-fix this threw OwnerUnavailable — routing only reached LIVE owners.
-    const composite = service.getTicket(agentCasted, {
-      ticketId: `s207-owner:${log.ticketId}`,
-    });
-    expect(composite.ticket.title).toBe("owned by the closed log");
+    // Composite `<sourceSessionId>:<id>`: the write path's OLD address
+    // form, deleted by #45. The same lookup now refuses.
+    expect(() =>
+      service.getTicket(agentCasted, {
+        ticketId: `s207-owner:${log.ticketId}`,
+      }),
+    ).toThrow(/no such ticket/);
 
     // get_evidence is getTicket underneath (src/tools/aidos-tools.ts calls
     // ctx.aidos.getTicket and maps result.evidence), so the tool reaches the
     // closed owner's rows through the same fallback; this harness registers
     // the six board tools, so assert the service seam directly.
-    const evidenceRead = service.getTicket(agentCasted, {
-      ticketId: `s207-owner:${log.ticketId}`,
-    });
-    expect(evidenceRead.ticket.id).toBe(log.ticketId);
+    const evidenceRead = service.getTicket(agentCasted, { ticketId: boardId });
+    expect(evidenceRead.ticket.id).toBe(boardId);
     expect(Array.isArray(evidenceRead.evidence)).toBe(true);
   });
 

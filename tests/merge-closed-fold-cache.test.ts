@@ -13,9 +13,12 @@
  *  - the cache and refresh maps no longer exist on the service;
  *  - the reopen-close gap is stated, not hidden: a ticket written to a
  *    closed log AFTER the one-time backfill is not on the board, because
- *    the write path still targets session logs (host write mirroring is
- *    #43/#45's work). The backfill marker is once-and-done by #41's design,
- *    so no re-scan picks the late row up.
+ *    the write path still targets session logs. #43 deliberately routes
+ *    only DEAD origins to the store, and #45's verdict is that collapsing
+ *    the id space (host creates allocating from the store's port) is still
+ *    open — until then a blind mirror could fold a live create over an
+ *    unrelated imported ticket. The backfill marker is once-and-done by
+ *    #41's design, so no re-scan picks the late row up.
  */
 import { describe, expect, it } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";

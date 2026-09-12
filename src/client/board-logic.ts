@@ -18,15 +18,16 @@ import { compareTicketViews, filterTicketViews } from "../kernel/projections";
  */
 
 import { BUILTIN_KINDS, DEFAULT_GATES } from "../kernel/constants";
-import { boardKeyText } from "../kernel/board-key";
+import { boardKeyText, parseBoardKey } from "../kernel/board-key";
 import { RETIRED_KIND, isRetired } from "../kernel/retirement";
 import { STATE_ORDER } from "../kernel/types";
 import type { TicketState } from "../kernel/types";
 
 /**
- * A row addressable on the merged workspace board. Own rows are plain ids;
- * FOREIGN rows (from another session, merged in by workspaceTickets) are
- * addressed `sourceSessionId:id`, because ids collide across sessions.
+ * A row addressable on the merged workspace board. #45: ids are unique per
+ * workspace, so every row is addressed by its plain id — the `foreign` and
+ * `sourceSessionId` fields survive only as provenance and as the shape the
+ * host still stamps.
  */
 export interface BoardKeyed {
   id: number | string;
@@ -42,8 +43,11 @@ export interface BoardKeyed {
  * There are three spaces, and every one of them was `string | number`, so
  * TypeScript accepted every confusion silently:
  *
- *   - a TICKET ID (`12`) is unique only within one session;
- *   - a BOARD KEY (`"12"` or `"sess-abc:12"`) is unique across the merged board;
+ *   - a TICKET ID (`12`) is unique per workspace since #45 (the store's
+ *     port counter, #39, with every imported log renumbered into it, #41);
+ *   - a BOARD KEY (`"12"`) is that id as a string — the composite
+ *     `"sess-abc:12"` forms of the past are refused on the write path and
+ *     honoured on the deep-link path only when owner and tail both match;
  *   - a DEPENDENCY REF (`"workspaceKey:12"`) is unique across NOTHING, because
  *     every session in a workspace shares the workspace key.
  *
@@ -103,6 +107,15 @@ export function boardKeyOf(ticket: BoardKeyed): BoardKey {
  * correctly instead of being addressed by a bare id that is not its
  * address.
  *
+ * #45 MIGRATION. The board key is the plain id now, but saved links from
+ * the composite-addressing builds still carry `<sourceSessionId>:<id>`.
+ * Such a ref resolves to the row that carries BOTH halves — the numeric
+ * tail AND the owning session — which is exactly the ticket the link
+ * meant: an other-board key (`#100 round 4`) matches no row's owner and
+ * still resolves to nothing, and a tail that names two same-owner rows
+ * refuses rather than guessing, which is the #93 rule. Non-numeric colon
+ * refs (`workspaceKey:slug`) still mean nothing here.
+ *
  * Exported, and a pure function, because the two earlier #100 fixes were
  * pinned by tests that re-implemented the derivation or grepped the source
  * — both of which passed while the bug shipped.
@@ -114,9 +127,16 @@ export function resolveDeepLinkRow<T extends BoardKeyed>(
   if (ref === null || ref === "") return null;
   const byKey = rows.find((row) => boardKeyOf(row) === ref);
   if (byKey !== undefined) return byKey;
-  if (!/^\d+$/.test(ref)) return null;
-  const id = Number(ref);
-  return rows.find((row) => Number(row.id) === id) ?? null;
+  if (/^\d+$/.test(ref)) {
+    const id = Number(ref);
+    return rows.find((row) => Number(row.id) === id) ?? null;
+  }
+  const parsed = parseBoardKey(ref);
+  if (parsed.foreign !== true) return null;
+  const matches = rows.filter(
+    (row) => Number(row.id) === parsed.id && row.sourceSessionId === parsed.sourceSessionId,
+  );
+  return matches.length === 1 ? (matches[0] ?? null) : null;
 }
 
 /** The ticket fields the board logic reads. TicketView satisfies this. */

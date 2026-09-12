@@ -144,15 +144,28 @@ describe("#164 get_evidence returns what get_ticket cannot", () => {
     expect(withComments.comments[0].body).toBe("the comment body");
   });
 
-  it("a composite id resolves exactly like get_ticket", async () => {
+  it("a decimal-string id resolves exactly like get_ticket", async () => {
+    // #45: the composite `<sessionId>:<id>` address is gone; the string
+    // form the board sends is the plain id, and it answers the same rows.
+    const harness = riggedHarness();
+    const id = ticketWithEvidence(harness);
+    const viaString = successJson(
+      await harness.runTool("get_evidence", { ticketId: String(id) }, { agent: harness.agent }),
+    ) as { evidence: EvidenceRowOut[] };
+    expect(viaString.evidence).toHaveLength(2);
+    expect((viaString.evidence[0].payload as { note: string }).note).toBe(LONG_NOTE);
+  });
+
+  it("a composite id no longer resolves", async () => {
+    // #45 deleted the session-routing branch: the old addressing form now
+    // refuses instead of routing.
     const harness = riggedHarness();
     const id = ticketWithEvidence(harness);
     const composite = `${String(harness.agent.session.id)}:${id}`;
-    const viaComposite = successJson(
+    const failure = failureJson(
       await harness.runTool("get_evidence", { ticketId: composite }, { agent: harness.agent }),
-    ) as { evidence: EvidenceRowOut[] };
-    expect(viaComposite.evidence).toHaveLength(2);
-    expect((viaComposite.evidence[0].payload as { note: string }).note).toBe(LONG_NOTE);
+    );
+    expect(failure.message).toMatch(/no such ticket/);
   });
 
   it("is a declared READ a dispatched subagent can call", async () => {
