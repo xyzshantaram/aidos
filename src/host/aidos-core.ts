@@ -4984,9 +4984,10 @@ registerAidosSessionEventTypes(ctx);
    *    is the backstop — a genuine collision refuses the whole create
    *    with the session log untouched, never a silent overwrite;
    *  - any other ticket write mirrors only in LOCKSTEP: the store holds
-   *    the same id with the same slug at the same revision. A mirrored
-   *    ticket stays in lockstep from its create (every later write
-   *    mirrors), so this passes for exactly the tickets the mirror owns.
+   *    the same id with the same slug at the same revision AND the same
+   *    createdAt. A mirrored ticket stays in lockstep from its create
+   *    (every later write mirrors), so this passes for exactly the
+   *    tickets the mirror owns.
    *    A legacy fold-counter ticket the store never saw (or saw only as
    *    an unrelated imported id) fails it and stays session-only: it is
    *    not renumbered, not refused, and not folded over anyone — the
@@ -4994,11 +4995,19 @@ registerAidosSessionEventTypes(ctx);
    *    allocation was unified BEFORE any mirror ran, so a live create
    *    can never share an id with an unrelated store row.
    *
-   * The lockstep check is structural, not heuristic-by-accident: slug
-   * plus revision must both agree. Two different tickets sharing an id
-   * AND a slug AND a revision would still pass it — that shape needs a
-   * pre-existing same-title collision at the same event count, and it is
-   * the documented residual, not a silent guarantee.
+   * The lockstep check is structural, not heuristic-by-accident: slug,
+   * revision AND createdAt must all agree. createdAt is the field that
+   * closes #220: the backfill preserves it (store.ts create `at`, and the
+   * squashing set carries it through its `...final` spread), while a live
+   * mirror lands the SAME event object in both homes — so two rows that
+   * are one ticket always agree here, and two tickets born at different
+   * times never do. Without it, a legacy live ticket at exactly revision
+   * 2 sharing a numeric id and slug with a backfilled row fused on the
+   * first touch, and stayed fused because the two revisions then advanced
+   * together. The remaining window is a genuine impossibility, not a
+   * narrow one: the same id (refused by unified allocation), the same
+   * slug (refused by workspace-unique slugs), the same revision, AND the
+   * same birth instant.
    */
   private _mirrorTarget(
     agent: Agent,
@@ -5034,6 +5043,15 @@ registerAidosSessionEventTypes(ctx);
       return null;
     }
     if (sessionTicket.slug !== storeTicket.slug) {
+      return null;
+    }
+    // #220: createdAt is the fourth lockstep field. Two rows that are one
+    // ticket always agree here — the backfill preserves it, and a live
+    // mirror lands the same event in both homes — while two tickets born
+    // at different times never do. createdAt is birth data: no write path
+    // rewrites it (creates set it, every set spreads `...prev`), so the
+    // refusal below cannot decay into a later fusion.
+    if (sessionTicket.createdAt !== storeTicket.createdAt) {
       return null;
     }
     const sessionRev = cache.state.lastRevision.get(id) ?? sessionTicket.revision;
