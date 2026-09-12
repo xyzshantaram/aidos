@@ -30521,7 +30521,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * the id does not resolve to a row of the workspace project.
    */
   _ticketInWorkspaceStore(agent, ticketRef) {
-    const entry = this._workspaceStore(agent);
+    const entry = this._workspaceStoreForRead(agent);
     if (entry === null) return null;
     let id;
     if (typeof ticketRef === "number") {
@@ -30676,7 +30676,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       if (cache.state.projects.has(explicit)) {
         return { projectId: explicit, state: cache.state };
       }
-      const entry2 = this._workspaceStore(reader);
+      const entry2 = this._workspaceStoreForRead(reader);
       if (entry2 !== null && entry2.store.state.projects.has(explicit)) {
         return { projectId: explicit, state: entry2.store.state };
       }
@@ -30686,7 +30686,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (this._ticketsFor(foldProjectId, cache.state).length > 0) {
       return { projectId: foldProjectId, state: cache.state };
     }
-    const entry = this._workspaceStore(reader);
+    const entry = this._workspaceStoreForRead(reader);
     if (entry !== null && this._ticketsFor(entry.projectId, entry.store.state).length > 0) {
       return { projectId: entry.projectId, state: entry.store.state };
     }
@@ -30912,10 +30912,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * the caller that awaits it before merging.
    */
   _workspaceBoardMerge(agent, includeRetired, opts) {
-    const workspaceStore = this._workspaceStore(agent);
-    if (opts?.backfillAwaited !== true && workspaceStore !== null && !workspaceStore.store.hasBackfillCompleted()) {
-      void this._backfillRun(agent, workspaceStore).catch(() => void 0);
-    }
+    const workspaceStore = this._workspaceStoreForRead(agent, opts);
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
     const workspaceLabels = {};
@@ -31220,6 +31217,32 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * folds (a warning is logged) rather than refusing every read because
    * durable storage is broken.
    */
+  /**
+   * The workspace store for an agent READ, with the one-time import KICKED.
+   *
+   * #42 review (2026-09-12), second round. The first fix kicked the backfill
+   * inside `_workspaceBoardMerge` only, so `getTickets` was merely LATE on a
+   * cold host — rows landed from the next read. But `getTicket`/`getEvidence`
+   * (via `_ticketInWorkspaceStore`) and `plan`/`planMeta` (via
+   * `_planProjectSource`) queried the store DIRECTLY and kicked nothing. On a
+   * host whose first board interaction was one of those reads, the answer was
+   * "no such ticket" — and it STAYED "no such ticket" on every later call,
+   * because nothing ever started the import. That is a WRONG answer, not a
+   * late one, and it is exactly the "reads once, concludes no such ticket"
+   * mode the earlier review_fail demanded be hunted.
+   *
+   * So the kick belongs to READING THE STORE, not to one caller of it. Every
+   * agent read path goes through here; `backfillAwaited` is for the browser
+   * remote, which awaits the same shared promise BEFORE merging and must not
+   * start a stale second run that a later reader would inherit.
+   */
+  _workspaceStoreForRead(agent, opts) {
+    const entry = this._workspaceStore(agent);
+    if (opts?.backfillAwaited !== true && entry !== null && !entry.store.hasBackfillCompleted()) {
+      void this._backfillRun(agent, entry).catch(() => void 0);
+    }
+    return entry;
+  }
   _workspaceStore(agent) {
     let path;
     try {

@@ -193,6 +193,84 @@ describe("#207 criterion 2: the one-ticket reads resolve a foreign, CLOSED owner
   });
 });
 
+describe("#42 review round 2: a COLD host whose first board read is get_ticket", () => {
+  /*
+   * The asymmetry this pins. The first fix kicked the one-time import inside
+   * `_workspaceBoardMerge` only, so `get_tickets` was merely LATE on a cold
+   * host — the rows landed from the next read. But `get_ticket`/`get_evidence`
+   * and `plan`/`plan_meta` queried the store DIRECTLY and kicked nothing, so
+   * on a host whose FIRST board interaction was one of those reads the answer
+   * was "no such ticket" — and it STAYED "no such ticket" on every later call,
+   * because nothing ever started the import. A wrong answer, not a late one.
+   *
+   * The discriminator is the SECOND read, not the first: the kick is
+   * fire-and-forget, so the first call may legitimately miss. Pre-fix, every
+   * later call misses too, forever.
+   *
+   * Nothing here may call workspaceTickets or get_tickets first — those kick
+   * the import and would hide exactly the defect under test.
+   */
+  it("a repeated get_ticket resolves the closed owner's ticket; it does not refuse forever", async () => {
+    const harness = createHarness(undefined, { cwd: WS });
+    harness.installService();
+    const log = buildClosedLog(harness, "s207-cold-owner", "only reachable after the import");
+    harness.ctx.reflect.provide("sessionPersistence", {
+      list: async () => [{ id: SessionId("s207-cold-owner"), cwd: WS }],
+      inspect: async (id: string) => {
+        if (id !== "s207-cold-owner") throw new Error("not found");
+        return { meta: { id, cwd: WS }, events: log.events };
+      },
+    });
+    const service = harness.service;
+    const agent = harness.asAgent(freshReader(harness, "s207-cold-reader"));
+
+    const read = (): string | null => {
+      try {
+        return service.getTicket(agent, { ticketId: log.ticketId }).ticket.title;
+      } catch {
+        return null;
+      }
+    };
+
+    // FIRST interaction with the board on this host. Allowed to miss.
+    read();
+
+    // Let the fire-and-forget import settle, then read again. Pre-fix this
+    // stays null however long we wait, because no read ever kicked it.
+    for (let attempt = 0; attempt < 50 && read() === null; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(read()).toBe("only reachable after the import");
+  });
+
+  it("plan does not render an empty document on a cold host", async () => {
+    const harness = createHarness(undefined, { cwd: WS });
+    harness.installService();
+    const log = buildClosedLog(harness, "s207-cold-plan-owner", "a ticket the plan must carry");
+    harness.ctx.reflect.provide("sessionPersistence", {
+      list: async () => [{ id: SessionId("s207-cold-plan-owner"), cwd: WS }],
+      inspect: async (id: string) => {
+        if (id !== "s207-cold-plan-owner") throw new Error("not found");
+        return { meta: { id, cwd: WS }, events: log.events };
+      },
+    });
+    const service = harness.service;
+    const agent = harness.asAgent(freshReader(harness, "s207-cold-plan-reader"));
+
+    // First board interaction is `plan`, never get_tickets.
+    service.plan(agent);
+    for (
+      let attempt = 0;
+      attempt < 50 && !service.plan(agent).includes("a ticket the plan must carry");
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(service.plan(agent)).toContain("a ticket the plan must carry");
+    void log.ticketId;
+  });
+});
+
 describe("#207 criterion 4: a different workspace does not see this workspace's tickets", () => {
   it("a session in another cwd reads its own (empty) store, never this board", async () => {
     const harness = createHarness(undefined, { cwd: WS });

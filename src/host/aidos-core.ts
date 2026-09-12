@@ -1790,7 +1790,7 @@ registerAidosSessionEventTypes(ctx);
     agent: Agent,
     ticketRef: number | string,
   ): { ticket: TicketView; evidence: EvidenceRow[]; comments: CommentRecord[] } | null {
-    const entry = this._workspaceStore(agent);
+    const entry = this._workspaceStoreForRead(agent);
     if (entry === null) return null;
     let id: number;
     if (typeof ticketRef === "number") {
@@ -2035,7 +2035,7 @@ registerAidosSessionEventTypes(ctx);
       if (cache.state.projects.has(explicit as ProjectId)) {
         return { projectId: explicit as ProjectId, state: cache.state };
       }
-      const entry = this._workspaceStore(reader);
+      const entry = this._workspaceStoreForRead(reader);
       if (entry !== null && entry.store.state.projects.has(explicit as ProjectId)) {
         return { projectId: explicit as ProjectId, state: entry.store.state };
       }
@@ -2045,7 +2045,7 @@ registerAidosSessionEventTypes(ctx);
     if (this._ticketsFor(foldProjectId, cache.state).length > 0) {
       return { projectId: foldProjectId, state: cache.state };
     }
-    const entry = this._workspaceStore(reader);
+    const entry = this._workspaceStoreForRead(reader);
     if (
       entry !== null &&
       this._ticketsFor(entry.projectId, entry.store.state).length > 0
@@ -2379,19 +2379,11 @@ registerAidosSessionEventTypes(ctx);
     comments: Record<string, CommentRecord[]>;
     workspaceLabels: Record<string, string>;
   } {
-    const workspaceStore = this._workspaceStore(agent);
-    if (
-      opts?.backfillAwaited !== true &&
-      workspaceStore !== null &&
-      !workspaceStore.store.hasBackfillCompleted()
-    ) {
-      // Fire-and-forget: a sync agent read cannot await the import, but it
-      // shares the in-flight run, so the rows land for the next read (and
-      // for every workspaceTickets caller, which awaits this same promise
-      // BEFORE merging — it passes backfillAwaited so this kick cannot
-      // start a stale second run a later reader would inherit).
-      void this._backfillRun(agent, workspaceStore).catch(() => undefined);
-    }
+    // Fire-and-forget: a sync agent read cannot await the import, but it
+    // shares the in-flight run, so the rows land for the next read. The kick
+    // now lives in _workspaceStoreForRead so EVERY store-backed read starts
+    // it, not just this one (see that method for what the asymmetry cost).
+    const workspaceStore = this._workspaceStoreForRead(agent, opts);
 
     /*
      * #108: retired tickets are HIDDEN from the merge by default and the
@@ -2916,6 +2908,40 @@ registerAidosSessionEventTypes(ctx);
    * folds (a warning is logged) rather than refusing every read because
    * durable storage is broken.
    */
+  /**
+   * The workspace store for an agent READ, with the one-time import KICKED.
+   *
+   * #42 review (2026-09-12), second round. The first fix kicked the backfill
+   * inside `_workspaceBoardMerge` only, so `getTickets` was merely LATE on a
+   * cold host — rows landed from the next read. But `getTicket`/`getEvidence`
+   * (via `_ticketInWorkspaceStore`) and `plan`/`planMeta` (via
+   * `_planProjectSource`) queried the store DIRECTLY and kicked nothing. On a
+   * host whose first board interaction was one of those reads, the answer was
+   * "no such ticket" — and it STAYED "no such ticket" on every later call,
+   * because nothing ever started the import. That is a WRONG answer, not a
+   * late one, and it is exactly the "reads once, concludes no such ticket"
+   * mode the earlier review_fail demanded be hunted.
+   *
+   * So the kick belongs to READING THE STORE, not to one caller of it. Every
+   * agent read path goes through here; `backfillAwaited` is for the browser
+   * remote, which awaits the same shared promise BEFORE merging and must not
+   * start a stale second run that a later reader would inherit.
+   */
+  private _workspaceStoreForRead(
+    agent: Agent,
+    opts?: { backfillAwaited?: boolean },
+  ): { store: Store; projectId: ProjectId } | null {
+    const entry = this._workspaceStore(agent);
+    if (
+      opts?.backfillAwaited !== true &&
+      entry !== null &&
+      !entry.store.hasBackfillCompleted()
+    ) {
+      void this._backfillRun(agent, entry).catch(() => undefined);
+    }
+    return entry;
+  }
+
   private _workspaceStore(
     agent: Agent,
   ): { store: Store; projectId: ProjectId } | null {
