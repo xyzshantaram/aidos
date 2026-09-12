@@ -2732,15 +2732,84 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * Resolve the writer session for a foreign ticket reference
-   * `<sourceSessionId>:<ticketId>`. A live source session returns it;
-   * a closed one resumes nothing here — routing only reaches live owners.
+   * `<sourceSessionId>:<ticketId>`. A live source session returns it.
+   *
+   * #43: a CLOSED or DELETED origin no longer refuses the write. When the
+   * workspace store can be opened, the write routes to a synthetic
+   * store-backed session (`_orphanSession`): the write methods run exactly
+   * as they always have — same gate, same event shape — but the append
+   * lands in the store alone, the only durable home the ticket has left.
+   * A live origin still appends to its own session log; only the orphan
+   * case changes. `OwnerUnavailable` survives for the case where no store
+   * can serve the write either (the store will not open), so the caller
+   * still gets a refusal rather than a silent drop.
    */
   private _ownerSession(agent: Agent, sourceSessionId: string): Session {
     if (sourceSessionId === agent.session.id) return agent.session;
     for (const candidate of this.ctx.agents.list()) {
       if (candidate.session.id === sourceSessionId) return candidate.session;
     }
+    const orphan = this._orphanSession(agent, sourceSessionId);
+    if (orphan !== null) return orphan;
     throw new OwnerUnavailable(sourceSessionId);
+  }
+
+  /**
+   * #43: the synthetic store-backed session a closed origin's write runs
+   * against. One per origin id per workspace store, memoized so the host's
+   * per-session fold cache stays consistent across writes.
+   *
+   * `events` is derived from the store's log on EVERY access (never a
+   * snapshot), so the fold the write methods compute against is the
+   * store's own state — including the one-time backfill import and every
+   * earlier orphan write. `append` is the #43 seam: it validates and
+   * mirrors through `Store.commitHostEvent` (the #40 bracket), so a store
+   * refusal throws out of the write and nothing is half-landed. The
+   * header carries the CALLER's cwd, so workspace assertions and the
+   * worktree affordances keep resolving to the same workspace.
+   */
+  private readonly _orphanSessions = new WeakMap<
+    object,
+    Map<string, Session>
+  >();
+
+  private _orphanSession(agent: Agent, sourceSessionId: string): Session | null {
+    const entry = this._workspaceStore(agent);
+    if (entry === null) return null;
+    let memo = this._orphanSessions.get(entry);
+    if (memo === undefined) {
+      memo = new Map<string, Session>();
+      this._orphanSessions.set(entry, memo);
+    }
+    const existing = memo.get(sourceSessionId);
+    if (existing !== undefined) return existing;
+    const store = entry.store;
+    const envelope = (event: AidosEvent, seq: number): SessionEvent =>
+      ({
+        type: event.kind,
+        seq,
+        time: (event as { at?: number }).at ?? 0,
+        data: event,
+      }) as unknown as SessionEvent;
+    const orphan = {
+      id: sourceSessionId,
+      header: {
+        ...(agent.session.header as unknown as Record<string, unknown>),
+        id: sourceSessionId,
+      },
+      get events(): readonly SessionEvent[] {
+        return store.events().map((event, seq) => envelope(event, seq));
+      },
+      append(type: string, data: unknown): SessionEvent {
+        void type;
+        // The store alone (#43): no session log exists to take this
+        // append, so the mirrored store write IS the durable record.
+        store.commitHostEvent(data as AidosEvent);
+        return envelope(data as AidosEvent, store.events().length - 1);
+      },
+    } as unknown as Session;
+    memo.set(sourceSessionId, orphan);
+    return orphan;
   }
 
   /**

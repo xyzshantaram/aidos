@@ -117,7 +117,11 @@ describe("workspaceTickets merge", () => {
     expect(ownEvents.some((t) => t?.title === "after")).toBe(false);
   });
 
-  it("refuses a foreign write when the owner session is not live", async () => {
+  it("refuses a foreign write when neither a live owner nor the store holds the ticket", async () => {
+    // #43 changed the closed-origin contract: the write now routes to the
+    // workspace store (a store-backed orphan session) instead of refusing
+    // outright. The refusal survives for a ticket the store does not hold
+    // either — it just names the missing ticket now, not the dead session.
     const { harness } = twoAgentHarness();
     const service = harness.service;
     expect(() =>
@@ -125,7 +129,7 @@ describe("workspaceTickets merge", () => {
         ticketId: "session-gone:3",
         to: "in_progress",
       } as never),
-    ).toThrow(/not open/);
+    ).toThrow(/no such ticket/);
   });
 });
 

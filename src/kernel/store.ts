@@ -238,6 +238,19 @@ export class Store {
   }
 
   /**
+   * #43: one HOST write lands in the store directly — the orphan-ticket
+   * write path. When a ticket's origin session is closed or deleted, the
+   * host's write methods still compute the same event they always did, but
+   * the synthetic orphan session appends HERE instead of into a session
+   * log: the store is the only durable home the ticket has left. The write
+   * rides the same mirrored `_append` every other store write uses (#40),
+   * so a store refusal throws and the whole write is refused.
+   */
+  commitHostEvent(event: AidosEvent): void {
+    this._append(event);
+  }
+
+  /**
    * #42: whether the one-time backfill marker is in the log. The host
    * checks this BEFORE gathering any logs, so a board read after the first
    * open never touches the persistence inspect path at all.
