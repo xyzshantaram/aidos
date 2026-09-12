@@ -1663,16 +1663,504 @@ function useEvidenceViewer(): {
   };
 }
 
+/**
+ * #216: the four board tools that had NO row at all.
+ *
+ * attach_commit, attach_tags, suggest_tag_change and digest_recent fell
+ * through to the generic renderer and printed raw argument/result JSON in
+ * the conversation. Each row below is modelled on the closest of the
+ * twelve existing rows and reuses its chrome -- Facts, the aidos-tool-list
+ * anatomy, EvidenceStrip, the footer -- so no second visual language
+ * arrives with them.
+ */
+
+/** The string members of an unknown value, for tag-name lists. */
+function stringArrayOf(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+/* ── attach_commit ────────────────────────────────────────────────────
+ *
+ * Modelled on AttachEvidenceRow, the closest sibling: the call attaches
+ * one evidence row, so the body carries the same EvidenceStrip (kind
+ * builtin:user_commit) with the same viewer, and the summary names the
+ * ticket the same way. What differs is the line itself: a commit's
+ * identity is its SHORT hash and its readable line is the SUBJECT, so the
+ * summary leads with those rather than with the ticket label alone.
+ *
+ * Safe to display prominently because the host RESOLVES the hash with
+ * `git show` before storing it -- the row renders verified fields
+ * (result.commit/result.subject), not agent-supplied text. A hash git
+ * could not resolve comes back as an error, which takes the standard
+ * errorBody path below: a refusal with its reason, never an empty card.
+ */
+
+/** The commit the call attached: the host-resolved hash, else what the agent passed. */
+export function commitHashOf(
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+): string | null {
+  if (result !== null && typeof result.commit === "string" && result.commit.trim() !== "") {
+    return result.commit.trim();
+  }
+  if (args !== null && typeof args.hash === "string" && args.hash.trim() !== "") {
+    return args.hash.trim();
+  }
+  return null;
+}
+
+/** The host-resolved subject, or null while running or when absent. */
+export function commitSubjectOf(result: Record<string, unknown> | null): string | null {
+  if (result === null || typeof result.subject !== "string" || result.subject.trim() === "") {
+    return null;
+  }
+  return result.subject.trim();
+}
+
+/** The short hash: the commit's identity everywhere else it is shown. */
+export function shortHashOf(hash: string | null): string | null {
+  if (hash === null || hash === "") return null;
+  return hash.length <= 12 ? hash : hash.slice(0, 12);
+}
+
+/**
+ * `#216 — Title · abc123def456 — the subject`, with each half degrading
+ * on its own: a running call has a hash but no subject yet, and a ticket
+ * the board has not published falls back to its bare id.
+ */
+export function attachCommitSummary(
+  ticketId: string | null,
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+  label: string | null,
+): string {
+  const short = shortHashOf(commitHashOf(args, result));
+  const subject = commitSubjectOf(result);
+  const who = label ?? (ticketId === null ? null : `#${ticketId}`);
+  /*
+   * #142: the subject is shortened through expandableFact, not oneLine.
+   * Components never reach past the expander to the flattener directly;
+   * only `.value` is read here, so no expander leaks onto the summary.
+   */
+  const line = subject === null ? null : expandableFact("subject", subject, { max: 80 }).value;
+  const what =
+    short === null
+      ? (subject ?? "commit")
+      : line === null
+        ? short
+        : `${short} — ${line}`;
+  return who === null ? what : `${who} · ${what}`;
+}
+
+/** The commit as facts: hash, subject, the agent's note, gate, next step. */
+export function attachCommitFacts(
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+): Fact[] {
+  const facts: Fact[] = [];
+  const hash = commitHashOf(args, result);
+  if (hash !== null) facts.push(expandableFact("Commit", hash));
+  const subject = commitSubjectOf(result);
+  if (subject !== null) facts.push(expandableFact("Subject", subject));
+  if (args !== null && typeof args.note === "string" && args.note.trim() !== "") {
+    facts.push(expandableFact("Note", args.note.trim()));
+  }
+  const present = result?.gatePresent;
+  const total = result?.gateTotal;
+  if (typeof present === "number" && typeof total === "number") {
+    facts.push({ label: "Gate", value: `${present}/${total}` });
+  }
+  if (result !== null && typeof result.nextStep === "string" && result.nextStep.trim() !== "") {
+    facts.push(expandableFact("Next step", result.nextStep.trim()));
+  }
+  return facts;
+}
+
+export function AttachCommitRow(props: AidosViewProps) {
+  const { args, state, result, resultText, ticketId, errorText, errorSummary } =
+    useAidosRow(props);
+  const evidenceViewer = useEvidenceViewer();
+  const label = ticketLabel(props.sessionId, ticketId);
+  const summary = attachCommitSummary(ticketId, args, result, label);
+  const facts = attachCommitFacts(args, result);
+  const hash = commitHashOf(args, result);
+  const subject = commitSubjectOf(result);
+  const note =
+    args !== null && typeof args.note === "string" && args.note.trim() !== ""
+      ? args.note.trim()
+      : null;
+  const body =
+    errorText !== null && errorText !== ""
+      ? errorBody(errorText)
+      : facts.length === 0 && hash === null
+        ? result === null
+          ? fallbackBody(resultText)
+          : null
+        : (
+            <>
+              {facts.length > 0 ? <Facts facts={facts} /> : null}
+              {hash === null ? null : (
+                <ul className="aidos-evidence-list">
+                  <EvidenceStrip
+                    row={{
+                      kind: "builtin:user_commit",
+                      payload: {
+                        commit: hash,
+                        ...(subject === null ? {} : { subject }),
+                        ...(note === null ? {} : { note }),
+                      },
+                      author: "agent",
+                    }}
+                    onView={evidenceViewer.open}
+                  />
+                </ul>
+              )}
+              {evidenceViewer.viewer}
+            </>
+          );
+  return (
+    <AidosRow
+      icon={<SignoffIcon />}
+      title="Attach commit"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+      ticketId={ticketId}
+      sessionId={props.sessionId}
+      useProjection={props.useProjection}
+    />
+  );
+}
+
+/* ── attach_tags ──────────────────────────────────────────────────────
+ *
+ * Modelled on SetTicketRow: the call edits ticket metadata, so the body
+ * is the Facts table of what it wrote. The fact that matters most is the
+ * result's `message` -- "agent created N tags" with the names -- which
+ * #180 deliberately made visible so tag creation is never silent. It is
+ * rendered verbatim, not paraphrased into a count, so the card keeps the
+ * exact wording the host reported.
+ */
+
+/**
+ * `#216 — Title · 3 tags · created 1`: what was attached, and whether
+ * anything was created by it. A zero creation is NOT on the line -- the
+ * body already says "agent created 0 tags", and the summary would spend
+ * its scarcest space confirming nothing happened.
+ */
+export function attachTagsSummary(
+  ticketId: string | null,
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+  label: string | null,
+): string {
+  const settled = result === null ? [] : stringArrayOf(result.attached);
+  const requested = stringArrayOf(args?.tags);
+  const names = settled.length > 0 ? settled : result === null ? requested : settled;
+  const what = `${names.length} tag${names.length === 1 ? "" : "s"}`;
+  const created = result !== null && typeof result.createdCount === "number" ? result.createdCount : null;
+  const who = label ?? (ticketId === null ? null : `#${ticketId}`) ?? "tags";
+  return who + " · " + what + (created !== null && created > 0 ? ` · created ${created}` : "");
+}
+
+/**
+ * The names attached, and the host's creation report verbatim. Empty
+ * while the call is still running: naming tags "attached" before the
+ * host answers would claim what has not happened yet.
+ */
+export function attachTagsFacts(
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+): Fact[] {
+  if (result === null) return [];
+  const facts: Fact[] = [];
+  const attached = stringArrayOf(result.attached);
+  if (attached.length > 0) {
+    facts.push(expandableFact("Attached", attached.join(", ")));
+  } else {
+    const requested = stringArrayOf(args?.tags);
+    if (requested.length > 0) {
+      facts.push(expandableFact("Requested", requested.join(", ")));
+    }
+  }
+  if (typeof result.message === "string" && result.message.trim() !== "") {
+    facts.push(expandableFact("Created", result.message.trim()));
+  }
+  return facts;
+}
+
+export function AttachTagsRow(props: AidosViewProps) {
+  const { args, state, result, ticketId, errorText, errorSummary } = useAidosRow(props);
+  const label = ticketLabel(props.sessionId, ticketId);
+  const summary = attachTagsSummary(ticketId, args, result, label);
+  const facts = attachTagsFacts(args, result);
+  const body =
+    errorText !== null && errorText !== ""
+      ? errorBody(errorText)
+      : facts.length > 0
+        ? <Facts facts={facts} />
+        : null;
+  return (
+    <AidosRow
+      icon={<PencilIcon />}
+      title="Attach tags"
+      summary={summary}
+      state={state}
+      body={body}
+      errorSummary={errorSummary}
+      ticketId={ticketId}
+      sessionId={props.sessionId}
+      useProjection={props.useProjection}
+    />
+  );
+}
+
+/* ── suggest_tag_change ───────────────────────────────────────────────
+ *
+ * Modelled on SuggestActionsRow: the call is a proposal awaiting human
+ * approval, so the body is the SAME list anatomy (key, tag, expandable
+ * reason) and the reason -- the whole payload of a proposal -- is the
+ * part that expands. The queue position rides the footer, the way a board
+ * read's count rides its footer: a fact about the body, under the body.
+ * No inline button: the human approves in the tags modal, and there is no
+ * signoff/verify/mark-done action here to launch.
+ */
+
+/** One tag proposal, from the call's arguments and its queued result. */
+export interface TagChangeLine {
+  action: string;
+  tag: string;
+  to: string | null;
+  ticketId: string | null;
+  reason: string;
+  status: string | null;
+  requestId: string | null;
+}
+
+export function tagChangeLineOf(
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+): TagChangeLine | null {
+  const action =
+    args !== null && typeof args.action === "string" && args.action !== ""
+      ? args.action
+      : result !== null && typeof result.action === "string" && result.action !== ""
+        ? result.action
+        : null;
+  const tag =
+    args !== null && typeof args.tag === "string" && args.tag !== ""
+      ? args.tag
+      : result !== null && typeof result.tag === "string" && result.tag !== ""
+        ? result.tag
+        : null;
+  if (action === null || tag === null) return null;
+  const toRaw = args?.to ?? result?.to;
+  const ticketRaw = args?.ticketId ?? result?.ticketId;
+  return {
+    action,
+    tag,
+    to: typeof toRaw === "string" && toRaw !== "" ? toRaw : null,
+    ticketId:
+      typeof ticketRaw === "number" || typeof ticketRaw === "string" ? String(ticketRaw) : null,
+    reason: args !== null && typeof args.reason === "string" ? args.reason : "",
+    status: result !== null && typeof result.status === "string" ? result.status : null,
+    requestId: result !== null && typeof result.requestId === "string" ? result.requestId : null,
+  };
+}
+
+/** `migrate foo → bar · pending`: what is proposed, and that it still waits. */
+export function tagChangeSummary(line: TagChangeLine | null): string {
+  if (line === null) return "tag change";
+  const what =
+    line.action === "migrate" && line.to !== null
+      ? `${line.tag} → ${line.to}`
+      : line.action === "detach" && line.ticketId !== null
+        ? `detach ${line.tag} from #${line.ticketId}`
+        : `${line.action} ${line.tag}`;
+  return line.status === null ? what : `${what} · ${line.status}`;
+}
+
+export function SuggestTagChangeRow(props: AidosViewProps) {
+  const { args, state, result, errorText, errorSummary } = useAidosRow(props);
+  const line = tagChangeLineOf(args, result);
+  const summary = tagChangeSummary(line);
+  const footer = line?.requestId === null || line?.requestId === undefined ? null : `request ${line.requestId}`;
+  const body =
+    errorText !== null && errorText !== ""
+      ? errorBody(errorText)
+      : line === null
+        ? null
+        : (
+            <ul className="aidos-tool-list">
+              <li key={line.action + ":" + line.tag + ":" + (line.ticketId ?? "")}>
+                <span className="aidos-tool-list-key">{line.tag}</span>
+                <span className="aidos-tool-list-tag">{line.action}</span>
+                {line.action === "detach" && line.ticketId !== null ? (
+                  <span className="aidos-tool-list-key">#{line.ticketId}</span>
+                ) : null}
+                <ListValue
+                  fact={expandableFact(
+                    "reason",
+                    line.reason.trim() === "" ? "(no reason given)" : line.reason,
+                  )}
+                />
+              </li>
+            </ul>
+          );
+  return (
+    <AidosRow
+      icon={<AlertCircleIcon />}
+      title="Suggest tag change"
+      summary={summary}
+      state={state}
+      body={body}
+      footer={footer}
+      errorSummary={errorSummary}
+      ticketId={line !== null && line.action === "detach" ? line.ticketId : null}
+      sessionId={props.sessionId}
+      useProjection={props.useProjection}
+    />
+  );
+}
+
+/* ── digest_recent ────────────────────────────────────────────────────
+ *
+ * Modelled on GetTicketsRow: a board read whose body is the rows it
+ * returned. Each change is one list item -- the ticket, what changed,
+ * and what that ticket needs next -- and the result's scope note
+ * (`covers`, plus how many rows were omitted) rides the footer, where a
+ * count belongs. While running the row says what it will be, never "0
+ * changes", which would read like a failure.
+ */
+
+/** One board change, and what its ticket needs next. */
+export interface DigestLine {
+  ticketId: string;
+  state: string;
+  title: string;
+  change: string;
+  nextStep: string | null;
+}
+
+export function digestLinesOf(result: Record<string, unknown> | null): DigestLine[] {
+  if (result === null || !Array.isArray(result.changes)) return [];
+  const out: DigestLine[] = [];
+  for (const entry of result.changes) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const row = entry as Record<string, unknown>;
+    const id = row.ticketId;
+    const change = row.change;
+    if ((typeof id !== "number" && typeof id !== "string") || typeof change !== "string") {
+      continue;
+    }
+    out.push({
+      ticketId: String(id),
+      state: typeof row.state === "string" ? row.state : "",
+      title: typeof row.title === "string" ? row.title : "",
+      change,
+      nextStep:
+        typeof row.nextStep === "string" && row.nextStep.trim() !== "" ? row.nextStep : null,
+    });
+  }
+  return out;
+}
+
+/** `3 changes`, or `#14 · 3 changes` when the call filtered to one ticket. */
+export function digestSummary(
+  args: Record<string, unknown> | null,
+  result: Record<string, unknown> | null,
+  lines: DigestLine[],
+): string {
+  const filtered =
+    args !== null && (typeof args.ticketId === "number" || typeof args.ticketId === "string")
+      ? String(args.ticketId)
+      : null;
+  if (result === null) {
+    return filtered === null ? "recent changes" : `#${filtered} · recent changes`;
+  }
+  const count = `${lines.length} change${lines.length === 1 ? "" : "s"}`;
+  return filtered === null ? count : `#${filtered} · ${count}`;
+}
+
+/**
+ * The result's scope note, with the omitted count: what the list above
+ * does and does not cover. Always present once settled, so even an empty
+ * digest expands into its own coverage rather than into nothing.
+ */
+export function digestFooterOf(result: Record<string, unknown> | null): string | null {
+  if (result === null) return null;
+  const covers = typeof result.covers === "string" && result.covers.trim() !== "" ? result.covers.trim() : null;
+  const omitted = typeof result.omitted === "number" && result.omitted > 0 ? result.omitted : null;
+  if (covers === null && omitted === null) return null;
+  return (
+    (covers ?? "board changes") +
+    (omitted === null ? "" : ` · ${omitted} earlier change${omitted === 1 ? "" : "s"} omitted`)
+  );
+}
+
+export function DigestRecentRow(props: AidosViewProps) {
+  const { args, state, result, resultText, errorText, errorSummary } = useAidosRow(props);
+  const lines = digestLinesOf(result);
+  const summary = digestSummary(args, result, lines);
+  const footer = digestFooterOf(result);
+  const body =
+    errorText !== null && errorText !== ""
+      ? errorBody(errorText)
+      : lines.length === 0
+        ? result === null
+          ? fallbackBody(resultText)
+          : null
+        : (
+            <ul className="aidos-tool-list">
+              {lines.map((line, index) => (
+                <li key={line.ticketId + ":" + index}>
+                  <span className="aidos-tool-list-key">#{line.ticketId}</span>
+                  {line.state === "" ? null : (
+                    <span className="aidos-tool-list-tag">{line.state}</span>
+                  )}
+                  {line.title === "" ? null : (
+                    <span className="aidos-tool-list-text" title={line.title} data-dsh-tip="">
+                      {line.title}
+                    </span>
+                  )}
+                  <ListValue fact={expandableFact("change", line.change)} />
+                  {line.nextStep === null ? null : (
+                    <ListValue fact={expandableFact("next step", "Next: " + line.nextStep)} />
+                  )}
+                </li>
+              ))}
+            </ul>
+          );
+  return (
+    <AidosRow
+      icon={<CompassIcon />}
+      title="Recent changes"
+      summary={summary}
+      state={state}
+      body={body}
+      footer={footer}
+      errorSummary={errorSummary}
+    />
+  );
+}
+
 /** Tool name -> row, for the slot registrations in index.ts. */
 export const AIDOS_ROWS: ReadonlyArray<[string, (props: AidosViewProps) => react.ReactElement]> = [
   ["get_tickets", GetTicketsRow],
   ["get_ticket", GetTicketRow],
   ["get_evidence", GetEvidenceRow],
+  ["digest_recent", DigestRecentRow],
   ["set_ticket", SetTicketRow],
   ["attach_evidence", AttachEvidenceRow],
+  ["attach_commit", AttachCommitRow],
+  ["attach_tags", AttachTagsRow],
   ["move_ticket", MoveTicketRow],
   ["request_allowlist", RequestAllowlistRow],
   ["suggest_actions", SuggestActionsRow],
+  ["suggest_tag_change", SuggestTagChangeRow],
   ["plan", PlanRow],
   ["plan_import", PlanImportRow],
   ["plan_meta", PlanMetaRow],

@@ -23,6 +23,7 @@ import {
   ticketTitle,
 } from "../src/client/view-state";
 import { AIDOS_ROWS, errorBody, selectTitle } from "../src/client/aidos-rows";
+import { SCRATCH_ROWS } from "../src/client/scratch-rows";
 import { parseErrorEnvelope, rowSummary, unwrapErrorEnvelope } from "../src/client/tool-block";
 import {
   allowlistFacts,
@@ -41,6 +42,21 @@ import { asContext, createHarness } from "./b1-harness";
 /**
  * The aidos tool names the host actually REGISTERS, read from the registry
  * rather than from a list. See the parity suite below for why that matters.
+ *
+ * #216: derived, not filtered by a hand-copied set. The previous version
+ * kept a literal list of the aidos names ("Keep it in step with the aidos
+ * tool registry") -- the same rot this suite exists to catch, one layer
+ * along: a thirteenth board tool would register, miss the literal, and
+ * pass vacuously. The registry here holds only aidos tools plus the
+ * scratch tools, and the scratch tools already have their own rows, so
+ * "registered minus scratch-covered" IS the aidos set, with no literal
+ * to keep in step.
+ *
+ * The one misfiling this accepts: a future SCRATCH tool that ships with
+ * no row lands in the expected-aidos set instead of the expected-scratch
+ * one. It still fails -- just bucketed wrong -- and the message names
+ * AIDOS_ROWS because that is where the missing key must NOT go; the fix
+ * is a scratch row, not an aidos one.
  */
 function registeredAidosToolNames(): string[] {
   const harness = createHarness();
@@ -48,29 +64,8 @@ function registeredAidosToolNames(): string[] {
   apply(asContext(harness.ctx), {});
   const map = (harness as unknown as { tools?: Map<string, { name: string }> }).tools;
   if (map === undefined) return [];
-  // The harness registry may also hold fs/bash stubs, which have no aidos row.
-  const AIDOS = new Set([
-    "get_tickets",
-    "get_ticket",
-    /*
-     * #164's read. It shipped with no client row, so the one tool whose
-     * entire purpose is the UNTRUNCATED payload rendered as the raw JSON
-     * fallback — precisely the failure the two assertions below exist to
-     * catch, missed because this set is the hardcoded list the header
-     * claims not to be. Keep it in step with the aidos tool registry.
-     */
-    "get_evidence",
-    "set_ticket",
-    "attach_evidence",
-    "move_ticket",
-    "plan",
-    "plan_import",
-    "plan_meta",
-    "plan_meta_set",
-    "request_allowlist",
-    "suggest_actions",
-  ]);
-  return [...map.keys()].filter((name) => AIDOS.has(name));
+  const scratchKeys = new Set(SCRATCH_ROWS.map(([key]) => key));
+  return [...map.keys()].filter((name) => !scratchKeys.has(name));
 }
 
 const rows = readFileSync(new URL("../src/client/aidos-rows.tsx", import.meta.url), "utf8");
@@ -476,8 +471,9 @@ describe("#73 every registered aidos tool has a client row", () => {
 
   it("finds the tools at all", () => {
     // Guards the degenerate pass: a broken registry lookup would make the
-    // assertion below vacuously succeed over an empty list.
-    expect(registered.length).toBeGreaterThanOrEqual(11);
+    // assertion below vacuously succeed over an empty list. Dynamic, not a
+    // literal count: the directional assertions below pin the exact set.
+    expect(registered.length).toBeGreaterThanOrEqual(AIDOS_ROWS.length);
   });
 
   it("leaves no tool rendering a raw JSON envelope", () => {
