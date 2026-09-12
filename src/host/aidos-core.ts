@@ -960,6 +960,27 @@ export class OwnerUnavailable extends Error {
   }
 }
 
+/**
+ * #217: a one-ticket read for a plain numeric id while the workspace's
+ * one-time import has not completed yet. The ticket may simply not be
+ * loaded — this is NOT the settled "no such ticket" fact, and it must
+ * never read as one: an agent that hits it once must retry after a board
+ * read (which kicks the same import) rather than conclude the ticket is
+ * gone. The message keeps the "no such ticket" prefix so existing
+ * refusal-shape matchers still hold, and says "yet" so it cannot be
+ * mistaken for settled.
+ */
+export class TicketNotYetImported extends Error {
+  readonly ticketId: number | string;
+  constructor(ticketId: number | string) {
+    super(
+      `no such ticket yet: ${ticketId} — not loaded yet, the workspace import is still running; ` +
+        `call get_tickets, then get_ticket again. A repeat refusal means the ticket does not exist.`,
+    );
+    this.ticketId = ticketId;
+  }
+}
+
 export interface EvidenceView {
   ticketId: number;
   kind: string;
@@ -1787,6 +1808,25 @@ registerAidosSessionEventTypes(ctx);
       }
       const fromStore = this._ticketInWorkspaceStore(reader, args.ticketId);
       if (fromStore !== null) return fromStore;
+      /*
+       * #217: transient versus settled refusal. The store fallback above
+       * already kicked the one-time import through `_workspaceStoreForRead`
+       * (the same seam every other read uses), so when the import has still
+       * not completed and the ref is a plain numeric id, the ticket may
+       * simply not be loaded yet — refuse as "not loaded yet", never as the
+       * settled "no such ticket" fact an agent could act on (retire it,
+       * recreate it, or report it gone). Colon/composite and non-numeric
+       * refs stay settled: no retry ever resolves them (#45). A completed
+       * import also stays settled: the ticket genuinely does not exist.
+       */
+      const ref = args.ticketId;
+      const plainNumeric = typeof ref === "number" || (typeof ref === "string" && /^\d+$/.test(ref));
+      if (plainNumeric) {
+        const entry = this._workspaceStoreForRead(reader);
+        if (entry !== null && !entry.store.hasBackfillCompleted()) {
+          throw new TicketNotYetImported(ref);
+        }
+      }
       throw error;
     }
   }
@@ -2178,6 +2218,15 @@ registerAidosSessionEventTypes(ctx);
     if (cwd) {
       try {
         if (existsSync(storePathForWorkspace(cwd))) {
+          /*
+           * #217: GUARDED kick — the store file exists, so reaching the
+           * one-time import through `_workspaceStoreForRead` (the same seam
+           * every other read uses) creates nothing new. The `existsSync`
+           * guard above is what keeps #44's "a search never creates a
+           * store" rule intact: with no file on disk this whole block is
+           * skipped and no kick fires.
+           */
+          this._workspaceStoreForRead(agent);
           const storage = openWorkspaceStorage(cwd);
           for (const row of storage.searchTickets(query)) {
             seen.add(`${row.workspaceKey}:${row.ticketId}`);
@@ -2288,8 +2337,12 @@ registerAidosSessionEventTypes(ctx);
     }
     // #42: the store query. No persistence access, no log scan — closed
     // sessions' rows are served from the workspace store the backfill
-    // imported, so a deleted log changes nothing here.
-    const workspaceStore = this._workspaceStore(agent);
+    // imported, so a deleted log changes nothing here. #217: through the
+    // same `_workspaceStoreForRead` seam every other read uses, so a cold
+    // host whose first board interaction is this surface still starts the
+    // one-time import (a board read may create the store; only search may
+    // not, per #44).
+    const workspaceStore = this._workspaceStoreForRead(agent);
     if (workspaceStore !== null) {
       const storeState = workspaceStore.store.state;
       for (const view of ticketsProjection(storeState, this._resolvedConfig).values()) {
@@ -2959,9 +3012,14 @@ registerAidosSessionEventTypes(ctx);
    * mode the earlier review_fail demanded be hunted.
    *
    * So the kick belongs to READING THE STORE, not to one caller of it. Every
-   * agent read path goes through here; `backfillAwaited` is for the browser
-   * remote, which awaits the same shared promise BEFORE merging and must not
-   * start a stale second run that a later reader would inherit.
+   * agent read path goes through here: `getTickets` via the merge,
+   * `getTicket`/`get_evidence` via `_ticketInWorkspaceStore`, `plan`/
+   * `planMeta` via `_planProjectSource`, `coldTickets` directly, and
+   * `searchTickets` under its #44 `existsSync` guard (a search kicks only
+   * when a store file already exists, never creating one); `backfillAwaited`
+   * is for the browser remote, which awaits the same shared promise BEFORE
+   * merging and must not start a stale second run that a later reader
+   * would inherit.
    */
   private _workspaceStoreForRead(
     agent: Agent,

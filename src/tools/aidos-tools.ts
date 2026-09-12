@@ -36,6 +36,7 @@ import {
   PlanImportFileUncommittedError,
   RetireRefused,
   RetiredTicketWriteRefused,
+  TicketNotYetImported,
 } from "../host/aidos-core";
 import {
   ContextTooLongError,
@@ -418,6 +419,27 @@ function refusal(error: unknown, overrides?: { kind?: string }): never {
       "unknown_project",
     );
   }
+  if (error instanceof TicketNotYetImported) {
+    /*
+     * #217: the transient refusal. The ticket id is plain and numeric but
+     * the workspace's one-time import has not completed yet, so the row
+     * may simply not be loaded — never a settled "no such ticket". Same
+     * refusal code (callers key on it), plus a transient flag and a
+     * message that says what to do: read the board, then read the ticket
+     * again. get_evidence rides getTicket, so this one branch covers both
+     * tools.
+     */
+    throw new HarnessError(
+      JSON.stringify({
+        ok: false,
+        error: "unknown_ticket",
+        transient: true,
+        ticketId: error.ticketId,
+        message: error.message,
+      }),
+      "unknown_ticket",
+    );
+  }
   if (error instanceof UnknownTicket) {
     throw new HarnessError(
       JSON.stringify({ ok: false, error: "unknown_ticket", ticketId: error.ticketId, message: error.message }),
@@ -600,7 +622,8 @@ function registerGetTickets(ctx: Context): void {
     defineTool({
       name: "get_tickets",
       description:
-        "Read the board rows of the session's project: every ticket with its state, confidence score, and gate fraction. Optional FilterPanel-parity filters (#49); with no filters, returns everything as before.",
+        "Read the board rows of the session's project: every ticket with its state, confidence score, and gate fraction. Optional FilterPanel-parity filters (#49); with no filters, returns everything as before. " +
+        "On a cold workspace the first read starts the workspace import in the background and may miss tickets that are still importing — call get_tickets again for the settled board.",
       parameters: {
         projectId: {
           type: "integer",
@@ -744,7 +767,9 @@ function registerGetTicket(ctx: Context): void {
         "the one ticket you are about to work on. A plain numeric id addresses any ticket " +
         "in the workspace, including one owned by another session (#45): ids are unique " +
         "across the workspace, so the '<sourceSessionId>:<ticketId>' form is gone and is " +
-        "now REFUSED.",
+        "now REFUSED. On a cold workspace the ticket may not be loaded yet: a refusal " +
+        "with transient true means the import is still running — call get_tickets, then " +
+        "get_ticket again — while a repeat refusal means the ticket does not exist.",
       parameters: {
         ticketId: {
           oneOf: [{ type: "integer" }, { type: "string" }],
