@@ -61,13 +61,15 @@ describe("#45 criterion 1: detail-panel writes work on another session's ticket"
   it("an attach and a move addressed with a plain string land in the live owner's log", async () => {
     const { harness, peer } = twoAgentHarness();
     const service = harness.service;
-    // The caller's own log holds ticket 1; the peer's second ticket is the
-    // unambiguous foreign id 2 — the detail panel sends exactly this form.
+    // #218: ids are workspace-unique now (one store port), so the
+    // caller's ticket is 1, the peer's first is 2, and the peer's second
+    // — the unambiguous foreign id — is 3. The detail panel sends
+    // exactly this plain form.
     service.userSetTicket(harness.asAgent(), { title: "own" });
     service.userSetTicket(harness.asAgent(peer), { title: "peer first" });
     const peerTicket = service.userSetTicket(harness.asAgent(peer), { title: "peer detail" });
     const plainRef = String(peerTicket.id);
-    expect(plainRef).toBe("2");
+    expect(plainRef).toBe("3");
 
     service.userAttachEvidence(harness.asAgent(), {
       ticketId: plainRef,

@@ -251,6 +251,143 @@ export class Store {
   }
 
   /**
+   * #218: one LIVE host write lands in BOTH homes — the session log and
+   * the store — under #40's mirrored all-or-nothing rule.
+   *
+   * The host validates the event against its own session fold BEFORE
+   * calling (a session-invalid event never reaches the store); this
+   * method validates against the STORE fold first, so a store-invalid
+   * event never reaches the session either. Then, inside ONE storage
+   * bracket: stage the store write (log push, port append, fold), run
+   * the session append (`sessionWrite`), and commit. A failure at any
+   * stage rolls everything back — the store log gives the event back,
+   * the fold replays, the port bracket rolls back — and:
+   *  - a STORE-stage failure throws StoreWriteRefused naming the store,
+   *    with the session log untouched (the refusal leaves no event
+   *    behind, which is #40 criterion 2's shape at host level);
+   *  - a SESSION-stage failure propagates raw (it is not the store
+   *    refusing), with the staged store write rolled back.
+   *
+   * The session append is assumed atomic (one event or nothing, which
+   * holds for the in-memory log and for a single-record durable
+   * append). A session persistence failure AFTER the store staged is
+   * still rolled back here; only a session failure the callback cannot
+   * report (a half-appended session log) escapes, and that shape means
+   * dsh's own session persistence is broken — a bigger problem than one
+   * ticket write.
+   *
+   * `origin` stamps the stored row exactly like the backfill's rows
+   * (#41): the host passes the creating session on a mirrored create so
+   * `originSessionOf` answers the owner and the board merge stamps the
+   * store copy with the session that owns it rather than with whoever
+   * happens to be reading. Updates carry no origin (only creates are
+   * noted). `localSeq` is null — unknown at mirror time, and the
+   * columns stay nullable on purpose.
+   */
+  commitHostMirror(
+    event: AidosEvent,
+    sessionWrite: () => void,
+    origin?: { sessionId: string; localSeq?: number | null },
+  ): void {
+    validateAidosEvent(this._state, event);
+    const storage = this._storage;
+    const mirrored =
+      typeof storage.beginTransaction === "function" &&
+      typeof storage.commitTransaction === "function";
+    if (!mirrored) {
+      // A bracket-less port keeps the persist-first order: the store
+      // refuses before the session is touched, but a session failure
+      // after a successful store append cannot be rolled back. Both
+      // shipped ports implement the bracket, so this is the
+      // hypothetical-port path, documented not hidden.
+      const originValue =
+        origin !== undefined
+          ? { sessionId: origin.sessionId, localSeq: origin.localSeq ?? null }
+          : undefined;
+      try {
+        if (originValue) {
+          if (originValue.sessionId !== undefined && originValue.sessionId !== null) {
+            this._noteOrigin({ seq: 0, event, sessionId: originValue.sessionId, localSeq: originValue.localSeq ?? null });
+          }
+          storage.append(event, originValue);
+        } else {
+          storage.append(event);
+        }
+      } catch (error) {
+        throw new StoreWriteRefused(error);
+      }
+      this._log.push(event);
+      foldAidosEvents(this._state, event);
+      sessionWrite();
+      return;
+    }
+    storage.beginTransaction!();
+    let stage: "store" | "session" | "commit" = "store";
+    let notedOrigin = false;
+    try {
+      this._log.push(event);
+      if (origin !== undefined && origin.sessionId !== undefined && origin.sessionId !== null) {
+        const id =
+          event.kind === "ticket/change" ? (event.ticket.id as TicketId) : null;
+        if (event.kind === "ticket/change" && id !== null && !this._originSessionOfTicket.has(id)) {
+          notedOrigin = true;
+        }
+        this._noteOrigin({
+          seq: 0,
+          event,
+          sessionId: origin.sessionId,
+          localSeq: origin.localSeq ?? null,
+        });
+      }
+      if (origin !== undefined) {
+        storage.append(event, { sessionId: origin.sessionId, localSeq: origin.localSeq ?? null });
+      } else {
+        storage.append(event);
+      }
+      foldAidosEvents(this._state, event);
+      stage = "session";
+      sessionWrite();
+      stage = "commit";
+      storage.commitTransaction!();
+    } catch (error) {
+      this._log.pop();
+      this.replay();
+      if (notedOrigin) {
+        const id =
+          event.kind === "ticket/change" ? (event.ticket.id as TicketId) : undefined;
+        if (id !== undefined) {
+          this._originSessionOfTicket.delete(id);
+        }
+      }
+      storage.rollbackTransaction?.();
+      if (stage === "session") {
+        throw error;
+      }
+      throw error instanceof StoreWriteRefused ? error : new StoreWriteRefused(error);
+    }
+  }
+
+  /**
+   * #218: claim the next workspace-unique ticket id from the store port
+   * for a HOST create. This is the public form of the private
+   * allocation every `Store.createTicket` already uses: the port
+   * counter (atomic across processes on SQLite, shared across sessions
+   * in one process on every port) floored by the store fold's own
+   * counter, so a store seeded from an explicit log never reissues a
+   * seeded id. The host maxes this once more against its session
+   * fold's counter, so a session holding legacy fold-counter tickets
+   * ahead of the port still mints a fresh id in both spaces.
+   *
+   * A refused allocation throws StoreWriteRefused before any log
+   * append, exactly like #40's allocation rule. A refused CREATE still
+   * consumes the claimed port id (a monotonic gap, never a reuse) —
+   * the same consumption #39 already accepts for the fallback slug.
+   */
+  allocateTicketId(): TicketId {
+    return this._nextTicketId();
+  }
+
+  /**
    * #42: whether the one-time backfill marker is in the log. The host
    * checks this BEFORE gathering any logs, so a board read after the first
    * open never touches the persistence inspect path at all.
@@ -500,6 +637,18 @@ export class Store {
       }
     }
     return false;
+  }
+
+  /**
+   * #218: the host's pre-allocation slug check. A refused create consumes
+   * nothing (the port contract), so the host validates the slug against
+   * the store fold BEFORE claiming an id — the same order
+   * `Store.createTicket` uses above. Without it a cross-session duplicate
+   * slug would only fail inside the mirrored append, after the port id
+   * was already consumed.
+   */
+  slugTaken(workspaceKey: string, slug: string, excludeId: TicketId | null): boolean {
+    return this._slugTaken(workspaceKey, slug, excludeId);
   }
 
   /** One ticket row from a folded snapshot. The one read code path. */

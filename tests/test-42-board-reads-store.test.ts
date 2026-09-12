@@ -36,16 +36,33 @@ const MANY = 119;
 
 /**
  * One closed session's log: a ticket of this workspace, built by the real
- * service so the log holds exactly what a production session log holds,
- * then detached from the live agents so the board sees it as closed.
+ * service so the log holds exactly what a production session log holds.
+ *
+ * Built on a THROWAWAY harness, never on the reading harness: creating
+ * through the service mirrors the ticket into that harness's own store
+ * (#218), so building on the reader would hand the backfill a log the
+ * store already holds and import a suffixed second copy.
  */
 function buildClosedLog(harness: ReturnType<typeof createHarness>, id: string, title: string) {
-  const peer = harness.makeAgent({ id });
-  (peer.session.header as { cwd?: string }).cwd = WS;
-  harness.service.userSetTicket(harness.asAgent(peer), { title });
-  const events = [...peer.session.events];
-  harness.agents.splice(harness.agents.indexOf(peer), 1);
-  return events;
+  void harness;
+  // installService mints a throwaway DSH_HOME per harness: save and
+  // restore it so the builder's home never leaks into the reader's.
+  const savedHome = process.env.DSH_HOME;
+  try {
+    const builder = createHarness(undefined, { cwd: WS });
+    builder.installService();
+    const peer = builder.makeAgent({ id });
+    (peer.session.header as { cwd?: string }).cwd = WS;
+    builder.service.userSetTicket(builder.asAgent(peer), { title });
+    const events = [...peer.session.events];
+    return events;
+  } finally {
+    if (savedHome === undefined) {
+      delete process.env.DSH_HOME;
+    } else {
+      process.env.DSH_HOME = savedHome;
+    }
+  }
 }
 
 describe("#42 criterion 1: no cold scan on board reads", () => {

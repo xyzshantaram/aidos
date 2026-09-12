@@ -11,14 +11,12 @@
  *  - the second merge does not re-inspect a still-closed session (kept from
  *    the original suite — the store serves the row, not a cache);
  *  - the cache and refresh maps no longer exist on the service;
- *  - the reopen-close gap is stated, not hidden: a ticket written to a
- *    closed log AFTER the one-time backfill is not on the board, because
- *    the write path still targets session logs. #43 deliberately routes
- *    only DEAD origins to the store, and #45's verdict is that collapsing
- *    the id space (host creates allocating from the store's port) is still
- *    open — until then a blind mirror could fold a live create over an
- *    unrelated imported ticket. The backfill marker is once-and-done by
- *    #41's design, so no re-scan picks the late row up.
+ *  - the reopen-close gap is CLOSED by #218: a ticket written to a live
+ *    session after the one-time backfill mirrors into the store at write
+ *    time, so a session that closes again with NEW events leaves those
+ *    rows in the store and the board shows them with no re-scan. The
+ *    inspect count stays flat because the row arrives through the write
+ *    path, not through a second import.
  */
 import { describe, expect, it } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
@@ -73,12 +71,12 @@ describe("closed sessions are answered by the store, not a fold cache", () => {
     expect(internals._closedFoldRefreshes).toBeUndefined();
   });
 
-  it("a ticket written to a closed log after the backfill is not on the board", async () => {
-    // #42's known gap, stated so no later test can silently assume it away:
-    // the backfill marker is once-and-done (#41), the write path still
-    // targets session logs, and nothing re-scans — so a session that closes
-    // again with NEW events leaves those rows out of the store until the
-    // host write path moves to the store (#43/#45).
+  it("a ticket written to a live session after the backfill is on the board", async () => {
+    // #218 closed #42's known gap: the write path mirrors live writes
+    // into the store at commit time, so a session that closes again with
+    // NEW events leaves those rows in the store. The inspect count stays
+    // flat — the row arrives through the mirror, never through a re-scan
+    // (the once-only marker still means exactly one import).
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
     let inspects = 0;
@@ -106,6 +104,6 @@ describe("closed sessions are answered by the store, not a fold cache", () => {
     expect(inspects).toBe(1);
     const titles = after.tickets.map((row) => row.title);
     expect(titles).toContain("closed ticket");
-    expect(titles).not.toContain("reopened ticket");
+    expect(titles).toContain("reopened ticket");
   });
 });

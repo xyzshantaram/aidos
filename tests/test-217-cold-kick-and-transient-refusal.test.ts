@@ -54,22 +54,41 @@ import { openWorkspaceStorage, storePathForWorkspace } from "../src/host/storage
 import { DEFAULT_CONFIG } from "../src/kernel/constants";
 import { Store } from "../src/kernel/store";
 import { asContext, createHarness, failureJson } from "./b1-harness";
+import { makeConfig } from "./helpers";
 
 const WS = "/home/sid/repos/aidos";
 
 /**
  * One CLOSED session's log: a distinct session id, its own events, built by
- * the real service so the log holds exactly what a production log holds,
- * then detached from the live agents. Mirrors test-207's builder — the
- * defect hid behind never driving two distinct logs.
+ * the real service so the log holds exactly what a production log holds.
+ *
+ * Built on a THROWAWAY harness, never on the reading harness: creating
+ * through the service mirrors the ticket into that harness's own store
+ * (#218), so building on the reader would warm the "cold" host under
+ * test — the ticket would resolve immediately and no transient refusal
+ * could ever be observed.
  */
 function buildClosedLog(harness: ReturnType<typeof createHarness>, id: string, title: string) {
-  const peer = harness.makeAgent({ id });
-  (peer.session.header as { cwd?: string }).cwd = WS;
-  const peerTicket = harness.service.userSetTicket(harness.asAgent(peer), { title });
-  const events = [...peer.session.events];
-  harness.agents.splice(harness.agents.indexOf(peer), 1);
-  return { events, ticketId: peerTicket.id };
+  void harness;
+  // installService mints a throwaway DSH_HOME per harness: save and
+  // restore it so the builder's home never orphans state (like a seeded
+  // store file) the reading harness planted under its own.
+  const savedHome = process.env.DSH_HOME;
+  try {
+    const builder = createHarness(undefined, { cwd: WS });
+    builder.installService();
+    const peer = builder.makeAgent({ id });
+    (peer.session.header as { cwd?: string }).cwd = WS;
+    const peerTicket = builder.service.userSetTicket(builder.asAgent(peer), { title });
+    const events = [...peer.session.events];
+    return { events, ticketId: peerTicket.id };
+  } finally {
+    if (savedHome === undefined) {
+      delete process.env.DSH_HOME;
+    } else {
+      process.env.DSH_HOME = savedHome;
+    }
+  }
 }
 
 /** A fresh reader session: its OWN log is empty; only its cwd binds it. */
@@ -162,9 +181,18 @@ describe("#217 criterion 2: a cold host whose first board interaction is a searc
   it("a search still never CREATES a store (#44's rule, with the file assertion)", () => {
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
+    // A live-only ticket that never touched the store: #218 mirrors every
+    // service write into the workspace store (creating the file), so the
+    // ticket is raw-appended past the write path — the only shape that
+    // still has a live ticket and no store file at all.
+    const seed = new Store(makeConfig());
+    const seedProject = seed.createProject(WS, "aidos");
+    seed.createTicket(seedProject, "Live payment ticket", "");
     const peer = harness.makeAgent({ id: "s217-live-only" });
     (peer.session.header as { cwd?: string }).cwd = WS;
-    harness.service.userSetTicket(harness.asAgent(peer), { title: "Live payment ticket" });
+    for (const event of seed.events()) {
+      harness.appendAidosEvent(peer, event);
+    }
 
     // Precondition: this workspace has no store file at all.
     expect(existsSync(storePathForWorkspace(WS))).toBe(false);

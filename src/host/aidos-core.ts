@@ -2525,16 +2525,18 @@ registerAidosSessionEventTypes(ctx);
      * logs as a fallback.
      *
      * Live rows (the caller's own and other live sessions') stay fold-driven
-     * above: a live session is the only writer to its log (#43 routes only
-     * DEAD origins to the store), and the store does not hold its
-     * post-backfill rows. Mirroring live writes needs the host create path
-     * to allocate from the store's port (#45 verdict: declined here — the
-     * host still mints ids from per-session fold counters, so a blind
-     * mirror could fold a live create over an unrelated imported ticket;
-     * owned by the follow-up that collapses the id space). Dedupe below
-     * collapses a store copy against a live copy of the same identity —
-     * the newer updatedAt wins, so a reopened session's live rows shadow
-     * their imported snapshots.
+     * above: a live session is still the writer to its log — and, since
+     * #218, to the store as well. Every live create claims its id from
+     * the store port (`_allocateTicketId`) and every lockstep ticket
+     * write mirrors into the store under #40's bracket (`_mirrorTarget`
+     * + `Store.commitHostMirror`), so the store holds the live rows too
+     * and a session that closes after the backfill leaves nothing
+     * behind: the once-only marker is no longer a trapdoor. Legacy
+     * fold-counter tickets the store never saw stay session-only (not
+     * renumbered, not refused), and #43 still routes only DEAD origins
+     * to the store alone. Dedupe below collapses a store copy against
+     * a live copy of the same identity — the newer updatedAt wins, so
+     * a reopened session's live rows shadow their imported snapshots.
      */
     if (workspaceStore !== null) {
       const storeState = workspaceStore.store.state;
@@ -2878,6 +2880,10 @@ registerAidosSessionEventTypes(ctx);
         ...(agent.session.header as unknown as Record<string, unknown>),
         id: sourceSessionId,
       },
+      // #218: the `_commit` mirror seam reads this brand. An orphan
+      // session's append lands straight in the store (#43), so a host
+      // write routed here must NOT mirror a second copy into it.
+      __aidosStoreBacked: true,
       get events(): readonly SessionEvent[] {
         return store.events().map((event, seq) => envelope(event, seq));
       },
@@ -4930,12 +4936,112 @@ registerAidosSessionEventTypes(ctx);
     // marker, which the host's own _commit never emits — the Store's
     // backfill writes it straight to the workspace store, never to a
     // session log. The casts only widen the envelope type and data.
-    session.append(
-      event.kind as SessionEvent["type"],
-      event as SessionEvent["data"],
+    const sessionWrite = (): void => {
+      session.append(
+        event.kind as SessionEvent["type"],
+        event as SessionEvent["data"],
+      );
+    };
+    // #218: the live-write mirror. A ticket-scoped write whose ticket the
+    // store holds in lockstep lands in BOTH homes inside one store
+    // bracket (`Store.commitHostMirror`); anything else stays session-only
+    // exactly as before. See `_mirrorTarget` for the eligibility rule.
+    const mirror = this._mirrorTarget(agent, session, cache, event);
+    if (mirror === null) {
+      sessionWrite();
+      this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
+      this._sync(session, cache);
+      return;
+    }
+    mirror.store.commitHostMirror(
+      event,
+      () => {
+        sessionWrite();
+      },
+      mirror.origin,
     );
     this.ctx.logger?.info?.(`aidos: committed ${event.kind} for session ${session.id}`);
     this._sync(session, cache);
+  }
+
+  /**
+   * #218: where one host write should land — the session log alone, or the
+   * session log plus the workspace store.
+   *
+   * Returns null (session-only, today's behaviour) when:
+   *  - the session is a #43 store-backed orphan: its append IS the store
+   *    write, so mirroring here would land the event twice;
+   *  - no workspace store can be opened: the host falls back to the fold
+   *    counter and the session log, which is why every pre-store harness
+   *    test still passes;
+   *  - the event is not ticket-scoped (project/created, phase/set,
+   *    plan/change): the store owns its own project rows and never
+   *    imported plans or phases, so there is nothing to stay in lockstep
+   *    with;
+   *  - the event is a create: creates ALWAYS mirror (never null here).
+   *    The id was claimed from the store port in `_createTicketInternal`,
+   *    so it is fresh in the store fold, and the store's own validation
+   *    is the backstop — a genuine collision refuses the whole create
+   *    with the session log untouched, never a silent overwrite;
+   *  - any other ticket write mirrors only in LOCKSTEP: the store holds
+   *    the same id with the same slug at the same revision. A mirrored
+   *    ticket stays in lockstep from its create (every later write
+   *    mirrors), so this passes for exactly the tickets the mirror owns.
+   *    A legacy fold-counter ticket the store never saw (or saw only as
+   *    an unrelated imported id) fails it and stays session-only: it is
+   *    not renumbered, not refused, and not folded over anyone — the
+   *    migration rule. That is also what makes the ordering load-bearing:
+   *    allocation was unified BEFORE any mirror ran, so a live create
+   *    can never share an id with an unrelated store row.
+   *
+   * The lockstep check is structural, not heuristic-by-accident: slug
+   * plus revision must both agree. Two different tickets sharing an id
+   * AND a slug AND a revision would still pass it — that shape needs a
+   * pre-existing same-title collision at the same event count, and it is
+   * the documented residual, not a silent guarantee.
+   */
+  private _mirrorTarget(
+    agent: Agent,
+    session: Session,
+    cache: SessionCache,
+    event: AidosEvent,
+  ): { store: Store; origin?: { sessionId: string } } | null {
+    if ((session as unknown as { __aidosStoreBacked?: boolean }).__aidosStoreBacked === true) {
+      return null;
+    }
+    const ticketId =
+      event.kind === "ticket/change"
+        ? event.ticket.id
+        : (event as unknown as { ticketId?: unknown }).ticketId;
+    if (typeof ticketId !== "number") {
+      return null;
+    }
+    const entry = this._workspaceStore(agent);
+    if (entry === null) {
+      return null;
+    }
+    if (event.kind === "ticket/change" && event.operation === "create") {
+      // The creating session owns the row: the merge stamps the store
+      // copy with this session (not with whoever happens to read first),
+      // so the dedupe tie can never elect a reader as owner and route a
+      // foreign write at the wrong log.
+      return { store: entry.store, origin: { sessionId: String(session.id) } };
+    }
+    const id = ticketId as TicketId;
+    const sessionTicket = cache.state.tickets.get(id);
+    const storeTicket = entry.store.state.tickets.get(id);
+    if (sessionTicket === undefined || storeTicket === undefined) {
+      return null;
+    }
+    if (sessionTicket.slug !== storeTicket.slug) {
+      return null;
+    }
+    const sessionRev = cache.state.lastRevision.get(id) ?? sessionTicket.revision;
+    const storeRev = entry.store.state.lastRevision.get(id) ?? storeTicket.revision;
+    if (sessionRev !== storeRev) {
+      return null;
+    }
+    return { store: entry.store };
   }
 
   /** The clock, seconds as a float, floored per ticket at the last at. */
@@ -6172,13 +6278,29 @@ registerAidosSessionEventTypes(ctx);
   ): TicketId {
     const cache = this._cache(agent.session);
     this._sync(agent.session, cache);
-    const ticketId = this._nextTicketId(cache.state);
     const project = cache.state.projects.get(projectId);
     const workspaceKey = workspaceKeyFromPath(project?.absPath ?? this._workspacePath(agent));
-    const slug = opts?.slug?.trim() || slugFromTitle(title) || `ticket-${ticketId}`;
-    if (this._slugTaken(cache.state, workspaceKey, slug, null)) {
-      throw new DuplicateSlug(slug, workspaceKey);
+    const base = opts?.slug?.trim() || slugFromTitle(title);
+    // #218: a refused create consumes nothing (the port contract), so the
+    // slug is validated BEFORE the id is claimed — against the session
+    // fold AND the store fold. The session check alone cannot see a live
+    // peer's same-titled ticket; without the store check that duplicate
+    // would only fail inside the mirrored append, after the port id was
+    // already consumed.
+    if (base !== "" && this._slugTaken(cache.state, workspaceKey, base, null)) {
+      throw new DuplicateSlug(base, workspaceKey);
     }
+    const entry = this._workspaceStore(agent);
+    if (entry !== null && base !== "" && entry.store.slugTaken(workspaceKey, base, null)) {
+      throw new DuplicateSlug(base, workspaceKey);
+    }
+    // #218: the id is claimed from the store port, not minted from the
+    // per-session fold counter. See `_allocateTicketId` for the fallback
+    // and the floor rule that keeps legacy sessions fresh in both spaces.
+    // (#186, inherited: an empty base falls back to `ticket-<id>` after
+    // the claim, so its second refusal may still consume the id.)
+    const ticketId = this._allocateTicketId(agent, cache.state, entry);
+    const slug = base || `ticket-${ticketId}`;
     const phase = opts?.phase ?? 1;
     const order = opts?.order ?? this._nextOrder(cache.state, projectId, phase);
     const at = this._now();
@@ -6380,6 +6502,46 @@ registerAidosSessionEventTypes(ctx);
 
   private _nextTicketId(state: AidosState): TicketId {
     return state.nextTicketId;
+  }
+
+  /**
+   * #218: claim one workspace-unique ticket id for a host create.
+   *
+   * The store port owns allocation (#39): its counter is shared across
+   * every session of the workspace in this process and atomic across
+   * processes on SQLite, so two live sessions never receive the same
+   * id. The public `Store.allocateTicketId` already floors the port
+   * against the store fold; the host maxes once more against its own
+   * session fold, so a session holding legacy fold-counter tickets
+   * ahead of the port still mints an id that is fresh in BOTH spaces —
+   * no refusal, no overwrite, no renumbering of anything already on
+   * the board (the migration rule).
+   *
+   * No store (it will not open) falls back to the fold counter: the
+   * pre-store harness world and every test written against it behave
+   * exactly as before. A refused port allocation throws
+   * StoreWriteRefused before any log append, so the failed create
+   * leaves the session log untouched.
+   *
+   * DESIGN (why a public allocate, not routing creates through
+   * `Store.createTicket`): the create's content — slug rule, phase
+   * defaulting, order, workspace key, the plan-import shape — is host
+   * logic computed against the SESSION fold (its project row, its
+   * phases), while `Store.createTicket` computes the same fields
+   * against the STORE fold (a different project row, no imported
+   * phases). Routing through it would either duplicate that logic or
+   * silently answer from the wrong fold. Allocation is the one piece
+   * that must be shared, so the one shared piece is what moved.
+   */
+  private _allocateTicketId(
+    agent: Agent,
+    state: AidosState,
+    entry: { store: Store; projectId: ProjectId } | null,
+  ): TicketId {
+    if (entry === null) {
+      return this._nextTicketId(state);
+    }
+    return Math.max(entry.store.allocateTicketId(), state.nextTicketId);
   }
 
   /** Whether one workspace already holds the given slug on another ticket. */

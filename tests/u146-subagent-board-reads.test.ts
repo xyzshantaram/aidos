@@ -181,14 +181,19 @@ describe("#146 a subagent's reads resolve against the dispatching board", () => 
     ) as { tickets: { title: string; foreign: boolean; sourceSessionId: string }[] };
     /*
      * #207: the fork still SEES the parent's ticket — same workspace — and
-     * #45 deleted the foreign flag that used to prove whose board this is,
-     * so the proof is the ORDER: a board renders the READER's own rows
-     * first (the merge's insertion order), which a rerouted read would
-     * invert. Provenance names each row's owner either way.
+     * #45 deleted the foreign flag that used to prove whose board this is.
+     * #218 deleted the other distinguisher this test used: the ORDER. Both
+     * tickets used to share numeric id 1 (per-session fold counters), so
+     * the merge's final id sort tied and stable insertion order put the
+     * reader's own row first. With workspace-unique ids the sort is
+     * total — both boards render parent-then-fork — so order proves
+     * nothing any more. What remains is content plus provenance: the
+     * fork's board carries its own ticket owned by itself, which a
+     * dropped-own-log reroute would lose.
      */
     const titles = payload.tickets.map((t) => t.title);
     expect(titles).toContain("Parent ticket");
-    expect(titles[0]).toBe("Fork ticket");
+    expect(titles).toContain("Fork ticket");
     const parentTitles = parentPayload.tickets.map((t) => t.title);
     expect(parentTitles[0]).toBe("Parent ticket");
     const byTitle = new Map(payload.tickets.map((t) => [t.title, t]));

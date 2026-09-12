@@ -48,17 +48,36 @@ const OTHER = "/home/sid/repos/unrelated";
 
 /**
  * One CLOSED session's log: a distinct session id, its own events, built by
- * the real service so the log holds exactly what a production log holds,
- * then detached from the live agents. Two calls produce TWO DISTINCT logs —
- * the shape the defect hid behind by never driving.
+ * the real service so the log holds exactly what a production log holds.
+ * Two calls produce TWO DISTINCT logs — the shape the defect hid behind
+ * by never driving.
+ *
+ * Built on a THROWAWAY harness, never on the reading harness: creating
+ * through the service mirrors the ticket into that harness's own store
+ * (#218), so building on the reader would hand the backfill a log the
+ * store already holds and import a suffixed second copy. The peer lives
+ * on the builder, so it is already "closed" for the reader.
  */
 function buildClosedLog(harness: ReturnType<typeof createHarness>, id: string, title: string) {
-  const peer = harness.makeAgent({ id });
-  (peer.session.header as { cwd?: string }).cwd = WS;
-  const peerTicket = harness.service.userSetTicket(harness.asAgent(peer), { title });
-  const events = [...peer.session.events];
-  harness.agents.splice(harness.agents.indexOf(peer), 1);
-  return { events, ticketId: peerTicket.id };
+  void harness;
+  // installService mints a throwaway DSH_HOME per harness: save and
+  // restore it so the builder's home never leaks into the reader's.
+  const savedHome = process.env.DSH_HOME;
+  try {
+    const builder = createHarness(undefined, { cwd: WS });
+    builder.installService();
+    const peer = builder.makeAgent({ id });
+    (peer.session.header as { cwd?: string }).cwd = WS;
+    const peerTicket = builder.service.userSetTicket(builder.asAgent(peer), { title });
+    const events = [...peer.session.events];
+    return { events, ticketId: peerTicket.id };
+  } finally {
+    if (savedHome === undefined) {
+      delete process.env.DSH_HOME;
+    } else {
+      process.env.DSH_HOME = savedHome;
+    }
+  }
 }
 
 /** A fresh reader session: its OWN log is empty; only its cwd binds it. */
@@ -305,15 +324,28 @@ describe("#108/unpinned: a RETIRED backfilled closed-session ticket is hidden fr
   it("the store loop's retire filter holds on get_tickets and workspaceTickets; includeRetired sweeps it back", async () => {
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
-    // A closed log whose ticket was RETIRED before the log closed.
-    const peer = harness.makeAgent({ id: "s207-retired-owner" });
-    (peer.session.header as { cwd?: string }).cwd = WS;
-    const service = harness.service;
-    const peerAgent = harness.asAgent(peer);
-    const ticket = service.userSetTicket(peerAgent, { title: "retired while closed" });
-    service.userRetireTicket(peerAgent, { ticketId: ticket.id, reason: "superseded" });
-    const events = [...peer.session.events];
-    harness.agents.splice(harness.agents.indexOf(peer), 1);
+    // A closed log whose ticket was RETIRED before the log closed — built
+    // on a throwaway harness (see buildClosedLog) so the backfill imports
+    // exactly one copy.
+    const savedHome = process.env.DSH_HOME;
+    let events: readonly unknown[];
+    try {
+      const builder = createHarness(undefined, { cwd: WS });
+      builder.installService();
+      const peer = builder.makeAgent({ id: "s207-retired-owner" });
+      (peer.session.header as { cwd?: string }).cwd = WS;
+      const builderService = builder.service;
+      const peerAgent = builder.asAgent(peer);
+      const ticket = builderService.userSetTicket(peerAgent, { title: "retired while closed" });
+      builderService.userRetireTicket(peerAgent, { ticketId: ticket.id, reason: "superseded" });
+      events = [...peer.session.events];
+    } finally {
+      if (savedHome === undefined) {
+        delete process.env.DSH_HOME;
+      } else {
+        process.env.DSH_HOME = savedHome;
+      }
+    }
 
     harness.ctx.reflect.provide("sessionPersistence", {
       list: async () => [{ id: SessionId("s207-retired-owner"), cwd: WS }],
@@ -322,6 +354,7 @@ describe("#108/unpinned: a RETIRED backfilled closed-session ticket is hidden fr
         return { meta: { id, cwd: WS }, events };
       },
     });
+    const service = harness.service;
 
     // Default board reads — browser AND agent — hide the retired row.
     const merged = await service.workspaceTickets(harness.asAgent());

@@ -9,6 +9,8 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 
 import type { FakeAgent } from "./b1-harness";
 import { asContext, createHarness } from "./b1-harness";
+import { Store } from "../src/kernel/store";
+import { makeConfig } from "./helpers";
 
 /** Two agents of the same workspace; the second carries its own tickets. */
 function twoAgentHarness() {
@@ -68,6 +70,21 @@ describe("workspaceTickets merge", () => {
     const closedId = "session-closed-1";
 
     // A persistence backend whose log holds one ticket of this workspace.
+    // The log is built WITHOUT the service: a kernel store mints the
+    // events and they are raw-appended to the peer session. Creating
+    // through the service would mirror the ticket into the shared store
+    // (#218), so the log would never be store-unknown and the backfill
+    // would import a suffixed second copy of the same ticket.
+    const seed = new Store(makeConfig());
+    const seedProject = seed.createProject("/home/sid/repos/aidos", "aidos");
+    seed.createTicket(seedProject, "closed ticket", "");
+    const seedPeer = harness.makeAgent({ id: closedId });
+    (seedPeer.session.header as { cwd?: string }).cwd = "/home/sid/repos/aidos";
+    for (const event of seed.events()) {
+      harness.appendAidosEvent(seedPeer, event);
+    }
+    const seedEvents = [...seedPeer.session.events];
+    harness.agents.splice(harness.agents.indexOf(seedPeer), 1);
     harness.ctx.reflect.provide("sessionPersistence", {
       list: async () => [
         { id: SessionId(closedId), cwd: "/home/sid/repos/aidos" },
@@ -75,16 +92,7 @@ describe("workspaceTickets merge", () => {
       ],
       inspect: async (id: string) => {
         if (id !== closedId) throw new Error("not found");
-        // Build a tiny log: project/created + ticket/change create.
-        const peer = harness.makeAgent({ id: closedId });
-        (peer.session.header as { cwd?: string }).cwd = "/home/sid/repos/aidos";
-        const service = harness.service;
-        service.userSetTicket(harness.asAgent(peer), { title: "closed ticket" });
-        const events = [...peer.session.events];
-        // Drop the synthetic agent again so it stays "closed" for the merge.
-        harness.agents.pop();
-        harness.agents.splice(harness.agents.indexOf(peer), 1);
-        return { meta: { id: closedId, cwd: "/home/sid/repos/aidos" }, events };
+        return { meta: { id: closedId, cwd: "/home/sid/repos/aidos" }, events: seedEvents };
       },
     });
 
