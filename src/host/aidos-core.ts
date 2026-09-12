@@ -1634,7 +1634,39 @@ registerAidosSessionEventTypes(ctx);
 
   // ---- reads ----
 
-  /** The board rows of one agent's session. Sorted by phase and order. */
+  /**
+   * The board rows of one agent's session. Sorted by phase and order.
+   *
+   * #207/#84: the agent read resolves against the WORKSPACE — the same
+   * merged board the browser reads through `workspaceTickets` — not against
+   * one session's fold. A fresh session with an empty own log sees the
+   * workspace's tickets (live sessions fold from memory, closed sessions
+   * from the workspace store) and never an ok:true empty list while the
+   * workspace holds rows. There is ONE derivation, `_workspaceBoardMerge`;
+   * this method and the browser remote are its two callers.
+   *
+   * Ids (#207 design decision): rows keep their NUMERIC id. Store rows are
+   * already renumbered into the workspace id space (#41), so they never
+   * collide; a live foreign row that collides with an own id carries
+   * `sourceSessionId` and `foreign: true`, and is ADDRESSED by the
+   * composite `<sourceSessionId>:<id>` string that get_ticket, get_evidence,
+   * move_ticket and attach_evidence already parse and route. A composite
+   * string in the `id` field itself would break every numeric consumer
+   * (sorting, paging, tool schemas) and is deleted outright by #45.
+   *
+   * Project scoping (#207 design decision): an ABSENT projectId means the
+   * WORKSPACE — every row of the merged board, no per-session narrowing,
+   * no minted empty project (#84). An explicit projectId filters the
+   * merged rows and refuses UnknownProject only when NO source on the
+   * workspace (own fold, live sessions, store) holds that id.
+   *
+   * This method stays SYNCHRONOUS deliberately: src/tools/allowlist.ts
+   * reads it from the write-boundary path, which cannot await. The
+   * one-time backfill therefore cannot be awaited here either — the merge
+   * KICKS it off (shared through `_backfillRuns`, awaited by every
+   * workspaceTickets caller), so imported closed-session rows are visible
+   * from the next read on, while live sessions are visible on this one.
+   */
   getTickets(
     agent: Agent,
     opts?: {
@@ -1661,32 +1693,25 @@ registerAidosSessionEventTypes(ctx);
     },
   ): TicketView[] {
     // #146: a subagent reads the board that dispatched it, not its own
-    // (empty) session log.
+    // (empty) session log — then the WORKSPACE merge on top of it.
     const reader = this._boardAgent(agent);
-    const cache = this._cache(reader.session);
-    this._sync(reader.session, cache);
-    let projectId: ProjectId;
+    const rows = this._workspaceBoardMerge(reader, opts?.includeRetired === true).tickets;
+    let scoped: BoardTicketView[];
     if (opts?.projectId !== undefined) {
-      projectId = opts.projectId;
-      if (!cache.state.projects.has(projectId)) {
-        throw new UnknownProject(projectId);
+      const known = new Set(rows.map((row) => row.projectId));
+      if (!known.has(opts.projectId as ProjectId)) {
+        throw new UnknownProject(opts.projectId);
       }
+      scoped = rows.filter((row) => row.projectId === opts.projectId);
+    } else if (opts?.projectIds !== undefined) {
+      scoped = rows.filter((row) => (opts.projectIds as readonly number[]).includes(row.projectId));
     } else {
-      projectId = this._ensureProject(reader).projectId;
+      scoped = rows;
     }
-    const views = ticketsProjection(cache.state, this._resolvedConfig);
-    const scoped = [...views.values()].filter((view) => view.projectId === projectId);
-    /*
-     * #108: retired tickets are absent from the agent's board read. The
-     * agent must still be able to READ one deliberately — get_ticket on a
-     * retired id resolves — or it could not help un-retire; the hiding is
-     * of the board sweep, not of the ticket's existence.
-     */
-    const live = opts?.includeRetired === true
-      ? scoped
-      : scoped.filter((view) => !this._isRetired(cache.state, view.id));
     // FilterPanel-parity filtering (#49): server-side, no default narrowing.
-    return filterTicketViews(live, {
+    // Retired rows were already dropped by the merge (the same rule the
+    // browser merge applies); includeRetired swept them back in above.
+    return filterTicketViews(scoped, {
       stateIds: opts?.stateIds,
       projectIds: opts?.projectIds,
       search: opts?.search,
@@ -1718,19 +1743,71 @@ registerAidosSessionEventTypes(ctx);
   } {
     // #146: hop to the dispatching board FIRST, then apply composite
     // `sessionId:id` routing on top of it.
-    const routed = this._routedAgent(this._boardAgent(agent), args.ticketId);
-    const id = this._resolveTicketId(routed, args.ticketId);
-    const cache = this._cache(routed.session);
-    this._sync(routed.session, cache);
-    const views = ticketsProjection(cache.state, this._resolvedConfig);
-    const ticket = views.get(id as TicketId);
-    if (ticket === undefined) {
-      throw new UnknownTicket(id);
+    const reader = this._boardAgent(agent);
+    try {
+      const routed = this._routedAgent(reader, args.ticketId);
+      const id = this._resolveTicketId(routed, args.ticketId);
+      const cache = this._cache(routed.session);
+      this._sync(routed.session, cache);
+      const views = ticketsProjection(cache.state, this._resolvedConfig);
+      const ticket = views.get(id as TicketId);
+      if (ticket === undefined) {
+        throw new UnknownTicket(id);
+      }
+      return {
+        ticket,
+        evidence: [...(cache.state.evidence.get(id as TicketId) ?? [])],
+        comments: [...(cache.state.comments.get(id as TicketId) ?? [])],
+      };
+    } catch (error) {
+      /*
+       * #207: a ticket that lives in another session's log of this
+       * workspace resolves here even when its owner is CLOSED — the owner
+       * fold cannot answer (OwnerUnavailable: routing only reaches live
+       * owners) and the own fold never held the row (UnknownTicket). The
+       * workspace store can: the one-time backfill renumbered the row into
+       * the workspace id space, so the numeric id (bare, or the tail of a
+       * composite reference) resolves without any live owner. A genuinely
+       * unknown id rethrows the original error.
+       */
+      if (!(error instanceof UnknownTicket) && !(error instanceof OwnerUnavailable)) {
+        throw error;
+      }
+      const fromStore = this._ticketInWorkspaceStore(reader, args.ticketId);
+      if (fromStore !== null) return fromStore;
+      throw error;
     }
+  }
+
+  /**
+   * #207: resolve one ticket from the workspace store — the read-side
+   * fallback that lets get_ticket/get_evidence reach a CLOSED session's
+   * ticket. Returns null (never throws) when no store exists, the
+   * reference is not a plain numeric or composite-with-numeric-tail id, or
+   * the id does not resolve to a row of the workspace project.
+   */
+  private _ticketInWorkspaceStore(
+    agent: Agent,
+    ticketRef: number | string,
+  ): { ticket: TicketView; evidence: EvidenceRow[]; comments: CommentRecord[] } | null {
+    const entry = this._workspaceStore(agent);
+    if (entry === null) return null;
+    let id: number;
+    if (typeof ticketRef === "number") {
+      id = ticketRef;
+    } else {
+      const colon = ticketRef.indexOf(":");
+      const tail = colon > 0 ? ticketRef.slice(colon + 1) : ticketRef;
+      if (!/^\d+$/.test(tail)) return null;
+      id = Number(tail);
+    }
+    const state = entry.store.state;
+    const view = ticketsProjection(state, this._resolvedConfig).get(id as TicketId);
+    if (view === undefined || view.projectId !== entry.projectId) return null;
     return {
-      ticket,
-      evidence: [...(cache.state.evidence.get(id as TicketId) ?? [])],
-      comments: [...(cache.state.comments.get(id as TicketId) ?? [])],
+      ticket: view,
+      evidence: [...(state.evidence.get(id as TicketId) ?? [])],
+      comments: [...(state.comments.get(id as TicketId) ?? [])],
     };
   }
 
@@ -1935,24 +2012,63 @@ registerAidosSessionEventTypes(ctx);
     return union;
   }
 
-  /** Serialize one project's plan as markdown. */
-  plan(agent: Agent, opts?: { projectId?: number }): string {
-    // #146: a subagent serializes the dispatching board's plan.
-    const reader = this._boardAgent(agent);
+  /**
+   * #207: which state holds one project for the agent READ paths (plan,
+   * plan_meta). An explicit id resolves in the reader's own fold first,
+   * then in the workspace store, and refuses UnknownProject when no source
+   * holds it. An ABSENT id means the workspace: the reader's own project
+   * while it actually holds tickets (the working session's own rows are
+   * the newest truth, and this preserves every session-local plan), else
+   * the workspace store's project — where the one-time backfill put the
+   * workspace's tickets — and only a workspace with no store and no own
+   * tickets falls back to `_ensureProject`. A fresh session over a
+   * backfilled workspace therefore plans the REAL project instead of
+   * minting an empty one (#84).
+   */
+  private _planProjectSource(
+    reader: Agent,
+    explicit: number | undefined,
+  ): { projectId: ProjectId; state: AidosState } {
     const cache = this._cache(reader.session);
     this._sync(reader.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
-    if (!cache.state.projects.has(projectId)) {
-      throw new UnknownProject(projectId);
+    if (explicit !== undefined) {
+      if (cache.state.projects.has(explicit as ProjectId)) {
+        return { projectId: explicit as ProjectId, state: cache.state };
+      }
+      const entry = this._workspaceStore(reader);
+      if (entry !== null && entry.store.state.projects.has(explicit as ProjectId)) {
+        return { projectId: explicit as ProjectId, state: entry.store.state };
+      }
+      throw new UnknownProject(explicit);
     }
-    const meta = this._planMetaOf(projectId, cache.state);
+    const foldProjectId = this._ensureProject(reader).projectId;
+    if (this._ticketsFor(foldProjectId, cache.state).length > 0) {
+      return { projectId: foldProjectId, state: cache.state };
+    }
+    const entry = this._workspaceStore(reader);
+    if (
+      entry !== null &&
+      this._ticketsFor(entry.projectId, entry.store.state).length > 0
+    ) {
+      return { projectId: entry.projectId, state: entry.store.state };
+    }
+    return { projectId: foldProjectId, state: cache.state };
+  }
+
+  /** Serialize one project's plan as markdown. */
+  plan(agent: Agent, opts?: { projectId?: number }): string {
+    // #146: a subagent serializes the dispatching board's plan — resolved
+    // against the workspace (#207) through the one project source above.
+    const reader = this._boardAgent(agent);
+    const { projectId, state } = this._planProjectSource(reader, opts?.projectId);
+    const meta = this._planMetaOf(projectId, state);
     /*
      * #108: a retired ticket does not render into the plan document. The
      * plan is the export the plan_import round trip feeds on; a retired
      * ticket must not re-enter a fresh project through it.
      */
-    const planTickets = this._ticketsFor(projectId, cache.state).filter(
-      (row) => !this._isRetired(cache.state, row.id),
+    const planTickets = this._ticketsFor(projectId, state).filter(
+      (row) => !this._isRetired(state, row.id),
     );
     const tickets: PlanTicket[] = planTickets.map((row): PlanTicket => ({
       id: String(row.id),
@@ -1985,15 +2101,10 @@ registerAidosSessionEventTypes(ctx);
  * project is a refusal, like plan().
    */
   planMeta(agent: Agent, opts?: { projectId?: number }): PlanMetaView {
-    // #146: same reader rule as plan().
+    // #146: same reader rule as plan(); #207: same workspace resolution.
     const reader = this._boardAgent(agent);
-    const cache = this._cache(reader.session);
-    this._sync(reader.session, cache);
-    const projectId = opts?.projectId ?? this._ensureProject(reader).projectId;
-    if (!cache.state.projects.has(projectId)) {
-      throw new UnknownProject(projectId);
-    }
-    return this._planMetaOf(projectId, cache.state);
+    const { projectId, state } = this._planProjectSource(reader, opts?.projectId);
+    return this._planMetaOf(projectId, state);
   }
 
   // ---- writes ----
@@ -2247,82 +2358,39 @@ registerAidosSessionEventTypes(ctx);
    * collide across sessions, so each foreign row carries `sourceSessionId`
    * for the board badge and for owner-routed writes. Own rows keep plain
    * numeric ids and carry no source marker.
+   *
+   * #207: this is THE ONE DERIVATION. The browser remote (`workspaceTickets`
+   * below) and the agent read path (`getTickets`, `getTicket`'s store
+   * fallback, `plan`/`planMeta` through `_planProjectSource`) all consume it,
+   * so the browser board and the agent board can never disagree about what
+   * the workspace holds. It is SYNCHRONOUS on purpose: `getTickets` is read
+   * from the write-boundary path in src/tools/allowlist.ts, which cannot
+   * await. The one-time backfill is therefore KICKED off here (shared
+   * through `_backfillRuns`) rather than awaited — `workspaceTickets` is
+   * the caller that awaits it before merging.
    */
-  @Remote("workspaceTickets")
-  async workspaceTickets(agent: Agent, args?: {
-    includeRetired?: boolean;
-    /**
-     * #197: the board version the caller last saw. When it matches the
-     * current version and that version is fresh (see the TTL below), the
-     * board has not moved and the reply carries NO rows: the caller keeps
-     * its merge. This is what stops every board change from dragging a
-     * full world re-pull over this remote.
-     */
-    sinceVersion?: string;
-  }): Promise<{
+  private _workspaceBoardMerge(
+    agent: Agent,
+    includeRetired: boolean,
+    opts?: { backfillAwaited?: boolean },
+  ): {
     tickets: BoardTicketView[];
     evidence: Record<string, EvidenceRow[]>;
     comments: Record<string, CommentRecord[]>;
-    /**
-     * #139: workspace key -> that workspace's real directory name.
-     *
-     * The key CANNOT be inverted. `workspaceKeyFromPath` is dsh's own
-     * `projectKey` transform: `/` becomes `-`, and a literal `-` in a
-     * directory name passes through unchanged (src/kernel/slug.ts:40 keeps
-     * `-` in the safe set). So `/home/sid/repos/dotfiles-ai` and a
-     * hypothetical `/home/sid/repos/dotfiles/ai` encode identically, and
-     * the client's split-on-dash rendered the workspace as "ai".
-     *
-     * The host is the only side holding the answer, because it holds every
-     * session's cwd. Derived at READ time from the sessions in this merge,
-     * so nothing stored has to be migrated and an old ticket gets a correct
-     * label as soon as its session is visible.
-     */
     workspaceLabels: Record<string, string>;
-    /**
-     * #197: the current board version, echoed on every full reply so the
-     * next pull can gate on it. `unchanged` marks the gated empty reply.
-     */
-    version: string;
-    unchanged?: true;
-  }> {
-    /*
-     * #197 VERSION GATE. The caller's last-seen version matched and the
-     * version is still fresh, so nothing observable has moved: reply with
-     * no rows at all. The payload collapses from the whole merged board
-     * (tickets + evidence + comments) to a handful of bytes, and the merge
-     * body — every live fold and every closed-session inspect — never runs.
-     *
-     * The freshness window is the SAME TTL the closed-fold cache uses, and
-     * for the same reason: another process can append to a session this one
-     * considers closed, and this process cannot see the append. After the
-     * TTL the gate opens (a full compute runs, which refreshes the fold
-     * cache AND the timestamp), bounding cross-process staleness exactly
-     * like the fold cache does instead of eliminating it.
-     */
-    const includeRetired = args?.includeRetired === true;
-    const nowGate = Date.now();
-    const versionFresh = nowGate - this._boardVersionAt < CLOSED_FOLD_CACHE_TTL_MS;
-    /*
-     * The CURRENT version is the live seq, not the last-stamped string: a
-     * mutation bumps the seq without pulling, so a caller still holding the
-     * stamped token must get a FULL reply, never a false `unchanged`.
-     */
-    const currentVersion = String(this._boardVersionSeq);
+  } {
+    const workspaceStore = this._workspaceStore(agent);
     if (
-      !includeRetired &&
-      typeof args?.sinceVersion === "string" &&
-      args.sinceVersion === currentVersion &&
-      versionFresh
+      opts?.backfillAwaited !== true &&
+      workspaceStore !== null &&
+      !workspaceStore.store.hasBackfillCompleted()
     ) {
-      return {
-        tickets: [],
-        evidence: {},
-        comments: {},
-        workspaceLabels: {},
-        version: currentVersion,
-        unchanged: true,
-      };
+      // Fire-and-forget: a sync agent read cannot await the import, but it
+      // shares the in-flight run, so the rows land for the next read (and
+      // for every workspaceTickets caller, which awaits this same promise
+      // BEFORE merging — it passes backfillAwaited so this kick cannot
+      // start a stale second run a later reader would inherit).
+      void this._backfillRun(agent, workspaceStore).catch(() => undefined);
     }
 
     /*
@@ -2402,9 +2470,7 @@ registerAidosSessionEventTypes(ctx);
      * copy of the same identity — the newer updatedAt wins, so a reopened
      * session's live rows shadow their imported snapshots.
      */
-    const workspaceStore = this._workspaceStore(agent);
     if (workspaceStore !== null) {
-      await this._backfillRun(agent, workspaceStore);
       const storeState = workspaceStore.store.state;
       const storeViews = ticketsProjection(storeState, this._resolvedConfig);
       for (const view of [...storeViews.values()].sort(ownSort)) {
@@ -2476,16 +2542,105 @@ registerAidosSessionEventTypes(ctx);
         evidence: keptEvidence,
         comments: keptComments,
         workspaceLabels,
-        version: this._stampBoardVersion(nowGate),
       };
     }
 
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    return { tickets, evidence, comments, workspaceLabels };
+  }
+
+  @Remote("workspaceTickets")
+  async workspaceTickets(agent: Agent, args?: {
+    includeRetired?: boolean;
+    /**
+     * #197: the board version the caller last saw. When it matches the
+     * current version and that version is fresh (see the TTL below), the
+     * board has not moved and the reply carries NO rows: the caller keeps
+     * its merge. This is what stops every board change from dragging a
+     * full world re-pull over this remote.
+     */
+    sinceVersion?: string;
+  }): Promise<{
+    tickets: BoardTicketView[];
+    evidence: Record<string, EvidenceRow[]>;
+    comments: Record<string, CommentRecord[]>;
+    /**
+     * #139: workspace key -> that workspace's real directory name.
+     *
+     * The key CANNOT be inverted. `workspaceKeyFromPath` is dsh's own
+     * `projectKey` transform: `/` becomes `-`, and a literal `-` in a
+     * directory name passes through unchanged (src/kernel/slug.ts:40 keeps
+     * `-` in the safe set). So `/home/sid/repos/dotfiles-ai` and a
+     * hypothetical `/home/sid/repos/dotfiles/ai` encode identically, and
+     * the client's split-on-dash rendered the workspace as "ai".
+     *
+     * The host is the only side holding the answer, because it holds every
+     * session's cwd. Derived at READ time from the sessions in this merge,
+     * so nothing stored has to be migrated and an old ticket gets a correct
+     * label as soon as its session is visible.
+     */
+    workspaceLabels: Record<string, string>;
+    /**
+     * #197: the current board version, echoed on every full reply so the
+     * next pull can gate on it. `unchanged` marks the gated empty reply.
+     */
+    version: string;
+    unchanged?: true;
+  }> {
+    /*
+     * #197 VERSION GATE. The caller's last-seen version matched and the
+     * version is still fresh, so nothing observable has moved: reply with
+     * no rows at all. The payload collapses from the whole merged board
+     * (tickets + evidence + comments) to a handful of bytes, and the merge
+     * body — every live fold and every closed-session inspect — never runs.
+     *
+     * The freshness window is the SAME TTL the closed-fold cache uses, and
+     * for the same reason: another process can append to a session this one
+     * considers closed, and this process cannot see the append. After the
+     * TTL the gate opens (a full compute runs, which refreshes the fold
+     * cache AND the timestamp), bounding cross-process staleness exactly
+     * like the fold cache does instead of eliminating it.
+     */
+    const includeRetired = args?.includeRetired === true;
+    const nowGate = Date.now();
+    const versionFresh = nowGate - this._boardVersionAt < CLOSED_FOLD_CACHE_TTL_MS;
+    /*
+     * The CURRENT version is the live seq, not the last-stamped string: a
+     * mutation bumps the seq without pulling, so a caller still holding the
+     * stamped token must get a FULL reply, never a false `unchanged`.
+     */
+    const currentVersion = String(this._boardVersionSeq);
+    if (
+      !includeRetired &&
+      typeof args?.sinceVersion === "string" &&
+      args.sinceVersion === currentVersion &&
+      versionFresh
+    ) {
+      return {
+        tickets: [],
+        evidence: {},
+        comments: {},
+        workspaceLabels: {},
+        version: currentVersion,
+        unchanged: true,
+      };
+    }
+
+    // The browser read CAN await, so the first open imports before the
+    // merge queries the store — the shared single-flight run below is the
+    // same promise the sync agent reads kick off.
+    const workspaceStore = this._workspaceStore(agent);
+    if (workspaceStore !== null) {
+      await this._backfillRun(agent, workspaceStore);
+    }
+    // ONE derivation, two callers (#207): the agent read path (getTickets
+    // and the project resolvers) consumes this same merge, sync.
+    const merge = this._workspaceBoardMerge(agent, includeRetired, { backfillAwaited: true });
     return {
-      tickets,
-      evidence,
-      comments,
-      workspaceLabels,
+      tickets: merge.tickets,
+      evidence: merge.evidence,
+      comments: merge.comments,
+      workspaceLabels: merge.workspaceLabels,
       version: this._stampBoardVersion(nowGate),
     };
   }

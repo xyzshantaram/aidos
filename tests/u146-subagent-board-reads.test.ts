@@ -168,10 +168,19 @@ describe("#146 a subagent's reads resolve against the dispatching board", () => 
     const fork = harness.makeAgent({ depth: 0, id: "session-fork" });
     (fork.session.header as { parentSession?: string }).parentSession = harness.agent.session.id;
 
-    const payload = successJson(await harness.runTool("get_tickets", {}, { agent: fork })) as {
-      tickets: { title: string }[];
+    const payload = successJson(await harness.runTool("get_tickets", { detail: "full" }, { agent: fork })) as {
+      tickets: { title: string; foreign: boolean; sourceSessionId: string }[];
     };
-    expect(payload.tickets.map((t) => t.title)).not.toContain("Parent ticket");
+    const row = payload.tickets.find((t) => t.title === "Parent ticket");
+    /*
+     * #207: the fork still SEES the ticket — same workspace — but as a
+     * FOREIGN row of the parent's session, which is what proves its board
+     * was not REROUTED: a rerouted read would render the parent's ticket
+     * as the fork's OWN row (foreign: false, the fork's own session id).
+     */
+    expect(row).toBeDefined();
+    expect(row?.foreign).toBe(true);
+    expect(row?.sourceSessionId).toBe(harness.agent.session.id);
   });
 
   it("walks a nested child all the way to the orchestrator", async () => {

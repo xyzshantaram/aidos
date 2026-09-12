@@ -99,11 +99,22 @@ describe("workspaceTickets merge", () => {
       title: "after",
     } as never);
 
-    // The peer's log holds the edit; the caller's does not.
-    const peerRow = service.getTickets(harness.asAgent(peer)).find((row) => row.id === peerTicket.id);
-    expect(peerRow?.title).toBe("after");
-    const ownRow = service.getTickets(harness.asAgent()).find((row) => row.title === "after");
-    expect(ownRow).toBeUndefined();
+    /*
+     * #207: the agent BOARD reads resolve against the workspace now, so a
+     * session's board no longer distinguishes whose log holds a row — the
+     * routing assertion lives in the LOGS, where ownership actually is.
+     * The edit landed in the peer's log; the caller's log does not hold it.
+     */
+    const peerEvents = harness.aidosEvents(peer).map((event) => {
+      const data = event as unknown as { kind: string; ticket?: { id: number; title: string } };
+      return data.kind === "ticket/change" ? data.ticket : undefined;
+    });
+    expect(peerEvents.some((t) => t?.id === peerTicket.id && t.title === "after")).toBe(true);
+    const ownEvents = harness.aidosEvents(harness.agent).map((event) => {
+      const data = event as unknown as { kind: string; ticket?: { id: number; title: string } };
+      return data.kind === "ticket/change" ? data.ticket : undefined;
+    });
+    expect(ownEvents.some((t) => t?.title === "after")).toBe(false);
   });
 
   it("refuses a foreign write when the owner session is not live", async () => {
