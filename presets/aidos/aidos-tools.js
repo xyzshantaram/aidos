@@ -35175,11 +35175,11 @@ function registerGetTicket(ctx) {
     "read",
     defineTool2({
       name: "get_ticket",
-      description: "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, plus its evidence rows (each with a stable index) and comments. get_evidence fetches any row's full payload by that index. The companion to get_tickets, which returns compact summary rows by default - read the board to find what you need, then read the one ticket you are about to work on. Accepts a composite '<sourceSessionId>:<ticketId>' for a ticket owned by another session.",
+      description: "Read ONE ticket in full: description, criteria, body, allowlist, dependencies, plus its evidence rows (each with a stable index) and comments. get_evidence fetches any row's full payload by that index. The companion to get_tickets, which returns compact summary rows by default - read the board to find what you need, then read the one ticket you are about to work on. A plain numeric id addresses any ticket in the workspace, including one owned by another session (#45): ids are unique across the workspace, so the '<sourceSessionId>:<ticketId>' form is gone and is now REFUSED.",
       parameters: {
         ticketId: {
           oneOf: [{ type: "integer" }, { type: "string" }],
-          description: "The ticket to read. A composite id may be passed as a string.",
+          description: "The ticket to read, by plain numeric id (or its decimal string form) or slug. The old '<sourceSessionId>:<ticketId>' composite is refused (#45).",
           required: true
         }
       },
@@ -35316,11 +35316,11 @@ function registerGetEvidence(ctx) {
     "read",
     defineTool2({
       name: "get_evidence",
-      description: "Fetch full evidence records for a ticket \u2014 kind, author, when, and the COMPLETE payload, untruncated (#164). get_ticket shows only bounded excerpts (#92); read the board, then read the one record you need here. Without index: every row, in the same order get_ticket lists them. With index: exactly that row. comments: true also returns full comment bodies (get_ticket returns only the count). Accepts a composite '<sourceSessionId>:<ticketId>' like get_ticket.",
+      description: "Fetch full evidence records for a ticket \u2014 kind, author, when, and the COMPLETE payload, untruncated (#164). get_ticket shows only bounded excerpts (#92); read the board, then read the one record you need here. Without index: every row, in the same order get_ticket lists them. With index: exactly that row. comments: true also returns full comment bodies (get_ticket returns only the count). A plain numeric id addresses any ticket in the workspace, like get_ticket; the old '<sourceSessionId>:<ticketId>' composite is refused (#45).",
       parameters: {
         ticketId: {
           oneOf: [{ type: "integer" }, { type: "string" }],
-          description: "The ticket whose evidence to fetch. A composite id may be passed as a string.",
+          description: "The ticket whose evidence to fetch, by plain numeric id (or its decimal string form) or slug. The old '<sourceSessionId>:<ticketId>' composite is refused (#45).",
           required: true
         },
         index: {
