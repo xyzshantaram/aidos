@@ -25,7 +25,36 @@
 import { foldAidosEvents, createInitialState } from "./fold";
 import type { AidosState } from "./fold";
 import type { AidosEvent } from "./events";
-import type { CommentRecord, EvidenceRow, TicketId } from "./types";
+import type {
+  Actor,
+  CommentRecord,
+  EvidenceRow,
+  PlanValue,
+  ProjectId,
+  TicketId,
+  TicketState,
+} from "./types";
+
+/**
+ * #211: the importer generation. v1 (#41) imported tickets, evidence and
+ * comments only, and its marker recorded counts alone. v2 imports plan
+ * meta, phases and refusal history too, and its marker records every drop
+ * BY NAME. A v2 importer that finds a v1 marker completes the workspace
+ * instead of skipping it.
+ */
+export const BACKFILL_IMPORTER_VERSION = 2;
+
+/**
+ * #211: the v1 importer's known blind spots, for a marker that predates
+ * versioning. A `backfill/completed` version-1 marker never imported these
+ * kinds and never recorded what it dropped, so a v2 completion treats them
+ * as the classes to finish.
+ */
+export const V1_SKIPPED_KINDS: readonly string[] = [
+  "plan/change",
+  "phase/set",
+  "aidos/refusal",
+];
 
 /**
  * The aidos event kinds a session log can carry. Same set as the host's
@@ -80,6 +109,53 @@ export interface FoldedSessionLog {
   seqOfEvidence: Map<string, number>;
   /** Local ticket id -> the seqs of its comments, in log order. */
   seqsOfComments: Map<TicketId, number[]>;
+  /**
+   * #211: every plan/change event of the log, in log order. The fold keeps
+   * only the final plan per project; the import replays the history so a
+   * cutover moves it instead of dropping it.
+   */
+  planEvents: FoldedPlanEvent[];
+  /**
+   * #211: every phase/set event of the log, in log order. Same history
+   * reason as the plans.
+   */
+  phaseEvents: FoldedPhaseEvent[];
+  /**
+   * #211: every refusal event of the log, in log order. The fold ignores
+   * refusals (log-only history), so without this list they would vanish.
+   */
+  refusalEvents: FoldedRefusalEvent[];
+  /** Every aidos envelope type the log carried, in first-seen order. */
+  seenKinds: string[];
+}
+
+/** One plan/change event as the fold saw it, with its source project. */
+export interface FoldedPlanEvent {
+  sourceProjectId: ProjectId;
+  plan: PlanValue;
+  at: number;
+  seq: number;
+}
+
+/** One phase/set event as the fold saw it, with its source project. */
+export interface FoldedPhaseEvent {
+  sourceProjectId: ProjectId;
+  number: number;
+  title: string;
+  state: string;
+  at: number;
+  seq: number;
+}
+
+/** One refusal event as the fold saw it, naming its source-local ticket. */
+export interface FoldedRefusalEvent {
+  localTicketId: TicketId;
+  fromState: TicketState | null;
+  toState: TicketState | null;
+  actor: Actor | null;
+  reason: string;
+  at: number;
+  seq: number;
 }
 
 /**
@@ -94,8 +170,17 @@ export function foldSessionLog(log: BackfillSessionLog): FoldedSessionLog {
   const seqOfTicket = new Map<TicketId, number>();
   const seqOfEvidence = new Map<string, number>();
   const seqsOfComments = new Map<TicketId, number[]>();
+  const planEvents: FoldedPlanEvent[] = [];
+  const phaseEvents: FoldedPhaseEvent[] = [];
+  const refusalEvents: FoldedRefusalEvent[] = [];
+  const seenKinds: string[] = [];
+  const seen = new Set<string>();
   for (const event of log.events) {
     if (!AIDOS_LOG_EVENT_KINDS.has(event.type)) continue;
+    if (!seen.has(event.type)) {
+      seen.add(event.type);
+      seenKinds.push(event.type);
+    }
     const aidos = event.data as AidosEvent;
     foldAidosEvents(state, aidos);
     switch (aidos.kind) {
@@ -111,11 +196,52 @@ export function foldSessionLog(log: BackfillSessionLog): FoldedSessionLog {
         seqsOfComments.set(aidos.ticketId, seqs);
         break;
       }
+      case "plan/change":
+        // #211: recorded in log order; the import replays them against the
+        // mapped workspace project, oldest first, so history survives.
+        planEvents.push({
+          sourceProjectId: aidos.projectId,
+          plan: aidos.plan,
+          at: aidos.at,
+          seq: event.seq,
+        });
+        break;
+      case "phase/set":
+        phaseEvents.push({
+          sourceProjectId: aidos.projectId,
+          number: aidos.number,
+          title: aidos.title,
+          state: aidos.state,
+          at: aidos.at,
+          seq: event.seq,
+        });
+        break;
+      case "aidos/refusal":
+        refusalEvents.push({
+          localTicketId: aidos.ticketId,
+          fromState: aidos.fromState,
+          toState: aidos.toState,
+          actor: aidos.actor,
+          reason: aidos.reason,
+          at: aidos.at,
+          seq: event.seq,
+        });
+        break;
       default:
         break;
     }
   }
-  return { sessionId: log.sessionId, state, seqOfTicket, seqOfEvidence, seqsOfComments };
+  return {
+    sessionId: log.sessionId,
+    state,
+    seqOfTicket,
+    seqOfEvidence,
+    seqsOfComments,
+    planEvents,
+    phaseEvents,
+    refusalEvents,
+    seenKinds,
+  };
 }
 
 /** One evidence row as the import flushes it, with its origin seq. */

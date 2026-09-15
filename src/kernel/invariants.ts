@@ -82,6 +82,56 @@ const BACKFILL_KEYS = [
   "comments",
   "at",
 ];
+/**
+ * #211: the v2 marker's exact field set. Every loss list rides the marker
+ * itself, so an old log (v1 keys) and a new log (v2 keys) each validate
+ * against exactly one shape — a marker with a mix of the two is corrupt.
+ */
+const BACKFILL_V2_KEYS = [
+  "kind",
+  "version",
+  "importerVersion",
+  "sessionIds",
+  "tickets",
+  "evidence",
+  "comments",
+  "plans",
+  "phases",
+  "refusals",
+  "edgesRewritten",
+  "droppedDependencies",
+  "skippedPlans",
+  "skippedPhases",
+  "droppedRefusals",
+  "skippedKinds",
+  "ticketMap",
+  "at",
+];
+const DROPPED_EDGE_KEYS = [
+  "fromSessionId",
+  "fromLocalId",
+  "fromNewId",
+  "fromTitle",
+  "ref",
+  "reason",
+];
+const SKIPPED_PLAN_KEYS = [
+  "sessionId",
+  "sourceProjectId",
+  "absPath",
+  "at",
+  "reason",
+];
+const SKIPPED_PHASE_KEYS = [
+  "sessionId",
+  "sourceProjectId",
+  "number",
+  "title",
+  "at",
+  "reason",
+];
+const DROPPED_REFUSAL_KEYS = ["sessionId", "localTicketId", "at", "reason"];
+const TICKET_MAP_KEYS = ["sessionId", "localId", "newId"];
 
 // ---- checks ----
 
@@ -724,12 +774,26 @@ function validatePhaseSet(
  * #41: the backfill marker carries no board state, so there is nothing to
  * check against the fold — only its own shape. The marker is append-only
  * history like a refusal: replay keeps it, the projection ignores it.
+ *
+ * #211: version-aware. A version-1 marker is #41's counts-only record; a
+ * version-2 marker carries the importer version and every loss BY NAME, and
+ * each entry of each list is shape-checked so a corrupt report is a
+ * rejected log rather than a migration that prints garbage.
  */
 function validateBackfillCompleted(raw: Record<string, unknown>): void {
-  expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
-  if (raw.version !== 1) {
-    invariant("backfill/completed version must be 1");
+  if (raw.version === 1) {
+    validateBackfillCompletedV1(raw);
+    return;
   }
+  if (raw.version === 2) {
+    validateBackfillCompletedV2(raw);
+    return;
+  }
+  invariant("backfill/completed version must be 1 or 2");
+}
+
+function validateBackfillCompletedV1(raw: Record<string, unknown>): void {
+  expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
   if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
     invariant("backfill/completed sessionIds must be an array of strings");
   }
@@ -737,6 +801,101 @@ function validateBackfillCompleted(raw: Record<string, unknown>): void {
   expectInt(raw.evidence, "backfill evidence", 0);
   expectInt(raw.comments, "backfill comments", 0);
   expectNumber(raw.at, "backfill/completed at");
+}
+
+function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
+  expectKeys(raw, BACKFILL_V2_KEYS, "backfill/completed");
+  if (raw.importerVersion !== 2) {
+    invariant("backfill/completed importerVersion must be 2");
+  }
+  if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
+    invariant("backfill/completed sessionIds must be an array of strings");
+  }
+  expectInt(raw.tickets, "backfill tickets", 0);
+  expectInt(raw.evidence, "backfill evidence", 0);
+  expectInt(raw.comments, "backfill comments", 0);
+  expectInt(raw.plans, "backfill plans", 0);
+  expectInt(raw.phases, "backfill phases", 0);
+  expectInt(raw.refusals, "backfill refusals", 0);
+  expectInt(raw.edgesRewritten, "backfill edgesRewritten", 0);
+  expectStringArray(raw.skippedKinds, "backfill skippedKinds");
+  if (!Array.isArray(raw.droppedDependencies)) {
+    invariant("backfill/completed droppedDependencies must be an array");
+  }
+  for (const entry of raw.droppedDependencies as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed droppedDependencies entries must be objects");
+    }
+    expectKeys(entry, DROPPED_EDGE_KEYS, "backfill dropped edge");
+    expectString(entry.fromSessionId, "backfill dropped edge fromSessionId");
+    expectInt(entry.fromLocalId, "backfill dropped edge fromLocalId", 1);
+    expectInt(entry.fromNewId, "backfill dropped edge fromNewId", 1);
+    expectString(entry.fromTitle, "backfill dropped edge fromTitle");
+    expectString(entry.ref, "backfill dropped edge ref");
+    expectString(entry.reason, "backfill dropped edge reason");
+  }
+  if (!Array.isArray(raw.skippedPlans)) {
+    invariant("backfill/completed skippedPlans must be an array");
+  }
+  for (const entry of raw.skippedPlans as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed skippedPlans entries must be objects");
+    }
+    expectKeys(entry, SKIPPED_PLAN_KEYS, "backfill skipped plan");
+    expectString(entry.sessionId, "backfill skipped plan sessionId");
+    expectInt(entry.sourceProjectId, "backfill skipped plan sourceProjectId", 1);
+    expectString(entry.absPath, "backfill skipped plan absPath");
+    expectNumber(entry.at, "backfill skipped plan at");
+    expectString(entry.reason, "backfill skipped plan reason");
+  }
+  if (!Array.isArray(raw.skippedPhases)) {
+    invariant("backfill/completed skippedPhases must be an array");
+  }
+  for (const entry of raw.skippedPhases as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed skippedPhases entries must be objects");
+    }
+    expectKeys(entry, SKIPPED_PHASE_KEYS, "backfill skipped phase");
+    expectString(entry.sessionId, "backfill skipped phase sessionId");
+    expectInt(entry.sourceProjectId, "backfill skipped phase sourceProjectId", 1);
+    expectInt(entry.number, "backfill skipped phase number", 0);
+    expectString(entry.title, "backfill skipped phase title");
+    expectNumber(entry.at, "backfill skipped phase at");
+    expectString(entry.reason, "backfill skipped phase reason");
+  }
+  if (!Array.isArray(raw.droppedRefusals)) {
+    invariant("backfill/completed droppedRefusals must be an array");
+  }
+  for (const entry of raw.droppedRefusals as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed droppedRefusals entries must be objects");
+    }
+    expectKeys(entry, DROPPED_REFUSAL_KEYS, "backfill dropped refusal");
+    expectString(entry.sessionId, "backfill dropped refusal sessionId");
+    expectInt(entry.localTicketId, "backfill dropped refusal localTicketId", 1);
+    expectNumber(entry.at, "backfill dropped refusal at");
+    expectString(entry.reason, "backfill dropped refusal reason");
+  }
+  if (!Array.isArray(raw.ticketMap)) {
+    invariant("backfill/completed ticketMap must be an array");
+  }
+  for (const entry of raw.ticketMap as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed ticketMap entries must be objects");
+    }
+    expectKeys(entry, TICKET_MAP_KEYS, "backfill ticket map entry");
+    expectString(entry.sessionId, "backfill ticket map sessionId");
+    expectInt(entry.localId, "backfill ticket map localId", 1);
+    expectInt(entry.newId, "backfill ticket map newId", 1);
+  }
+  expectNumber(raw.at, "backfill/completed at");
+}
+
+/** An array of strings and nothing else. */
+function expectStringArray(value: unknown, what: string): void {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    invariant(`${what} must be an array of strings`);
+  }
 }
 export function validateAidosEvent(state: AidosState, event: AidosEvent): void {
   if (!isPlainObject(event)) {

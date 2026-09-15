@@ -9,8 +9,22 @@
 import type { AidosEvent } from "./events";
 import { foldAidosEvents, createInitialState } from "./fold";
 import type { AidosState } from "./fold";
-import { foldSessionLog, importedRowsOf } from "./backfill";
+import {
+  BACKFILL_IMPORTER_VERSION,
+  V1_SKIPPED_KINDS,
+  foldSessionLog,
+  importedRowsOf,
+} from "./backfill";
 import type { BackfillSessionLog, FoldedSessionLog } from "./backfill";
+import type {
+  AnyBackfillCompletedEvent,
+  BackfillCompletedEvent,
+  BackfillTicketMapEntry,
+  DroppedDependencyEdge,
+  DroppedRefusalRecord,
+  SkippedPhaseRecord,
+  SkippedPlanRecord,
+} from "./events";
 import { checkGate, isLegalTransition } from "./gates";
 import { planContextLineCount, validateAidosEvent } from "./invariants";
 import { confidenceScoreOf, gateFractionOf } from "./projections";
@@ -87,13 +101,81 @@ export interface TicketSearchHit {
   workspaceKey: string;
 }
 
-/** What one backfill run did. Zeros plus `alreadyRan` when it skipped. */
+/**
+ * What one backfill run did. Counts are THIS run's deltas (zero plus
+ * `alreadyRan` when it skipped); the loss lists are what this run newly
+ * recorded — a v1 completion recomputes the drops v1 never wrote, a resume
+ * records only its fresh sessions. The MARKER accumulates across runs, so
+ * the durable cumulative account lives on `backfillReport()`, not here.
+ */
 export interface BackfillResult {
   alreadyRan: boolean;
   sessionIds: string[];
   tickets: number;
   evidence: number;
   comments: number;
+  /** #211: plan, phase and refusal events this run replayed. */
+  plans: number;
+  phases: number;
+  refusals: number;
+  /** #211: dependency references rewritten through the renumbering map. */
+  edgesRewritten: number;
+  /**
+   * #211: every dropped edge, named with the ticket that lost it and the
+   * exact reference dropped — what the #209 migration summary reports.
+   */
+  droppedDependencies: DroppedDependencyEdge[];
+  /** #211: every unmapped plan/change, named with its reason. */
+  skippedPlans: SkippedPlanRecord[];
+  /** #211: every unmapped phase/set, named with its reason. */
+  skippedPhases: SkippedPhaseRecord[];
+  /** #211: every unmapped refusal, named with its reason. */
+  droppedRefusals: DroppedRefusalRecord[];
+  /** #211: source-local kinds seen but given no direct replay. */
+  skippedKinds: string[];
+  /** #211: the importer generation that ran. */
+  importerVersion: number;
+  /**
+   * #211: true when this call named no loss — every drop and skip list is
+   * empty — so a clean report and an unexamined one are distinguishable.
+   * (Ticket history stays intentionally collapsed to create + final set
+   * per #41's design; see backfillSessionLogs.)
+   */
+  lossless: boolean;
+}
+
+/**
+ * #211: what the latest backfill marker says, for the #209 migration
+ * script's summary — and the resume base for #221's batched driver, which
+ * reads `sessionIds` + `ticketMap` to hand only unimported logs. Read the
+ * marker, not the result: the result describes one call, the marker is the
+ * durable CUMULATIVE record across every run so far.
+ */
+export interface BackfillReport {
+  importerVersion: number;
+  sessionIds: string[];
+  tickets: number;
+  evidence: number;
+  comments: number;
+  plans: number;
+  phases: number;
+  refusals: number;
+  edgesRewritten: number;
+  droppedDependencies: DroppedDependencyEdge[];
+  skippedPlans: SkippedPlanRecord[];
+  skippedPhases: SkippedPhaseRecord[];
+  droppedRefusals: DroppedRefusalRecord[];
+  skippedKinds: string[];
+  ticketMap: BackfillTicketMapEntry[];
+  /**
+   * True only for a v1 marker, which predates reporting: its drops were
+   * never recorded, so the lists read empty-but-unknown. The consumer must
+   * print its caveat rather than a comforting zero.
+   */
+  dropsUnknown: boolean;
+  /** True when every loss list is known-empty. Never true for v1. */
+  lossless: boolean;
+  at: number;
 }
 
 /** The plan of a project that never held one. */
@@ -394,6 +476,78 @@ export class Store {
    */
   hasBackfillCompleted(): boolean {
     return this._log.some((event) => event.kind === "backfill/completed");
+  }
+
+  /**
+   * #211: what the latest backfill marker records, for the #209 migration
+   * script's summary — real rewritten/dropped edge lists, not a predicted
+   * fold. Null when no backfill has run. A v1 marker predates reporting:
+   * it reads back with `dropsUnknown` true and `lossless` false, because
+   * its drops were never recorded and silence must not parse as success.
+   * Copies: mutating the report never touches the log.
+   */
+  backfillReport(): BackfillReport | null {
+    const marker = this._latestBackfillMarker();
+    if (marker === null) {
+      return null;
+    }
+    if (marker.version === 1) {
+      return {
+        importerVersion: 1,
+        sessionIds: [...marker.sessionIds],
+        tickets: marker.tickets,
+        evidence: marker.evidence,
+        comments: marker.comments,
+        plans: 0,
+        phases: 0,
+        refusals: 0,
+        edgesRewritten: 0,
+        droppedDependencies: [],
+        skippedPlans: [],
+        skippedPhases: [],
+        droppedRefusals: [],
+        skippedKinds: [...V1_SKIPPED_KINDS],
+        ticketMap: [],
+        dropsUnknown: true,
+        lossless: false,
+        at: marker.at,
+      };
+    }
+    return {
+      importerVersion: marker.importerVersion,
+      sessionIds: [...marker.sessionIds],
+      tickets: marker.tickets,
+      evidence: marker.evidence,
+      comments: marker.comments,
+      plans: marker.plans,
+      phases: marker.phases,
+      refusals: marker.refusals,
+      edgesRewritten: marker.edgesRewritten,
+      droppedDependencies: marker.droppedDependencies.map((entry) => ({ ...entry })),
+      skippedPlans: marker.skippedPlans.map((entry) => ({ ...entry })),
+      skippedPhases: marker.skippedPhases.map((entry) => ({ ...entry })),
+      droppedRefusals: marker.droppedRefusals.map((entry) => ({ ...entry })),
+      skippedKinds: [...marker.skippedKinds],
+      ticketMap: marker.ticketMap.map((entry) => ({ ...entry })),
+      dropsUnknown: false,
+      lossless:
+        marker.droppedDependencies.length === 0 &&
+        marker.skippedPlans.length === 0 &&
+        marker.skippedPhases.length === 0 &&
+        marker.droppedRefusals.length === 0,
+      at: marker.at,
+    };
+  }
+
+  /** The latest backfill marker in the log, either generation, or null. */
+  private _latestBackfillMarker(): AnyBackfillCompletedEvent | null {
+    let latest: AnyBackfillCompletedEvent | null = null;
+    for (const event of this._log) {
+      if (event.kind === "backfill/completed") {
+        latest = event;
+      }
+    }
+    return latest;
   }
 
   /**
@@ -777,13 +931,44 @@ export class Store {
    * on every row the import flushes, and has its dependency references and
    * evidence rows rewritten through the renumbering map.
    *
-   * RUNS ONCE. The import lands inside ONE storage transaction bracket and
-   * finishes with a `backfill/completed` marker event. The marker in the
-   * log IS the record that the backfill ran: any later call — same store
-   * or a reopen that replays the log — sees it and imports nothing. A crash
+   * #211, what v2 adds. Plan meta, phases and refusal history are replayed
+   * through their workspace mapping instead of dropped: a plan/phase event
+   * whose source project shares the target workspace is re-emitted against
+   * the target project, oldest first, so history survives; a refusal is
+   * re-emitted against the ticket's renumbered id. Anything without a
+   * mapping — a plan/phase for a foreign project, a refusal for a ticket in
+   * no log, a dependency edge whose target no log holds — is RECORDED BY
+   * NAME on the marker, never silently dropped. Dropping a dangling edge
+   * stays correct (a preserved `workspaceKey:99` would resolve to a
+   * stranger's ticket once future creates reuse the number); the defect was
+   * the silence, and the marker ends it.
+   *
+   * RUNS ONCE PER SESSION, RESUMABLE PER WORKSPACE (#221). The import lands
+   * inside ONE storage bracket and finishes with a `backfill/completed`
+   * version-2 marker carrying the importer version, every imported session
+   * id, the whole ticket map, and every loss by name. A later call whose
+   * sessions are all already on the marker imports nothing. A later call
+   * with unimported sessions RESUMES: only those sessions are flushed,
+   * against the marker's ticket map, and the next marker accumulates —
+   * session ids, ticket map, counts, and loss lists — so the marker stays
+   * the complete account of the workspace import and a driver can batch
+   * logs to bound memory instead of accumulating every log first. A v1
+   * marker (#41's
+   * counts-only record) means INCOMPLETE: the call COMPLETES the workspace
+   * — imports the plans, phases and refusals v1 never did, recomputes the
+   * drops v1 never recorded from the source logs it is handed — and skips
+   * every ticket v1 already imported, so nothing lands twice. A crash
    * midway rolls the uncommitted bracket back, so no marker lands, nothing
    * half-imported survives, and the next open retries the whole import:
    * at-least-once attempts, exactly-once effect.
+   *
+   * Honest collapse, kept from #41: one ticket's history lands as a create
+   * plus its live rows plus one final set — intermediate revisions are not
+   * replayed as events. Evidence detach/link outcomes and folded tags ride
+   * the final state, so they are captured, not lost. Source-local project
+   * records (`project/created`, `project/moved`) get no direct replay: the
+   * import targets the single project it was handed, and they are listed on
+   * the marker's `skippedKinds`.
    *
    * Import shape per source ticket, respecting the create invariants
    * (a create is revision 1, open, createdAt = at): one `create` carrying
@@ -799,10 +984,6 @@ export class Store {
     projectId: ProjectId,
     logs: readonly BackfillSessionLog[],
   ): BackfillResult {
-    // Once and only once: the marker in the log is the record.
-    if (this._log.some((event) => event.kind === "backfill/completed")) {
-      return { alreadyRan: true, sessionIds: [], tickets: 0, evidence: 0, comments: 0 };
-    }
     const project = this._state.projects.get(projectId);
     if (!project) {
       throw new UnknownProject(projectId);
@@ -810,26 +991,106 @@ export class Store {
     const workspaceKey = workspaceKeyFromPath(project.absPath);
 
     const folded = logs.map(foldSessionLog);
+    const latest = this._latestBackfillMarker();
+    // The import base: what previous runs already finished.
+    //
+    // - No marker: a fresh import. Nothing is prior to anything.
+    // - A v1 marker (#41's counts-only record): INCOMPLETE. The map v1 never
+    //   recorded is rebuilt from the origin columns v1 did stamp (see
+    //   _reconstructTicketMap), and the drops v1 never recorded are
+    //   recomputed below from the source logs.
+    // - A v2 marker: RESUME (#221). Its sessionIds name every fully-imported
+    //   log and its ticketMap carries every imported ticket, so a driver
+    //   that batches logs to bound memory can hand the next batch and only
+    //   the unimported sessions are flushed; the rest are skipped without a
+    //   sound. When every handed-in session is already imported the call is
+    //   a no-op. Carried lists go straight onto the next marker, so the
+    //   marker stays the cumulative account of the whole workspace import.
+    let priorMap = new Map<string, TicketId>();
+    let priorSessionIds: string[] = [];
+    let carriedEdgesRewritten = 0;
+    let carriedCounts = { tickets: 0, evidence: 0, comments: 0, plans: 0, phases: 0, refusals: 0 };
+    let carriedDrops: DroppedDependencyEdge[] = [];
+    let carriedSkippedPlans: SkippedPlanRecord[] = [];
+    let carriedSkippedPhases: SkippedPhaseRecord[] = [];
+    let carriedDroppedRefusals: DroppedRefusalRecord[] = [];
+    let carriedSkippedKinds: string[] = [];
+    // True only on the v1 path: the one generation whose drops went
+    // unrecorded, and therefore the only one whose prior drops are
+    // recomputed. Recomputing on a v2 resume would duplicate the carried
+    // lists (or invent drops for folds that are not even handed in).
+    let recomputePriorDrops = false;
+    if (latest !== null && latest.version === 1) {
+      priorMap = this._reconstructTicketMap(folded);
+      recomputePriorDrops = true;
+    } else if (latest !== null && latest.version === 2) {
+      priorMap = new Map(
+        latest.ticketMap.map((entry) => [`${entry.sessionId}#${entry.localId}`, entry.newId]),
+      );
+      priorSessionIds = [...latest.sessionIds];
+      carriedEdgesRewritten = latest.edgesRewritten;
+      carriedCounts = {
+        tickets: latest.tickets,
+        evidence: latest.evidence,
+        comments: latest.comments,
+        plans: latest.plans,
+        phases: latest.phases,
+        refusals: latest.refusals,
+      };
+      carriedDrops = latest.droppedDependencies.map((entry) => ({ ...entry }));
+      carriedSkippedPlans = latest.skippedPlans.map((entry) => ({ ...entry }));
+      carriedSkippedPhases = latest.skippedPhases.map((entry) => ({ ...entry }));
+      carriedDroppedRefusals = latest.droppedRefusals.map((entry) => ({ ...entry }));
+      carriedSkippedKinds = [...latest.skippedKinds];
+      const imported = new Set(priorSessionIds);
+      if (folded.every((fold) => imported.has(fold.sessionId))) {
+        return {
+          alreadyRan: true,
+          sessionIds: [],
+          tickets: 0,
+          evidence: 0,
+          comments: 0,
+          plans: 0,
+          phases: 0,
+          refusals: 0,
+          edgesRewritten: 0,
+          droppedDependencies: [],
+          skippedPlans: [],
+          skippedPhases: [],
+          droppedRefusals: [],
+          skippedKinds: [],
+          importerVersion: BACKFILL_IMPORTER_VERSION,
+          lossless: true,
+        };
+      }
+    }
 
     // Pass 1 — renumber. One workspace-unique id per imported ticket, from
     // the same port counter every create uses; two logs may both hold a
-    // local ticket 1, and they leave here with different ids.
-    const newIdOf = new Map<string, TicketId>();
+    // local ticket 1, and they leave here with different ids. Tickets the
+    // previous generation already mapped keep their ids: they are reported
+    // but never re-imported.
+    const newIdOf = new Map<string, TicketId>(priorMap);
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
+        const key = `${fold.sessionId}#${localId}`;
+        if (newIdOf.has(key)) {
+          continue;
+        }
         let newId: TicketId;
         try {
           newId = this._storage.allocateTicketId();
         } catch (error) {
           throw new StoreWriteRefused(error);
         }
-        newIdOf.set(`${fold.sessionId}#${localId}`, newId);
+        newIdOf.set(key, newId);
       }
     }
 
     // Pass 2 — slugs. The workspace slug is unique per workspace; two
     // sessions can hold the same slug, so later collisions get a numeric
-    // suffix, deterministically in import order.
+    // suffix, deterministically in import order. Previously imported
+    // tickets keep the slugs they landed with.
     const slugOf = new Map<string, string>();
     const takenSlugs = new Set<string>();
     for (const snapshot of this._state.tickets.values()) {
@@ -839,6 +1100,10 @@ export class Store {
     }
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
+        const key = `${fold.sessionId}#${localId}`;
+        if (priorMap.has(key)) {
+          continue;
+        }
         const final = fold.state.tickets.get(localId)!;
         let slug = final.slug;
         let suffix = 2;
@@ -847,9 +1112,16 @@ export class Store {
           suffix += 1;
         }
         takenSlugs.add(slug);
-        slugOf.set(`${fold.sessionId}#${localId}`, slug);
+        slugOf.set(key, slug);
       }
     }
+
+    // The source-local project records get no direct replay: the import
+    // targets the single project it was handed. Seen here, listed on the
+    // marker, so a later importer knows exactly what was left behind.
+    const skippedKinds = [...new Set(folded.flatMap((fold) => fold.seenKinds))].filter(
+      (kind) => kind === "project/created" || kind === "project/moved",
+    );
 
     // Pass 3 — flush, all inside one bracket.
     const storage = this._storage;
@@ -863,11 +1135,24 @@ export class Store {
     let tickets = 0;
     let evidence = 0;
     let comments = 0;
+    let plans = 0;
+    let phases = 0;
+    let refusals = 0;
+    let edgesRewritten = 0;
+    const droppedDependencies: DroppedDependencyEdge[] = [];
+    const skippedPlans: SkippedPlanRecord[] = [];
+    const skippedPhases: SkippedPhaseRecord[] = [];
+    const droppedRefusals: DroppedRefusalRecord[] = [];
     try {
       for (const fold of folded) {
         const rows = importedRowsOf(fold);
         for (const localId of sortedLocalIds(fold)) {
           const key = `${fold.sessionId}#${localId}`;
+          // A completion run never re-imports a ticket its predecessor
+          // mapped: its drops are recomputed for the report below.
+          if (priorMap.has(key)) {
+            continue;
+          }
           const newId = newIdOf.get(key)!;
           const slug = slugOf.get(key)!;
           const final = fold.state.tickets.get(localId)!;
@@ -949,7 +1234,27 @@ export class Store {
           }
 
           // The set: the final snapshot — final state, remapped deps,
-          // folded tags — at revision 2, no earlier than any write.
+          // folded tags — at revision 2, no earlier than any write. A dep
+          // whose target no imported log holds is DROPPED and recorded by
+          // name: keeping it raw would leave a local id pointing at
+          // whatever new ticket later claims that number.
+          const remappedDeps: string[] = [];
+          for (const ref of final.dependsOn) {
+            const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
+            if (mapped === null) {
+              droppedDependencies.push({
+                fromSessionId: fold.sessionId,
+                fromLocalId: localId,
+                fromNewId: newId,
+                fromTitle: final.title,
+                ref,
+                reason: this._dropReasonFor(ref, fold, folded, newIdOf),
+              });
+            } else {
+              remappedDeps.push(mapped);
+              edgesRewritten += 1;
+            }
+          }
           const setAt = Math.max(final.updatedAt, lastWriteAt);
           this._emit(
             {
@@ -962,9 +1267,7 @@ export class Store {
                 projectId,
                 workspaceKey,
                 slug,
-                dependsOn: final.dependsOn
-                  .map((ref) => this._remapDependency(ref, fold, folded, newIdOf, workspaceKey))
-                  .filter((ref): ref is string => ref !== null),
+                dependsOn: remappedDeps,
                 revision: 2,
                 updatedAt: setAt,
               },
@@ -975,17 +1278,201 @@ export class Store {
           tickets += 1;
         }
       }
+      // Pass 3b — the drops v1 left silently. Its sets already landed
+      // without them, so there is nothing to re-emit: the source logs still
+      // hold the original references, and recomputing them here names every
+      // edge the workspace lost. Runs ONLY on the v1 path — a first import
+      // has no prior tickets and skips for free, and a v2 resume carries its
+      // recorded drops forward instead of recomputing them.
+      if (recomputePriorDrops) {
+        for (const fold of folded) {
+          for (const localId of sortedLocalIds(fold)) {
+            const key = `${fold.sessionId}#${localId}`;
+            if (!priorMap.has(key)) {
+              continue;
+            }
+            const final = fold.state.tickets.get(localId)!;
+            const newId = priorMap.get(key)!;
+            for (const ref of final.dependsOn) {
+              const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
+              if (mapped === null) {
+                droppedDependencies.push({
+                  fromSessionId: fold.sessionId,
+                  fromLocalId: localId,
+                  fromNewId: newId,
+                  fromTitle: final.title,
+                  ref,
+                  reason: this._dropReasonFor(ref, fold, folded, newIdOf),
+                });
+              } else {
+                edgesRewritten += 1;
+              }
+            }
+          }
+        }
+      }
+      // Pass 4 — project history: plans, phases, refusals. Logs in the
+      // order handed in, events oldest first per log; the last replay wins,
+      // exactly the source logs' own last-write-wins. A resume replays only
+      // sessions the marker does not already account for: re-running an old
+      // session's history would duplicate it. Refusals and
+      // plan/phase events carry no fold monotonicity, so source `at` values
+      // replay verbatim. An over-cap plan is SKIPPED, never refused: one
+      // long document must not fail the whole cutover.
+      for (const fold of folded) {
+        if (priorSessionIds.includes(fold.sessionId)) {
+          continue;
+        }
+        for (const plan of fold.planEvents) {
+          const source = fold.state.projects.get(plan.sourceProjectId);
+          const sourceKey = source !== undefined ? workspaceKeyFromPath(source.absPath) : null;
+          if (sourceKey !== workspaceKey) {
+            skippedPlans.push({
+              sessionId: fold.sessionId,
+              sourceProjectId: plan.sourceProjectId,
+              absPath: source?.absPath ?? `<unknown project ${plan.sourceProjectId}>`,
+              at: plan.at,
+              reason:
+                source === undefined
+                  ? `source project id ${plan.sourceProjectId} names no project in its own log`
+                  : `source project ${source.absPath} has no workspace equivalent for ${workspaceKey}`,
+            });
+            continue;
+          }
+          const lines = planContextLineCount(plan.plan);
+          if (lines > PLAN_CONTEXT_LIMIT) {
+            skippedPlans.push({
+              sessionId: fold.sessionId,
+              sourceProjectId: plan.sourceProjectId,
+              absPath: source!.absPath,
+              at: plan.at,
+              reason: `plan context is ${lines} lines, over the ${PLAN_CONTEXT_LIMIT}-line cap`,
+            });
+            continue;
+          }
+          this._emit(
+            {
+              kind: "plan/change",
+              version: 1,
+              projectId,
+              plan: deepClone(plan.plan),
+              at: plan.at,
+            },
+            { sessionId: fold.sessionId, localSeq: plan.seq },
+          );
+          plans += 1;
+        }
+        for (const phase of fold.phaseEvents) {
+          const source = fold.state.projects.get(phase.sourceProjectId);
+          const sourceKey = source !== undefined ? workspaceKeyFromPath(source.absPath) : null;
+          if (sourceKey !== workspaceKey) {
+            skippedPhases.push({
+              sessionId: fold.sessionId,
+              sourceProjectId: phase.sourceProjectId,
+              number: phase.number,
+              title: phase.title,
+              at: phase.at,
+              reason:
+                source === undefined
+                  ? `source project id ${phase.sourceProjectId} names no project in its own log`
+                  : `source project ${source.absPath} has no workspace equivalent for ${workspaceKey}`,
+            });
+            continue;
+          }
+          this._emit(
+            {
+              kind: "phase/set",
+              version: 1,
+              projectId,
+              number: phase.number,
+              title: phase.title,
+              state: phase.state,
+              at: phase.at,
+            },
+            { sessionId: fold.sessionId, localSeq: phase.seq },
+          );
+          phases += 1;
+        }
+        for (const refusal of fold.refusalEvents) {
+          const newId = newIdOf.get(`${fold.sessionId}#${refusal.localTicketId}`);
+          if (newId === undefined) {
+            droppedRefusals.push({
+              sessionId: fold.sessionId,
+              localTicketId: refusal.localTicketId,
+              at: refusal.at,
+              reason: `ticket ${refusal.localTicketId} of session ${fold.sessionId} is in no imported log`,
+            });
+            continue;
+          }
+          this._emit(
+            {
+              kind: "aidos/refusal",
+              version: 1,
+              ticketId: newId,
+              fromState: refusal.fromState,
+              toState: refusal.toState,
+              actor: refusal.actor,
+              reason: refusal.reason,
+              at: refusal.at,
+            },
+            { sessionId: fold.sessionId, localSeq: refusal.seq },
+          );
+          refusals += 1;
+        }
+      }
       // The marker: the record that this backfill ran, committed in the
-      // same bracket as the rows it vouches for.
-      this._emit({
+      // same bracket as the rows it vouches for. Version 2 names the
+      // importer, EVERY imported session, the whole ticket map, and every
+      // loss — a backfill that lost nothing records empty lists, so silence
+      // and success are distinguishable. Everything here is CUMULATIVE
+      // across runs (this run's work plus what earlier markers carried), so
+      // the latest marker is always the complete account of the workspace
+      // import — the shape #221's batched driver resumes from.
+      const ticketMap: BackfillTicketMapEntry[] = [...newIdOf.entries()]
+        .map(([key, newId]) => {
+          const hash = key.lastIndexOf("#");
+          return {
+            sessionId: key.slice(0, hash),
+            localId: Number(key.slice(hash + 1)),
+            newId,
+          };
+        })
+        .sort(
+          (a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : a.localId - b.localId),
+        );
+      const sessionIds = [...priorSessionIds];
+      for (const fold of folded) {
+        if (!sessionIds.includes(fold.sessionId)) {
+          sessionIds.push(fold.sessionId);
+        }
+      }
+      const unionKinds = [...carriedSkippedKinds];
+      for (const kind of skippedKinds) {
+        if (!unionKinds.includes(kind)) {
+          unionKinds.push(kind);
+        }
+      }
+      const marker: BackfillCompletedEvent = {
         kind: "backfill/completed",
-        version: 1,
-        sessionIds: folded.map((fold) => fold.sessionId),
-        tickets,
-        evidence,
-        comments,
+        version: 2,
+        importerVersion: BACKFILL_IMPORTER_VERSION,
+        sessionIds,
+        tickets: carriedCounts.tickets + tickets,
+        evidence: carriedCounts.evidence + evidence,
+        comments: carriedCounts.comments + comments,
+        plans: carriedCounts.plans + plans,
+        phases: carriedCounts.phases + phases,
+        refusals: carriedCounts.refusals + refusals,
+        edgesRewritten: carriedEdgesRewritten + edgesRewritten,
+        droppedDependencies: [...carriedDrops, ...droppedDependencies],
+        skippedPlans: [...carriedSkippedPlans, ...skippedPlans],
+        skippedPhases: [...carriedSkippedPhases, ...skippedPhases],
+        droppedRefusals: [...carriedDroppedRefusals, ...droppedRefusals],
+        skippedKinds: unionKinds,
+        ticketMap,
         at: this._nowFn(),
-      });
+      };
+      this._emit(marker);
       if (transactional) {
         storage.commitTransaction!();
       }
@@ -999,13 +1486,64 @@ export class Store {
       }
       throw new StoreWriteRefused(error);
     }
+    const lossless =
+      droppedDependencies.length === 0 &&
+      skippedPlans.length === 0 &&
+      skippedPhases.length === 0 &&
+      droppedRefusals.length === 0;
     return {
       alreadyRan: false,
       sessionIds: folded.map((fold) => fold.sessionId),
       tickets,
       evidence,
       comments,
+      plans,
+      phases,
+      refusals,
+      edgesRewritten,
+      droppedDependencies,
+      skippedPlans,
+      skippedPhases,
+      droppedRefusals,
+      skippedKinds: [...skippedKinds],
+      importerVersion: BACKFILL_IMPORTER_VERSION,
+      lossless,
     };
+  }
+
+  /**
+   * #211: rebuild the (session, local) -> workspace ticket map a v1 import
+   * left behind. Each imported create's origin columns are the source
+   * ticket's last-touch seq, which the fold recomputes deterministically,
+   * so matching them pairs every source ticket with the id v1 gave it.
+   */
+  private _reconstructTicketMap(folded: readonly FoldedSessionLog[]): Map<string, TicketId> {
+    const createsByOrigin = new Map<string, TicketId>();
+    for (const stored of this._storage.readAll()) {
+      const event = stored.event;
+      if (
+        event.kind === "ticket/change" &&
+        event.operation === "create" &&
+        stored.sessionId !== null &&
+        stored.localSeq !== null
+      ) {
+        createsByOrigin.set(`${stored.sessionId}#${stored.localSeq}`, event.ticket.id);
+      }
+    }
+    const map = new Map<string, TicketId>();
+    for (const fold of folded) {
+      for (const localId of sortedLocalIds(fold)) {
+        const originSeq = fold.seqOfTicket.get(localId) ?? null;
+        if (originSeq === null) {
+          continue;
+        }
+        const found = createsByOrigin.get(`${fold.sessionId}#${originSeq}`);
+        if (found !== undefined) {
+          map.set(`${fold.sessionId}#${localId}`, found);
+        }
+      }
+    }
+    return map;
   }
 
   /**
@@ -1013,8 +1551,9 @@ export class Store {
    * reference through the renumbering map. The reference resolves within
    * its own session's log first; when the prefix names ANOTHER imported
    * session, that session's mapping answers. A reference whose target no
-   * imported log holds is dropped — keeping it raw would leave a local id
-   * pointing at whatever new ticket later claims that number.
+   * imported log holds maps to null — the caller records it BY NAME (see
+   * _dropReasonFor): keeping it raw would leave a local id pointing at
+   * whatever new ticket later claims that number.
    */
   private _remapDependency(
     ref: string,
@@ -1036,6 +1575,33 @@ export class Store {
       folded.find((fold) => fold.sessionId === prefix) ?? own;
     const newId = newIdOf.get(`${source.sessionId}#${localId}`);
     return newId === undefined ? null : `${workspaceKey}:${newId}`;
+  }
+
+  /**
+   * #211: WHY one dependency reference did not survive the import, in words
+   * a human can act on. Only called for references _remapDependency already
+   * refused, so every branch below is a drop with its reason.
+   */
+  private _dropReasonFor(
+    ref: string,
+    own: FoldedSessionLog,
+    folded: readonly FoldedSessionLog[],
+    newIdOf: Map<string, TicketId>,
+  ): string {
+    const colon = ref.lastIndexOf(":");
+    if (colon < 0) {
+      return `malformed reference ${JSON.stringify(ref)} carries no workspace prefix`;
+    }
+    const localId = Number(ref.slice(colon + 1));
+    if (!Number.isInteger(localId) || localId < 1) {
+      return `malformed reference ${JSON.stringify(ref)} names no ticket number`;
+    }
+    const prefix = ref.slice(0, colon);
+    const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
+    if (prefix !== source.sessionId) {
+      return `target ${ref} is in no imported log (it resolves to session ${source.sessionId}, which holds no ticket ${localId})`;
+    }
+    return `target ${ref} is in no imported log (session ${source.sessionId} holds no ticket ${localId})`;
   }
 
   // ---- projects ----

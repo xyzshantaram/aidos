@@ -26168,6 +26168,51 @@ var BACKFILL_KEYS = [
   "comments",
   "at"
 ];
+var BACKFILL_V2_KEYS = [
+  "kind",
+  "version",
+  "importerVersion",
+  "sessionIds",
+  "tickets",
+  "evidence",
+  "comments",
+  "plans",
+  "phases",
+  "refusals",
+  "edgesRewritten",
+  "droppedDependencies",
+  "skippedPlans",
+  "skippedPhases",
+  "droppedRefusals",
+  "skippedKinds",
+  "ticketMap",
+  "at"
+];
+var DROPPED_EDGE_KEYS = [
+  "fromSessionId",
+  "fromLocalId",
+  "fromNewId",
+  "fromTitle",
+  "ref",
+  "reason"
+];
+var SKIPPED_PLAN_KEYS = [
+  "sessionId",
+  "sourceProjectId",
+  "absPath",
+  "at",
+  "reason"
+];
+var SKIPPED_PHASE_KEYS = [
+  "sessionId",
+  "sourceProjectId",
+  "number",
+  "title",
+  "at",
+  "reason"
+];
+var DROPPED_REFUSAL_KEYS = ["sessionId", "localTicketId", "at", "reason"];
+var TICKET_MAP_KEYS = ["sessionId", "localId", "newId"];
 function invariant(message) {
   throw new InvariantError(message);
 }
@@ -26664,10 +26709,18 @@ function validatePhaseSet(state, raw) {
   }
 }
 function validateBackfillCompleted(raw) {
-  expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
-  if (raw.version !== 1) {
-    invariant("backfill/completed version must be 1");
+  if (raw.version === 1) {
+    validateBackfillCompletedV1(raw);
+    return;
   }
+  if (raw.version === 2) {
+    validateBackfillCompletedV2(raw);
+    return;
+  }
+  invariant("backfill/completed version must be 1 or 2");
+}
+function validateBackfillCompletedV1(raw) {
+  expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
   if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
     invariant("backfill/completed sessionIds must be an array of strings");
   }
@@ -26675,6 +26728,98 @@ function validateBackfillCompleted(raw) {
   expectInt(raw.evidence, "backfill evidence", 0);
   expectInt(raw.comments, "backfill comments", 0);
   expectNumber(raw.at, "backfill/completed at");
+}
+function validateBackfillCompletedV2(raw) {
+  expectKeys(raw, BACKFILL_V2_KEYS, "backfill/completed");
+  if (raw.importerVersion !== 2) {
+    invariant("backfill/completed importerVersion must be 2");
+  }
+  if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
+    invariant("backfill/completed sessionIds must be an array of strings");
+  }
+  expectInt(raw.tickets, "backfill tickets", 0);
+  expectInt(raw.evidence, "backfill evidence", 0);
+  expectInt(raw.comments, "backfill comments", 0);
+  expectInt(raw.plans, "backfill plans", 0);
+  expectInt(raw.phases, "backfill phases", 0);
+  expectInt(raw.refusals, "backfill refusals", 0);
+  expectInt(raw.edgesRewritten, "backfill edgesRewritten", 0);
+  expectStringArray(raw.skippedKinds, "backfill skippedKinds");
+  if (!Array.isArray(raw.droppedDependencies)) {
+    invariant("backfill/completed droppedDependencies must be an array");
+  }
+  for (const entry of raw.droppedDependencies) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed droppedDependencies entries must be objects");
+    }
+    expectKeys(entry, DROPPED_EDGE_KEYS, "backfill dropped edge");
+    expectString(entry.fromSessionId, "backfill dropped edge fromSessionId");
+    expectInt(entry.fromLocalId, "backfill dropped edge fromLocalId", 1);
+    expectInt(entry.fromNewId, "backfill dropped edge fromNewId", 1);
+    expectString(entry.fromTitle, "backfill dropped edge fromTitle");
+    expectString(entry.ref, "backfill dropped edge ref");
+    expectString(entry.reason, "backfill dropped edge reason");
+  }
+  if (!Array.isArray(raw.skippedPlans)) {
+    invariant("backfill/completed skippedPlans must be an array");
+  }
+  for (const entry of raw.skippedPlans) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed skippedPlans entries must be objects");
+    }
+    expectKeys(entry, SKIPPED_PLAN_KEYS, "backfill skipped plan");
+    expectString(entry.sessionId, "backfill skipped plan sessionId");
+    expectInt(entry.sourceProjectId, "backfill skipped plan sourceProjectId", 1);
+    expectString(entry.absPath, "backfill skipped plan absPath");
+    expectNumber(entry.at, "backfill skipped plan at");
+    expectString(entry.reason, "backfill skipped plan reason");
+  }
+  if (!Array.isArray(raw.skippedPhases)) {
+    invariant("backfill/completed skippedPhases must be an array");
+  }
+  for (const entry of raw.skippedPhases) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed skippedPhases entries must be objects");
+    }
+    expectKeys(entry, SKIPPED_PHASE_KEYS, "backfill skipped phase");
+    expectString(entry.sessionId, "backfill skipped phase sessionId");
+    expectInt(entry.sourceProjectId, "backfill skipped phase sourceProjectId", 1);
+    expectInt(entry.number, "backfill skipped phase number", 0);
+    expectString(entry.title, "backfill skipped phase title");
+    expectNumber(entry.at, "backfill skipped phase at");
+    expectString(entry.reason, "backfill skipped phase reason");
+  }
+  if (!Array.isArray(raw.droppedRefusals)) {
+    invariant("backfill/completed droppedRefusals must be an array");
+  }
+  for (const entry of raw.droppedRefusals) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed droppedRefusals entries must be objects");
+    }
+    expectKeys(entry, DROPPED_REFUSAL_KEYS, "backfill dropped refusal");
+    expectString(entry.sessionId, "backfill dropped refusal sessionId");
+    expectInt(entry.localTicketId, "backfill dropped refusal localTicketId", 1);
+    expectNumber(entry.at, "backfill dropped refusal at");
+    expectString(entry.reason, "backfill dropped refusal reason");
+  }
+  if (!Array.isArray(raw.ticketMap)) {
+    invariant("backfill/completed ticketMap must be an array");
+  }
+  for (const entry of raw.ticketMap) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed ticketMap entries must be objects");
+    }
+    expectKeys(entry, TICKET_MAP_KEYS, "backfill ticket map entry");
+    expectString(entry.sessionId, "backfill ticket map sessionId");
+    expectInt(entry.localId, "backfill ticket map localId", 1);
+    expectInt(entry.newId, "backfill ticket map newId", 1);
+  }
+  expectNumber(raw.at, "backfill/completed at");
+}
+function expectStringArray(value, what) {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+    invariant(`${what} must be an array of strings`);
+  }
 }
 function validateAidosEvent(state, event) {
   if (!isPlainObject2(event)) {
@@ -27767,6 +27912,12 @@ function followSupersedeChain(startRefs, lookup) {
 }
 
 // src/kernel/backfill.ts
+var BACKFILL_IMPORTER_VERSION = 2;
+var V1_SKIPPED_KINDS = [
+  "plan/change",
+  "phase/set",
+  "aidos/refusal"
+];
 var AIDOS_LOG_EVENT_KINDS = /* @__PURE__ */ new Set([
   "ticket/change",
   "evidence/attached",
@@ -27789,8 +27940,17 @@ function foldSessionLog(log) {
   const seqOfTicket = /* @__PURE__ */ new Map();
   const seqOfEvidence = /* @__PURE__ */ new Map();
   const seqsOfComments = /* @__PURE__ */ new Map();
+  const planEvents = [];
+  const phaseEvents = [];
+  const refusalEvents = [];
+  const seenKinds = [];
+  const seen = /* @__PURE__ */ new Set();
   for (const event of log.events) {
     if (!AIDOS_LOG_EVENT_KINDS.has(event.type)) continue;
+    if (!seen.has(event.type)) {
+      seen.add(event.type);
+      seenKinds.push(event.type);
+    }
     const aidos = event.data;
     foldAidosEvents(state, aidos);
     switch (aidos.kind) {
@@ -27806,11 +27966,50 @@ function foldSessionLog(log) {
         seqsOfComments.set(aidos.ticketId, seqs);
         break;
       }
+      case "plan/change":
+        planEvents.push({
+          sourceProjectId: aidos.projectId,
+          plan: aidos.plan,
+          at: aidos.at,
+          seq: event.seq
+        });
+        break;
+      case "phase/set":
+        phaseEvents.push({
+          sourceProjectId: aidos.projectId,
+          number: aidos.number,
+          title: aidos.title,
+          state: aidos.state,
+          at: aidos.at,
+          seq: event.seq
+        });
+        break;
+      case "aidos/refusal":
+        refusalEvents.push({
+          localTicketId: aidos.ticketId,
+          fromState: aidos.fromState,
+          toState: aidos.toState,
+          actor: aidos.actor,
+          reason: aidos.reason,
+          at: aidos.at,
+          seq: event.seq
+        });
+        break;
       default:
         break;
     }
   }
-  return { sessionId: log.sessionId, state, seqOfTicket, seqOfEvidence, seqsOfComments };
+  return {
+    sessionId: log.sessionId,
+    state,
+    seqOfTicket,
+    seqOfEvidence,
+    seqsOfComments,
+    planEvents,
+    phaseEvents,
+    refusalEvents,
+    seenKinds
+  };
 }
 function importedRowsOf(folded) {
   const evidence = [];
@@ -28184,6 +28383,72 @@ var Store = class {
     return this._log.some((event) => event.kind === "backfill/completed");
   }
   /**
+   * #211: what the latest backfill marker records, for the #209 migration
+   * script's summary — real rewritten/dropped edge lists, not a predicted
+   * fold. Null when no backfill has run. A v1 marker predates reporting:
+   * it reads back with `dropsUnknown` true and `lossless` false, because
+   * its drops were never recorded and silence must not parse as success.
+   * Copies: mutating the report never touches the log.
+   */
+  backfillReport() {
+    const marker = this._latestBackfillMarker();
+    if (marker === null) {
+      return null;
+    }
+    if (marker.version === 1) {
+      return {
+        importerVersion: 1,
+        sessionIds: [...marker.sessionIds],
+        tickets: marker.tickets,
+        evidence: marker.evidence,
+        comments: marker.comments,
+        plans: 0,
+        phases: 0,
+        refusals: 0,
+        edgesRewritten: 0,
+        droppedDependencies: [],
+        skippedPlans: [],
+        skippedPhases: [],
+        droppedRefusals: [],
+        skippedKinds: [...V1_SKIPPED_KINDS],
+        ticketMap: [],
+        dropsUnknown: true,
+        lossless: false,
+        at: marker.at
+      };
+    }
+    return {
+      importerVersion: marker.importerVersion,
+      sessionIds: [...marker.sessionIds],
+      tickets: marker.tickets,
+      evidence: marker.evidence,
+      comments: marker.comments,
+      plans: marker.plans,
+      phases: marker.phases,
+      refusals: marker.refusals,
+      edgesRewritten: marker.edgesRewritten,
+      droppedDependencies: marker.droppedDependencies.map((entry) => ({ ...entry })),
+      skippedPlans: marker.skippedPlans.map((entry) => ({ ...entry })),
+      skippedPhases: marker.skippedPhases.map((entry) => ({ ...entry })),
+      droppedRefusals: marker.droppedRefusals.map((entry) => ({ ...entry })),
+      skippedKinds: [...marker.skippedKinds],
+      ticketMap: marker.ticketMap.map((entry) => ({ ...entry })),
+      dropsUnknown: false,
+      lossless: marker.droppedDependencies.length === 0 && marker.skippedPlans.length === 0 && marker.skippedPhases.length === 0 && marker.droppedRefusals.length === 0,
+      at: marker.at
+    };
+  }
+  /** The latest backfill marker in the log, either generation, or null. */
+  _latestBackfillMarker() {
+    let latest = null;
+    for (const event of this._log) {
+      if (event.kind === "backfill/completed") {
+        latest = event;
+      }
+    }
+    return latest;
+  }
+  /**
    * #42: the session id whose log this ticket was imported from, or null
    * when the ticket was created directly in the store.
    */
@@ -28518,13 +28783,44 @@ var Store = class {
    * on every row the import flushes, and has its dependency references and
    * evidence rows rewritten through the renumbering map.
    *
-   * RUNS ONCE. The import lands inside ONE storage transaction bracket and
-   * finishes with a `backfill/completed` marker event. The marker in the
-   * log IS the record that the backfill ran: any later call — same store
-   * or a reopen that replays the log — sees it and imports nothing. A crash
+   * #211, what v2 adds. Plan meta, phases and refusal history are replayed
+   * through their workspace mapping instead of dropped: a plan/phase event
+   * whose source project shares the target workspace is re-emitted against
+   * the target project, oldest first, so history survives; a refusal is
+   * re-emitted against the ticket's renumbered id. Anything without a
+   * mapping — a plan/phase for a foreign project, a refusal for a ticket in
+   * no log, a dependency edge whose target no log holds — is RECORDED BY
+   * NAME on the marker, never silently dropped. Dropping a dangling edge
+   * stays correct (a preserved `workspaceKey:99` would resolve to a
+   * stranger's ticket once future creates reuse the number); the defect was
+   * the silence, and the marker ends it.
+   *
+   * RUNS ONCE PER SESSION, RESUMABLE PER WORKSPACE (#221). The import lands
+   * inside ONE storage bracket and finishes with a `backfill/completed`
+   * version-2 marker carrying the importer version, every imported session
+   * id, the whole ticket map, and every loss by name. A later call whose
+   * sessions are all already on the marker imports nothing. A later call
+   * with unimported sessions RESUMES: only those sessions are flushed,
+   * against the marker's ticket map, and the next marker accumulates —
+   * session ids, ticket map, counts, and loss lists — so the marker stays
+   * the complete account of the workspace import and a driver can batch
+   * logs to bound memory instead of accumulating every log first. A v1
+   * marker (#41's
+   * counts-only record) means INCOMPLETE: the call COMPLETES the workspace
+   * — imports the plans, phases and refusals v1 never did, recomputes the
+   * drops v1 never recorded from the source logs it is handed — and skips
+   * every ticket v1 already imported, so nothing lands twice. A crash
    * midway rolls the uncommitted bracket back, so no marker lands, nothing
    * half-imported survives, and the next open retries the whole import:
    * at-least-once attempts, exactly-once effect.
+   *
+   * Honest collapse, kept from #41: one ticket's history lands as a create
+   * plus its live rows plus one final set — intermediate revisions are not
+   * replayed as events. Evidence detach/link outcomes and folded tags ride
+   * the final state, so they are captured, not lost. Source-local project
+   * records (`project/created`, `project/moved`) get no direct replay: the
+   * import targets the single project it was handed, and they are listed on
+   * the marker's `skippedKinds`.
    *
    * Import shape per source ticket, respecting the create invariants
    * (a create is revision 1, open, createdAt = at): one `create` carrying
@@ -28537,25 +28833,81 @@ var Store = class {
    * from.
    */
   backfillSessionLogs(projectId, logs) {
-    if (this._log.some((event) => event.kind === "backfill/completed")) {
-      return { alreadyRan: true, sessionIds: [], tickets: 0, evidence: 0, comments: 0 };
-    }
     const project = this._state.projects.get(projectId);
     if (!project) {
       throw new UnknownProject(projectId);
     }
     const workspaceKey = workspaceKeyFromPath(project.absPath);
     const folded = logs.map(foldSessionLog);
-    const newIdOf = /* @__PURE__ */ new Map();
+    const latest = this._latestBackfillMarker();
+    let priorMap = /* @__PURE__ */ new Map();
+    let priorSessionIds = [];
+    let carriedEdgesRewritten = 0;
+    let carriedCounts = { tickets: 0, evidence: 0, comments: 0, plans: 0, phases: 0, refusals: 0 };
+    let carriedDrops = [];
+    let carriedSkippedPlans = [];
+    let carriedSkippedPhases = [];
+    let carriedDroppedRefusals = [];
+    let carriedSkippedKinds = [];
+    let recomputePriorDrops = false;
+    if (latest !== null && latest.version === 1) {
+      priorMap = this._reconstructTicketMap(folded);
+      recomputePriorDrops = true;
+    } else if (latest !== null && latest.version === 2) {
+      priorMap = new Map(
+        latest.ticketMap.map((entry) => [`${entry.sessionId}#${entry.localId}`, entry.newId])
+      );
+      priorSessionIds = [...latest.sessionIds];
+      carriedEdgesRewritten = latest.edgesRewritten;
+      carriedCounts = {
+        tickets: latest.tickets,
+        evidence: latest.evidence,
+        comments: latest.comments,
+        plans: latest.plans,
+        phases: latest.phases,
+        refusals: latest.refusals
+      };
+      carriedDrops = latest.droppedDependencies.map((entry) => ({ ...entry }));
+      carriedSkippedPlans = latest.skippedPlans.map((entry) => ({ ...entry }));
+      carriedSkippedPhases = latest.skippedPhases.map((entry) => ({ ...entry }));
+      carriedDroppedRefusals = latest.droppedRefusals.map((entry) => ({ ...entry }));
+      carriedSkippedKinds = [...latest.skippedKinds];
+      const imported = new Set(priorSessionIds);
+      if (folded.every((fold) => imported.has(fold.sessionId))) {
+        return {
+          alreadyRan: true,
+          sessionIds: [],
+          tickets: 0,
+          evidence: 0,
+          comments: 0,
+          plans: 0,
+          phases: 0,
+          refusals: 0,
+          edgesRewritten: 0,
+          droppedDependencies: [],
+          skippedPlans: [],
+          skippedPhases: [],
+          droppedRefusals: [],
+          skippedKinds: [],
+          importerVersion: BACKFILL_IMPORTER_VERSION,
+          lossless: true
+        };
+      }
+    }
+    const newIdOf = new Map(priorMap);
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
+        const key = `${fold.sessionId}#${localId}`;
+        if (newIdOf.has(key)) {
+          continue;
+        }
         let newId;
         try {
           newId = this._storage.allocateTicketId();
         } catch (error51) {
           throw new StoreWriteRefused(error51);
         }
-        newIdOf.set(`${fold.sessionId}#${localId}`, newId);
+        newIdOf.set(key, newId);
       }
     }
     const slugOf = /* @__PURE__ */ new Map();
@@ -28567,6 +28919,10 @@ var Store = class {
     }
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
+        const key = `${fold.sessionId}#${localId}`;
+        if (priorMap.has(key)) {
+          continue;
+        }
         const final = fold.state.tickets.get(localId);
         let slug = final.slug;
         let suffix = 2;
@@ -28575,9 +28931,12 @@ var Store = class {
           suffix += 1;
         }
         takenSlugs.add(slug);
-        slugOf.set(`${fold.sessionId}#${localId}`, slug);
+        slugOf.set(key, slug);
       }
     }
+    const skippedKinds = [...new Set(folded.flatMap((fold) => fold.seenKinds))].filter(
+      (kind) => kind === "project/created" || kind === "project/moved"
+    );
     const storage = this._storage;
     const transactional = typeof storage.beginTransaction === "function" && typeof storage.commitTransaction === "function";
     if (transactional) {
@@ -28587,11 +28946,22 @@ var Store = class {
     let tickets = 0;
     let evidence = 0;
     let comments = 0;
+    let plans = 0;
+    let phases = 0;
+    let refusals = 0;
+    let edgesRewritten = 0;
+    const droppedDependencies = [];
+    const skippedPlans = [];
+    const skippedPhases = [];
+    const droppedRefusals = [];
     try {
       for (const fold of folded) {
         const rows = importedRowsOf(fold);
         for (const localId of sortedLocalIds(fold)) {
           const key = `${fold.sessionId}#${localId}`;
+          if (priorMap.has(key)) {
+            continue;
+          }
           const newId = newIdOf.get(key);
           const slug = slugOf.get(key);
           const final = fold.state.tickets.get(localId);
@@ -28661,6 +29031,23 @@ var Store = class {
               comments += 1;
             }
           }
+          const remappedDeps = [];
+          for (const ref of final.dependsOn) {
+            const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
+            if (mapped === null) {
+              droppedDependencies.push({
+                fromSessionId: fold.sessionId,
+                fromLocalId: localId,
+                fromNewId: newId,
+                fromTitle: final.title,
+                ref,
+                reason: this._dropReasonFor(ref, fold, folded, newIdOf)
+              });
+            } else {
+              remappedDeps.push(mapped);
+              edgesRewritten += 1;
+            }
+          }
           const setAt = Math.max(final.updatedAt, lastWriteAt);
           this._emit(
             {
@@ -28673,7 +29060,7 @@ var Store = class {
                 projectId,
                 workspaceKey,
                 slug,
-                dependsOn: final.dependsOn.map((ref) => this._remapDependency(ref, fold, folded, newIdOf, workspaceKey)).filter((ref) => ref !== null),
+                dependsOn: remappedDeps,
                 revision: 2,
                 updatedAt: setAt
               },
@@ -28684,15 +29071,171 @@ var Store = class {
           tickets += 1;
         }
       }
-      this._emit({
+      if (recomputePriorDrops) {
+        for (const fold of folded) {
+          for (const localId of sortedLocalIds(fold)) {
+            const key = `${fold.sessionId}#${localId}`;
+            if (!priorMap.has(key)) {
+              continue;
+            }
+            const final = fold.state.tickets.get(localId);
+            const newId = priorMap.get(key);
+            for (const ref of final.dependsOn) {
+              const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
+              if (mapped === null) {
+                droppedDependencies.push({
+                  fromSessionId: fold.sessionId,
+                  fromLocalId: localId,
+                  fromNewId: newId,
+                  fromTitle: final.title,
+                  ref,
+                  reason: this._dropReasonFor(ref, fold, folded, newIdOf)
+                });
+              } else {
+                edgesRewritten += 1;
+              }
+            }
+          }
+        }
+      }
+      for (const fold of folded) {
+        if (priorSessionIds.includes(fold.sessionId)) {
+          continue;
+        }
+        for (const plan of fold.planEvents) {
+          const source = fold.state.projects.get(plan.sourceProjectId);
+          const sourceKey = source !== void 0 ? workspaceKeyFromPath(source.absPath) : null;
+          if (sourceKey !== workspaceKey) {
+            skippedPlans.push({
+              sessionId: fold.sessionId,
+              sourceProjectId: plan.sourceProjectId,
+              absPath: source?.absPath ?? `<unknown project ${plan.sourceProjectId}>`,
+              at: plan.at,
+              reason: source === void 0 ? `source project id ${plan.sourceProjectId} names no project in its own log` : `source project ${source.absPath} has no workspace equivalent for ${workspaceKey}`
+            });
+            continue;
+          }
+          const lines = planContextLineCount(plan.plan);
+          if (lines > PLAN_CONTEXT_LIMIT) {
+            skippedPlans.push({
+              sessionId: fold.sessionId,
+              sourceProjectId: plan.sourceProjectId,
+              absPath: source.absPath,
+              at: plan.at,
+              reason: `plan context is ${lines} lines, over the ${PLAN_CONTEXT_LIMIT}-line cap`
+            });
+            continue;
+          }
+          this._emit(
+            {
+              kind: "plan/change",
+              version: 1,
+              projectId,
+              plan: deepClone(plan.plan),
+              at: plan.at
+            },
+            { sessionId: fold.sessionId, localSeq: plan.seq }
+          );
+          plans += 1;
+        }
+        for (const phase of fold.phaseEvents) {
+          const source = fold.state.projects.get(phase.sourceProjectId);
+          const sourceKey = source !== void 0 ? workspaceKeyFromPath(source.absPath) : null;
+          if (sourceKey !== workspaceKey) {
+            skippedPhases.push({
+              sessionId: fold.sessionId,
+              sourceProjectId: phase.sourceProjectId,
+              number: phase.number,
+              title: phase.title,
+              at: phase.at,
+              reason: source === void 0 ? `source project id ${phase.sourceProjectId} names no project in its own log` : `source project ${source.absPath} has no workspace equivalent for ${workspaceKey}`
+            });
+            continue;
+          }
+          this._emit(
+            {
+              kind: "phase/set",
+              version: 1,
+              projectId,
+              number: phase.number,
+              title: phase.title,
+              state: phase.state,
+              at: phase.at
+            },
+            { sessionId: fold.sessionId, localSeq: phase.seq }
+          );
+          phases += 1;
+        }
+        for (const refusal2 of fold.refusalEvents) {
+          const newId = newIdOf.get(`${fold.sessionId}#${refusal2.localTicketId}`);
+          if (newId === void 0) {
+            droppedRefusals.push({
+              sessionId: fold.sessionId,
+              localTicketId: refusal2.localTicketId,
+              at: refusal2.at,
+              reason: `ticket ${refusal2.localTicketId} of session ${fold.sessionId} is in no imported log`
+            });
+            continue;
+          }
+          this._emit(
+            {
+              kind: "aidos/refusal",
+              version: 1,
+              ticketId: newId,
+              fromState: refusal2.fromState,
+              toState: refusal2.toState,
+              actor: refusal2.actor,
+              reason: refusal2.reason,
+              at: refusal2.at
+            },
+            { sessionId: fold.sessionId, localSeq: refusal2.seq }
+          );
+          refusals += 1;
+        }
+      }
+      const ticketMap = [...newIdOf.entries()].map(([key, newId]) => {
+        const hash2 = key.lastIndexOf("#");
+        return {
+          sessionId: key.slice(0, hash2),
+          localId: Number(key.slice(hash2 + 1)),
+          newId
+        };
+      }).sort(
+        (a, b) => a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : a.localId - b.localId
+      );
+      const sessionIds = [...priorSessionIds];
+      for (const fold of folded) {
+        if (!sessionIds.includes(fold.sessionId)) {
+          sessionIds.push(fold.sessionId);
+        }
+      }
+      const unionKinds = [...carriedSkippedKinds];
+      for (const kind of skippedKinds) {
+        if (!unionKinds.includes(kind)) {
+          unionKinds.push(kind);
+        }
+      }
+      const marker = {
         kind: "backfill/completed",
-        version: 1,
-        sessionIds: folded.map((fold) => fold.sessionId),
-        tickets,
-        evidence,
-        comments,
+        version: 2,
+        importerVersion: BACKFILL_IMPORTER_VERSION,
+        sessionIds,
+        tickets: carriedCounts.tickets + tickets,
+        evidence: carriedCounts.evidence + evidence,
+        comments: carriedCounts.comments + comments,
+        plans: carriedCounts.plans + plans,
+        phases: carriedCounts.phases + phases,
+        refusals: carriedCounts.refusals + refusals,
+        edgesRewritten: carriedEdgesRewritten + edgesRewritten,
+        droppedDependencies: [...carriedDrops, ...droppedDependencies],
+        skippedPlans: [...carriedSkippedPlans, ...skippedPlans],
+        skippedPhases: [...carriedSkippedPhases, ...skippedPhases],
+        droppedRefusals: [...carriedDroppedRefusals, ...droppedRefusals],
+        skippedKinds: unionKinds,
+        ticketMap,
         at: this._nowFn()
-      });
+      };
+      this._emit(marker);
       if (transactional) {
         storage.commitTransaction();
       }
@@ -28704,21 +29247,63 @@ var Store = class {
       }
       throw new StoreWriteRefused(error51);
     }
+    const lossless = droppedDependencies.length === 0 && skippedPlans.length === 0 && skippedPhases.length === 0 && droppedRefusals.length === 0;
     return {
       alreadyRan: false,
       sessionIds: folded.map((fold) => fold.sessionId),
       tickets,
       evidence,
-      comments
+      comments,
+      plans,
+      phases,
+      refusals,
+      edgesRewritten,
+      droppedDependencies,
+      skippedPlans,
+      skippedPhases,
+      droppedRefusals,
+      skippedKinds: [...skippedKinds],
+      importerVersion: BACKFILL_IMPORTER_VERSION,
+      lossless
     };
+  }
+  /**
+   * #211: rebuild the (session, local) -> workspace ticket map a v1 import
+   * left behind. Each imported create's origin columns are the source
+   * ticket's last-touch seq, which the fold recomputes deterministically,
+   * so matching them pairs every source ticket with the id v1 gave it.
+   */
+  _reconstructTicketMap(folded) {
+    const createsByOrigin = /* @__PURE__ */ new Map();
+    for (const stored of this._storage.readAll()) {
+      const event = stored.event;
+      if (event.kind === "ticket/change" && event.operation === "create" && stored.sessionId !== null && stored.localSeq !== null) {
+        createsByOrigin.set(`${stored.sessionId}#${stored.localSeq}`, event.ticket.id);
+      }
+    }
+    const map2 = /* @__PURE__ */ new Map();
+    for (const fold of folded) {
+      for (const localId of sortedLocalIds(fold)) {
+        const originSeq = fold.seqOfTicket.get(localId) ?? null;
+        if (originSeq === null) {
+          continue;
+        }
+        const found = createsByOrigin.get(`${fold.sessionId}#${originSeq}`);
+        if (found !== void 0) {
+          map2.set(`${fold.sessionId}#${localId}`, found);
+        }
+      }
+    }
+    return map2;
   }
   /**
    * Rewrite one `workspaceKey:localId` (or `sessionId:localId`) dependency
    * reference through the renumbering map. The reference resolves within
    * its own session's log first; when the prefix names ANOTHER imported
    * session, that session's mapping answers. A reference whose target no
-   * imported log holds is dropped — keeping it raw would leave a local id
-   * pointing at whatever new ticket later claims that number.
+   * imported log holds maps to null — the caller records it BY NAME (see
+   * _dropReasonFor): keeping it raw would leave a local id pointing at
+   * whatever new ticket later claims that number.
    */
   _remapDependency(ref, own, folded, newIdOf, workspaceKey) {
     const colon = ref.lastIndexOf(":");
@@ -28733,6 +29318,27 @@ var Store = class {
     const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
     const newId = newIdOf.get(`${source.sessionId}#${localId}`);
     return newId === void 0 ? null : `${workspaceKey}:${newId}`;
+  }
+  /**
+   * #211: WHY one dependency reference did not survive the import, in words
+   * a human can act on. Only called for references _remapDependency already
+   * refused, so every branch below is a drop with its reason.
+   */
+  _dropReasonFor(ref, own, folded, newIdOf) {
+    const colon = ref.lastIndexOf(":");
+    if (colon < 0) {
+      return `malformed reference ${JSON.stringify(ref)} carries no workspace prefix`;
+    }
+    const localId = Number(ref.slice(colon + 1));
+    if (!Number.isInteger(localId) || localId < 1) {
+      return `malformed reference ${JSON.stringify(ref)} names no ticket number`;
+    }
+    const prefix = ref.slice(0, colon);
+    const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
+    if (prefix !== source.sessionId) {
+      return `target ${ref} is in no imported log (it resolves to session ${source.sessionId}, which holds no ticket ${localId})`;
+    }
+    return `target ${ref} is in no imported log (session ${source.sessionId} holds no ticket ${localId})`;
   }
   // ---- projects ----
   createProject(absPath, name2) {
