@@ -11,7 +11,8 @@
     "build": "node build.mjs",
     "prepare": "node build.mjs",
     "patch:dsh": "bash patches/apply-dsh-patches.sh",
-    "typecheck:client": "tsc --noEmit -p tsconfig.client.json"
+    "typecheck:client": "tsc --noEmit -p tsconfig.client.json",
+    "typecheck:all": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.client.json"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",

@@ -42,7 +42,8 @@ import type { StoragePort, StoredEvent } from "../src/kernel/storage";
 import { openSqliteStorage } from "../src/host/storage-sqlite";
 import { workspaceKeyFromPath } from "../src/kernel/slug";
 import { StoreWriteRefused } from "../src/kernel/types";
-import type { AidosEvent, TicketId } from "../src/kernel/types";
+import type { AidosEvent } from "../src/kernel/events";
+import type { TicketId } from "../src/kernel/types";
 import { FIXED_NOW, makeConfig } from "./helpers";
 
 const WORKSPACE = "/srv/proj/alpha";
@@ -341,8 +342,21 @@ describe("#41: a crash midway leaves nothing behind", () => {
 
       // One-shot failure: the FIRST bracket's commit dies (the crash
       // midway), every later commit succeeds.
+      //
+      // commitTransaction is OPTIONAL on StoragePort — #40's deliberate,
+      // reviewed design: a port may legitimately not implement the bracket.
+      // Narrow it instead of asserting it away. This test NEEDS the bracket
+      // (it kills exactly one commit), so on a bracket-less port it fails
+      // loudly here rather than passing vacuously without ever exercising
+      // the crash-midway path — which keeps proving what #40's
+      // optional-bracket design intended: the mirrored order runs wherever
+      // the bracket exists.
       let failedOnce = false;
-      const realCommit = storage.commitTransaction.bind(storage);
+      const bracket = storage.commitTransaction;
+      if (typeof bracket !== "function") {
+        throw new Error("#41 needs a port with the #40 transaction bracket");
+      }
+      const realCommit = bracket.bind(storage);
       storage.commitTransaction = () => {
         if (!failedOnce) {
           failedOnce = true;

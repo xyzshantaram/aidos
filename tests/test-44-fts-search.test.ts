@@ -36,7 +36,7 @@ import { openWorkspaceStorage } from "../src/host/storage-sqlite";
 import { ftsMatchExpression } from "../src/host/storage-sqlite";
 import { workspaceKeyFromPath } from "../src/kernel/slug";
 import { DEFAULT_CONFIG } from "../src/kernel/constants";
-import type { AidosEvent } from "../src/kernel/types";
+import type { AidosEvent } from "../src/kernel/events";
 import { FIXED_NOW } from "./helpers";
 
 /** The harness sessions bind to this cwd (b1-harness DEFAULT_CWD). */
