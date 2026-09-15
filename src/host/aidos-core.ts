@@ -71,6 +71,32 @@ const CLOSED_FOLD_CACHE_TTL_MS = 60000;
  */
 const CLOSED_INSPECT_CONCURRENCY = 4;
 
+/**
+ * #221: how many closed-session logs one backfill batch holds in memory at
+ * once. THE bound criterion 1 asks for: `_ensureWorkspaceBackfill` inspects
+ * a batch, hands it to `Store.backfillSessionLogs`, releases it, and only
+ * then moves to the next batch — so peak retained memory is a function of
+ * this number, never of the workspace's session count.
+ *
+ * Sized against memory, not convenience (a crash re-runs the whole batch,
+ * so the bound is load-bearing both ways):
+ * - the measured killer workspace is 456 sessions / ~1.00 GB decompressed,
+ *   ~2.2 MB per session on average; parsed JS objects expand ~4x over the
+ *   JSON text, so a 10-log batch retains on the order of 90 MB — more than
+ *   an order of magnitude under the 5.5 GB peak that OOMed the host;
+ * - even if every log in a batch is a 10x outlier, the batch stays
+ *   survivable on the machine that died;
+ * - a crash re-runs at most 10 sessions (per-call resumption), and the
+ *   456-session workspace lands its marker in 46 small transactions rather
+ *   than one workspace-sized one.
+ * What the count bound does NOT cover: a SINGLE session log larger than
+ * memory still OOMs inside one `inspect` — the persistence API only offers
+ * whole-log inspection, so no host-side batching can bound that. It is
+ * recorded here so a future giant-session death is not misread as a
+ * regression of this bound.
+ */
+const BACKFILL_BATCH_SESSIONS = 10;
+
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { reviewChainOf } from "../kernel/gates";
@@ -106,6 +132,7 @@ import type { RetirementInfo } from "../kernel/retirement";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 // #42: the workspace store the board reads.
 import { Store } from "../kernel/store";
+import type { BackfillReport } from "../kernel/store";
 import type { BackfillSessionLog } from "../kernel/backfill";
 // #44 shares this import: the workspace store's FTS index backs the
 // dependency search, and storePathForWorkspace is how a search checks for a
@@ -1823,7 +1850,10 @@ registerAidosSessionEventTypes(ctx);
       const plainNumeric = typeof ref === "number" || (typeof ref === "string" && /^\d+$/.test(ref));
       if (plainNumeric) {
         const entry = this._workspaceStoreForRead(reader);
-        if (entry !== null && !entry.store.hasBackfillCompleted()) {
+        // #221: verified, not merely marked — a landed batch writes its
+        // marker long before the last batch runs, and an id missing
+        // mid-import is still "not loaded yet", never a settled absence.
+        if (entry !== null && !this._isBackfillVerified(reader)) {
           throw new TicketNotYetImported(ref);
         }
       }
@@ -2997,6 +3027,26 @@ registerAidosSessionEventTypes(ctx);
   private readonly _backfillRuns = new Map<string, Promise<void>>();
 
   /**
+   * #221: workspace paths whose backfill this process already drove to
+   * completion — every closed session the store does not already account
+   * for was handed over and flushed. Gates the kick (`_workspaceStoreForRead`
+   * and `_backfillRun`) and the transient refusal below, so the steady
+   * state performs no list and no inspect. In-memory only: a new process
+   * re-verifies with one headers-only list, then resumes or goes silent.
+   */
+  private readonly _backfillVerified = new Set<string>();
+
+  /**
+   * #221: the process-wide backfill batch serializer (criterion 7). Every
+   * batch — inspect plus flush — runs exclusive through this tail chain, so
+   * N workspaces importing at once still retain at most ONE batch: no read
+   * can ever stack N full-history imports again, whatever #176 names. The
+   * tail never rejects (each link guards its predecessor), so a failed
+   * batch delays the next one but never wedges the chain.
+   */
+  private _backfillBatchTail: Promise<void> = Promise.resolve();
+
+  /**
    * #42: the workspace store for one agent's workspace, opened on first use
    * with its project row ensured. Returns null — never throws — when the
    * store cannot be opened or replayed: the board degrades to the live
@@ -3035,11 +3085,29 @@ registerAidosSessionEventTypes(ctx);
     if (
       opts?.backfillAwaited !== true &&
       entry !== null &&
-      !entry.store.hasBackfillCompleted()
+      !this._isBackfillVerified(agent)
     ) {
       void this._backfillRun(agent, entry).catch(() => undefined);
     }
     return entry;
+  }
+
+  /**
+   * #221: whether this process already drove the workspace's backfill to
+   * completion — the kick gate and the transient refusal below both read
+   * this, never the marker alone. The marker means "some batch landed";
+   * only this set means "no session is left unimported". No workspace path
+   * (or an unreadable one) means no import could run, which reads as
+   * settled, not transient.
+   */
+  private _isBackfillVerified(agent: Agent): boolean {
+    let path: string;
+    try {
+      path = this._workspacePath(agent);
+    } catch {
+      return true;
+    }
+    return this._backfillVerified.has(path);
   }
 
   private _workspaceStore(
@@ -3094,6 +3162,9 @@ registerAidosSessionEventTypes(ctx);
     } catch {
       return Promise.resolve();
     }
+    // #221: the steady state never builds a run at all — no list, no
+    // inspect, no promise churn per board read.
+    if (this._backfillVerified.has(path)) return Promise.resolve();
     const inFlight = this._backfillRuns.get(path);
     if (inFlight !== undefined) return inFlight;
     const run = this._ensureWorkspaceBackfill(agent, entry).finally(() => {
@@ -3112,24 +3183,54 @@ registerAidosSessionEventTypes(ctx);
    * WRITE: renumbering, dependency rewriting, origin stamping, the marker,
    * and the single transaction bracket are all #41's, unchanged.
    *
+   * #221: the handoff is BATched, not whole-workspace. Each batch of at
+   * most BACKFILL_BATCH_SESSIONS logs is inspected, flushed with one
+   * `backfillSessionLogs` call, and then released — peak retained memory is
+   * a function of the batch bound, never of the session count. #211's v2
+   * marker is incremental and cumulative, so each call lands durable
+   * progress (its sessions plus a cumulative ticket map) and a crash
+   * re-runs at most one batch: the next open hands only the sessions no
+   * marker yet accounts for and skips the rest without inspecting them.
+   *
    * Failure handling, per piece:
-   *  - no persistence service: skip, no marker — the next open retries;
-   *  - the list itself fails: skip, no marker — running an empty backfill
-   *    here would land the marker and LOSE every closed log;
-   *  - one log's inspect fails: that log is skipped (warned), the rest
-   *    still import and the marker lands — resilience over completeness;
-   *    a log that stays unreadable past the one-time import is the same
-   *    gap as a log that closes after it (see the merge above);
-   *  - the import itself refuses (StoreWriteRefused): warn and return — the
-   *    marker never landed, so the NEXT open retries the whole import;
-   *    this read continues with whatever rows the store already holds.
-   * A failed backfill never fails the board read.
+   *  - no persistence service: skip, nothing verified — the next open retries;
+   *  - the list itself fails: skip, nothing verified — running an empty
+   *    backfill here would land the marker and LOSE every closed log;
+   *  - one log's inspect fails: that log is skipped (warned) and the
+   *    workspace stays UNVERIFIED, so the next open retries it — a log
+   *    unreadable mid-import (another process mid-append is the real shape)
+   *    is a transient read error, not a verdict, and must not be lost
+   *    permanently. A log that NEVER becomes readable costs one failed
+   *    inspect plus its warning per open: bounded, diagnosable, and a
+   *    deliberate change from #42's skip-forever. The rest of its batch
+   *    still imports and still lands its marker.
+   *  - one batch's import refuses (StoreWriteRefused): warn NAMING the
+   *    batch, keep going with the next batch (batches are independent —
+   *    one poison batch must not hold the other 446 sessions hostage),
+   *    and leave the workspace unverified so the NEXT open retries exactly
+   *    the unlanded sessions. The board read never fails either way.
+   *  - CROSS-BATCH dependency edges (#211 round-2 review, F1/F2): until the
+   *    kernel stops falling back to the own session for a prefix outside
+   *    the handed batch, a batch whose logs depend on LATER batches refuses
+   *    (self-edge) or silently miswires. The refusal path above keeps the
+   *    host alive and retries; the miswire is invisible from the driver and
+   *    is this ticket's correctness blocker — the cross-batch test pins it.
+   * A failed backfill never fails the board read, and never kills the host:
+   * every refusal is caught, logged, and retried — the OOM this replaces
+   * was the only failure mode that escaped this method, because it struck
+   * below the code, in the allocator.
    */
   private async _ensureWorkspaceBackfill(
     agent: Agent,
     entry: { store: Store; projectId: ProjectId },
   ): Promise<void> {
-    if (entry.store.hasBackfillCompleted()) return;
+    let path: string;
+    try {
+      path = this._workspacePath(agent);
+    } catch {
+      return;
+    }
+    if (this._backfillVerified.has(path)) return;
     const persistence = this.ctx.get("sessionPersistence") as
       | {
           list: () => Promise<SessionHeader[]>;
@@ -3143,42 +3244,155 @@ registerAidosSessionEventTypes(ctx);
     // A failed list must NOT run an empty backfill: the marker would land
     // and every closed log would be lost. Leave the import for the next open.
     if (closedIds === null) return;
+    const report = entry.store.backfillReport();
+    if (report !== null && report.dropsUnknown) {
+      // #221/F4: a v1 marker's session list and ticket map do not survive a
+      // SUBSET handoff — the upgraded marker names only the handed sessions,
+      // so the next batch re-imports the v1 sessions' tickets as suffixed
+      // duplicates. #211 round 2 carries the v1 session list across calls;
+      // until it lands, hand NOTHING to a v1-marked store and leave the
+      // marker byte-identical. This is exactly #42's behavior for such
+      // workspaces (the marker gate never let them re-import), so nothing
+      // that works today changes. Verified hollowly on purpose: it means
+      // "this process decided", not "the import is complete" — a new
+      // process (possibly with the round-2 kernel) re-decides from scratch.
+      this.ctx.logger?.info?.(
+        `aidos: backfill defers ${path}: a v1 import marker is present and subset completion lands with #211 round 2`,
+      );
+      this._backfillVerified.add(path);
+      return;
+    }
+    const fresh = this._unimportedSessionIds(entry.store, report, closedIds);
+    if (fresh.length === 0) {
+      this._backfillVerified.add(path);
+      return;
+    }
+    this.ctx.logger?.info?.(
+      `aidos: backfill importing ${fresh.length} of ${closedIds.length} closed log(s) in batches of ${BACKFILL_BATCH_SESSIONS}`,
+    );
+    let refused = false;
+    for (let start = 0; start < fresh.length; start += BACKFILL_BATCH_SESSIONS) {
+      const batch = fresh.slice(start, start + BACKFILL_BATCH_SESSIONS);
+      const flushed = await this._exclusiveBackfillBatch(() =>
+        this._importBackfillBatch(entry, batch, persistence),
+      );
+      if (!flushed) refused = true;
+    }
+    // Only a fully flushed import verifies: a refused batch's sessions are
+    // unmarked, so the next open re-lists and retries exactly them.
+    if (!refused) this._backfillVerified.add(path);
+  }
+
+  /**
+   * #221: the sessions of `closedIds` the store does not already account
+   * for — the resume set. Two sources, both read without touching a log:
+   *  - the v2 marker's `sessionIds`: every batch that landed names its
+   *    sessions, so a crashed import resumes after its last landed batch
+   *    instead of restarting the workspace. (A v1 marker never reaches
+   *    here: the caller defers it whole — see the F4 gate above.)
+   *  - the store's origin index: on a RESUME (marker present) a session
+   *    whose tickets the live mirror (#218) already owns is skipped, so a
+   *    session that mirrored its rows and then closed is never re-imported
+   *    as suffixed duplicates. On the FIRST import (no marker) the set is
+   *    exactly `closedIds`, byte-for-byte #42's set: changing it would
+   *    trade today's duplication corner for a silent plan-loss corner, and
+   *    that trade is out of scope — it is recorded on BACKFILL_BATCH_SESSIONS.
+   */
+  private _unimportedSessionIds(
+    store: Store,
+    report: BackfillReport | null,
+    closedIds: SessionId[],
+  ): SessionId[] {
+    if (report === null) return [...closedIds];
+    const imported = new Set<string>(report.sessionIds);
+    const mirrored = this._storeOriginSessions(store);
+    return closedIds.filter(
+      (id) => !imported.has(String(id)) && !mirrored.has(String(id)),
+    );
+  }
+
+  /**
+   * #221: every session id the store holds tickets for — the mirrored-rows
+   * side of the resume set above. One in-memory pass over the workspace
+   * fold, once per import, never per read.
+   */
+  private _storeOriginSessions(store: Store): Set<string> {
+    const out = new Set<string>();
+    for (const id of store.state.tickets.keys()) {
+      const origin = store.originSessionOf(id);
+      if (origin !== null) out.add(origin);
+    }
+    return out;
+  }
+
+  /**
+   * #221: run one backfill batch exclusive process-wide (criterion 7). The
+   * tail chain serializes batches across workspaces, so N simultaneous
+   * imports retain one batch between them instead of N full histories.
+   */
+  private _exclusiveBackfillBatch<T>(task: () => Promise<T>): Promise<T> {
+    const run = this._backfillBatchTail.then(task, task);
+    this._backfillBatchTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
+   * #221: inspect one bounded batch of closed logs and flush it with a
+   * single `backfillSessionLogs` call. Returns true only when every log of
+   * the batch either landed or was vacuously absent — an unreadable log or
+   * a refused flush returns false, leaving the workspace unverified so the
+   * next open retries exactly the unlanded sessions. The `logs` array is
+   * released on return, so the next batch starts from an empty retained set.
+   */
+  private async _importBackfillBatch(
+    entry: { store: Store; projectId: ProjectId },
+    batch: SessionId[],
+    persistence: {
+      inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
+    },
+  ): Promise<boolean> {
     const logs: BackfillSessionLog[] = [];
     let cursor = 0;
+    let inspectFailed = false;
     const worker = async (): Promise<void> => {
-      while (cursor < closedIds.length) {
-        const id = closedIds[cursor++]!;
+      while (cursor < batch.length) {
+        const id = batch[cursor++]!;
         try {
           const inspection = await persistence.inspect(id as SessionId);
-          logs.push({
-            sessionId: id,
-            events: inspection.events.map((event) => ({
-              seq: event.seq,
-              type: event.type,
-              data: event.data,
-            })),
-          });
+          // No `.map()` copy: the inspection's own event array IS the
+          // batch's retention. The old `.map()` kept a SECOND full copy of
+          // every parsed event alive next to the inspection's own — half
+          // the peak, for no reason (the fold only reads seq/type/data,
+          // which the envelope already carries).
+          logs.push({ sessionId: id, events: inspection.events });
         } catch (error) {
+          inspectFailed = true;
           this.ctx.logger?.warn?.(
-            `aidos: backfill inspect failed for ${id}, skipping it: ${error instanceof Error ? error.message : String(error)}`,
+            `aidos: backfill inspect failed for ${id}, skipping it (the next open retries it): ${error instanceof Error ? error.message : String(error)}`,
           );
         }
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, closedIds.length) }, worker),
+      Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, batch.length) }, worker),
     );
+    if (logs.length === 0) return !inspectFailed;
     try {
       const result = entry.store.backfillSessionLogs(entry.projectId, logs);
       if (!result.alreadyRan) {
         this.ctx.logger?.info?.(
-          `aidos: backfill imported ${result.tickets} ticket(s), ${result.evidence} evidence row(s), ${result.comments} comment(s) from ${result.sessionIds.length} log(s)`,
+          `aidos: backfill batch imported ${result.tickets} ticket(s), ${result.evidence} evidence row(s), ${result.comments} comment(s) from ${result.sessionIds.length} log(s)`,
         );
       }
+      return !inspectFailed;
     } catch (error) {
       this.ctx.logger?.warn?.(
-        `aidos: workspace backfill refused (the next open retries it): ${error instanceof Error ? error.message : String(error)}`,
+        `aidos: workspace backfill batch refused (the next open retries its ${logs.length} log(s): ${batch.map(String).join(", ")}): ${error instanceof Error ? error.message : String(error)}`,
       );
+      return false;
     }
   }
 
