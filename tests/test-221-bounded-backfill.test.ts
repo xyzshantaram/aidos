@@ -71,6 +71,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store } from "../src/kernel/store";
+import { BACKFILL_IMPORTER_VERSION } from "../src/kernel/backfill";
 import type { BackfillSessionLog } from "../src/kernel/backfill";
 import { MemoryStorage } from "../src/kernel/storage-memory";
 import type { AidosEvent } from "../src/kernel/events";
@@ -577,7 +578,10 @@ describe("#221 finding B: a real v1 marker no longer freezes the board", () => {
       // the v1 row itself persists in the log behind it.
       const post = store.backfillReport()!;
       expect(post.dropsUnknown).toBe(false);
-      expect(post.importerVersion).toBe(3);
+      // The point is that the marker left v1 behind, not which number the
+      // importer is on today: #211 round 3 moved it from 3 to 4 while this
+      // file sat in a parallel worktree, and a literal here broke on merge.
+      expect(post.importerVersion).toBe(BACKFILL_IMPORTER_VERSION);
       expect(post.tickets).toBe(preTickets + freshIds.length);
       for (const id of freshIds) expect(post.sessionIds).toContain(id);
       expect(
@@ -690,7 +694,10 @@ describe("#221 finding B: a real v1 marker no longer freezes the board", () => {
       expect(store.getPlanMeta(projectId)).toMatchObject({ preamble: "the v1s plan" });
       const post = store.backfillReport()!;
       expect(post.dropsUnknown).toBe(false);
-      expect(post.importerVersion).toBe(3);
+      // The point is that the marker left v1 behind, not which number the
+      // importer is on today: #211 round 3 moved it from 3 to 4 while this
+      // file sat in a parallel worktree, and a literal here broke on merge.
+      expect(post.importerVersion).toBe(BACKFILL_IMPORTER_VERSION);
       expect(post.tickets).toBe(2);
       for (const id of ["t221-v1s-a", "t221-v1s-b"]) expect(post.sessionIds).toContain(id);
     } finally {
