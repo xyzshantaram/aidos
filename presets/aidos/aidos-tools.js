@@ -25777,7 +25777,8 @@ import {
   readFileSync,
   readdirSync,
   symlinkSync,
-  unlinkSync
+  unlinkSync,
+  writeFileSync
 } from "node:fs";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, relative as relative2, resolve as resolve3 } from "node:path";
 import { execFile } from "node:child_process";
@@ -29931,6 +29932,294 @@ var Store = class {
     }
     return repaired(resolved);
   }
+  // ---- #222: merged-board migration load ----
+  /**
+   * #222: load a merged-board migration document into this store.
+   *
+   * The load half of the owner's JSON round-trip (exported by the host from
+   * the MERGED board, optionally hand-edited, loaded here). Intended for a
+   * FRESH store — every id is allocated from the store's own port counter
+   * (#39/#218), so nothing collides — but safe on any store: a slug the
+   * store already holds refuses the whole load, and the single transaction
+   * bracket below makes a refusal all-or-nothing.
+   *
+   * Per ticket the shape mirrors #41's flush exactly: a `create` (open,
+   * revision 1, `createdAt` == at — the invariants' only legal birth), the
+   * ticket's evidence and comments oldest-first with their stamped `at`
+   * values verbatim, then a `set` (revision 2, final state, remapped deps,
+   * at the later of `updatedAt` and the last write — so no `at` ever falls).
+   * States transfer as-is: the load never re-gates. Tags ride the snapshots
+   * (the backfill precedent); refusals ride nothing — the owner chose to let
+   * them die at cutover, so no refusals table is built here.
+   *
+   * Dependency references resolve through the export's `depTargets` table
+   * (computed while the source folds were available). A null target — or a
+   * remap that would point a ticket at itself — is CARRIED VERBATIM and
+   * reported by name (#211's rule), never silently dropped. A remapped graph
+   * that closes a cycle refuses the load naming the cycle: the validator
+   * would throw mid-bracket anyway, and the pre-check names tickets instead
+   * of event indexes. Orphaned evidence or comments (a hand-edit removed the
+   * ticket but not its history) refuse the same way.
+   */
+  importBoardDocument(doc) {
+    if (doc.version !== 1) {
+      throw new Error(`unsupported board migration document version ${JSON.stringify(doc.version)}`);
+    }
+    if (doc.workspaceKey !== workspaceKeyFromPath(doc.absPath)) {
+      throw new Error(
+        `board migration workspaceKey ${JSON.stringify(doc.workspaceKey)} does not match absPath ${JSON.stringify(doc.absPath)}`
+      );
+    }
+    const workspaceKey = doc.workspaceKey;
+    const projectId = this.findProject(doc.absPath) ?? this.createProject(doc.absPath, doc.projectName);
+    const seenSlugs = /* @__PURE__ */ new Set();
+    for (const ticket of doc.tickets) {
+      if (seenSlugs.has(ticket.slug)) {
+        throw new Error(`board migration lists slug ${JSON.stringify(ticket.slug)} twice`);
+      }
+      seenSlugs.add(ticket.slug);
+      if (this._slugTaken(workspaceKey, ticket.slug, null)) {
+        throw new Error(`board migration slug ${JSON.stringify(ticket.slug)} is already used in workspace ${workspaceKey}`);
+      }
+    }
+    const knownSlugs = new Set(seenSlugs);
+    for (const row of doc.evidence) {
+      if (!knownSlugs.has(row.ticketSlug)) {
+        throw new Error(
+          `board migration evidence ${JSON.stringify(row.kind)} at ${row.at} names no ticket ${JSON.stringify(row.ticketSlug)}`
+        );
+      }
+    }
+    for (const comment of doc.comments) {
+      if (!knownSlugs.has(comment.ticketSlug)) {
+        throw new Error(
+          `board migration comment at ${comment.at} names no ticket ${JSON.stringify(comment.ticketSlug)}`
+        );
+      }
+    }
+    const newIds = /* @__PURE__ */ new Map();
+    for (const ticket of doc.tickets) {
+      newIds.set(ticket.slug, this._nextTicketId());
+    }
+    const remapped = /* @__PURE__ */ new Map();
+    const unresolved = [];
+    let edgesRewritten = 0;
+    for (const ticket of doc.tickets) {
+      const out = [];
+      for (const ref of ticket.dependsOn) {
+        const targetSlug = ticket.depTargets?.[ref] ?? null;
+        const targetId = targetSlug !== null ? newIds.get(targetSlug) : void 0;
+        if (targetSlug !== null && targetId !== void 0 && targetId !== newIds.get(ticket.slug)) {
+          out.push(`${workspaceKey}:${targetId}`);
+          edgesRewritten += 1;
+        } else {
+          out.push(ref);
+          unresolved.push({ ticketSlug: ticket.slug, ticketTitle: ticket.title, ref });
+        }
+      }
+      remapped.set(ticket.slug, out);
+    }
+    {
+      const liveIds = new Set(newIds.values());
+      const adjacency = /* @__PURE__ */ new Map();
+      for (const ticket of doc.tickets) {
+        const self = `${workspaceKey}:${newIds.get(ticket.slug)}`;
+        const edges = [];
+        for (const ref of remapped.get(ticket.slug) ?? []) {
+          const colon = ref.lastIndexOf(":");
+          if (colon < 0) continue;
+          if (ref.slice(0, colon) !== workspaceKey) continue;
+          const target = Number(ref.slice(colon + 1));
+          if (!Number.isInteger(target) || target < 1) continue;
+          if (liveIds.has(target)) {
+            edges.push(`${workspaceKey}:${target}`);
+          }
+        }
+        adjacency.set(self, edges);
+      }
+      const color = /* @__PURE__ */ new Map();
+      for (const node of adjacency.keys()) color.set(node, 0);
+      const path = [];
+      const visit = (node) => {
+        color.set(node, 1);
+        path.push(node);
+        for (const next of adjacency.get(node) ?? []) {
+          if (color.get(next) === 2) continue;
+          if (color.get(next) === 1) {
+            const cycle = [...path.slice(path.indexOf(next)), next];
+            throw new Error(`board migration dependency cycle: ${cycle.join(" -> ")}`);
+          }
+          visit(next);
+        }
+        path.pop();
+        color.set(node, 2);
+      };
+      for (const node of adjacency.keys()) {
+        if (color.get(node) === 0) visit(node);
+      }
+    }
+    const storage = this._storage;
+    const transactional = typeof storage.beginTransaction === "function" && typeof storage.commitTransaction === "function";
+    if (transactional) {
+      storage.beginTransaction();
+    }
+    const logLengthBefore = this._log.length;
+    const result = {
+      projectId,
+      tickets: 0,
+      evidence: 0,
+      comments: 0,
+      plans: 0,
+      phases: 0,
+      edgesRewritten,
+      unresolvedDependencies: unresolved,
+      skippedPlans: [],
+      newIds: {}
+    };
+    try {
+      for (const ticket of doc.tickets) {
+        const newId = newIds.get(ticket.slug);
+        const tags = ticket.tags ?? [];
+        this._emit({
+          kind: "ticket/change",
+          version: 1,
+          operation: "create",
+          ticket: {
+            id: newId,
+            projectId,
+            title: ticket.title,
+            description: ticket.description,
+            body: ticket.body,
+            criteria: ticket.criteria,
+            phase: ticket.phase,
+            order: ticket.order,
+            state: "open",
+            dependsOn: [],
+            allowlist: [...ticket.allowlist],
+            tags: [...tags],
+            slug: ticket.slug,
+            workspaceKey,
+            revision: 1,
+            createdAt: ticket.createdAt,
+            updatedAt: ticket.createdAt
+          },
+          at: ticket.createdAt
+        });
+        const writes = [];
+        doc.evidence.forEach((row, index) => {
+          if (row.ticketSlug === ticket.slug) {
+            writes.push({ at: row.at, seq: index, kind: "evidence", index });
+          }
+        });
+        doc.comments.forEach((comment, index) => {
+          if (comment.ticketSlug === ticket.slug) {
+            writes.push({ at: comment.at, seq: index, kind: "comment", index });
+          }
+        });
+        writes.sort((a, b) => a.at - b.at || a.seq - b.seq);
+        let lastWriteAt = ticket.createdAt;
+        for (const write of writes) {
+          lastWriteAt = Math.max(lastWriteAt, write.at);
+          if (write.kind === "evidence") {
+            const row = doc.evidence[write.index];
+            this._emit({
+              kind: "evidence/attached",
+              version: 1,
+              ticketId: newId,
+              row: {
+                kind: row.kind,
+                author: row.author,
+                at: row.at,
+                payload: deepClone(row.payload),
+                ...row.stamp === void 0 ? {} : { stamp: deepClone(row.stamp) }
+              }
+            });
+            result.evidence += 1;
+          } else {
+            const comment = doc.comments[write.index];
+            this._emit({
+              kind: "comment/added",
+              version: 1,
+              ticketId: newId,
+              text: comment.text,
+              author: comment.author,
+              at: comment.at
+            });
+            result.comments += 1;
+          }
+        }
+        const setAt = Math.max(ticket.updatedAt, lastWriteAt);
+        this._emit({
+          kind: "ticket/change",
+          version: 1,
+          operation: "set",
+          ticket: {
+            id: newId,
+            projectId,
+            title: ticket.title,
+            description: ticket.description,
+            body: ticket.body,
+            criteria: ticket.criteria,
+            phase: ticket.phase,
+            order: ticket.order,
+            state: ticket.state,
+            dependsOn: [...remapped.get(ticket.slug) ?? []],
+            allowlist: [...ticket.allowlist],
+            tags: [...tags],
+            slug: ticket.slug,
+            workspaceKey,
+            revision: 2,
+            createdAt: ticket.createdAt,
+            updatedAt: setAt
+          },
+          at: setAt
+        });
+        result.tickets += 1;
+        result.newIds[ticket.slug] = newId;
+      }
+      {
+        const lines = planContextLineCount(doc.plan);
+        if (lines > PLAN_CONTEXT_LIMIT) {
+          result.skippedPlans.push({
+            at: doc.exportedAt,
+            reason: `plan context is ${lines} lines, over the ${PLAN_CONTEXT_LIMIT}-line cap`
+          });
+        } else {
+          this._emit({
+            kind: "plan/change",
+            version: 1,
+            projectId,
+            plan: deepClone(doc.plan),
+            at: doc.exportedAt
+          });
+          result.plans += 1;
+        }
+      }
+      for (const phase of doc.phases) {
+        this._emit({
+          kind: "phase/set",
+          version: 1,
+          projectId,
+          number: phase.number,
+          title: phase.title,
+          state: phase.state,
+          at: doc.exportedAt
+        });
+        result.phases += 1;
+      }
+      if (transactional) {
+        storage.commitTransaction();
+      }
+    } catch (error51) {
+      this._log.length = logLengthBefore;
+      this.replay();
+      if (transactional) {
+        storage.rollbackTransaction?.();
+      }
+      throw new StoreWriteRefused(error51);
+    }
+    return result;
+  }
   // ---- projects ----
   createProject(absPath, name2) {
     let max = 0;
@@ -31857,6 +32146,15 @@ function _assertTicketTextClean(args) {
     }
   }
 }
+function compareBoardCopiesNewestFirst(callerSessionId) {
+  return (a, b) => {
+    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+    const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
+    const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
+    if (aOwn !== bOwn) return aOwn - bOwn;
+    return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
+  };
+}
 function dedupeBoardRows(rows, callerSessionId) {
   const groups = /* @__PURE__ */ new Map();
   const order = [];
@@ -31878,13 +32176,7 @@ function dedupeBoardRows(rows, callerSessionId) {
       out.push(group[0]);
       continue;
     }
-    const ranked = [...group].sort((a, b) => {
-      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
-      const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
-      const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
-      if (aOwn !== bOwn) return aOwn - bOwn;
-      return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
-    });
+    const ranked = [...group].sort(compareBoardCopiesNewestFirst(callerSessionId));
     const [winner, ...losers] = ranked;
     const copies = losers.map((row) => ({
       sessionId: row.sourceSessionId,
@@ -31916,6 +32208,349 @@ function boardStoreDivergence(board, storeIdentities) {
   }
   missing.sort((a, b) => a.id - b.id);
   return { missingCount: missing.length, missing };
+}
+var MIGRATION_DOCUMENT_VERSION = 1;
+var MIGRATION_DROPPED_EVIDENCE_KIND = "builtin:imported_state";
+function findBoardMigrationDuplicates(tickets, callerSessionId) {
+  const byIdentity = /* @__PURE__ */ new Map();
+  for (const ticket of tickets) {
+    byIdentity.set(ticket.workspaceKey + ":" + ticket.slug, ticket);
+  }
+  const twinToBase = /* @__PURE__ */ new Map();
+  for (const ticket of tickets) {
+    const cut = ticket.slug.lastIndexOf("-");
+    if (cut <= 0) continue;
+    if (!/^\d+$/.test(ticket.slug.slice(cut + 1))) continue;
+    const base = ticket.workspaceKey + ":" + ticket.slug.slice(0, cut);
+    const baseRow = byIdentity.get(base);
+    if (baseRow === void 0) continue;
+    if (baseRow.createdAt !== ticket.createdAt) continue;
+    twinToBase.set(ticket.workspaceKey + ":" + ticket.slug, base);
+  }
+  const rootOf = (key) => {
+    let current = key;
+    const seen = /* @__PURE__ */ new Set([current]);
+    while (twinToBase.has(current)) {
+      const next = twinToBase.get(current);
+      if (seen.has(next)) break;
+      seen.add(next);
+      current = next;
+    }
+    return current;
+  };
+  const groups = /* @__PURE__ */ new Map();
+  for (const ticket of tickets) {
+    const key = ticket.workspaceKey + ":" + ticket.slug;
+    const root = twinToBase.has(key) ? rootOf(key) : key;
+    const group = groups.get(root);
+    if (group === void 0) {
+      groups.set(root, [ticket]);
+    } else {
+      group.push(ticket);
+    }
+  }
+  const ordering = compareBoardCopiesNewestFirst(callerSessionId);
+  const pairs = [];
+  const droppedSlugs = /* @__PURE__ */ new Set();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ranked = [...group].sort((a, b) => {
+      const order = ordering(
+        { updatedAt: a.updatedAt, sourceSessionId: a.oldSource },
+        { updatedAt: b.updatedAt, sourceSessionId: b.oldSource }
+      );
+      if (order !== 0) return order;
+      const aSuffixed = /-\d+$/.test(a.slug) ? 1 : 0;
+      const bSuffixed = /-\d+$/.test(b.slug) ? 1 : 0;
+      return aSuffixed - bSuffixed;
+    });
+    const winner = ranked[0];
+    for (const loser of ranked.slice(1)) {
+      const key = loser.workspaceKey + ":" + loser.slug;
+      if (droppedSlugs.has(key)) continue;
+      droppedSlugs.add(key);
+      const tied = winner.updatedAt === loser.updatedAt;
+      pairs.push({
+        workspaceKey: loser.workspaceKey,
+        keptSlug: winner.slug,
+        droppedSlug: loser.slug,
+        createdAt: loser.createdAt,
+        keptUpdatedAt: winner.updatedAt,
+        droppedUpdatedAt: loser.updatedAt,
+        keptTitle: winner.title,
+        droppedTitle: loser.title,
+        keptState: winner.state,
+        droppedState: loser.state,
+        reason: tied ? `tied updatedAt ${winner.updatedAt}; #83 order prefers ${winner.oldSource}, bare by convention` : `newer updatedAt wins: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
+        nontrivial: winner.state !== loser.state || winner.title !== loser.title
+      });
+    }
+  }
+  pairs.sort((a, b) => a.droppedSlug < b.droppedSlug ? -1 : a.droppedSlug > b.droppedSlug ? 1 : 0);
+  return { pairs, droppedSlugs };
+}
+function migrationCopyKey(source, id) {
+  return source + "\0" + String(id);
+}
+function utf8ByteLength(text) {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 128) {
+      bytes += 1;
+    } else if (code < 2048) {
+      bytes += 2;
+    } else if (code >= 55296 && code <= 56319 && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 56320 && next <= 57343) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+function buildBoardMigrationDocument(input) {
+  const groups = /* @__PURE__ */ new Map();
+  const groupOrder = [];
+  for (const row of input.rows) {
+    const identity = row.workspaceKey + ":" + row.slug;
+    const group = groups.get(identity);
+    if (group === void 0) {
+      groups.set(identity, [row]);
+      groupOrder.push(identity);
+    } else {
+      group.push(row);
+    }
+  }
+  const ordering = compareBoardCopiesNewestFirst(input.callerSessionId);
+  const winners = [];
+  for (const identity of groupOrder) {
+    const group = groups.get(identity);
+    const ranked = [...group].sort(
+      (a, b) => ordering({ updatedAt: a.updatedAt, sourceSessionId: a.oldSource }, { updatedAt: b.updatedAt, sourceSessionId: b.oldSource })
+    );
+    winners.push(ranked[0]);
+  }
+  const { pairs, droppedSlugs } = findBoardMigrationDuplicates(winners, input.callerSessionId);
+  const survivors = winners.filter((row) => !droppedSlugs.has(row.workspaceKey + ":" + row.slug));
+  const survivorKeys = new Set(survivors.map((row) => row.workspaceKey + ":" + row.slug));
+  const nearDuplicates = [];
+  for (const row of survivors) {
+    const cut = row.slug.lastIndexOf("-");
+    if (cut <= 0) continue;
+    if (!/^\d+$/.test(row.slug.slice(cut + 1))) continue;
+    const base = row.slug.slice(0, cut);
+    const baseKey = row.workspaceKey + ":" + base;
+    if (!survivorKeys.has(baseKey)) continue;
+    const baseRow = survivors.find((candidate) => candidate.workspaceKey === row.workspaceKey && candidate.slug === base);
+    if (baseRow.createdAt !== row.createdAt) {
+      nearDuplicates.push({ workspaceKey: row.workspaceKey, keptSlug: base, otherSlug: row.slug });
+    }
+  }
+  nearDuplicates.sort((a, b) => a.otherSlug < b.otherSlug ? -1 : a.otherSlug > b.otherSlug ? 1 : 0);
+  const keptByPair = /* @__PURE__ */ new Map();
+  for (const pair of pairs) {
+    keptByPair.set(pair.workspaceKey + ":" + pair.droppedSlug, pair.keptSlug);
+  }
+  const winnerOfIdentity = /* @__PURE__ */ new Map();
+  for (const row of survivors) {
+    winnerOfIdentity.set(row.workspaceKey + ":" + row.slug, row);
+  }
+  const survivorOf = /* @__PURE__ */ new Map();
+  const winnerByCopy = /* @__PURE__ */ new Map();
+  for (const row of input.rows) {
+    const identity = row.workspaceKey + ":" + row.slug;
+    const twinKept = keptByPair.get(identity);
+    if (twinKept !== void 0) {
+      const kept = survivors.find(
+        (candidate) => candidate.workspaceKey === row.workspaceKey && candidate.slug === twinKept
+      );
+      survivorOf.set(migrationCopyKey(row.oldSource, row.oldId), twinKept);
+      winnerByCopy.set(migrationCopyKey(row.oldSource, row.oldId), kept);
+      continue;
+    }
+    const winner = winnerOfIdentity.get(identity);
+    survivorOf.set(migrationCopyKey(row.oldSource, row.oldId), winner.slug);
+    winnerByCopy.set(migrationCopyKey(row.oldSource, row.oldId), winner);
+  }
+  const survivorSlugs = new Set(survivors.map((row) => row.slug));
+  const evidenceSeen = /* @__PURE__ */ new Map();
+  const commentsSeen = /* @__PURE__ */ new Map();
+  for (const row of survivors) {
+    evidenceSeen.set(row.slug, /* @__PURE__ */ new Set());
+    commentsSeen.set(row.slug, /* @__PURE__ */ new Set());
+  }
+  for (const row of input.evidence) {
+    if (row.kind === MIGRATION_DROPPED_EVIDENCE_KIND) continue;
+    const copyKey = migrationCopyKey(row.oldSource, row.oldId);
+    const winner = winnerByCopy.get(copyKey);
+    if (winner === void 0) continue;
+    if (winner.oldSource === row.oldSource && winner.oldId === row.oldId) {
+      evidenceSeen.get(winner.slug).add(row.kind + ":" + String(row.at));
+    }
+  }
+  for (const comment of input.comments) {
+    const copyKey = migrationCopyKey(comment.oldSource, comment.oldId);
+    const winner = winnerByCopy.get(copyKey);
+    if (winner === void 0) continue;
+    if (winner.oldSource === comment.oldSource && winner.oldId === comment.oldId) {
+      commentsSeen.get(winner.slug).add(String(comment.at) + ":" + comment.author + ":" + comment.text);
+    }
+  }
+  let evidenceDroppedImportedState = 0;
+  let evidenceForwardedFromCopies = 0;
+  let evidenceDroppedDuplicate = 0;
+  const keptEvidence = [];
+  for (const row of input.evidence) {
+    if (row.kind === MIGRATION_DROPPED_EVIDENCE_KIND) {
+      evidenceDroppedImportedState += 1;
+      continue;
+    }
+    const copyKey = migrationCopyKey(row.oldSource, row.oldId);
+    const slug = survivorOf.get(copyKey);
+    const winner = winnerByCopy.get(copyKey);
+    if (slug === void 0 || winner === void 0 || !survivorSlugs.has(slug)) {
+      evidenceDroppedDuplicate += 1;
+      continue;
+    }
+    const key = row.kind + ":" + String(row.at);
+    const seen = evidenceSeen.get(winner.slug);
+    if (winner.oldSource === row.oldSource && winner.oldId === row.oldId) {
+      keptEvidence.push({
+        ticketSlug: slug,
+        kind: row.kind,
+        author: row.author,
+        at: row.at,
+        payload: deepClone(row.payload),
+        ...row.stamp === void 0 ? {} : { stamp: deepClone(row.stamp) }
+      });
+      continue;
+    }
+    if (seen.has(key)) {
+      evidenceDroppedDuplicate += 1;
+      continue;
+    }
+    seen.add(key);
+    evidenceForwardedFromCopies += 1;
+    keptEvidence.push({
+      ticketSlug: slug,
+      kind: row.kind,
+      author: row.author,
+      at: row.at,
+      payload: deepClone(row.payload),
+      ...row.stamp === void 0 ? {} : { stamp: deepClone(row.stamp) }
+    });
+  }
+  let commentsForwardedFromCopies = 0;
+  let commentsDroppedDuplicate = 0;
+  const keptComments = [];
+  for (const comment of input.comments) {
+    const copyKey = migrationCopyKey(comment.oldSource, comment.oldId);
+    const slug = survivorOf.get(copyKey);
+    const winner = winnerByCopy.get(copyKey);
+    if (slug === void 0 || winner === void 0 || !survivorSlugs.has(slug)) {
+      commentsDroppedDuplicate += 1;
+      continue;
+    }
+    const key = String(comment.at) + ":" + comment.author + ":" + comment.text;
+    const seen = commentsSeen.get(winner.slug);
+    if (winner.oldSource === comment.oldSource && winner.oldId === comment.oldId) {
+      keptComments.push({ ticketSlug: slug, text: comment.text, author: comment.author, at: comment.at });
+      continue;
+    }
+    if (seen.has(key)) {
+      commentsDroppedDuplicate += 1;
+      continue;
+    }
+    seen.add(key);
+    commentsForwardedFromCopies += 1;
+    keptComments.push({ ticketSlug: slug, text: comment.text, author: comment.author, at: comment.at });
+  }
+  let depsResolved = 0;
+  let depsUnresolved = 0;
+  const docTickets = survivors.map((row) => {
+    const depTargets = {};
+    for (const ref of row.dependsOn) {
+      const colon = ref.lastIndexOf(":");
+      let target = null;
+      if (colon > 0) {
+        const head = ref.slice(0, colon);
+        const tail = Number(ref.slice(colon + 1));
+        if (head === row.workspaceKey && Number.isInteger(tail) && tail >= 1) {
+          target = survivorOf.get(migrationCopyKey(row.oldSource, tail)) ?? null;
+        }
+      }
+      depTargets[ref] = target;
+      if (target !== null) depsResolved += 1;
+      else depsUnresolved += 1;
+    }
+    return {
+      slug: row.slug,
+      title: row.title,
+      description: row.description,
+      body: row.body,
+      criteria: row.criteria,
+      phase: row.phase,
+      order: row.order,
+      state: row.state,
+      allowlist: [...row.allowlist],
+      dependsOn: [...row.dependsOn],
+      depTargets,
+      ...row.tags.length === 0 ? {} : { tags: [...row.tags] },
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      oldId: row.oldId,
+      oldSource: row.oldSource
+    };
+  });
+  docTickets.sort((a, b) => a.phase - b.phase || a.order - b.order || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const planJson = JSON.stringify(input.plan);
+  const doc = {
+    version: MIGRATION_DOCUMENT_VERSION,
+    exportedAt: input.exportedAt,
+    workspaceKey: input.workspaceKey,
+    absPath: input.absPath,
+    projectName: input.projectName,
+    tickets: docTickets,
+    evidence: keptEvidence,
+    comments: keptComments,
+    plan: deepClone(input.plan),
+    phases: input.phases.map((phase) => ({ ...phase }))
+  };
+  const report = {
+    boardInputRows: input.rows.length,
+    mergedRows: winners.length,
+    duplicatesMatched: pairs.length,
+    duplicatesDropped: pairs.map((pair) => pair.droppedSlug),
+    duplicateResolutions: pairs,
+    nearDuplicates,
+    evidenceKept: keptEvidence.length,
+    evidenceDroppedImportedState,
+    evidenceForwardedFromCopies,
+    evidenceDroppedDuplicate,
+    commentsKept: keptComments.length,
+    commentsForwardedFromCopies,
+    commentsDroppedDuplicate,
+    depsTotal: depsResolved + depsUnresolved,
+    depsResolved,
+    depsUnresolved,
+    refusals: "not migrated, by owner decision: the 40 refusals die at cutover, no refusals table is built",
+    retiredExcluded: input.retiredExcluded,
+    plan: {
+      frontmatterBytes: utf8ByteLength(input.plan.frontmatter),
+      preambleBytes: utf8ByteLength(input.plan.context.preamble),
+      sectionCount: input.plan.context.contextSections.length,
+      totalBytes: utf8ByteLength(planJson)
+    },
+    phaseCount: input.phases.length,
+    ticketsExported: docTickets.length
+  };
+  return { doc, report };
 }
 var TicketNotYetImported = class extends Error {
   ticketId;
@@ -32085,8 +32720,8 @@ function validateAllowlistPaths(cwd, paths) {
   if (clean.length === 0) return { ok: false, bad: [{ path: "(all)", reason: "the list is empty" }] };
   return { ok: true, paths: clean, created };
 }
-var _userUnretireTicket_dec, _userRetireTicket_dec, _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _workspaceTags_dec, _userDeleteTag_dec, _userMigrateTag_dec, _userAttachTags_dec, _userDetachTags_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _storeCoverage_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
-var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _storeCoverage_dec = [Remote("storeCoverage")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userDetachTags_dec = [Remote("userDetachTags")], _userAttachTags_dec = [Remote("userAttachTags")], _userMigrateTag_dec = [Remote("userMigrateTag")], _userDeleteTag_dec = [Remote("userDeleteTag")], _workspaceTags_dec = [Remote("workspaceTags")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _userRetireTicket_dec = [Remote("userRetireTicket")], _userUnretireTicket_dec = [Remote("userUnretireTicket")], _a3) {
+var _userUnretireTicket_dec, _userRetireTicket_dec, _userSetPlanMeta_dec, _userAddComment_dec, _userMoveTicket_dec, _userAttachCommitEvidence_dec, _userRecentCommits_dec, _userLinkEvidence_dec, _workspaceTags_dec, _userDeleteTag_dec, _userMigrateTag_dec, _userAttachTags_dec, _userDetachTags_dec, _userDetachEvidence_dec, _reviewStandings_dec, _userAttachEvidence_dec, _workspaceRoot_dec, _dismissNomination_dec, _actionNominations_dec, _suggestActions_dec, _userGrantAllowlist_dec, _resolveApproval_dec, _pendingApprovals_dec, _pendingApproval_dec, _requestAllowlist_dec, _retiredTickets_dec, _migrateBoardToFreshStore_dec, _storeCoverage_dec, _workspaceTickets_dec, _coldTickets_dec, _searchTickets_dec, _userSetTicket_dec, _a3, _init;
+var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec = [Remote("userSetTicket")], _searchTickets_dec = [Remote("searchTickets")], _coldTickets_dec = [Remote("coldTickets")], _workspaceTickets_dec = [Remote("workspaceTickets")], _storeCoverage_dec = [Remote("storeCoverage")], _migrateBoardToFreshStore_dec = [Remote("migrateBoardToFreshStore")], _retiredTickets_dec = [Remote("retiredTickets")], _requestAllowlist_dec = [Remote("requestAllowlist")], _pendingApproval_dec = [Remote("pendingApproval")], _pendingApprovals_dec = [Remote("pendingApprovals")], _resolveApproval_dec = [Remote("resolveApproval")], _userGrantAllowlist_dec = [Remote("userGrantAllowlist")], _suggestActions_dec = [Remote("suggestActions")], _actionNominations_dec = [Remote("actionNominations")], _dismissNomination_dec = [Remote("dismissNomination")], _workspaceRoot_dec = [Remote("workspaceRoot")], _userAttachEvidence_dec = [Remote("userAttachEvidence")], _reviewStandings_dec = [Remote("reviewStandings")], _userDetachEvidence_dec = [Remote("userDetachEvidence")], _userDetachTags_dec = [Remote("userDetachTags")], _userAttachTags_dec = [Remote("userAttachTags")], _userMigrateTag_dec = [Remote("userMigrateTag")], _userDeleteTag_dec = [Remote("userDeleteTag")], _workspaceTags_dec = [Remote("workspaceTags")], _userLinkEvidence_dec = [Remote("userLinkEvidence")], _userRecentCommits_dec = [Remote("userRecentCommits")], _userAttachCommitEvidence_dec = [Remote("userAttachCommitEvidence")], _userMoveTicket_dec = [Remote("userMoveTicket")], _userAddComment_dec = [Remote("userAddComment")], _userSetPlanMeta_dec = [Remote("userSetPlanMeta")], _userRetireTicket_dec = [Remote("userRetireTicket")], _userUnretireTicket_dec = [Remote("userUnretireTicket")], _a3) {
   constructor(ctx, config2) {
     super(ctx, "aidos");
     __runInitializers(_init, 5, this);
@@ -32995,6 +33630,203 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         `aidos: #222 store coverage complete: all ${coverage.boardRows} board rows have a store row (store holds ${coverage.storeRows} rows)`
       );
     }
+  }
+  async migrateBoardToFreshStore(agent, args) {
+    const dryRun = args?.dryRun !== false;
+    const cwd = this._workspacePath(agent);
+    const workspaceKey = workspaceKeyFromPath(cwd);
+    const storageDir = dirname2(storePathForWorkspace(cwd));
+    const jsonPath = args?.jsonPath ?? join(storageDir, "board-migration.json");
+    const defaultStorePath = join(storageDir, "board.migrated.db");
+    if (dryRun) {
+      const copies = this._migrationExportCopies(agent, cwd, workspaceKey);
+      const planSource = this._planProjectSource(this._boardAgent(agent), void 0);
+      const planState = planSource.state;
+      const planRow = planState.plans.get(planSource.projectId);
+      const meta3 = this._planMetaOf(planSource.projectId, planState);
+      const plan = {
+        frontmatter: meta3.frontmatter,
+        context: {
+          preamble: meta3.preamble,
+          contextSections: meta3.contextSections.map((section) => ({ ...section }))
+        },
+        rules: planRow?.rules ?? ""
+      };
+      const phaseRows = planState.phases.get(planSource.projectId);
+      const phases = phaseRows === void 0 ? [] : [...phaseRows.entries()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({ number: number4, title: phase.title, state: phase.state }));
+      const { doc: doc2, report } = buildBoardMigrationDocument({
+        workspaceKey,
+        absPath: cwd,
+        projectName: copies.projectName,
+        exportedAt: Date.now() / 1e3,
+        callerSessionId: agent.session.id,
+        rows: copies.rows,
+        evidence: copies.evidence,
+        comments: copies.comments,
+        plan,
+        phases,
+        retiredExcluded: copies.retiredExcluded
+      });
+      mkdirSync3(dirname2(jsonPath), { recursive: true });
+      writeFileSync(jsonPath, JSON.stringify(doc2, null, 2) + "\n");
+      return {
+        dryRun: true,
+        jsonPath,
+        defaultStorePath,
+        backfillVerified: this._isBackfillVerified(agent),
+        report
+      };
+    }
+    let doc;
+    try {
+      doc = JSON.parse(readFileSync(jsonPath, "utf8"));
+    } catch (error51) {
+      throw new Error(
+        `board migration: cannot read ${jsonPath} \u2014 run a dry run first, then edit the JSON by hand: ${error51 instanceof Error ? error51.message : String(error51)}`
+      );
+    }
+    if (doc.workspaceKey !== workspaceKey) {
+      throw new Error(
+        `board migration: document workspace ${JSON.stringify(doc.workspaceKey)} does not match this workspace ${JSON.stringify(workspaceKey)}`
+      );
+    }
+    const storePath = args?.storePath ?? defaultStorePath;
+    if (resolve3(storePath) === resolve3(storePathForWorkspace(cwd))) {
+      throw new Error(
+        `board migration: refusing to write the candidate over the live store ${storePathForWorkspace(cwd)} \u2014 the candidate must be a NEW path`
+      );
+    }
+    const storage = openSqliteStorage(storePath);
+    const fresh = new Store(this._resolvedConfig, { storage });
+    try {
+      const load = fresh.importBoardDocument(doc);
+      const storeTickets = fresh.ticketsFor(load.projectId);
+      const boardRows = doc.tickets.map((ticket) => ({
+        id: load.newIds[ticket.slug],
+        title: ticket.title,
+        workspaceKey: doc.workspaceKey,
+        slug: ticket.slug
+      }));
+      const storeIdentities = /* @__PURE__ */ new Set();
+      for (const snapshot of fresh.state.tickets.values()) {
+        if (snapshot.projectId !== load.projectId) continue;
+        storeIdentities.add(snapshot.workspaceKey + ":" + snapshot.slug);
+      }
+      const { missingCount, missing } = boardStoreDivergence(boardRows, storeIdentities);
+      const ticketCountMatches = storeTickets.length === doc.tickets.length;
+      return {
+        dryRun: false,
+        jsonPath,
+        storePath,
+        exportedTicketCount: doc.tickets.length,
+        load,
+        verification: {
+          ticketCountMatches,
+          storeTickets: storeTickets.length,
+          missingCount,
+          missing,
+          lossless: ticketCountMatches && missingCount === 0
+        },
+        note: "candidate verified; swapping it over the live store is the owner's separate action, coordinated with #219 (which deletes the backfill path first)"
+      };
+    } finally {
+      fresh.close();
+    }
+  }
+  /**
+   * #222: walk the merged board's three sources with provenance attached.
+   * The merge (`_workspaceBoardMerge`) answers what the BOARD shows; the
+   * export needs more per row — `createdAt`, the source fold for exact
+   * evidence/comments attribution (the merge keys both maps by bare numeric
+   * id, so colliding ids clobber), and the source session for
+   * session-local dependency resolution. Same three groups, same retired
+   * rule, winning values selected downstream by the shared #83 comparator.
+   * Read-only throughout: folds are synced, never written; the store opens
+   * only when its file already exists.
+   */
+  _migrationExportCopies(agent, cwd, workspaceKey) {
+    const rows = [];
+    const evidence = [];
+    const comments = [];
+    let retiredExcluded = 0;
+    let projectName = basename(cwd);
+    const pushState = (state, oldSource) => {
+      for (const project of state.projects.values()) {
+        if (project.absPath === cwd) {
+          projectName = project.name;
+          break;
+        }
+      }
+      for (const snapshot of state.tickets.values()) {
+        if (snapshot.workspaceKey !== workspaceKey) continue;
+        if (this._isRetired(state, snapshot.id)) {
+          retiredExcluded += 1;
+          continue;
+        }
+        rows.push({
+          title: snapshot.title,
+          description: snapshot.description,
+          body: snapshot.body,
+          criteria: snapshot.criteria,
+          phase: snapshot.phase,
+          order: snapshot.order,
+          state: snapshot.state,
+          allowlist: [...snapshot.allowlist],
+          dependsOn: [...snapshot.dependsOn],
+          tags: [...snapshot.tags],
+          slug: snapshot.slug,
+          workspaceKey: snapshot.workspaceKey,
+          createdAt: snapshot.createdAt,
+          updatedAt: snapshot.updatedAt,
+          oldId: snapshot.id,
+          oldSource
+        });
+        for (const row of state.evidence.get(snapshot.id) ?? []) {
+          evidence.push({
+            oldSource,
+            oldId: snapshot.id,
+            kind: row.kind,
+            author: row.author,
+            at: row.at,
+            payload: row.payload,
+            ...row.stamp === void 0 ? {} : { stamp: row.stamp }
+          });
+        }
+        for (const comment of state.comments.get(snapshot.id) ?? []) {
+          comments.push({
+            oldSource,
+            oldId: snapshot.id,
+            text: comment.text,
+            author: comment.author,
+            at: comment.at
+          });
+        }
+      }
+    };
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    pushState(cache.state, agent.session.id);
+    for (const session of this._liveWorkspaceSessions(agent)) {
+      const entry = this._cache(session);
+      this._sync(session, entry);
+      pushState(entry.state, session.id);
+    }
+    try {
+      if (existsSync(storePathForWorkspace(cwd))) {
+        const entry = this._workspaceStore(agent);
+        if (entry !== null) {
+          for (const project of entry.store.state.projects.values()) {
+            if (project.absPath === cwd) {
+              projectName = project.name;
+              break;
+            }
+          }
+          pushState(entry.store.state, "store");
+        }
+      }
+    } catch {
+    }
+    return { rows, evidence, comments, retiredExcluded, projectName };
   }
   async retiredTickets(agent, args) {
     void args;
@@ -36136,6 +36968,7 @@ __decorateElement(_init, 1, "searchTickets", _searchTickets_dec, AidosService);
 __decorateElement(_init, 1, "coldTickets", _coldTickets_dec, AidosService);
 __decorateElement(_init, 1, "workspaceTickets", _workspaceTickets_dec, AidosService);
 __decorateElement(_init, 1, "storeCoverage", _storeCoverage_dec, AidosService);
+__decorateElement(_init, 1, "migrateBoardToFreshStore", _migrateBoardToFreshStore_dec, AidosService);
 __decorateElement(_init, 1, "retiredTickets", _retiredTickets_dec, AidosService);
 __decorateElement(_init, 1, "requestAllowlist", _requestAllowlist_dec, AidosService);
 __decorateElement(_init, 1, "pendingApproval", _pendingApproval_dec, AidosService);

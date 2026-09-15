@@ -51,6 +51,7 @@ import type {
   Actor,
   CommentRecord,
   ContextSection,
+  EvidenceStamp,
   EvidenceViewRow,
   PhaseView,
   PlanMetaView,
@@ -207,6 +208,102 @@ const EMPTY_PLAN: PlanValue = {
   context: { preamble: "", contextSections: [] },
   rules: "",
 };
+
+/**
+ * #222: the merged-board migration document. The export half (host) writes
+ * this as JSON a human can read and edit by hand; the load half
+ * (`importBoardDocument` below) reads it back into a FRESH store.
+ *
+ * Tickets are final snapshots, not creates: `createdAt`/`updatedAt` are
+ * floats preserved exactly, `state` transfers as-is (the load never
+ * re-gates), and `tags` is OMITTED when the board row carries none rather
+ * than defaulted. Evidence payloads are verbatim (`Record<string, unknown>`
+ * — 100+ ad-hoc keys in the wild, so no exact-shape validation may touch
+ * them); row identity is `(ticket, at, kind)` with a float `at`.
+ *
+ * `dependsOn` keeps the ORIGINAL reference strings (what the human
+ * recognises); `depTargets` is the machine resolution the export computed
+ * while the source folds were still available (`workspaceKey:NN` is
+ * session-local addressing and means nothing to a fresh store). A `null`
+ * target is unresolvable: the loader carries the original string verbatim
+ * and REPORTS it by name (#211's rule), never silently dropping it.
+ */
+export interface BoardMigrationTicket {
+  slug: string;
+  title: string;
+  description: string;
+  body: string;
+  criteria: string;
+  phase: number;
+  order: number;
+  state: TicketState;
+  allowlist: string[];
+  dependsOn: string[];
+  /** Original ref -> surviving target slug, or null when unresolvable. */
+  depTargets: Record<string, string | null>;
+  /** Absent reads as untagged. */
+  tags?: string[];
+  createdAt: number;
+  updatedAt: number;
+  /** The board identity this row was exported from (audit trail only). */
+  oldId: number;
+  /** The owning session id, or "store" for a store-resident row. */
+  oldSource: string;
+}
+
+/** #222: one evidence row of the migration document, payload verbatim. */
+export interface BoardMigrationEvidence {
+  ticketSlug: string;
+  kind: string;
+  author: Actor;
+  at: number;
+  payload: Record<string, unknown>;
+  stamp?: EvidenceStamp;
+}
+
+/** #222: one comment of the migration document. */
+export interface BoardMigrationComment {
+  ticketSlug: string;
+  text: string;
+  author: Actor;
+  at: number;
+}
+
+/** #222: the whole migration document. Version 1 is the only version. */
+export interface BoardMigrationDocument {
+  version: 1;
+  exportedAt: number;
+  workspaceKey: string;
+  absPath: string;
+  projectName: string;
+  tickets: BoardMigrationTicket[];
+  evidence: BoardMigrationEvidence[];
+  comments: BoardMigrationComment[];
+  plan: PlanValue;
+  phases: Array<{ number: number; title: string; state: string }>;
+}
+
+/** #222: one dependency reference the loader could not resolve. */
+export interface UnresolvedMigrationDependency {
+  ticketSlug: string;
+  ticketTitle: string;
+  ref: string;
+}
+
+/** #222: what one `importBoardDocument` call did. */
+export interface BoardMigrationLoadResult {
+  projectId: ProjectId;
+  tickets: number;
+  evidence: number;
+  comments: number;
+  plans: number;
+  phases: number;
+  edgesRewritten: number;
+  unresolvedDependencies: UnresolvedMigrationDependency[];
+  skippedPlans: Array<{ at: number; reason: string }>;
+  /** Surviving slug -> the fresh id the store's own counter allocated. */
+  newIds: Record<string, TicketId>;
+}
 
 /**
  * One classified dependency reference (see Store._classifyDependency).
@@ -2199,6 +2296,320 @@ export class Store {
       return drop(`repair of ${JSON.stringify(pending.ref)} refused: ${cause}`);
     }
     return repaired(resolved);
+  }
+
+  // ---- #222: merged-board migration load ----
+
+  /**
+   * #222: load a merged-board migration document into this store.
+   *
+   * The load half of the owner's JSON round-trip (exported by the host from
+   * the MERGED board, optionally hand-edited, loaded here). Intended for a
+   * FRESH store — every id is allocated from the store's own port counter
+   * (#39/#218), so nothing collides — but safe on any store: a slug the
+   * store already holds refuses the whole load, and the single transaction
+   * bracket below makes a refusal all-or-nothing.
+   *
+   * Per ticket the shape mirrors #41's flush exactly: a `create` (open,
+   * revision 1, `createdAt` == at — the invariants' only legal birth), the
+   * ticket's evidence and comments oldest-first with their stamped `at`
+   * values verbatim, then a `set` (revision 2, final state, remapped deps,
+   * at the later of `updatedAt` and the last write — so no `at` ever falls).
+   * States transfer as-is: the load never re-gates. Tags ride the snapshots
+   * (the backfill precedent); refusals ride nothing — the owner chose to let
+   * them die at cutover, so no refusals table is built here.
+   *
+   * Dependency references resolve through the export's `depTargets` table
+   * (computed while the source folds were available). A null target — or a
+   * remap that would point a ticket at itself — is CARRIED VERBATIM and
+   * reported by name (#211's rule), never silently dropped. A remapped graph
+   * that closes a cycle refuses the load naming the cycle: the validator
+   * would throw mid-bracket anyway, and the pre-check names tickets instead
+   * of event indexes. Orphaned evidence or comments (a hand-edit removed the
+   * ticket but not its history) refuse the same way.
+   */
+  importBoardDocument(doc: BoardMigrationDocument): BoardMigrationLoadResult {
+    if (doc.version !== 1) {
+      throw new Error(`unsupported board migration document version ${JSON.stringify(doc.version)}`);
+    }
+    if (doc.workspaceKey !== workspaceKeyFromPath(doc.absPath)) {
+      throw new Error(
+        `board migration workspaceKey ${JSON.stringify(doc.workspaceKey)} does not match absPath ${JSON.stringify(doc.absPath)}`,
+      );
+    }
+    const workspaceKey = doc.workspaceKey;
+    const projectId = this.findProject(doc.absPath) ?? this.createProject(doc.absPath, doc.projectName);
+
+    // Slug guard BEFORE any allocation or emit, so a refusal consumes
+    // nothing and names the slug.
+    const seenSlugs = new Set<string>();
+    for (const ticket of doc.tickets) {
+      if (seenSlugs.has(ticket.slug)) {
+        throw new Error(`board migration lists slug ${JSON.stringify(ticket.slug)} twice`);
+      }
+      seenSlugs.add(ticket.slug);
+      if (this._slugTaken(workspaceKey, ticket.slug, null)) {
+        throw new Error(`board migration slug ${JSON.stringify(ticket.slug)} is already used in workspace ${workspaceKey}`);
+      }
+    }
+    const knownSlugs = new Set(seenSlugs);
+    for (const row of doc.evidence) {
+      if (!knownSlugs.has(row.ticketSlug)) {
+        throw new Error(
+          `board migration evidence ${JSON.stringify(row.kind)} at ${row.at} names no ticket ${JSON.stringify(row.ticketSlug)}`,
+        );
+      }
+    }
+    for (const comment of doc.comments) {
+      if (!knownSlugs.has(comment.ticketSlug)) {
+        throw new Error(
+          `board migration comment at ${comment.at} names no ticket ${JSON.stringify(comment.ticketSlug)}`,
+        );
+      }
+    }
+
+    // Fresh ids from the store's own counter, in document order.
+    const newIds = new Map<string, TicketId>();
+    for (const ticket of doc.tickets) {
+      newIds.set(ticket.slug, this._nextTicketId());
+    }
+
+    // Resolve every dependency reference before emitting anything.
+    const remapped = new Map<string, string[]>();
+    const unresolved: UnresolvedMigrationDependency[] = [];
+    let edgesRewritten = 0;
+    for (const ticket of doc.tickets) {
+      const out: string[] = [];
+      for (const ref of ticket.dependsOn) {
+        const targetSlug = ticket.depTargets?.[ref] ?? null;
+        const targetId = targetSlug !== null ? newIds.get(targetSlug) : undefined;
+        if (targetSlug !== null && targetId !== undefined && targetId !== newIds.get(ticket.slug)) {
+          out.push(`${workspaceKey}:${targetId}`);
+          edgesRewritten += 1;
+        } else {
+          // Null target, a target edited out of the document, or a remap
+          // onto the ticket itself (a dep on its own dropped twin): carry
+          // the original string and report it by name.
+          out.push(ref);
+          unresolved.push({ ticketSlug: ticket.slug, ticketTitle: ticket.title, ref });
+        }
+      }
+      remapped.set(ticket.slug, out);
+    }
+
+    // Cycle pre-check over the remapped graph: the set validator would
+    // refuse a cycle mid-bracket, and this names the tickets up front.
+    {
+      const liveIds = new Set(newIds.values());
+      const adjacency = new Map<string, string[]>();
+      for (const ticket of doc.tickets) {
+        const self = `${workspaceKey}:${newIds.get(ticket.slug)}`;
+        const edges: string[] = [];
+        for (const ref of remapped.get(ticket.slug) ?? []) {
+          const colon = ref.lastIndexOf(":");
+          if (colon < 0) continue;
+          if (ref.slice(0, colon) !== workspaceKey) continue;
+          const target = Number(ref.slice(colon + 1));
+          if (!Number.isInteger(target) || target < 1) continue;
+          if (liveIds.has(target)) {
+            edges.push(`${workspaceKey}:${target}`);
+          }
+        }
+        adjacency.set(self, edges);
+      }
+      const color = new Map<string, number>();
+      for (const node of adjacency.keys()) color.set(node, 0);
+      const path: string[] = [];
+      const visit = (node: string): void => {
+        color.set(node, 1);
+        path.push(node);
+        for (const next of adjacency.get(node) ?? []) {
+          if (color.get(next) === 2) continue;
+          if (color.get(next) === 1) {
+            const cycle = [...path.slice(path.indexOf(next)), next];
+            throw new Error(`board migration dependency cycle: ${cycle.join(" -> ")}`);
+          }
+          visit(next);
+        }
+        path.pop();
+        color.set(node, 2);
+      };
+      for (const node of adjacency.keys()) {
+        if (color.get(node) === 0) visit(node);
+      }
+    }
+
+    const storage = this._storage;
+    const transactional =
+      typeof storage.beginTransaction === "function" &&
+      typeof storage.commitTransaction === "function";
+    if (transactional) {
+      storage.beginTransaction!();
+    }
+    const logLengthBefore = this._log.length;
+    const result: BoardMigrationLoadResult = {
+      projectId,
+      tickets: 0,
+      evidence: 0,
+      comments: 0,
+      plans: 0,
+      phases: 0,
+      edgesRewritten,
+      unresolvedDependencies: unresolved,
+      skippedPlans: [],
+      newIds: {},
+    };
+    try {
+      for (const ticket of doc.tickets) {
+        const newId = newIds.get(ticket.slug)!;
+        const tags = ticket.tags ?? [];
+        this._emit({
+          kind: "ticket/change",
+          version: 1,
+          operation: "create",
+          ticket: {
+            id: newId,
+            projectId,
+            title: ticket.title,
+            description: ticket.description,
+            body: ticket.body,
+            criteria: ticket.criteria,
+            phase: ticket.phase,
+            order: ticket.order,
+            state: "open",
+            dependsOn: [],
+            allowlist: [...ticket.allowlist],
+            tags: [...tags],
+            slug: ticket.slug,
+            workspaceKey,
+            revision: 1,
+            createdAt: ticket.createdAt,
+            updatedAt: ticket.createdAt,
+          },
+          at: ticket.createdAt,
+        });
+        const writes: Array<{ at: number; seq: number; kind: "evidence" | "comment"; index: number }> = [];
+        doc.evidence.forEach((row, index) => {
+          if (row.ticketSlug === ticket.slug) {
+            writes.push({ at: row.at, seq: index, kind: "evidence", index });
+          }
+        });
+        doc.comments.forEach((comment, index) => {
+          if (comment.ticketSlug === ticket.slug) {
+            writes.push({ at: comment.at, seq: index, kind: "comment", index });
+          }
+        });
+        // Stable: equal `at` values keep document order, and no at falls.
+        writes.sort((a, b) => a.at - b.at || a.seq - b.seq);
+        let lastWriteAt = ticket.createdAt;
+        for (const write of writes) {
+          lastWriteAt = Math.max(lastWriteAt, write.at);
+          if (write.kind === "evidence") {
+            const row = doc.evidence[write.index]!;
+            this._emit({
+              kind: "evidence/attached",
+              version: 1,
+              ticketId: newId,
+              row: {
+                kind: row.kind,
+                author: row.author,
+                at: row.at,
+                payload: deepClone(row.payload),
+                ...(row.stamp === undefined ? {} : { stamp: deepClone(row.stamp) }),
+              },
+            });
+            result.evidence += 1;
+          } else {
+            const comment = doc.comments[write.index]!;
+            this._emit({
+              kind: "comment/added",
+              version: 1,
+              ticketId: newId,
+              text: comment.text,
+              author: comment.author,
+              at: comment.at,
+            });
+            result.comments += 1;
+          }
+        }
+        const setAt = Math.max(ticket.updatedAt, lastWriteAt);
+        this._emit({
+          kind: "ticket/change",
+          version: 1,
+          operation: "set",
+          ticket: {
+            id: newId,
+            projectId,
+            title: ticket.title,
+            description: ticket.description,
+            body: ticket.body,
+            criteria: ticket.criteria,
+            phase: ticket.phase,
+            order: ticket.order,
+            state: ticket.state,
+            dependsOn: [...(remapped.get(ticket.slug) ?? [])],
+            allowlist: [...ticket.allowlist],
+            tags: [...tags],
+            slug: ticket.slug,
+            workspaceKey,
+            revision: 2,
+            createdAt: ticket.createdAt,
+            updatedAt: setAt,
+          },
+          at: setAt,
+        });
+        result.tickets += 1;
+        result.newIds[ticket.slug] = newId;
+      }
+      // The live plan, whole-value. An over-cap plan (only reachable by
+      // hand-edit: the live one already fits) is skipped and REPORTED, never
+      // refused — one long document must not fail the cutover (the backfill
+      // rule, #211).
+      {
+        const lines = planContextLineCount(doc.plan);
+        if (lines > PLAN_CONTEXT_LIMIT) {
+          result.skippedPlans.push({
+            at: doc.exportedAt,
+            reason: `plan context is ${lines} lines, over the ${PLAN_CONTEXT_LIMIT}-line cap`,
+          });
+        } else {
+          this._emit({
+            kind: "plan/change",
+            version: 1,
+            projectId,
+            plan: deepClone(doc.plan),
+            at: doc.exportedAt,
+          });
+          result.plans += 1;
+        }
+      }
+      for (const phase of doc.phases) {
+        this._emit({
+          kind: "phase/set",
+          version: 1,
+          projectId,
+          number: phase.number,
+          title: phase.title,
+          state: phase.state,
+          at: doc.exportedAt,
+        });
+        result.phases += 1;
+      }
+      if (transactional) {
+        storage.commitTransaction!();
+      }
+    } catch (error) {
+      // Nothing half-imported survives: give the log rows back, rebuild the
+      // fold, roll the bracket back, and refuse with the cause (the backfill
+      // rule, #41).
+      this._log.length = logLengthBefore;
+      this.replay();
+      if (transactional) {
+        storage.rollbackTransaction?.();
+      }
+      throw new StoreWriteRefused(error);
+    }
+    return result;
   }
 
   // ---- projects ----

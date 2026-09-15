@@ -21,6 +21,8 @@ interface AidosDirent {
 
 declare module "fs" {
   export function readFileSync(path: string, encoding: string): string;
+  /** #222: the migration export writes its JSON document to a new path. */
+  export function writeFileSync(path: string, data: string): void;
   export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
   /** #110: tests resolve tmpdir, which is behind a link on some platforms. */
@@ -38,6 +40,8 @@ declare module "fs" {
 }
 declare module "node:fs" {
   export function readFileSync(path: string, encoding: string): string;
+  /** #222: the migration export writes its JSON document to a new path. */
+  export function writeFileSync(path: string, data: string): void;
   export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
   /** #110: tests resolve tmpdir, which is behind a link on some platforms. */

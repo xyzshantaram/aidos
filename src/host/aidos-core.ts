@@ -33,6 +33,7 @@ import {
   readdirSync,
   symlinkSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { execFile } from "node:child_process";
@@ -156,14 +157,21 @@ import type { RetirementInfo } from "../kernel/retirement";
 import { slugFromTitle, workspaceKeyFromPath } from "../kernel/slug";
 // #42: the workspace store the board reads.
 import { Store } from "../kernel/store";
-import type { BackfillReport } from "../kernel/store";
+import type {
+  BackfillReport,
+  BoardMigrationComment,
+  BoardMigrationDocument,
+  BoardMigrationEvidence,
+  BoardMigrationLoadResult,
+  BoardMigrationTicket,
+} from "../kernel/store";
 import type { BackfillSessionLog } from "../kernel/backfill";
 // #44 shares this import: the workspace store's FTS index backs the
 // dependency search, and storePathForWorkspace is how a search checks for a
 // store WITHOUT creating one. Merged into one statement when #42 and #44
 // landed together -- both fronts added their own copy, which is a duplicate
 // identifier, not two different symbols.
-import { openWorkspaceStorage, storePathForWorkspace } from "./storage-sqlite";
+import { openSqliteStorage, openWorkspaceStorage, storePathForWorkspace } from "./storage-sqlite";
 import type { SessionHeader, SessionId } from "@deepseek-ai/dsh-session";
 import { deepClone, refusalReason, rowOf } from "../kernel/helpers";
 import { delegationDepthOf } from "@deepseek-ai/dsh-subagent";
@@ -174,6 +182,7 @@ import type {
   CommentRecord,
   ContextSection,
   EvidenceRow,
+  EvidenceStamp,
   PlanMetaView,
   PlanValue,
   ProjectId,
@@ -913,6 +922,33 @@ export interface RetiredTicketRow extends BoardTicketView {
   };
 }
 
+/**
+ * #222: the newest-copy-first ordering behind both #83's dedupe and the
+ * merged-board migration export.
+ *
+ * One rule, two call sites: `dedupeBoardRows` sorts wire rows with it, and
+ * the migration export sorts its source-carrying pairs with it, so the
+ * export's winners carry exactly the field values the board shows. The most
+ * recently updated copy wins (a fork's copy is a snapshot that stopped
+ * moving, so the newest updatedAt is the live one); ties break
+ * deterministically — the caller's own copy first, then the lowest session
+ * id — so two reads of an unchanged board agree.
+ */
+export function compareBoardCopiesNewestFirst(
+  callerSessionId: string | undefined,
+): (a: { updatedAt: number; sourceSessionId: string }, b: { updatedAt: number; sourceSessionId: string }) => number {
+  return (a, b) => {
+    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+    // The caller's own copy wins ties: it is the log they can actually
+    // write to. (#45: the old `foreign` flag is false on every row now,
+    // so the tie-break reads provenance instead.)
+    const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
+    const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
+    if (aOwn !== bOwn) return aOwn - bOwn;
+    return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
+  };
+}
+
 /** What the dedupe did, so the caller can log it without recomputing it. */
 export interface DedupeReport {
   identity: string;
@@ -977,16 +1013,7 @@ export function dedupeBoardRows(
       out.push(group[0]);
       continue;
     }
-    const ranked = [...group].sort((a, b) => {
-      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
-      // The caller's own copy wins ties: it is the log they can actually
-      // write to. (#45: the old `foreign` flag is false on every row now,
-      // so the tie-break reads provenance instead.)
-      const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
-      const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
-      if (aOwn !== bOwn) return aOwn - bOwn;
-      return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
-    });
+    const ranked = [...group].sort(compareBoardCopiesNewestFirst(callerSessionId));
     const [winner, ...losers] = ranked;
     const copies = losers.map((row) => ({
       sessionId: row.sourceSessionId,
@@ -1075,6 +1102,607 @@ export function boardStoreDivergence(
   }
   missing.sort((a, b) => a.id - b.id);
   return { missingCount: missing.length, missing };
+}
+
+/**
+ * #222: the merged-board migration EXPORT, pure half.
+ *
+ * The board merge already computes the forward-ported truth (newest-wins
+ * per `workspaceKey:slug`), so the migration exports the MERGED board into
+ * a JSON document instead of diffing folds against the store — every
+ * problematic update becomes a plain insert into a fresh store. The Remote
+ * further down walks the three merge sources with provenance attached and
+ * feeds that walk here; tests feed hand-built copies. What this layer owns:
+ *
+ * - winner selection per identity with the SAME comparator #83 dedupes
+ *   with, so exported field values equal what the board shows;
+ * - dropping `builtin:imported_state` evidence (import bookkeeping, 45 rows
+ *   in the wild — not evidence);
+ * - the refined duplicate rule (never a bare suffix guess): identity is
+ *   the stem pair plus an identical `createdAt` (durable identity;
+ *   `updatedAt` is recency and never gates), resolution keeps the NEWER
+ *   `updatedAt` on either side — the #83 newest-wins applied where the
+ *   merge cannot see. Legitimately-suffixed tickets survive on `createdAt`.
+ *   Every non-trivial resolution (state or title differed) is named in
+ *   the report with both sides and the reason;
+ * - resolving every `workspaceKey:NN` reference through the export's own
+ *   index while the source folds are still available. `NN` is
+ *   session-local addressing: it resolves against the DEPENDING ticket's
+ *   own source, never globally. A ref to a dropped twin resolves to the
+ *   surviving twin's slug; anything else unresolvable resolves to null and
+ *   the loader carries it verbatim and reports it by name.
+ *
+ * Floats (`createdAt`, `updatedAt`, evidence `at`) cross JSON exactly —
+ * shortest-round-trip doubles — and payloads are cloned key-for-key: 100+
+ * ad-hoc keys, no schema. `criteria` is always a string; `tags` stays
+ * absent when the row carries none.
+ */
+export const MIGRATION_DOCUMENT_VERSION = 1;
+
+/** Import bookkeeping, not evidence: dropped at export, counted. */
+export const MIGRATION_DROPPED_EVIDENCE_KIND = "builtin:imported_state";
+
+/** One merge copy with its provenance, before winner selection. */
+export interface MigrationExportRow {
+  title: string;
+  description: string;
+  body: string;
+  criteria: string;
+  phase: number;
+  order: number;
+  state: TicketState;
+  allowlist: string[];
+  dependsOn: string[];
+  tags: string[];
+  slug: string;
+  workspaceKey: string;
+  createdAt: number;
+  updatedAt: number;
+  oldId: number;
+  /** The owning session id, or "store" for a store-resident row. */
+  oldSource: string;
+}
+
+/** One evidence row with its provenance, payload verbatim. */
+export interface MigrationExportEvidence {
+  oldSource: string;
+  oldId: number;
+  kind: string;
+  author: Actor;
+  at: number;
+  payload: Record<string, unknown>;
+  stamp?: EvidenceStamp;
+}
+
+/** One comment with its provenance. */
+export interface MigrationExportComment {
+  oldSource: string;
+  oldId: number;
+  text: string;
+  author: Actor;
+  at: number;
+}
+
+/** One candidate row for duplicate detection: identity plus the tie-break. */
+export interface BoardMigrationDuplicateCandidate {
+  slug: string;
+  workspaceKey: string;
+  title: string;
+  state: string;
+  createdAt: number;
+  updatedAt: number;
+  /** The winning copy's source, for the #83 tie-break. */
+  oldSource: string;
+}
+
+/** One resolved duplicate pair: the dropped side, and why it lost. */
+export interface BoardMigrationDuplicatePair {
+  workspaceKey: string;
+  keptSlug: string;
+  droppedSlug: string;
+  createdAt: number;
+  keptUpdatedAt: number;
+  droppedUpdatedAt: number;
+  keptTitle: string;
+  droppedTitle: string;
+  keptState: string;
+  droppedState: string;
+  /** How the winner was chosen; the load-bearing record. */
+  reason: string;
+  /** True when state or title differed — decided by machine, read by human. */
+  nontrivial: boolean;
+}
+
+/**
+ * #222: the duplicate rule, refined. IDENTITY is the base/suffixed slug
+ * pair plus an identical `createdAt` — creation time is the durable
+ * identity (the backfill preserves it; fork-versus-store measured equal on
+ * all 82 pairs), while `updatedAt` is recency and must not gate the match:
+ * on the merged board the bare row carries the live fork's newer state,
+ * which the old both-timestamps rule mistook for ambiguity. RESOLUTION
+ * keeps the NEWER `updatedAt` — the #83 newest-wins semantics applied to a
+ * pair the merge cannot see (different slugs) — so a twin that moved
+ * further (68/150: the `-2` row is newer) wins over the bare row, and no
+ * cutover regresses a ticket to an older snapshot. Exact ties keep the
+ * bare row by convention (identical timestamps mean identical content: any
+ * set bumps updatedAt). The base slug must still exist — a suffixed slug
+ * with no base is a legitimate ticket, never a pair. Chains (S-3 whose
+ * base S-2 is itself dropped) resolve to the surviving root.
+ */
+export function findBoardMigrationDuplicates(
+  tickets: readonly BoardMigrationDuplicateCandidate[],
+  callerSessionId?: string,
+): { pairs: BoardMigrationDuplicatePair[]; droppedSlugs: Set<string> } {
+  const byIdentity = new Map<string, BoardMigrationDuplicateCandidate>();
+  for (const ticket of tickets) {
+    byIdentity.set(ticket.workspaceKey + ":" + ticket.slug, ticket);
+  }
+  // Pass 1: every suffixed ticket whose base exists with equal createdAt.
+  const twinToBase = new Map<string, string>();
+  for (const ticket of tickets) {
+    const cut = ticket.slug.lastIndexOf("-");
+    if (cut <= 0) continue;
+    if (!/^\d+$/.test(ticket.slug.slice(cut + 1))) continue;
+    const base = ticket.workspaceKey + ":" + ticket.slug.slice(0, cut);
+    const baseRow = byIdentity.get(base);
+    if (baseRow === undefined) continue;
+    if (baseRow.createdAt !== ticket.createdAt) continue;
+    twinToBase.set(ticket.workspaceKey + ":" + ticket.slug, base);
+  }
+  // Pass 2: follow chains to the surviving root (a base that is itself a
+  // dropped twin resolves through its keeper; transitive createdAt holds).
+  const rootOf = (key: string): string => {
+    let current = key;
+    const seen = new Set<string>([current]);
+    while (twinToBase.has(current)) {
+      const next = twinToBase.get(current)!;
+      if (seen.has(next)) break;
+      seen.add(next);
+      current = next;
+    }
+    return current;
+  };
+  const groups = new Map<string, BoardMigrationDuplicateCandidate[]>();
+  for (const ticket of tickets) {
+    const key = ticket.workspaceKey + ":" + ticket.slug;
+    const root = twinToBase.has(key) ? rootOf(key) : key;
+    const group = groups.get(root);
+    if (group === undefined) {
+      groups.set(root, [ticket]);
+    } else {
+      group.push(ticket);
+    }
+  }
+  const ordering = compareBoardCopiesNewestFirst(callerSessionId);
+  const pairs: BoardMigrationDuplicatePair[] = [];
+  const droppedSlugs = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const ranked = [...group].sort((a, b) => {
+      const order = ordering(
+        { updatedAt: a.updatedAt, sourceSessionId: a.oldSource },
+        { updatedAt: b.updatedAt, sourceSessionId: b.oldSource },
+      );
+      // A true tie (same recency, same source class) keeps the bare row:
+      // identical timestamps mean identical content, so the slug is the
+      // only thing left to prefer, and the bare form is the stable one.
+      if (order !== 0) return order;
+      const aSuffixed = /-\d+$/.test(a.slug) ? 1 : 0;
+      const bSuffixed = /-\d+$/.test(b.slug) ? 1 : 0;
+      return aSuffixed - bSuffixed;
+    });
+    const winner = ranked[0]!;
+    for (const loser of ranked.slice(1)) {
+      const key = loser.workspaceKey + ":" + loser.slug;
+      if (droppedSlugs.has(key)) continue;
+      droppedSlugs.add(key);
+      const tied = winner.updatedAt === loser.updatedAt;
+      pairs.push({
+        workspaceKey: loser.workspaceKey,
+        keptSlug: winner.slug,
+        droppedSlug: loser.slug,
+        createdAt: loser.createdAt,
+        keptUpdatedAt: winner.updatedAt,
+        droppedUpdatedAt: loser.updatedAt,
+        keptTitle: winner.title,
+        droppedTitle: loser.title,
+        keptState: winner.state,
+        droppedState: loser.state,
+        reason: tied
+          ? `tied updatedAt ${winner.updatedAt}; #83 order prefers ${winner.oldSource}, bare by convention`
+          : `newer updatedAt wins: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
+        nontrivial: winner.state !== loser.state || winner.title !== loser.title,
+      });
+    }
+  }
+  pairs.sort((a, b) => (a.droppedSlug < b.droppedSlug ? -1 : a.droppedSlug > b.droppedSlug ? 1 : 0));
+  return { pairs, droppedSlugs };
+}
+
+/** Everything the export builder consumes. Copies, not winners. */
+export interface BuildBoardMigrationInput {
+  workspaceKey: string;
+  absPath: string;
+  projectName: string;
+  exportedAt: number;
+  callerSessionId: string;
+  rows: MigrationExportRow[];
+  evidence: MigrationExportEvidence[];
+  comments: MigrationExportComment[];
+  /** Live plan_meta (frontmatter, preamble, sections) plus live rules. */
+  plan: PlanValue;
+  phases: Array<{ number: number; title: string; state: string }>;
+  /** Retired rows skipped at the walk, censused so the report is exact. */
+  retiredExcluded: number;
+}
+
+/** The export report: every stage counted, nothing asserted. */
+export interface BoardMigrationReport {
+  boardInputRows: number;
+  mergedRows: number;
+  duplicatesMatched: number;
+  duplicatesDropped: string[];
+  /**
+   * Every resolved pair with both sides' slugs, states, titles and the
+   * reason the winner won. The load-bearing record: the owner triages
+   * nothing by hand any more, so each non-trivial resolution
+   * (state or title differed) is named here.
+   */
+  duplicateResolutions: BoardMigrationDuplicatePair[];
+  /** Distinct tickets sharing a slug stem (createdAt differs): both KEPT, named for the human edit step. Expect ~0. */
+  nearDuplicates: Array<{ workspaceKey: string; keptSlug: string; otherSlug: string }>;
+  evidenceKept: number;
+  evidenceDroppedImportedState: number;
+  /** Non-winner rows the winner lacked, forwarded onto the survivor. */
+  evidenceForwardedFromCopies: number;
+  /** Same (kind, at) as a survivor row: the inherited prefix both sides hold. */
+  evidenceDroppedDuplicate: number;
+  commentsKept: number;
+  commentsForwardedFromCopies: number;
+  commentsDroppedDuplicate: number;
+  depsTotal: number;
+  depsResolved: number;
+  depsUnresolved: number;
+  refusals: string;
+  retiredExcluded: number;
+  plan: { frontmatterBytes: number; preambleBytes: number; sectionCount: number; totalBytes: number };
+  phaseCount: number;
+  ticketsExported: number;
+}
+
+function migrationCopyKey(source: string, id: number): string {
+  return source + "\u0000" + String(id);
+}
+
+/** What a migration dry run returns: the JSON path plus the full report. */
+export interface BoardMigrationDryRunResult {
+  dryRun: true;
+  jsonPath: string;
+  /** The candidate path a real run would write (nothing written yet). */
+  defaultStorePath: string;
+  backfillVerified: boolean;
+  report: BoardMigrationReport;
+}
+
+/** What a migration real run returns: the load plus its own proof. */
+export interface BoardMigrationRunResult {
+  dryRun: false;
+  jsonPath: string;
+  storePath: string;
+  exportedTicketCount: number;
+  load: BoardMigrationLoadResult;
+  verification: {
+    ticketCountMatches: boolean;
+    storeTickets: number;
+    missingCount: number;
+    missing: StoreCoverageMissing[];
+    lossless: boolean;
+  };
+  note: string;
+}
+
+/** UTF-8 byte length without node:Buffer (the host builtins shim has none). */
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
+  doc: BoardMigrationDocument;
+  report: BoardMigrationReport;
+} {
+  // Winner selection per identity, newest first — the #83 rule, so the
+  // export carries the field values the board shows.
+  const groups = new Map<string, MigrationExportRow[]>();
+  const groupOrder: string[] = [];
+  for (const row of input.rows) {
+    const identity = row.workspaceKey + ":" + row.slug;
+    const group = groups.get(identity);
+    if (group === undefined) {
+      groups.set(identity, [row]);
+      groupOrder.push(identity);
+    } else {
+      group.push(row);
+    }
+  }
+  const ordering = compareBoardCopiesNewestFirst(input.callerSessionId);
+  const winners: MigrationExportRow[] = [];
+  for (const identity of groupOrder) {
+    const group = groups.get(identity)!;
+    const ranked = [...group].sort((a, b) =>
+      ordering({ updatedAt: a.updatedAt, sourceSessionId: a.oldSource }, { updatedAt: b.updatedAt, sourceSessionId: b.oldSource }),
+    );
+    winners.push(ranked[0]!);
+  }
+
+  // The refined duplicate rule over the winners: identity by stem plus
+  // createdAt, resolution by newest updatedAt — either side may survive
+  // (the -2 twin wins when it moved further, as 68/150 proves). A dropped
+  // row takes nothing with it that the survivor lacks: history triage
+  // below forwards what is unique.
+  const { pairs, droppedSlugs } = findBoardMigrationDuplicates(winners, input.callerSessionId);
+  const survivors = winners.filter((row) => !droppedSlugs.has(row.workspaceKey + ":" + row.slug));
+
+  /*
+   * Near-duplicates: the genuinely ambiguous remainder. Same stem shape
+   * with the base present, but a DIFFERENT createdAt — two distinct
+   * tickets sharing a slug stem, not two copies of one ticket. Both are
+   * kept; the report names them for the human EDIT step. Expect ~0: every
+   * same-createdAt stem pair above already resolved into `pairs`.
+   */
+  const survivorKeys = new Set(survivors.map((row) => row.workspaceKey + ":" + row.slug));
+  const nearDuplicates: BoardMigrationReport["nearDuplicates"] = [];
+  for (const row of survivors) {
+    const cut = row.slug.lastIndexOf("-");
+    if (cut <= 0) continue;
+    if (!/^\d+$/.test(row.slug.slice(cut + 1))) continue;
+    const base = row.slug.slice(0, cut);
+    const baseKey = row.workspaceKey + ":" + base;
+    if (!survivorKeys.has(baseKey)) continue;
+    const baseRow = survivors.find((candidate) => candidate.workspaceKey === row.workspaceKey && candidate.slug === base)!;
+    if (baseRow.createdAt !== row.createdAt) {
+      nearDuplicates.push({ workspaceKey: row.workspaceKey, keptSlug: base, otherSlug: row.slug });
+    }
+  }
+  nearDuplicates.sort((a, b) => (a.otherSlug < b.otherSlug ? -1 : a.otherSlug > b.otherSlug ? 1 : 0));
+
+  // Survivor index: every copy (winner, loser, dropped twin) resolves to
+  // the slug that survives it, for dependency rewriting — plus the winning
+  // row behind each copy, for history triage below.
+  const keptByPair = new Map<string, string>();
+  for (const pair of pairs) {
+    keptByPair.set(pair.workspaceKey + ":" + pair.droppedSlug, pair.keptSlug);
+  }
+  const winnerOfIdentity = new Map<string, MigrationExportRow>();
+  for (const row of survivors) {
+    winnerOfIdentity.set(row.workspaceKey + ":" + row.slug, row);
+  }
+  const survivorOf = new Map<string, string>();
+  const winnerByCopy = new Map<string, MigrationExportRow>();
+  for (const row of input.rows) {
+    const identity = row.workspaceKey + ":" + row.slug;
+    const twinKept = keptByPair.get(identity);
+    if (twinKept !== undefined) {
+      const kept = survivors.find(
+        (candidate) => candidate.workspaceKey === row.workspaceKey && candidate.slug === twinKept,
+      )!;
+      survivorOf.set(migrationCopyKey(row.oldSource, row.oldId), twinKept);
+      winnerByCopy.set(migrationCopyKey(row.oldSource, row.oldId), kept);
+      continue;
+    }
+    const winner = winnerOfIdentity.get(identity)!;
+    survivorOf.set(migrationCopyKey(row.oldSource, row.oldId), winner.slug);
+    winnerByCopy.set(migrationCopyKey(row.oldSource, row.oldId), winner);
+  }
+
+  /*
+   * History triage, by row identity. The winner's own rows are kept whole.
+   * A non-winner copy's row is FORWARDED onto the survivor when the winner
+   * lacks that identity — post-fork work on store-resident tickets lives
+   * exactly here — and dropped as a duplicate when the winner already holds
+   * it (the same inherited prefix on both sides). Forwarded keys join the
+   * winner's set, so two losers holding the same row forward it once.
+   * Evidence identity is (kind, at); comments have no kind, so theirs is
+   * (at, author, text).
+   */
+  const survivorSlugs = new Set(survivors.map((row) => row.slug));
+  const evidenceSeen = new Map<string, Set<string>>();
+  const commentsSeen = new Map<string, Set<string>>();
+  for (const row of survivors) {
+    evidenceSeen.set(row.slug, new Set<string>());
+    commentsSeen.set(row.slug, new Set<string>());
+  }
+  for (const row of input.evidence) {
+    if (row.kind === MIGRATION_DROPPED_EVIDENCE_KIND) continue;
+    const copyKey = migrationCopyKey(row.oldSource, row.oldId);
+    const winner = winnerByCopy.get(copyKey);
+    if (winner === undefined) continue;
+    if (winner.oldSource === row.oldSource && winner.oldId === row.oldId) {
+      evidenceSeen.get(winner.slug)!.add(row.kind + ":" + String(row.at));
+    }
+  }
+  for (const comment of input.comments) {
+    const copyKey = migrationCopyKey(comment.oldSource, comment.oldId);
+    const winner = winnerByCopy.get(copyKey);
+    if (winner === undefined) continue;
+    if (winner.oldSource === comment.oldSource && winner.oldId === comment.oldId) {
+      commentsSeen.get(winner.slug)!.add(String(comment.at) + ":" + comment.author + ":" + comment.text);
+    }
+  }
+  let evidenceDroppedImportedState = 0;
+  let evidenceForwardedFromCopies = 0;
+  let evidenceDroppedDuplicate = 0;
+  const keptEvidence: BoardMigrationEvidence[] = [];
+  for (const row of input.evidence) {
+    if (row.kind === MIGRATION_DROPPED_EVIDENCE_KIND) {
+      evidenceDroppedImportedState += 1;
+      continue;
+    }
+    const copyKey = migrationCopyKey(row.oldSource, row.oldId);
+    const slug = survivorOf.get(copyKey);
+    const winner = winnerByCopy.get(copyKey);
+    if (slug === undefined || winner === undefined || !survivorSlugs.has(slug)) {
+      evidenceDroppedDuplicate += 1;
+      continue;
+    }
+    const key = row.kind + ":" + String(row.at);
+    const seen = evidenceSeen.get(winner.slug)!;
+    if (winner.oldSource === row.oldSource && winner.oldId === row.oldId) {
+      keptEvidence.push({
+        ticketSlug: slug,
+        kind: row.kind,
+        author: row.author,
+        at: row.at,
+        payload: deepClone(row.payload) as Record<string, unknown>,
+        ...(row.stamp === undefined ? {} : { stamp: deepClone(row.stamp) }),
+      });
+      continue;
+    }
+    if (seen.has(key)) {
+      evidenceDroppedDuplicate += 1;
+      continue;
+    }
+    seen.add(key);
+    evidenceForwardedFromCopies += 1;
+    keptEvidence.push({
+      ticketSlug: slug,
+      kind: row.kind,
+      author: row.author,
+      at: row.at,
+      payload: deepClone(row.payload) as Record<string, unknown>,
+      ...(row.stamp === undefined ? {} : { stamp: deepClone(row.stamp) }),
+    });
+  }
+  let commentsForwardedFromCopies = 0;
+  let commentsDroppedDuplicate = 0;
+  const keptComments: BoardMigrationComment[] = [];
+  for (const comment of input.comments) {
+    const copyKey = migrationCopyKey(comment.oldSource, comment.oldId);
+    const slug = survivorOf.get(copyKey);
+    const winner = winnerByCopy.get(copyKey);
+    if (slug === undefined || winner === undefined || !survivorSlugs.has(slug)) {
+      commentsDroppedDuplicate += 1;
+      continue;
+    }
+    const key = String(comment.at) + ":" + comment.author + ":" + comment.text;
+    const seen = commentsSeen.get(winner.slug)!;
+    if (winner.oldSource === comment.oldSource && winner.oldId === comment.oldId) {
+      keptComments.push({ ticketSlug: slug, text: comment.text, author: comment.author, at: comment.at });
+      continue;
+    }
+    if (seen.has(key)) {
+      commentsDroppedDuplicate += 1;
+      continue;
+    }
+    seen.add(key);
+    commentsForwardedFromCopies += 1;
+    keptComments.push({ ticketSlug: slug, text: comment.text, author: comment.author, at: comment.at });
+  }
+
+  // Dependency resolution, per depending ticket in ITS source's address
+  // space. Anything unresolvable resolves to null; the loader carries the
+  // original string and reports it by name.
+  let depsResolved = 0;
+  let depsUnresolved = 0;
+  const docTickets: BoardMigrationTicket[] = survivors.map((row) => {
+    const depTargets: Record<string, string | null> = {};
+    for (const ref of row.dependsOn) {
+      const colon = ref.lastIndexOf(":");
+      let target: string | null = null;
+      if (colon > 0) {
+        const head = ref.slice(0, colon);
+        const tail = Number(ref.slice(colon + 1));
+        if (head === row.workspaceKey && Number.isInteger(tail) && tail >= 1) {
+          target = survivorOf.get(migrationCopyKey(row.oldSource, tail)) ?? null;
+        }
+      }
+      depTargets[ref] = target;
+      if (target !== null) depsResolved += 1;
+      else depsUnresolved += 1;
+    }
+    return {
+      slug: row.slug,
+      title: row.title,
+      description: row.description,
+      body: row.body,
+      criteria: row.criteria,
+      phase: row.phase,
+      order: row.order,
+      state: row.state,
+      allowlist: [...row.allowlist],
+      dependsOn: [...row.dependsOn],
+      depTargets,
+      ...(row.tags.length === 0 ? {} : { tags: [...row.tags] }),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      oldId: row.oldId,
+      oldSource: row.oldSource,
+    };
+  });
+  // Deterministic document order: the board's phase/order sort, slug last
+  // (old numeric ids collide across sources, so they cannot order).
+  docTickets.sort((a, b) => a.phase - b.phase || a.order - b.order || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+
+  const planJson = JSON.stringify(input.plan);
+  const doc: BoardMigrationDocument = {
+    version: MIGRATION_DOCUMENT_VERSION,
+    exportedAt: input.exportedAt,
+    workspaceKey: input.workspaceKey,
+    absPath: input.absPath,
+    projectName: input.projectName,
+    tickets: docTickets,
+    evidence: keptEvidence,
+    comments: keptComments,
+    plan: deepClone(input.plan),
+    phases: input.phases.map((phase) => ({ ...phase })),
+  };
+  const report: BoardMigrationReport = {
+    boardInputRows: input.rows.length,
+    mergedRows: winners.length,
+    duplicatesMatched: pairs.length,
+    duplicatesDropped: pairs.map((pair) => pair.droppedSlug),
+    duplicateResolutions: pairs,
+    nearDuplicates,
+    evidenceKept: keptEvidence.length,
+    evidenceDroppedImportedState,
+    evidenceForwardedFromCopies,
+    evidenceDroppedDuplicate,
+    commentsKept: keptComments.length,
+    commentsForwardedFromCopies,
+    commentsDroppedDuplicate,
+    depsTotal: depsResolved + depsUnresolved,
+    depsResolved,
+    depsUnresolved,
+    refusals: "not migrated, by owner decision: the 40 refusals die at cutover, no refusals table is built",
+    retiredExcluded: input.retiredExcluded,
+    plan: {
+      frontmatterBytes: utf8ByteLength(input.plan.frontmatter),
+      preambleBytes: utf8ByteLength(input.plan.context.preamble),
+      sectionCount: input.plan.context.contextSections.length,
+      totalBytes: utf8ByteLength(planJson),
+    },
+    phaseCount: input.phases.length,
+    ticketsExported: docTickets.length,
+  };
+  return { doc, report };
 }
 
 /**
@@ -2984,6 +3612,255 @@ registerAidosSessionEventTypes(ctx);
         `aidos: #222 store coverage complete: all ${coverage.boardRows} board rows have a store row (store holds ${coverage.storeRows} rows)`,
       );
     }
+  }
+
+  /**
+   * #222: the merged-board migration operator. EXPLICIT INVOCATION ONLY —
+   * no board read, no backfill, no mirror, nothing else in this file calls
+   * it. It never runs automatically, and it never touches the live store:
+   * the live `board.db` is read (when present) but the candidate is always
+   * written to a NEW path, and a guard refuses a candidate path that
+   * resolves to the live one.
+   *
+   * Two runs, one round-trip:
+   * - dry run (`dryRun: true`, the default): walks the merged board's three
+   *   sources with provenance attached, builds the JSON document, writes it
+   *   to `jsonPath` for the human EDIT step, and returns the full report.
+   *   It writes NO store: the store side opens only when its file already
+   *   exists (#44's existsSync rule — a dry run must never create a store
+   *   as a side effect), and it kicks no backfill (unlike every board read,
+   *   which is exactly why this walk is separate from the merge).
+   * - real run (`dryRun: false`): READS the JSON back (hand-edits apply),
+   *   loads it into the NEW store path with fresh ids from the store's own
+   *   counter, and verifies before returning: ticket count equality plus
+   *   the `storeCoverage` identity check (`missingCount: 0`) against the
+   *   candidate. Swapping the candidate over the live store is the owner's
+   *   separate action, coordinated with #219 (which deletes the backfill
+   *   path — without that, opening the candidate would re-import).
+   */
+  @Remote("migrateBoardToFreshStore")
+  async migrateBoardToFreshStore(
+    agent: Agent,
+    args?: { dryRun?: boolean; jsonPath?: string; storePath?: string },
+  ): Promise<BoardMigrationDryRunResult | BoardMigrationRunResult> {
+    const dryRun = args?.dryRun !== false;
+    const cwd = this._workspacePath(agent);
+    const workspaceKey = workspaceKeyFromPath(cwd);
+    const storageDir = dirname(storePathForWorkspace(cwd));
+    const jsonPath = args?.jsonPath ?? join(storageDir, "board-migration.json");
+    const defaultStorePath = join(storageDir, "board.migrated.db");
+
+    if (dryRun) {
+      const copies = this._migrationExportCopies(agent, cwd, workspaceKey);
+      const planSource = this._planProjectSource(this._boardAgent(agent), undefined);
+      const planState = planSource.state;
+      const planRow = planState.plans.get(planSource.projectId);
+      const meta = this._planMetaOf(planSource.projectId, planState);
+      const plan: PlanValue = {
+        frontmatter: meta.frontmatter,
+        context: {
+          preamble: meta.preamble,
+          contextSections: meta.contextSections.map((section) => ({ ...section })),
+        },
+        rules: planRow?.rules ?? "",
+      };
+      const phaseRows = planState.phases.get(planSource.projectId);
+      const phases = phaseRows === undefined
+        ? []
+        : [...phaseRows.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([number, phase]) => ({ number, title: phase.title, state: phase.state }));
+      const { doc, report } = buildBoardMigrationDocument({
+        workspaceKey,
+        absPath: cwd,
+        projectName: copies.projectName,
+        exportedAt: Date.now() / 1000,
+        callerSessionId: agent.session.id,
+        rows: copies.rows,
+        evidence: copies.evidence,
+        comments: copies.comments,
+        plan,
+        phases,
+        retiredExcluded: copies.retiredExcluded,
+      });
+      mkdirSync(dirname(jsonPath), { recursive: true });
+      writeFileSync(jsonPath, JSON.stringify(doc, null, 2) + "\n");
+      return {
+        dryRun: true as const,
+        jsonPath,
+        defaultStorePath,
+        backfillVerified: this._isBackfillVerified(agent),
+        report,
+      };
+    }
+
+    // The real run is file-driven: the JSON the dry run produced, possibly
+    // hand-edited since, is the whole input. A missing file is a refusal,
+    // never a silent rebuild (which would discard the human's edits).
+    let doc: BoardMigrationDocument;
+    try {
+      doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    } catch (error) {
+      throw new Error(
+        `board migration: cannot read ${jsonPath} — run a dry run first, then edit the JSON by hand: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (doc.workspaceKey !== workspaceKey) {
+      throw new Error(
+        `board migration: document workspace ${JSON.stringify(doc.workspaceKey)} does not match this workspace ${JSON.stringify(workspaceKey)}`,
+      );
+    }
+    const storePath = args?.storePath ?? defaultStorePath;
+    if (resolve(storePath) === resolve(storePathForWorkspace(cwd))) {
+      throw new Error(
+        `board migration: refusing to write the candidate over the live store ${storePathForWorkspace(cwd)} — the candidate must be a NEW path`,
+      );
+    }
+    const storage = openSqliteStorage(storePath);
+    const fresh = new Store(this._resolvedConfig, { storage });
+    try {
+      const load = fresh.importBoardDocument(doc);
+      const storeTickets = fresh.ticketsFor(load.projectId);
+      const boardRows = doc.tickets.map((ticket) => ({
+        id: load.newIds[ticket.slug]!,
+        title: ticket.title,
+        workspaceKey: doc.workspaceKey,
+        slug: ticket.slug,
+      }));
+      const storeIdentities = new Set<string>();
+      for (const snapshot of fresh.state.tickets.values()) {
+        if (snapshot.projectId !== load.projectId) continue;
+        storeIdentities.add(snapshot.workspaceKey + ":" + snapshot.slug);
+      }
+      const { missingCount, missing } = boardStoreDivergence(boardRows, storeIdentities);
+      const ticketCountMatches = storeTickets.length === doc.tickets.length;
+      return {
+        dryRun: false as const,
+        jsonPath,
+        storePath,
+        exportedTicketCount: doc.tickets.length,
+        load,
+        verification: {
+          ticketCountMatches,
+          storeTickets: storeTickets.length,
+          missingCount,
+          missing,
+          lossless: ticketCountMatches && missingCount === 0,
+        },
+        note: "candidate verified; swapping it over the live store is the owner's separate action, coordinated with #219 (which deletes the backfill path first)",
+      };
+    } finally {
+      fresh.close();
+    }
+  }
+
+  /**
+   * #222: walk the merged board's three sources with provenance attached.
+   * The merge (`_workspaceBoardMerge`) answers what the BOARD shows; the
+   * export needs more per row — `createdAt`, the source fold for exact
+   * evidence/comments attribution (the merge keys both maps by bare numeric
+   * id, so colliding ids clobber), and the source session for
+   * session-local dependency resolution. Same three groups, same retired
+   * rule, winning values selected downstream by the shared #83 comparator.
+   * Read-only throughout: folds are synced, never written; the store opens
+   * only when its file already exists.
+   */
+  private _migrationExportCopies(
+    agent: Agent,
+    cwd: string,
+    workspaceKey: string,
+  ): {
+    rows: MigrationExportRow[];
+    evidence: MigrationExportEvidence[];
+    comments: MigrationExportComment[];
+    retiredExcluded: number;
+    projectName: string;
+  } {
+    const rows: MigrationExportRow[] = [];
+    const evidence: MigrationExportEvidence[] = [];
+    const comments: MigrationExportComment[] = [];
+    let retiredExcluded = 0;
+    let projectName = basename(cwd);
+    const pushState = (state: AidosState, oldSource: string): void => {
+      for (const project of state.projects.values()) {
+        if (project.absPath === cwd) {
+          projectName = project.name;
+          break;
+        }
+      }
+      for (const snapshot of state.tickets.values()) {
+        if (snapshot.workspaceKey !== workspaceKey) continue;
+        if (this._isRetired(state, snapshot.id)) {
+          retiredExcluded += 1;
+          continue;
+        }
+        rows.push({
+          title: snapshot.title,
+          description: snapshot.description,
+          body: snapshot.body,
+          criteria: snapshot.criteria,
+          phase: snapshot.phase,
+          order: snapshot.order,
+          state: snapshot.state,
+          allowlist: [...snapshot.allowlist],
+          dependsOn: [...snapshot.dependsOn],
+          tags: [...snapshot.tags],
+          slug: snapshot.slug,
+          workspaceKey: snapshot.workspaceKey,
+          createdAt: snapshot.createdAt,
+          updatedAt: snapshot.updatedAt,
+          oldId: snapshot.id,
+          oldSource,
+        });
+        for (const row of state.evidence.get(snapshot.id) ?? []) {
+          evidence.push({
+            oldSource,
+            oldId: snapshot.id,
+            kind: row.kind,
+            author: row.author,
+            at: row.at,
+            payload: row.payload,
+            ...(row.stamp === undefined ? {} : { stamp: row.stamp }),
+          });
+        }
+        for (const comment of state.comments.get(snapshot.id) ?? []) {
+          comments.push({
+            oldSource,
+            oldId: snapshot.id,
+            text: comment.text,
+            author: comment.author,
+            at: comment.at,
+          });
+        }
+      }
+    };
+    const cache = this._cache(agent.session);
+    this._sync(agent.session, cache);
+    pushState(cache.state, agent.session.id);
+    for (const session of this._liveWorkspaceSessions(agent)) {
+      const entry = this._cache(session);
+      this._sync(session, entry);
+      pushState(entry.state, session.id);
+    }
+    // #44's rule: a migration export must never CREATE a store as a side
+    // effect. With no file on disk the board is folds-only.
+    try {
+      if (existsSync(storePathForWorkspace(cwd))) {
+        const entry = this._workspaceStore(agent);
+        if (entry !== null) {
+          for (const project of entry.store.state.projects.values()) {
+            if (project.absPath === cwd) {
+              projectName = project.name;
+              break;
+            }
+          }
+          pushState(entry.store.state, "store");
+        }
+      }
+    } catch {
+      // The store side is best-effort here; the report carries what ran.
+    }
+    return { rows, evidence, comments, retiredExcluded, projectName };
   }
 
   /**
