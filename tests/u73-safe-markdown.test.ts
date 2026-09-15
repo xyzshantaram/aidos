@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * #73 BLOCKING review finding, 2026-09-05: agent-authored markdown was
  * rendered into the harness page through `dangerouslySetInnerHTML` with no
@@ -15,33 +16,31 @@
 
 import { describe, expect, it } from "vitest";
 
-import { escapeHtml, isSafeUrl, renderMarkdownSafe } from "../src/client/safe-markdown";
+import { isSafeUrl, renderMarkdownSafe } from "../src/client/safe-markdown";
 import { expandableFact } from "../src/client/aidos-row-data";
 
 describe("#73 raw HTML in agent-authored text never reaches the DOM", () => {
   it("defuses the reviewer's exact <img onerror> payload", () => {
     const html = renderMarkdownSafe('<img src=x onerror="alert(document.cookie)">');
     /*
-     * The property is that no ELEMENT exists to carry the handler -- not
-     * that the string "onerror" is absent. The rendered output is
-     *
-     *   <p>&lt;img src=x onerror=&quot;alert(document.cookie)&quot;&gt;</p>
-     *
-     * where every one of those characters is text content inside a <p>.
-     * Asserting the substring is gone would forbid the CORRECT behaviour:
-     * a ticket description that talks about an onerror attribute should
-     * still be readable, and nothing should be silently dropped.
+     * #212 moved the boundary to the OUTPUT side, so the contract changed:
+     * raw HTML is SANITIZED, not escaped to visible text. The property is
+     * still that no ELEMENT exists to carry the handler -- the sanitizer
+     * strips the attribute (with its value) and keeps the innocent tag.
+     * Asserting the substring "onerror" is gone would forbid the CORRECT
+     * behaviour: a ticket description that talks about an onerror attribute
+     * should still be readable, and nothing should be silently dropped.
      */
-    expect(html).not.toMatch(/<img/i);
-    // No unescaped tag opener survives anywhere except marked's own <p>.
-    expect(html.replace(/<\/?p>/g, "")).not.toContain("<");
-    expect(html).toContain("&lt;img");
+    expect(html).not.toMatch(/\son\w[\w-]*\s*=/i);
+    expect(html).not.toContain("alert(");
+    expect(html).toContain('src="x"');
   });
 
   it("defuses a script tag", () => {
     const html = renderMarkdownSafe("<script>fetch('/steal')</script>");
     expect(html).not.toContain("<script");
-    expect(html).toContain("&lt;script");
+    // The element goes WITH its payload text, not just its brackets.
+    expect(html).not.toContain("steal");
   });
 
   it("still renders ordinary markdown, so the fix is not a lobotomy", () => {
@@ -56,7 +55,8 @@ describe("#73 unsafe URL schemes are defused", () => {
   it("neutralizes the reviewer's exact javascript: link", () => {
     const html = renderMarkdownSafe("[click](javascript:alert(1))");
     expect(html).not.toContain("javascript:");
-    expect(html).toContain('href="#"');
+    // The sanitizer drops the unsafe href; the link survives as inert text.
+    expect(html).toContain(">click</a>");
   });
 
   it("neutralizes a data: URL", () => {
@@ -103,18 +103,6 @@ describe("#73 unsafe URL schemes are defused", () => {
     // The whole point of failing closed.
     expect(isSafeUrl("vbscript:msgbox(1)")).toBe(false);
     expect(isSafeUrl("somefuturescheme:whatever")).toBe(false);
-  });
-});
-
-describe("#73 escapeHtml covers every metacharacter", () => {
-  it("escapes all five", () => {
-    expect(escapeHtml(`&<>"'`)).toBe("&amp;&lt;&gt;&quot;&#39;");
-  });
-
-  it("escapes the ampersand FIRST, so entities are not double-decoded", () => {
-    // If & were escaped last, "&lt;" produced from "<" would become
-    // "&amp;lt;" and the output would show literal "&lt;" to the reader.
-    expect(escapeHtml("<")).toBe("&lt;");
   });
 });
 

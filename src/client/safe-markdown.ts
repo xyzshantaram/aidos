@@ -23,45 +23,118 @@
  * board can be trusted at all. A rendering convenience was one payload away
  * from defeating the product's core safety property.
  *
- * TWO DEFENCES, because either alone leaves a hole:
+ * WHERE THE BOUNDARY IS (#212, 2026-09-15).
  *
- * 1. ESCAPE THE INPUT before parsing, so NO author-supplied HTML tag can
- *    reach the DOM. Markdown syntax still works -- escaping touches only
- *    & < > " ' -- and raw HTML degrades to visible text, which is the
- *    correct outcome for a ticket description. This alone kills the <img
- *    onerror> class completely.
+ * It used to sit on the INPUT side: the source markdown was HTML-escaped
+ * before `marked` ever saw it. That double-escaped everything -- `"` became
+ * `&quot;` up front, then marked escaped code-span content a second time
+ * into `&amp;quot;`, so every `"`, `<`, `>` and `&` in a code span (and in
+ * prose marked escapes again) rendered as mangled entity text. The fix
+ * MOVES the boundary to the OUTPUT side: marked parses the raw
+ * (chrome-stripped) markdown, and the resulting HTML is sanitized once,
+ * against an allowlist, before it reaches `dangerouslySetInnerHTML`.
  *
- * 2. FILTER URL SCHEMES in the output, because escaping does not help
- *    there: `[click](javascript:alert(1))` contains no HTML metacharacters,
- *    so it survives step 1 and marked renders a live href from it.
+ * THE SANITIZER IS DOMPurify, A MAINTAINED LIBRARY -- NOT HAND-ROLLED.
+ * A hand-rolled HTML sanitizer is a classic source of bypasses (regexes
+ * cannot parse HTML, and every parser-differential is an injection), and
+ * #30 on this board already argues for preferring maintained libraries
+ * over hand-rolled parsing in this area. DOMPurify parses with the REAL
+ * DOM, so there is no tokenizer of ours to drift out of agreement with
+ * the browser, and its allowlists are audited by people who do only this.
+ * It is a runtime dependency of the client bundle (browser code built by
+ * build.mjs): pure JS, no Node builtins, minifies cleanly.
  *
- * The regex in step 2 is reliable ONLY because step 1 already ran: after
- * escaping, the only tags in the string are ones marked emitted itself, so
- * there is no attacker-controlled quoting to confuse it. Parsing HTML with
- * a regex is otherwise a mistake, and this comment exists so nobody
- * reorders the two steps and quietly breaks that guarantee.
+ * TWO LAYERS, because either alone leaves a hole:
  *
- * A dedicated sanitizer (DOMPurify) would be more robust against future
- * marked changes, and is the right move if this surface grows. It is a new
- * runtime dependency for the client bundle, so it is deliberately proposed
- * rather than assumed here.
+ * 1. DOMPurify WITH A NARROWED URI RULE. Stock DOMPurify allows more URI
+ *    schemes than this surface ever needs (tel:, sms:, cid:, ...), so the
+ *    config below keeps stock tag/attribute allowlists but restricts the
+ *    scheme test to http/https/mailto, schemeless URLs passing as before.
+ *    Stock DOMPurify ALSO keeps `data:` alive on media tags by design
+ *    (its DATA_URI_TAGS exception covers img/audio/video src), which is
+ *    why layer 2 is load-bearing rather than decorative.
+ *
+ * 2. `neutralizeUrls` AFTER the sanitizer, applying the same allow-list
+ *    rule (`isSafeUrl`) to the sanitized HTML. DOMPurify normalizes
+ *    attributes to double-quoted form, which is exactly what that regex
+ *    matches, so it now runs on normalized output instead of on
+ *    attacker-influenced quoting. It defuses anything layer 1 lets
+ *    through by exception (a `data:` image source) to "#", and it stays
+ *    correct if a future DOMPurify or marked change alters what layer 1
+ *    emits.
+ *
+ * DOMPurify NEEDS A WINDOW. The client bundle runs in a browser, where the
+ * default export arrives already bound. Under vitest there is no window,
+ * and the same default export is a FACTORY awaiting one -- so the binding
+ * is resolved lazily at first use (see `sanitizer()`), and tests for this
+ * module run under the jsdom environment, which supplies it. `jsdom` is a
+ * dev-only test concern: nothing in `src/client` may import it, or the
+ * client bundle would drag in Node-only code.
+ *
+ * #182 runs FIRST: harness ref-chip chrome is stripped before parsing, so
+ * it never renders as visible escaped markup. That ordering is untouched
+ * by #212 -- the strip still runs before everything else, for the same
+ * reason: the renderer never has to choose between mangling chrome and
+ * passing HTML through.
  */
 
+import DOMPurifyFactory from "dompurify";
+import type { Config as DOMPurifyConfig, DOMPurify } from "dompurify";
 import { marked } from "marked";
 import { stripHarnessChrome } from "./strip-harness-chrome";
 
-/** The five characters that can open an HTML construct. */
-const HTML_ESCAPES: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
+/**
+ * DOMPurify configuration: stock tag and attribute allowlists, with the
+ * URI-scheme rule narrowed to this surface's needs.
+ *
+ * The tail of the expression is DOMPurify's own stock tail, kept verbatim:
+ * schemeless URLs (relative paths, fragments, protocol-relative paths)
+ * carry no scheme and stay allowed. Only the scheme alternatives changed:
+ * stock allows ftp/ftps/tel/callto/sms/cid/xmpp/matrix in addition to
+ * http/https/mailto; here anything but http/https/mailto fails the test
+ * and DOMPurify drops the attribute. `neutralizeUrls` below then enforces
+ * the identical rule a second time (see the header: the DATA_URI_TAGS
+ * exception is why the second pass is load-bearing).
+ */
+const SANITIZE_CONFIG: DOMPurifyConfig = {
+  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
 };
 
-/** Render every HTML metacharacter inert. */
-export function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]);
+/**
+ * The sanitizer instance, resolved lazily.
+ *
+ * In the browser bundle the default export is already bound to the page's
+ * window and exposes `sanitize` directly. In Node (vitest) the same
+ * default export is a factory: `sanitize` is absent until it is called
+ * with a window, which the jsdom test environment provides as
+ * `globalThis.window`. Resolving here -- at first render, not at import --
+ * keeps module evaluation side-effect free in both runtimes, and the
+ * per-window cache keeps repeated renders from rebinding.
+ */
+let cachedWindow: unknown = null;
+let cachedSanitizer: DOMPurify | null = null;
+
+function sanitizer(): DOMPurify {
+  const candidate = DOMPurifyFactory as unknown as DOMPurify & ((win: Window) => DOMPurify);
+  if (typeof candidate.sanitize === "function") return candidate;
+  const win = (globalThis as unknown as { window?: Window }).window;
+  if (win === undefined || win === null) {
+    throw new Error(
+      "#212: renderMarkdownSafe needs a Window for DOMPurify and none exists. " +
+        "The client bundle always runs in a browser; tests for this module must " +
+        "run under the jsdom environment (// @vitest-environment jsdom).",
+    );
+  }
+  if (cachedSanitizer === null || cachedWindow !== win) {
+    cachedSanitizer = candidate(win);
+    cachedWindow = win;
+  }
+  return cachedSanitizer;
+}
+
+/** Sanitize marked's output HTML against the allowlist, exactly once. */
+function sanitizeHtml(html: string): string {
+  return sanitizer().sanitize(html, SANITIZE_CONFIG);
 }
 
 /**
@@ -91,7 +164,15 @@ export function isSafeUrl(url: string): boolean {
   return scheme[1] === "http" || scheme[1] === "https" || scheme[1] === "mailto";
 }
 
-/** Replace every unsafe href/src in marked's own output with "#". */
+/**
+ * Replace every unsafe href/src in sanitized output with "#".
+ *
+ * This runs AFTER DOMPurify (see the header): DOMPurify normalizes
+ * attributes to double-quoted form, so the only quoting this regex ever
+ * meets is the sanitizer's own -- there is no attacker-controlled quoting
+ * left to confuse it. It is load-bearing for the cases DOMPurify keeps by
+ * exception, notably `data:` sources on media tags.
+ */
 function neutralizeUrls(html: string): string {
   return html.replace(
     /(\s(?:href|src)=")([^"]*)(")/gi,
@@ -103,16 +184,16 @@ function neutralizeUrls(html: string): string {
 /**
  * Markdown to HTML, safe to hand to `dangerouslySetInnerHTML`.
  *
- * Author-supplied HTML becomes visible text rather than live markup, and a
- * link to anything but http/https/mailto is defused to "#".
+ * Marked parses the raw (chrome-stripped) markdown, so code spans and prose
+ * carry each entity exactly once; DOMPurify then keeps the allow-listed
+ * subset as live markup and drops the rest, and `neutralizeUrls` defuses
+ * any surviving non-http/https/mailto link to "#".
  *
- * #182 runs FIRST: harness ref-chip chrome is stripped before escaping, so
- * it never renders as visible escaped markup. The escaper below is
- * untouched -- it is the security boundary, and this step is the reason it
- * never has to choose between mangling chrome and passing HTML through.
+ * #182 runs FIRST: harness ref-chip chrome is stripped before parsing, so
+ * it never renders as visible escaped markup.
  */
 export function renderMarkdownSafe(text: string): string {
   if (text === "") return "";
-  const parsed = marked.parse(escapeHtml(stripHarnessChrome(text)), { async: false });
-  return neutralizeUrls(String(parsed));
+  const parsed = marked.parse(stripHarnessChrome(text), { async: false });
+  return neutralizeUrls(sanitizeHtml(String(parsed)));
 }

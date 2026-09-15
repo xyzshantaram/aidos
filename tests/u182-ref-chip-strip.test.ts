@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * #182: harness ref-chip markup rendered as escaped text in aidos surfaces.
  *
@@ -12,7 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { escapeHtml, renderMarkdownSafe } from "../src/client/safe-markdown";
+import { renderMarkdownSafe } from "../src/client/safe-markdown";
 import { stripHarnessChrome } from "../src/client/strip-harness-chrome";
 
 /** The reported sample's shape: styled-components refChip class + data attr. */
@@ -116,28 +117,25 @@ describe("#182 unrecognised variants fail loudly, never pass through", () => {
 });
 
 describe("#182 the #73 security boundary still holds after the fix", () => {
-  it("the reviewer's exact <img onerror> payload still degrades to text", () => {
+  it("the reviewer's exact <img onerror> payload is sanitized, not passed through", () => {
     const html = renderMarkdownSafe('<img src=x onerror="alert(document.cookie)">');
-    expect(html).not.toMatch(/<img/i);
-    // No unescaped tag opener survives anywhere except marked's own <p>.
-    expect(html.replace(/<\/?p>/g, "")).not.toContain("<");
-    expect(html).toContain("&lt;img");
+    // #212: raw HTML is sanitized rather than escaped to visible text --
+    // the handler (with its value) goes, the innocent tag stays.
+    expect(html).not.toMatch(/\son\w[\w-]*\s*=/i);
+    expect(html).not.toContain("alert(");
+    expect(html).toContain('src="x"');
   });
 
   it("a script tag smuggled beside chrome still degrades", () => {
     const html = renderMarkdownSafe(CHIP + "<script>fetch('/steal')</script>");
     expect(html).not.toContain("<script");
-    expect(html).toContain("&lt;script");
+    expect(html).not.toContain("steal");
     expect(html).toContain("/home");
-  });
-
-  it("escapeHtml still covers every metacharacter", () => {
-    expect(escapeHtml(`&<>"'`)).toBe("&amp;&lt;&gt;&quot;&#39;");
   });
 
   it("unsafe URL schemes are still defused after the strip", () => {
     const html = renderMarkdownSafe("[click](javascript:alert(1)) " + CHIP);
     expect(html).not.toContain("javascript:");
-    expect(html).toContain('href="#"');
+    expect(html).toContain(">click</a>");
   });
 });
