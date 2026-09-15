@@ -97,6 +97,30 @@ const CLOSED_INSPECT_CONCURRENCY = 4;
  */
 const BACKFILL_BATCH_SESSIONS = 10;
 
+/**
+ * #221, review finding (i): the retained log-TEXT one backfill batch holds
+ * at once, alongside the count bound. The count bound alone does not cover
+ * the packed batch: the measured workspace's largest sessions run
+ * 27/24/20 MB compressed (~68 MB decompressed max), and three large
+ * neighbours in one count-10 window would retain ~190 MB of text — ~750 MB
+ * parsed — survivable but uncomfortably close to the caps that killed the
+ * old driver. The byte term caps the COMMON tail: small-log batches still
+ * run full-count (64 MB dwarfs 10 × 2.2 MB average, so throughput is
+ * untouched), while a window of giants cuts early.
+ *
+ * Measured as `JSON.stringify(events).length` per resolved inspect — an
+ * honest proxy for the decompressed text the parse came from, one pass,
+ * backfill-path only. Overshoot bound, stated precisely: workers take the
+ * next id only while the retained total is under budget, but takes happen
+ * before sizes are known, so at most the in-flight parses (bounded by
+ * CLOSED_INSPECT_CONCURRENCY) land past the budget. The irreducible
+ * worst case is therefore BUDGET + 4 × largest-log — ~336 MB text,
+ * ~1.3 GB parsed, against a machine that died at 5.5 GB — and no
+ * host-side scheme can do better without serialising inspects (killing
+ * import speed) or pre-fetch size metadata the headers do not carry.
+ */
+const BACKFILL_BATCH_BYTES = 64 * 1024 * 1024;
+
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
 import { reviewChainOf } from "../kernel/gates";
@@ -3184,13 +3208,23 @@ registerAidosSessionEventTypes(ctx);
    * and the single transaction bracket are all #41's, unchanged.
    *
    * #221: the handoff is BATched, not whole-workspace. Each batch of at
-   * most BACKFILL_BATCH_SESSIONS logs is inspected, flushed with one
-   * `backfillSessionLogs` call, and then released — peak retained memory is
-   * a function of the batch bound, never of the session count. #211's v2
-   * marker is incremental and cumulative, so each call lands durable
-   * progress (its sessions plus a cumulative ticket map) and a crash
-   * re-runs at most one batch: the next open hands only the sessions no
-   * marker yet accounts for and skips the rest without inspecting them.
+   * most BACKFILL_BATCH_SESSIONS logs (and BACKFILL_BATCH_BYTES of retained
+   * log text) is inspected, flushed with one `backfillSessionLogs` call,
+   * and then released — peak retained memory is a function of the batch
+   * bounds, never of the session count. #211's v3 marker is incremental and
+   * cumulative, so each call lands durable progress (its sessions plus a
+   * cumulative ticket map) and a crash re-runs at most one batch: the next
+   * open hands only the sessions no marker yet accounts for and skips the
+   * rest without inspecting them.
+   *
+   * Every call carries the FULL resume set as `expectedSessionIds` (#211
+   * round 2, finding A): a reference naming a session handed in a LATER
+   * batch becomes a pending edge and is repaired on arrival, instead of
+   * being dropped terminally. Without the claim the batched import would be
+   * silently lower fidelity than the monolithic one it replaces — drops are
+   * terminal and nothing reclassifies them. Refs naming sessions the driver
+   * deliberately skips (mirrored rows, see below) are NOT claimed and still
+   * drop-and-record: the driver cannot promise their arrival.
    *
    * Failure handling, per piece:
    *  - no persistence service: skip, nothing verified — the next open retries;
@@ -3209,12 +3243,12 @@ registerAidosSessionEventTypes(ctx);
    *    one poison batch must not hold the other 446 sessions hostage),
    *    and leave the workspace unverified so the NEXT open retries exactly
    *    the unlanded sessions. The board read never fails either way.
-   *  - CROSS-BATCH dependency edges (#211 round-2 review, F1/F2): until the
-   *    kernel stops falling back to the own session for a prefix outside
-   *    the handed batch, a batch whose logs depend on LATER batches refuses
-   *    (self-edge) or silently miswires. The refusal path above keeps the
-   *    host alive and retries; the miswire is invisible from the driver and
-   *    is this ticket's correctness blocker — the cross-batch test pins it.
+   *  - CROSS-BATCH dependency edges (#211 round 2, finding A): every call
+   *    claims the full resume set, so a batch whose logs depend on LATER
+   *    batches pends those edges and repairs them on arrival (the
+   *    cross-batch test pins the wiring, not merely the absence of a
+   *    miswire). A batch that genuinely cannot flush still refuses below,
+   *    and the refusal path keeps the host alive and retries.
    * A failed backfill never fails the board read, and never kills the host:
    * every refusal is caught, logged, and retried — the OOM this replaces
    * was the only failure mode that escaped this method, because it struck
@@ -3245,38 +3279,30 @@ registerAidosSessionEventTypes(ctx);
     // and every closed log would be lost. Leave the import for the next open.
     if (closedIds === null) return;
     const report = entry.store.backfillReport();
-    if (report !== null && report.dropsUnknown) {
-      // #221/F4: a v1 marker's session list and ticket map do not survive a
-      // SUBSET handoff — the upgraded marker names only the handed sessions,
-      // so the next batch re-imports the v1 sessions' tickets as suffixed
-      // duplicates. #211 round 2 carries the v1 session list across calls;
-      // until it lands, hand NOTHING to a v1-marked store and leave the
-      // marker byte-identical. This is exactly #42's behavior for such
-      // workspaces (the marker gate never let them re-import), so nothing
-      // that works today changes. Verified hollowly on purpose: it means
-      // "this process decided", not "the import is complete" — a new
-      // process (possibly with the round-2 kernel) re-decides from scratch.
-      this.ctx.logger?.info?.(
-        `aidos: backfill defers ${path}: a v1 import marker is present and subset completion lands with #211 round 2`,
-      );
-      this._backfillVerified.add(path);
-      return;
-    }
     const fresh = this._unimportedSessionIds(entry.store, report, closedIds);
     if (fresh.length === 0) {
       this._backfillVerified.add(path);
       return;
     }
+    // Finding A: the full-horizon claim. Every call names the whole resume
+    // set, so cross-batch references pend instead of dropping terminally.
+    const expected = fresh.map(String);
     this.ctx.logger?.info?.(
       `aidos: backfill importing ${fresh.length} of ${closedIds.length} closed log(s) in batches of ${BACKFILL_BATCH_SESSIONS}`,
     );
     let refused = false;
-    for (let start = 0; start < fresh.length; start += BACKFILL_BATCH_SESSIONS) {
-      const batch = fresh.slice(start, start + BACKFILL_BATCH_SESSIONS);
-      const flushed = await this._exclusiveBackfillBatch(() =>
-        this._importBackfillBatch(entry, batch, persistence),
+    let cursor = 0;
+    while (cursor < fresh.length) {
+      const batch = fresh.slice(cursor, cursor + BACKFILL_BATCH_SESSIONS);
+      const outcome = await this._exclusiveBackfillBatch(() =>
+        this._importBackfillBatch(entry, batch, persistence, expected),
       );
-      if (!flushed) refused = true;
+      if (!outcome.ok) refused = true;
+      // Taken, not landed: inspected-but-unreadable ids are warned and left
+      // for the next open, never re-inspected in this run. At least one id
+      // is always taken from a non-empty slice (the first take is
+      // unconditional), so this loop terminates.
+      cursor += outcome.taken;
     }
     // Only a fully flushed import verifies: a refused batch's sessions are
     // unmarked, so the next open re-lists and retries exactly them.
@@ -3286,15 +3312,18 @@ registerAidosSessionEventTypes(ctx);
   /**
    * #221: the sessions of `closedIds` the store does not already account
    * for — the resume set. Two sources, both read without touching a log:
-   *  - the v2 marker's `sessionIds`: every batch that landed names its
+   *  - the marker's `sessionIds`: every batch that landed names its
    *    sessions, so a crashed import resumes after its last landed batch
-   *    instead of restarting the workspace. (A v1 marker never reaches
-   *    here: the caller defers it whole — see the F4 gate above.)
+   *    instead of restarting the workspace;
    *  - the store's origin index: on a RESUME (marker present) a session
    *    whose tickets the live mirror (#218) already owns is skipped, so a
    *    session that mirrored its rows and then closed is never re-imported
-   *    as suffixed duplicates. On the FIRST import (no marker) the set is
-   *    exactly `closedIds`, byte-for-byte #42's set: changing it would
+   *    as suffixed duplicates — EXCEPT v1-listed sessions, which are handed
+   *    even though v1 stamped their origins: #211 round 2 completes v1
+   *    history per handed-in batch (tickets scan-matched, never re-imported;
+   *    plans, phases and refusals replayed), and withholding them would
+   *    strand that history forever. On the FIRST import (no marker) the set
+   *    is exactly `closedIds`, byte-for-byte #42's set: changing it would
    *    trade today's duplication corner for a silent plan-loss corner, and
    *    that trade is out of scope — it is recorded on BACKFILL_BATCH_SESSIONS.
    */
@@ -3304,8 +3333,16 @@ registerAidosSessionEventTypes(ctx);
     closedIds: SessionId[],
   ): SessionId[] {
     if (report === null) return [...closedIds];
-    const imported = new Set<string>(report.sessionIds);
     const mirrored = this._storeOriginSessions(store);
+    if (report.dropsUnknown) {
+      // v1: hand every closed session except mirrored rows the v1 import
+      // never saw. v1-listed sessions are handed DESPITE their origins so
+      // round 2 can replay the history v1 skipped; the origin scan matches
+      // their tickets, so nothing lands twice (F4, kernel-tested).
+      const v1 = new Set<string>(report.sessionIds);
+      return closedIds.filter((id) => v1.has(String(id)) || !mirrored.has(String(id)));
+    }
+    const imported = new Set<string>(report.sessionIds);
     return closedIds.filter(
       (id) => !imported.has(String(id)) && !mirrored.has(String(id)),
     );
@@ -3341,11 +3378,14 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * #221: inspect one bounded batch of closed logs and flush it with a
-   * single `backfillSessionLogs` call. Returns true only when every log of
-   * the batch either landed or was vacuously absent — an unreadable log or
-   * a refused flush returns false, leaving the workspace unverified so the
-   * next open retries exactly the unlanded sessions. The `logs` array is
-   * released on return, so the next batch starts from an empty retained set.
+   * single `backfillSessionLogs` call. `expected` is the FULL resume set —
+   * every call claims it, so references to later batches pend and repair
+   * instead of dropping (finding A). Returns how many ids of the slice
+   * were taken (inspected or warned-skipped) and whether the batch is fully
+   * resolved: an unreadable log or a refused flush returns ok false,
+   * leaving the workspace unverified so the next open retries exactly the
+   * unlanded sessions. The `logs` array is released on return, so the next
+   * batch starts from an empty retained set.
    */
   private async _importBackfillBatch(
     entry: { store: Store; projectId: ProjectId },
@@ -3353,13 +3393,20 @@ registerAidosSessionEventTypes(ctx);
     persistence: {
       inspect: (id: SessionId) => Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>;
     },
-  ): Promise<boolean> {
+    expected: readonly string[],
+  ): Promise<{ ok: boolean; taken: number }> {
     const logs: BackfillSessionLog[] = [];
-    let cursor = 0;
+    let taken = 0;
+    let retainedBytes = 0;
     let inspectFailed = false;
     const worker = async (): Promise<void> => {
-      while (cursor < batch.length) {
-        const id = batch[cursor++]!;
+      while (taken < batch.length) {
+        // The byte cut: stop taking once the retained batch is over budget.
+        // Takes happen before sizes are known, so the first take is
+        // unconditional (progress) and in-flight parses are the bounded
+        // overshoot (see BACKFILL_BATCH_BYTES).
+        if (taken > 0 && retainedBytes >= BACKFILL_BATCH_BYTES) return;
+        const id = batch[taken++]!;
         try {
           const inspection = await persistence.inspect(id as SessionId);
           // No `.map()` copy: the inspection's own event array IS the
@@ -3368,6 +3415,7 @@ registerAidosSessionEventTypes(ctx);
           // the peak, for no reason (the fold only reads seq/type/data,
           // which the envelope already carries).
           logs.push({ sessionId: id, events: inspection.events });
+          retainedBytes += JSON.stringify(inspection.events).length;
         } catch (error) {
           inspectFailed = true;
           this.ctx.logger?.warn?.(
@@ -3379,20 +3427,22 @@ registerAidosSessionEventTypes(ctx);
     await Promise.all(
       Array.from({ length: Math.min(CLOSED_INSPECT_CONCURRENCY, batch.length) }, worker),
     );
-    if (logs.length === 0) return !inspectFailed;
+    if (logs.length === 0) return { ok: !inspectFailed, taken };
     try {
-      const result = entry.store.backfillSessionLogs(entry.projectId, logs);
+      const result = entry.store.backfillSessionLogs(entry.projectId, logs, {
+        expectedSessionIds: expected,
+      });
       if (!result.alreadyRan) {
         this.ctx.logger?.info?.(
           `aidos: backfill batch imported ${result.tickets} ticket(s), ${result.evidence} evidence row(s), ${result.comments} comment(s) from ${result.sessionIds.length} log(s)`,
         );
       }
-      return !inspectFailed;
+      return { ok: !inspectFailed, taken };
     } catch (error) {
       this.ctx.logger?.warn?.(
         `aidos: workspace backfill batch refused (the next open retries its ${logs.length} log(s): ${batch.map(String).join(", ")}): ${error instanceof Error ? error.message : String(error)}`,
       );
-      return false;
+      return { ok: false, taken };
     }
   }
 

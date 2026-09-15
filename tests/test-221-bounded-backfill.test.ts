@@ -7,17 +7,22 @@
  * `Store.backfillSessionLogs` in one call — peak memory scaled with the
  * workspace's entire accumulated history (measured: 5.5 GB peak, host OOM,
  * retry forever). Now it inspects a bounded batch, flushes it, releases it,
- * and moves on; #211's cumulative v2 marker makes each flush durable
- * progress the next open resumes from.
+ * and moves on; #211's cumulative v3 marker makes each flush durable
+ * progress the next open resumes from. Every call claims the FULL resume
+ * set as `expectedSessionIds`, so cross-batch references pend and repair
+ * instead of dropping terminally (finding A).
  *
  * Criterion map (#221's acceptance, verbatim):
  *   1. the backfill holds a bounded number of session logs in memory at
  *      once, so peak memory does not scale with the workspace's total
  *      accumulated history — the 35-log test below fails if any single
  *      `backfillSessionLogs` call carries more than BACKFILL_BATCH_SESSIONS
- *      (10) logs, or more than half the import's total bytes.
+ *      (10) logs, or more than half the import's total bytes. The byte-cut
+ *      test adds the second term of the bound: a batch stops taking once
+ *      retained log text exceeds BACKFILL_BATCH_BYTES (review finding i —
+ *      the count bound alone does not cover packed batches of giants).
  *   2. the bound is enforced by construction rather than by a comment —
- *      same test: it counts the driver's own handoff sizes, not wall time.
+ *      same tests: they count the driver's own handoff sizes, not wall time.
  *   3. progress is durable per session log, so an import interrupted
  *      partway resumes from where it stopped instead of restarting the
  *      whole workspace — the blackout test fails the second batch's
@@ -39,20 +44,19 @@
  *      concurrently while global in-flight inspects stay within one batch
  *      (the process-wide batch serializer).
  *
- * CROSS-BATCH DEPENDENCIES (F1/F2, #211 round-2 review): the last describe
- * pins the driver side of the subset-safety defect the review found —
- * `_remapDependency` falls back to the OWN session for a `sessionId:N`
- * prefix outside the handed batch, so a batch importing B before A either
- * refuses (self-edge, F1) or silently rewires B's edge onto B's own ticket
- * and reports `lossless: true` (F2). Measured pre-round-2: B2 lands on
- * `--home-sid-repos-aidos--:1` (B1's id, not A1's `:12`) with
- * `edgesRewritten: 1, droppedDependencies: [], lossless: true`.
- * That test FAILS against the current kernel + this batched driver by
- * design; it PASSES against the old monolithic driver (one call carries
- * every log, so no prefix is ever outside the batch — at unbounded memory
- * cost) and will flip green when #211 round 2 lands (drop-and-record
- * satisfies the `dropped` branch). It is NOT skipped or marked
- * expected-to-fail: a red test documenting a real defect is the deliverable.
+ * FINDING A (review): the driver passes `expectedSessionIds` (the full
+ * resume set) on every call, and the cross-batch test pins the WIRING —
+ * B2's edge to A1 must read `[KEY:A1]` after both batches land, with the
+ * repair recorded on the marker. The earlier "wired OR dropped" contract is
+ * what let the fidelity regression hide (drops are terminal); a regression
+ * to drop-and-record fails loudly here.
+ *
+ * FINDING B (review): the v1 gate is gone — #211 round 2 carries the v1
+ * session list across subset calls, so a v1-marked store resumes through
+ * the same path as a v3 one. The v1 test drives a COPY of the real
+ * `--home-sid-repos-aidos--` store (v1 marker, 323 sessions, 164 tickets)
+ * under a throwaway DSH_HOME and asserts the completion imports nothing
+ * twice; the real store is never written and no real session log is read.
  *
  * Log builders: kernel-built logs (`kernelLog`, the test-41 pattern — a
  * real Store folding real writes, wrapped in inspect envelopes) wherever
@@ -62,14 +66,17 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { Store } from "../src/kernel/store";
-import type { BackfillReport } from "../src/kernel/store";
 import type { BackfillSessionLog } from "../src/kernel/backfill";
 import { MemoryStorage } from "../src/kernel/storage-memory";
 import type { AidosEvent } from "../src/kernel/events";
 import type { ProjectId } from "../src/kernel/types";
 import { workspaceKeyFromPath } from "../src/kernel/slug";
+import { openWorkspaceStorage } from "../src/host/storage-sqlite";
 import { createHarness } from "./b1-harness";
 import { FIXED_NOW, makeConfig } from "./helpers";
 
@@ -209,6 +216,51 @@ describe("#221 criteria 1+2: the handoff is bounded by construction", () => {
       spy.mockRestore();
     }
   });
+
+  it(
+    "a batch stops taking once retained log text exceeds the byte budget",
+    // Moves ~70 MB through fold, stringify and sqlite: seconds standalone,
+    // longer with the suite's workers contending. The timeout declares the
+    // cost; the assertions still pin the behavior.
+    { timeout: 60000 },
+    async () => {
+    // Review finding (i): the count bound alone does not cover packed
+    // batches of giants. One ~70 MB log (over BACKFILL_BATCH_BYTES alone)
+    // leads nine small ones. Async stubs resolve in call order, so the
+    // giant is recorded first and every worker stops taking: the first
+    // call carries the giant plus the three already-in-flight smalls,
+    // and the remaining six smalls form the second call. Without the byte
+    // term the same import is a single call of 10.
+    const harness = createHarness(undefined, { cwd: WS });
+    harness.installService();
+    const giantId = "t221-giant-0";
+    const giant = kernelLog(giantId, WS, (store, projectId) => {
+      store.createTicket(projectId, "giant ticket", `payload ${"z".repeat(70 * 1024 * 1024)}`);
+    });
+    const smallIds = Array.from({ length: 9 }, (_, index) => `t221-byte-small-${index}`);
+    const logs = new Map<string, { cwd: string; events: LogEvents }>();
+    logs.set(giantId, { cwd: WS, events: giant.events });
+    for (const id of smallIds) {
+      const log = kernelLog(id, WS, (store, projectId) => {
+        kernelTicket(store, projectId, `byte small ${id}`);
+      });
+      logs.set(id, { cwd: WS, events: log.events });
+    }
+    provideLogs(harness, logs);
+
+    const spy = vi.spyOn(Store.prototype, "backfillSessionLogs");
+    try {
+      const result = await harness.service.workspaceTickets(harness.asAgent());
+      expect(result.tickets.filter((row) => row.title === "giant ticket").length).toBe(1);
+      expect(result.tickets.filter((row) => row.title.startsWith("byte small ")).length).toBe(9);
+      const sizes = spy.mock.calls.map((call) => (call[1] as readonly BackfillSessionLog[]).length);
+      expect(sizes).toEqual([4, 6]);
+      expect(workspaceEntry(harness, WS).store.backfillReport()?.sessionIds.length).toBe(10);
+    } finally {
+      spy.mockRestore();
+    }
+    },
+  );
 });
 
 describe("#221 criterion 3: progress is durable per session log", () => {
@@ -457,66 +509,203 @@ describe("#221 resume skips sessions the live mirror already owns", () => {
   });
 });
 
-describe("#221 v1 marker: the driver defers subset completion (F4 gate)", () => {
-  it("hands nothing to a v1-marked store and leaves the marker intact", async () => {
-    const harness = createHarness(undefined, { cwd: WS });
-    harness.installService();
-    const logger = setLogger(harness);
-    const logs = new Map<string, { cwd: string; events: LogEvents }>();
-    for (let index = 0; index < 3; index += 1) {
-      const id = `t221-v1fresh-${index}`;
-      const log = kernelLog(id, WS, (store, projectId) => {
-        kernelTicket(store, projectId, `v1fresh ticket ${index}`);
-      });
-      logs.set(id, { cwd: WS, events: log.events });
-    }
-    provideLogs(harness, logs);
-
-    // A v1 marker cannot be produced through any current writer (v2-only),
-    // so the gate is driven through the seam it reads: backfillReport.
-    const v1: BackfillReport = {
-      importerVersion: 1,
-      sessionIds: ["t221-v1-old-0"],
-      tickets: 1,
-      evidence: 0,
-      comments: 0,
-      plans: 0,
-      phases: 0,
-      refusals: 0,
-      edgesRewritten: 0,
-      droppedDependencies: [],
-      skippedPlans: [],
-      skippedPhases: [],
-      droppedRefusals: [],
-      skippedKinds: ["plan/change", "phase/set", "aidos/refusal"],
-      ticketMap: [],
-      // #211 round 2 added these three. A v1 marker records none of them --
-      // it predates the concepts -- which is precisely why dropsUnknown is
-      // true: empty here means "never recorded", not "nothing happened".
-      pendingEdges: [],
-      repairedEdges: [],
-      slugRenames: [],
-      dropsUnknown: true,
-      lossless: false,
-      at: FIXED_NOW,
-    };
-    const reportSpy = vi.spyOn(Store.prototype, "backfillReport").mockReturnValue(v1);
-    const backfillSpy = vi.spyOn(Store.prototype, "backfillSessionLogs");
+describe("#221 finding B: a real v1 marker no longer freezes the board", () => {
+  it("fresh sessions import once on a v1 store; the marker upgrades with carried counts", async () => {
+    // A COPY of the real `--home-sid-repos-aidos--` store (v1 marker, 323
+    // sessions, 164 tickets — measured read-only) under a throwaway
+    // DSH_HOME. The real store is never written. The stub lists ONLY fresh
+    // kernel logs: the 323 real v1 logs (1 GB) stay on disk, so this test
+    // proves the freeze is gone and the upgrade is exact — v1-history
+    // completion with handed-in v1 logs is pinned by the synthetic test
+    // below and measured at scale in the criterion-5 re-run.
+    const savedHome = process.env.DSH_HOME;
+    const fixtureHome = mkdtempSync(join(tmpdir(), "t221-v1fixture-home-"));
+    process.env.DSH_HOME = fixtureHome;
     try {
-      const result = await harness.service.workspaceTickets(harness.asAgent());
-      expect(result.tickets).toBeDefined();
-      // Nothing handed over: the buggy v1-upgrade path never fires.
-      expect(backfillSpy.mock.calls.length).toBe(0);
-      expect(logger.info.mock.calls.map((call) => String(call[0])).some((line) => /v1 import marker/.test(line))).toBe(true);
+      const key = "--home-sid-repos-aidos--";
+      const dest = join(fixtureHome, "aidos", "storage", key);
+      mkdirSync(dest, { recursive: true });
+      const realStore = join(homedir(), ".dsh", "aidos", "storage", key);
+      copyFileSync(join(realStore, "board.db"), join(dest, "board.db"));
+      copyFileSync(join(realStore, "board.db-wal"), join(dest, "board.db-wal"));
+
+      const harness = createHarness(undefined, { cwd: "/home/sid/repos/aidos" });
+      harness.installService();
+      // Pre-state, read directly (test-217 precedent): the v1 marker's facts.
+      const preStore = new Store(makeConfig(), { storage: openWorkspaceStorage("/home/sid/repos/aidos") });
+      const pre = preStore.backfillReport()!;
+      expect(pre.importerVersion).toBe(1);
+      expect(pre.dropsUnknown).toBe(true);
+      expect(pre.sessionIds.length).toBeGreaterThan(100);
+      const preTickets = pre.tickets;
+      const preProject = preStore.findProject("/home/sid/repos/aidos")!;
+      const preRows = preStore.ticketsFor(preProject).length;
+
+      const freshIds = ["t221-v1c-fresh-0", "t221-v1c-fresh-1", "t221-v1c-fresh-2"];
+      const freshLogs = new Map<string, { cwd: string; events: LogEvents }>();
+      for (const [index, id] of freshIds.entries()) {
+        const log = kernelLog(id, "/home/sid/repos/aidos", (store, projectId) => {
+          kernelTicket(store, projectId, `t221 v1c fresh ticket ${index}`);
+        });
+        freshLogs.set(id, { cwd: "/home/sid/repos/aidos", events: log.events });
+      }
+      const inspected: string[] = [];
+      harness.ctx.reflect.provide("sessionPersistence", {
+        list: async () => freshIds.map((id) => ({ id: SessionId(id), cwd: "/home/sid/repos/aidos" })),
+        inspect: async (id: string) => {
+          await Promise.resolve();
+          inspected.push(id);
+          const fresh = freshLogs.get(id);
+          if (fresh === undefined) throw new Error(`unexpected inspect: ${id}`);
+          return { meta: { id, cwd: "/home/sid/repos/aidos" }, events: fresh.events as never[] };
+        },
+      });
+
+      await harness.service.workspaceTickets(harness.asAgent());
+      const { store, projectId } = workspaceEntry(harness, "/home/sid/repos/aidos");
+      const rows = store.ticketsFor(projectId);
+      // The freeze is gone: fresh landed exactly once...
+      for (const index of [0, 1, 2]) {
+        expect(rows.filter((row) => row.title === `t221 v1c fresh ticket ${index}`).length).toBe(1);
+      }
+      expect([...inspected].sort()).toEqual([...freshIds].sort());
+      // ...and totals are exact: any duplicate would inflate them.
+      expect(rows.length).toBe(preRows + freshIds.length);
+      // The marker upgraded instead of resetting: v1's counts carried
+      // forward plus the fresh batch, under the new generation. sessionIds
+      // names only sessions this importer finished (round-2 narrowness);
+      // the v1 row itself persists in the log behind it.
+      const post = store.backfillReport()!;
+      expect(post.dropsUnknown).toBe(false);
+      expect(post.importerVersion).toBe(3);
+      expect(post.tickets).toBe(preTickets + freshIds.length);
+      for (const id of freshIds) expect(post.sessionIds).toContain(id);
+      expect(
+        store.events().some((event) => event.kind === "backfill/completed" && event.version === 1),
+      ).toBe(true);
     } finally {
-      reportSpy.mockRestore();
-      backfillSpy.mockRestore();
+      if (savedHome === undefined) {
+        delete process.env.DSH_HOME;
+      } else {
+        process.env.DSH_HOME = savedHome;
+      }
+      rmSync(fixtureHome, { recursive: true, force: true });
+    }
+  });
+
+  it("v1-listed sessions handed back in replay their history and land nothing twice", async () => {
+    // Synthetic v1 aftermath, small: two sessions whose tickets were
+    // flushed with origins stamped plus a counts-only v1 marker — the exact
+    // shape #211 round 2's F4 test stages, but driven here through the HOST
+    // batcher (which must HAND the v1 sessions despite their origins) with
+    // the real logs served back. Asserts the completion the real-copy test
+    // above cannot serve (1 GB of real logs stay on disk there).
+    const savedHome = process.env.DSH_HOME;
+    const fixtureHome = mkdtempSync(join(tmpdir(), "t221-v1synth-home-"));
+    process.env.DSH_HOME = fixtureHome;
+    try {
+      const sourceA = kernelLog("t221-v1s-a", WS, (store, projectId) => {
+        kernelTicket(store, projectId, "v1s ticket A");
+        store.setPlanMeta(projectId, {
+          frontmatter: "owner: syn",
+          preamble: "the v1s plan",
+          contextSections: [{ heading: "scope", text: "syn", index: 0 }],
+          rules: "none",
+        });
+      });
+      const sourceB = kernelLog("t221-v1s-b", WS, (store, projectId) => {
+        kernelTicket(store, projectId, "v1s ticket B");
+      });
+      const sources = new Map([
+        ["t221-v1s-a", sourceA],
+        ["t221-v1s-b", sourceB],
+      ]);
+
+      // Fabricate the v1 aftermath straight into the file the service will
+      // open: origin-stamped creates (the public mirror path — exactly what
+      // mirrored rows look like) plus one raw counts-only v1 marker.
+      const storage = openWorkspaceStorage(WS);
+      const seed = new Store(makeConfig(), { storage });
+      const seedProject = seed.createProject(WS, "aidos");
+      for (const [sessionId, log] of sources) {
+        const create = log.events.find(
+          (event) => event.type === "ticket/change" && (event.data as { operation?: string }).operation === "create",
+        )!;
+        // Source logs collide on local id 1 (each built on its own port),
+        // so the staged tickets are renumbered into the workspace space —
+        // exactly what the v1 importer did. The origin still names the
+        // source-local seq, which is what the completion matches on.
+        const stagedId = seed.allocateTicketId();
+        seed.commitHostMirror(
+          {
+            ...(create.data as AidosEvent),
+            ticket: {
+              ...(create.data as { ticket: object }).ticket,
+              id: stagedId,
+              projectId: seedProject,
+            },
+          } as AidosEvent,
+          () => undefined,
+          { sessionId, localSeq: create.seq },
+        );
+      }
+      seed.commitHostMirror(
+        {
+          kind: "backfill/completed",
+          version: 1,
+          sessionIds: ["t221-v1s-a", "t221-v1s-b"],
+          tickets: 2,
+          evidence: 0,
+          comments: 0,
+          at: FIXED_NOW,
+        } as unknown as AidosEvent,
+        () => undefined,
+      );
+
+      const harness = createHarness(undefined, { cwd: WS });
+      harness.installService();
+      const inspected: string[] = [];
+      harness.ctx.reflect.provide("sessionPersistence", {
+        list: async () =>
+          ["t221-v1s-a", "t221-v1s-b"].map((id) => ({ id: SessionId(id), cwd: WS })),
+        inspect: async (id: string) => {
+          await Promise.resolve();
+          inspected.push(id);
+          const found = sources.get(id);
+          if (found === undefined) throw new Error(`unexpected inspect: ${id}`);
+          return { meta: { id, cwd: WS }, events: found.events as never[] };
+        },
+      });
+
+      await harness.service.workspaceTickets(harness.asAgent());
+      const { store, projectId } = workspaceEntry(harness, WS);
+      // The v1 sessions WERE handed (completion requires their logs)...
+      expect([...inspected].sort()).toEqual(["t221-v1s-a", "t221-v1s-b"]);
+      // ...landed nothing twice...
+      const rows = store.ticketsFor(projectId);
+      expect(rows.length).toBe(2);
+      expect(rows.filter((row) => row.title === "v1s ticket A").length).toBe(1);
+      expect(rows.filter((row) => row.title === "v1s ticket B").length).toBe(1);
+      // ...and replayed the history v1 skipped.
+      expect(store.getPlanMeta(projectId)).toMatchObject({ preamble: "the v1s plan" });
+      const post = store.backfillReport()!;
+      expect(post.dropsUnknown).toBe(false);
+      expect(post.importerVersion).toBe(3);
+      expect(post.tickets).toBe(2);
+      for (const id of ["t221-v1s-a", "t221-v1s-b"]) expect(post.sessionIds).toContain(id);
+    } finally {
+      if (savedHome === undefined) {
+        delete process.env.DSH_HOME;
+      } else {
+        process.env.DSH_HOME = savedHome;
+      }
+      rmSync(fixtureHome, { recursive: true, force: true });
     }
   });
 });
 
-describe("#221 cross-batch dependency: never silently rewired (F1/F2 catcher)", () => {
-  it("an edge split across batches is correctly wired or explicitly dropped", async () => {
+describe("#221 cross-batch dependency: the edge is actually wired (Finding A pin)", () => {
+  it("an edge split across batches pends on the full-horizon claim and repairs on arrival", async () => {
     const harness = createHarness(undefined, { cwd: WS });
     harness.installService();
     // Session B (imports FIRST) holds B1/B2; B2 depends on A1, which lives
@@ -552,12 +741,20 @@ describe("#221 cross-batch dependency: never silently rewired (F1/F2 catcher)", 
     const b1 = byTitle.get("B one")!;
     const b2 = byTitle.get("B two")!;
     const report = store.backfillReport()!;
-    const dropped = report.droppedDependencies.some((edge) => edge.ref === "x221-dep-a:1");
-    const correctlyWired = b2.dependsOn.includes(`${KEY}:${a1.id}`);
-    // Either outcome is honest: the edge followed A across the boundary, or
-    // the import said so and recorded the drop by name.
-    expect(correctlyWired || dropped).toBe(true);
-    // The forbidden outcome: rewired onto B's own ticket wearing lossless.
-    expect(b2.dependsOn.includes(`${KEY}:${b1.id}`) && report.lossless).toBe(false);
+    // Finding A: with the full-horizon claim the edge waits, then wires.
+    // "Wired or dropped" is the contract that let the fidelity regression
+    // hide (drops are terminal, so the dropped branch passed while the
+    // import was silently poorer than the monolithic one); this pins the
+    // wiring itself.
+    expect(b2.dependsOn).toEqual([`${KEY}:${a1.id}`]);
+    expect(report.droppedDependencies).toEqual([]);
+    expect(report.pendingEdges).toEqual([]);
+    expect(report.lossless).toBe(true);
+    const repaired = report.repairedEdges.filter((edge) => edge.ref === "x221-dep-a:1");
+    expect(repaired.length).toBe(1);
+    expect(repaired[0]).toMatchObject({ fromTitle: "B two", resolvedTo: `${KEY}:${a1.id}` });
+    // And the forbidden outcome stays forbidden: never rewired onto B's own
+    // ticket wearing lossless.
+    expect(b2.dependsOn.includes(`${KEY}:${b1.id}`)).toBe(false);
   });
 });
