@@ -207,7 +207,7 @@ describe("#41 criterion 2: a second open does not import again", () => {
         repairedEdges: [],
         slugRenames: [],
         skippedKinds: [],
-        importerVersion: 3,
+        importerVersion: 4,
         lossless: true,
       });
       expect(storage.readAll().length).toBe(rowsAfterFirst);

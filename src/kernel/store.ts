@@ -136,10 +136,12 @@ export interface BackfillResult {
   /** #211: every unmapped refusal, named with its reason. */
   droppedRefusals: DroppedRefusalRecord[];
   /**
-   * #211 round 2: edges waiting on sessions not yet handed in. Neither
+   * #211 round 2: edges this call pended that are STILL waiting. Neither
    * rewritten nor dropped — a later batch carrying the target session
-   * rewires them (see repairedEdges). Non-empty means the import is not
-   * finished, only paused.
+   * rewires them (see repairedEdges). A pending created and finalized in
+   * the same call is NOT listed here: it appears under droppedDependencies
+   * instead, and never on the marker's waiting list. The full waiting list
+   * lives on `backfillReport().pendingEdges`.
    */
   pendingEdges: BackfillPendingEdge[];
   /** #211 round 2: pending edges this run rewired with a corrective set. */
@@ -983,36 +985,65 @@ export class Store {
    * on every row the import flushes, and has its dependency references and
    * evidence rows rewritten through the renumbering map.
    *
-   * #211, what v2 adds. Plan meta, phases and refusal history are replayed
-   * through their workspace mapping instead of dropped: a plan/phase event
-   * whose source project shares the target workspace is re-emitted against
-   * the target project, oldest first, so history survives; a refusal is
-   * re-emitted against the ticket's renumbered id. Anything without a
-   * mapping — a plan/phase for a foreign project, a refusal for a ticket in
-   * no log, a dependency edge whose target no log holds — is RECORDED BY
-   * NAME on the marker, never silently dropped. Dropping a dangling edge
-   * stays correct (a preserved `workspaceKey:99` would resolve to a
-   * stranger's ticket once future creates reuse the number); the defect was
-   * the silence, and the marker ends it.
+   * #211, what the current importer adds over #41. Plan meta, phases and
+   * refusal history are replayed through their workspace mapping instead
+   * of dropped: a plan/phase event whose source project shares the target
+   * workspace is re-emitted against the target project, oldest first, so
+   * history survives; a refusal is re-emitted against the ticket's
+   * renumbered id. Anything without a mapping — a plan/phase for a foreign
+   * project, a refusal for a ticket in no log, a dependency edge whose
+   * target no log holds — is RECORDED BY NAME on the marker, never silently
+   * dropped. Dropping a dangling edge stays correct (a preserved
+   * `workspaceKey:99` would resolve to a stranger's ticket once future
+   * creates reuse the number); the defect was the silence, and the marker
+   * ends it.
+   *
+   * Dependency references are CLASSIFIED, never guessed (`_classifyDependency`):
+   * `workspaceKey:N` and bare `N` resolve within the own log; a session id
+   * prefix resolves within that session when handed in, else through the
+   * CARRIED ticket map when that session finished earlier; slug tails
+   * (`workspaceKey:slug`, bare slugs, session-scoped slugs) resolve through
+   * the source slugs the same way. A session prefix naming no known session
+   * never falls back to the own log. What cannot resolve becomes PENDING
+   * when the driver claimed the full session set (`opts.expectedSessionIds`)
+   * and the target is among the not-yet-imported — repaired with a
+   * corrective set when the session arrives — or a NAMED DROP otherwise.
+   * Only wired edges count as `edgesRewritten`.
    *
    * RUNS ONCE PER SESSION, RESUMABLE PER WORKSPACE (#221). The import lands
    * inside ONE storage bracket and finishes with a `backfill/completed`
-   * version-2 marker carrying the importer version, every imported session
-   * id, the whole ticket map, and every loss by name. A later call whose
-   * sessions are all already on the marker imports nothing. A later call
-   * with unimported sessions RESUMES: only those sessions are flushed,
-   * against the marker's ticket map, and the next marker accumulates —
-   * session ids, ticket map, counts, and loss lists — so the marker stays
-   * the complete account of the workspace import and a driver can batch
-   * logs to bound memory instead of accumulating every log first. A v1
+   * version-3 marker carrying the importer version, the history-finished
+   * session ids, the whole ticket map (with source slugs), and every loss,
+   * wait, and rename by name. A later call whose sessions are all already
+   * on the marker imports nothing. A later call with unfinished sessions
+   * RESUMES: only those sessions flush, against the marker's ticket map,
+   * and the next marker accumulates — session ids, ticket map, counts,
+   * losses, pendings, repairs, renames — so the marker stays the complete
+   * account of the workspace import and a driver can batch logs to bound
+   * memory instead of accumulating every log first. A v1
    * marker (#41's
    * counts-only record) means INCOMPLETE: the call COMPLETES the workspace
    * — imports the plans, phases and refusals v1 never did, recomputes the
    * drops v1 never recorded from the source logs it is handed — and skips
-   * every ticket v1 already imported, so nothing lands twice. A crash
-   * midway rolls the uncommitted bracket back, so no marker lands, nothing
-   * half-imported survives, and the next open retries the whole import:
-   * at-least-once attempts, exactly-once effect.
+   * every ticket v1 already imported, so nothing lands twice. When the
+   * driver claimed the full session set and every claimed session is now
+   * imported, remaining pendings finalize to named drops: their targets
+   * will never materialize. A crash midway rolls the uncommitted bracket
+   * back, so no marker lands, nothing half-imported survives, and the next
+   * open retries the whole import: at-least-once attempts, exactly-once
+   * effect.
+   *
+   * `sessionIds` on the marker is deliberately NARROW: sessions whose
+   * tickets AND history both landed. A v1 session is not listed until a
+   * later call replays its history — listing it early would make a later
+   * call skip it as finished and lose that history silently. Under-claiming
+   * is safe (re-handing is idempotent); over-claiming loses data. Read the
+   * marker for the cumulative account (`backfillReport`); read the result
+   * for what one call did — notably, `result.pendingEdges` lists only this
+   * call's still-waiting pendings, while a pending created AND finalized in
+   * the same call appears under `droppedDependencies` instead and never on
+   * the marker's waiting list. Durable truth is exact; the result narrates
+   * the call.
    *
    * Honest collapse, kept from #41: one ticket's history lands as a create
    * plus its live rows plus one final set — intermediate revisions are not
@@ -1317,6 +1348,8 @@ export class Store {
     const droppedRefusals: DroppedRefusalRecord[] = [];
     const pendings: BackfillPendingEdge[] = [];
     const repaired: BackfillRepairedEdge[] = [];
+    // This call's still-waiting pendings (see below); assigned in the bracket.
+    let newStillPending: BackfillPendingEdge[] = [];
     try {
       for (const fold of folded) {
         const rows = importedRowsOf(fold);
@@ -1687,14 +1720,17 @@ export class Store {
       // becomes a recorded drop rather than a forever-pending maybe.
       if (expected !== null && [...expected].every((id) => importedNow.has(id))) {
         for (const pending of stillPending.splice(0)) {
+          const targetGone =
+            pending.targetSessionId !== null && !importedNow.has(pending.targetSessionId);
           droppedDependencies.push({
             fromSessionId: pending.fromSessionId,
             fromLocalId: pending.fromLocalId,
             fromNewId: pending.fromNewId,
             fromTitle: pending.fromTitle,
             ref: pending.ref,
-            reason:
-              pending.targetSessionId !== null && pending.targetLocalId !== null
+            reason: targetGone
+              ? `target session ${pending.targetSessionId} was never imported`
+              : pending.targetSessionId !== null && pending.targetLocalId !== null
                 ? `target session ${pending.targetSessionId} holds no ticket ${pending.targetLocalId}`
                 : pending.targetSessionId !== null
                   ? `target session ${pending.targetSessionId} holds no ticket with slug ${JSON.stringify(pending.slug)}`
@@ -1702,6 +1738,12 @@ export class Store {
           });
         }
       }
+      // What this call leaves still waiting: its newly-pended edges minus
+      // the ones it finalized or repaired in the same bracket. A pending
+      // created AND finalized here appears under droppedDependencies instead
+      // and never on any waiting list — durable truth (the marker) is exact,
+      // and the result narrates the call rather than echoing it.
+      newStillPending = stillPending.filter((pending) => pendings.includes(pending));
       // The marker: the record that this backfill ran, committed in the
       // same bracket as the rows it vouches for. Version 3 names the
       // importer, EVERY imported session, the whole ticket map, and every
@@ -1785,7 +1827,7 @@ export class Store {
       skippedPlans.length === 0 &&
       skippedPhases.length === 0 &&
       droppedRefusals.length === 0 &&
-      pendings.length === 0 &&
+      newStillPending.length === 0 &&
       slugRenames.length === 0;
     return {
       alreadyRan: false,
@@ -1801,7 +1843,7 @@ export class Store {
       skippedPlans,
       skippedPhases,
       droppedRefusals,
-      pendingEdges: pendings,
+      pendingEdges: newStillPending,
       repairedEdges: repaired,
       slugRenames,
       skippedKinds: [...skippedKinds],
@@ -1856,17 +1898,26 @@ export class Store {
 
   /**
    * Classify one `dependsOn` reference from one source ticket. Host parity
-   * (`resolveDependencyRef`): the FIRST colon splits scope from tail, a
-   * missing scope means the own workspace, `/^\d+$/` tails are ticket
-   * numbers, anything else a slug. Numeric tails resolve through the
-   * renumbering map; slug tails through the source slugs.
+   * (`resolveDependencyRef`): a missing scope means the own workspace,
+   * `/^\d+$/` tails are ticket numbers, anything else a slug. Numeric tails
+   * resolve through the renumbering map; slug tails through the source
+   * slugs.
+   *
+   * Scope parsing is colon-safe: session ids are an unverified shape and
+   * may themselves contain a colon, so a prefix that exactly names a KNOWN
+   * session (own, handed-in, or driver-claimed — longest first) wins over
+   * the first-colon split. Anything else keeps the host-style split, and an
+   * unknown colon-session stays a named drop: the guard only ever ADDS
+   * successful parses for verifiable sessions, it never reinterprets one.
    *
    * The rule that fixes F1/F2: the own session answers ONLY for the
    * workspace-key scope (and, by exact session match, for its own session
-   * id). A session prefix naming no handed-in log NEVER falls back to the
-   * own log — that fallback wired edges onto strangers and reported
-   * success. With a full session claim it waits; otherwise it is dropped
-   * and named.
+   * id). A session prefix naming no handed-in log consults the CARRIED map
+   * next — a finished-but-unhanded session's tickets are already renumbered,
+   * and on a resumed import that is the normal path, not a corner — and
+   * NEVER falls back to the own log: that fallback wired edges onto
+   * strangers and reported success. With a full session claim an
+   * unresolvable prefix waits; otherwise it is dropped and named.
    */
   private _classifyDependency(
     ref: string,
@@ -1878,18 +1929,19 @@ export class Store {
     workspaceKey: string,
     expected: Set<string> | null,
   ): DependencyOutcome {
-    const colon = ref.indexOf(":");
-    const prefix = colon >= 0 ? ref.slice(0, colon) : workspaceKey;
-    const tail = colon >= 0 ? ref.slice(colon + 1) : ref;
+    const scope = this._splitRefScope(ref, own, folded, expected);
+    const prefix = scope.prefix;
+    const tail = scope.tail;
     if (tail === "") {
       return { kind: "dropped", reason: `reference ${JSON.stringify(ref)} names no ticket or slug` };
     }
+    const handed = folded.some((fold) => fold.sessionId === prefix);
     if (/^\d+$/.test(tail)) {
       const localId = Number(tail);
       if (localId < 1) {
         return { kind: "dropped", reason: `reference ${JSON.stringify(ref)} names no ticket number` };
       }
-      if (prefix === workspaceKey) {
+      if (prefix === workspaceKey || !scope.hadColon) {
         const newId = newIdOf.get(`${own.sessionId}#${localId}`);
         return newId === undefined
           ? {
@@ -1898,7 +1950,7 @@ export class Store {
             }
           : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
       }
-      if (folded.some((fold) => fold.sessionId === prefix)) {
+      if (handed) {
         const newId = newIdOf.get(`${prefix}#${localId}`);
         return newId === undefined
           ? {
@@ -1906,6 +1958,13 @@ export class Store {
               reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket ${localId})`,
             }
           : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      // Unhanded session: the carried map may already hold the answer —
+      // on a resumed import every previously-imported session is exactly
+      // "finished but unhanded", so this lookup is the normal path there.
+      const carried = newIdOf.get(`${prefix}#${localId}`);
+      if (carried !== undefined) {
+        return { kind: "mapped", ref: `${workspaceKey}:${carried}` };
       }
       if (expected !== null && expected.has(prefix)) {
         return { kind: "pending", targetSessionId: prefix, targetLocalId: localId, slug: null };
@@ -1922,8 +1981,8 @@ export class Store {
     // Slug tail: workspace scope (or bare) searches own session first, then
     // the other handed-in sessions in order, then the carried ones — the
     // import's equivalent of the host's workspace-wide scan. A session scope
-    // searches exactly that session.
-    if (prefix === workspaceKey || colon < 0) {
+    // searches exactly that session, handed (fold) or finished (carried).
+    if (prefix === workspaceKey || !scope.hadColon) {
       const newId = lookupSlugIn(tail, workspaceOrder);
       if (newId !== null) {
         return { kind: "mapped", ref: `${workspaceKey}:${newId}` };
@@ -1936,14 +1995,15 @@ export class Store {
         reason: `reference ${JSON.stringify(ref)} matches no ticket slug in the imported logs`,
       };
     }
-    if (folded.some((fold) => fold.sessionId === prefix)) {
-      const newId = lookupSlugIn(tail, [prefix]);
-      return newId === null
-        ? {
-            kind: "dropped",
-            reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket with slug ${JSON.stringify(tail)})`,
-          }
-        : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+    const newId = lookupSlugIn(tail, [prefix]);
+    if (newId !== null) {
+      return { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+    }
+    if (handed) {
+      return {
+        kind: "dropped",
+        reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket with slug ${JSON.stringify(tail)})`,
+      };
     }
     if (expected !== null && expected.has(prefix)) {
       return { kind: "pending", targetSessionId: prefix, targetLocalId: null, slug: tail };
@@ -1954,6 +2014,52 @@ export class Store {
         `target ${ref} names session ${prefix}, which was not handed to this import` +
         (expected !== null ? ` and is not among the expected sessions` : ``),
     };
+  }
+
+  /**
+   * Split one reference into scope and tail. A prefix exactly naming a KNOWN
+   * session (own, handed-in, or driver-claimed — longest first, so a
+   * colon-bearing session id wins over its own head) scopes to that
+   * session; the workspace key keeps the host-style first-colon split. An
+   * unknown prefix keeps the first-colon split and resolves as unhanded.
+   * The guard only ever ADDS successful parses for verifiable sessions —
+   * an unknown colon-session stays a named drop, documented below.
+   */
+  private _splitRefScope(
+    ref: string,
+    own: FoldedSessionLog,
+    folded: readonly FoldedSessionLog[],
+    expected: Set<string> | null,
+  ): { prefix: string; tail: string; hadColon: boolean } {
+    const colon = ref.indexOf(":");
+    if (colon < 0) {
+      return { prefix: "", tail: ref, hadColon: false };
+    }
+    const firstPrefix = ref.slice(0, colon);
+    const known: string[] = [own.sessionId];
+    for (const fold of folded) {
+      if (!known.includes(fold.sessionId)) {
+        known.push(fold.sessionId);
+      }
+    }
+    if (expected !== null) {
+      for (const id of expected) {
+        if (!known.includes(id)) {
+          known.push(id);
+        }
+      }
+    }
+    known.sort((a, b) => b.length - a.length);
+    for (const sessionId of known) {
+      if (ref === sessionId || ref.startsWith(`${sessionId}:`)) {
+        return {
+          prefix: sessionId,
+          tail: ref.slice(sessionId.length + 1),
+          hadColon: true,
+        };
+      }
+    }
+    return { prefix: firstPrefix, tail: ref.slice(colon + 1), hadColon: true };
   }
 
   /**

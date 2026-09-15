@@ -346,8 +346,14 @@ export interface BackfillCompletedEventV2 {
 export interface BackfillCompletedEvent {
   kind: "backfill/completed";
   version: 3;
-  /** The importer generation that wrote this marker (backfill.ts). */
-  importerVersion: 3;
+  /**
+   * The importer generation that wrote this marker (backfill.ts). v3
+   * markers written by the round-2 importer carry 3, by round 3 carry 4:
+   * same shape, but round 3 resolves refs against finished-but-unhanded
+   * sessions where round 2 dropped them — so the number tells a reader
+   * which behavior produced the drops.
+   */
+  importerVersion: 3 | 4;
   /** Every imported session id, oldest run first. */
   sessionIds: string[];
   tickets: number;

@@ -885,8 +885,8 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
  */
 function validateBackfillCompletedV3(raw: Record<string, unknown>): void {
   expectKeys(raw, BACKFILL_V3_KEYS, "backfill/completed");
-  if (raw.importerVersion !== 3) {
-    invariant("backfill/completed importerVersion must be 3");
+  if (raw.importerVersion !== 3 && raw.importerVersion !== 4) {
+    invariant("backfill/completed importerVersion must be 3 or 4");
   }
   validateBackfillSessionIds(raw);
   validateBackfillCounts(raw);

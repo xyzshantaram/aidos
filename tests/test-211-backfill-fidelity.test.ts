@@ -117,7 +117,7 @@ describe("#211 criterion 1: the marker versions the importer and its skips", () 
       if (marker.kind !== "backfill/completed" || marker.version !== 3) {
         throw new Error("expected the v3 marker");
       }
-      expect(marker.importerVersion).toBe(3);
+      expect(marker.importerVersion).toBe(4);
       // The source-local project records get no direct replay: the import
       // targets the single project it was handed.
       expect(marker.skippedKinds).toContain("project/created");
@@ -125,7 +125,7 @@ describe("#211 criterion 1: the marker versions the importer and its skips", () 
 
       // And the #209-shaped report reads the same record back.
       const report = store.backfillReport()!;
-      expect(report.importerVersion).toBe(3);
+      expect(report.importerVersion).toBe(4);
       expect(report.dropsUnknown).toBe(false);
       expect(report.skippedKinds).toContain("project/created");
     });
@@ -870,6 +870,130 @@ describe("#211 round 2: slug renames are recorded", () => {
       const report = store.backfillReport()!;
       expect(report.slugRenames.length).toBe(1);
       expect(report.lossless).toBe(false);
+    });
+  });
+});
+
+describe("#211 round 3: finished-but-unhanded sessions resolve from the map", () => {
+  /**
+   * The resumed-import normal path: batch 1 finishes session-a, batch 2
+   * holds a numeric session-prefix ref into it. The carried ticketMap holds
+   * the answer, so the edge WIRES — not dropped, not pending. (Slug forms
+   * already resolved this way; numeric forms dropped until this round.)
+   * Driven with NO session claim, proving the map alone is sufficient.
+   */
+  it("a later batch wires numeric and slug refs into finished sessions", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Alpha", "d", { slug: "alpha" });
+      });
+      const logB = sessionLog("session-b", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "BetaNum", "d", {
+          dependsOn: ["session-a:1"],
+        });
+        store.createTicket(project, "BetaSlug", "d", {
+          dependsOn: ["session-a:alpha"],
+        });
+      });
+      const { store, projectId } = targetStore(storage);
+
+      const first = store.backfillSessionLogs(projectId, [logA]);
+      expect(first.tickets).toBe(1);
+      expect(store.backfillReport()!.sessionIds).toEqual(["session-a"]);
+
+      const second = store.backfillSessionLogs(projectId, [logB]);
+      expect(second.alreadyRan).toBe(false);
+      expect(second.tickets).toBe(2);
+      expect(second.edgesRewritten).toBe(2);
+      expect(second.droppedDependencies).toEqual([]);
+      expect(second.pendingEdges).toEqual([]);
+      const rows = store.ticketsFor(projectId);
+      const alpha = rows.find((row) => row.title === "Alpha")!;
+      expect(rows.find((row) => row.title === "BetaNum")!.dependsOn).toEqual([
+        `${KEY}:${alpha.id}`,
+      ]);
+      expect(rows.find((row) => row.title === "BetaSlug")!.dependsOn).toEqual([
+        `${KEY}:${alpha.id}`,
+      ]);
+      expect(store.backfillReport()!.lossless).toBe(true);
+    });
+  });
+});
+
+describe("#211 round 3: finalize is pinned (Pass 6)", () => {
+  /**
+   * A pending created AND finalized in the same call: the bare-slug ref
+   * pends (the claim is given, so it waits), then the satisfied claim
+   * finalizes it to a named drop in the same bracket. The result narrates
+   * the call — pending list empty, drop recorded — and the marker's waiting
+   * list stays exact.
+   */
+  it("a pending finalized in-run appears as a drop, never as waiting", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Seeker", "d", {
+          dependsOn: ["no-such-slug-anywhere"],
+        });
+      });
+      const { store, projectId } = targetStore(storage);
+      const result = store.backfillSessionLogs(projectId, [logA], {
+        expectedSessionIds: ["session-a"],
+      });
+      expect(result.tickets).toBe(1);
+      expect(result.edgesRewritten).toBe(0);
+      expect(result.pendingEdges).toEqual([]);
+      expect(result.droppedDependencies.length).toBe(1);
+      expect(result.droppedDependencies[0]).toMatchObject({
+        fromTitle: "Seeker",
+        ref: "no-such-slug-anywhere",
+      });
+      expect(result.droppedDependencies[0]!.reason).toMatch(/matches no ticket slug/);
+      expect(result.lossless).toBe(false);
+
+      const marker = store.events().at(-1)!;
+      if (marker.kind !== "backfill/completed" || marker.version !== 3) {
+        throw new Error("expected the v3 marker");
+      }
+      expect(marker.pendingEdges).toEqual([]);
+      expect(marker.droppedDependencies.length).toBe(1);
+      const report = store.backfillReport()!;
+      expect(report.pendingEdges).toEqual([]);
+      expect(report.lossless).toBe(false);
+    });
+  });
+});
+
+describe("#211 round 3: colon-bearing session ids parse", () => {
+  /**
+   * Session ids are an unverified shape; a colon inside one must not
+   * misroute the reference. The longest known-session match wins, so
+   * `sess:with:colon:1` scopes to session `sess:with:colon` — never to
+   * `sess`, never to the own log.
+   */
+  it("a numeric ref into a colon-bearing session wires", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("sess:with:colon", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "ColonBase", "d");
+      });
+      const logB = sessionLog("session-b", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Seeker", "d", {
+          dependsOn: ["sess:with:colon:1"],
+        });
+      });
+      const { store, projectId } = targetStore(storage);
+      const result = store.backfillSessionLogs(projectId, [logA, logB]);
+      const rows = store.ticketsFor(projectId);
+      const base = rows.find((row) => row.title === "ColonBase")!;
+      expect(rows.find((row) => row.title === "Seeker")!.dependsOn).toEqual([
+        `${KEY}:${base.id}`,
+      ]);
+      expect(result.edgesRewritten).toBe(1);
+      expect(result.droppedDependencies).toEqual([]);
     });
   });
 });

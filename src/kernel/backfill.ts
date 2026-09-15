@@ -43,9 +43,12 @@ import type {
  * across batch boundaries: session-scoped refs to expected-but-unimported
  * sessions become PENDING edges the marker carries until the target session
  * arrives, slug-form and bare legacy refs resolve like the host's own
- * resolver, and slug renames are recorded.
+ * resolver, and slug renames are recorded. v4 (round 3) additionally
+ * resolves session-prefix refs against finished-but-unhanded sessions from
+ * the carried map — the resumed-import normal path — instead of dropping
+ * them.
  */
-export const BACKFILL_IMPORTER_VERSION = 3;
+export const BACKFILL_IMPORTER_VERSION = 4;
 
 /**
  * #211: the v1 importer's known blind spots, for a marker that predates
