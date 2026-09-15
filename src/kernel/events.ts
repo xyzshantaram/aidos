@@ -198,11 +198,70 @@ export interface DroppedRefusalRecord {
  * #211: one imported ticket's identity map entry. The marker carries the
  * whole map so a later importer can complete the workspace — remap
  * refusals, recompute drops — without re-importing a single ticket.
+ * `slug` is the SOURCE slug (pre-rename): it lets a later batch resolve a
+ * slug-form reference against already-imported tickets without their folds.
  */
 export interface BackfillTicketMapEntry {
   sessionId: string;
   localId: TicketId;
   newId: TicketId;
+  /** The source slug. Absent on markers predating slug recording (v2). */
+  slug?: string;
+}
+
+/**
+ * #211 round 2: one dependency edge waiting on a session that has not been
+ * handed to the import yet. Recorded instead of dropped when the driver
+ * names the full session set up front (`expectedSessionIds`) and the target
+ * session is among the not-yet-imported: a LATER batch carrying that
+ * session rewires the edge with a corrective set and moves it to
+ * `repairedEdges`. A pending edge is neither rewritten nor dropped — it is
+ * the import saying "not yet", out loud, where round 1 said "done" (F2).
+ */
+export interface BackfillPendingEdge {
+  fromSessionId: string;
+  fromLocalId: TicketId;
+  fromNewId: TicketId;
+  fromTitle: string;
+  /** The original reference, verbatim. */
+  ref: string;
+  /** The session whose arrival resolves this edge, or null for bare slugs. */
+  targetSessionId: string | null;
+  /** The ticket number waited on (numeric tails), or null for slug tails. */
+  targetLocalId: TicketId | null;
+  /** The slug waited on (slug tails), or null for numeric tails. */
+  slug: string | null;
+}
+
+/**
+ * #211 round 2: one pending edge a later batch rewired. The corrective set
+ * is built from the ticket's CURRENT snapshot (only `dependsOn` changes),
+ * so intervening writes are never clobbered.
+ */
+export interface BackfillRepairedEdge {
+  fromSessionId: string;
+  fromLocalId: TicketId;
+  fromNewId: TicketId;
+  fromTitle: string;
+  /** The original reference, verbatim. */
+  ref: string;
+  /** The workspaceKey:newId it resolved to. */
+  resolvedTo: string;
+}
+
+/**
+ * #211 round 2: one slug the import renamed to keep workspace-unique
+ * (`x` → `x-2`). The ticket is intact, but anyone referencing the old slug
+ * must update — so renames are recorded, and a run with renames is not
+ * reported as `lossless`.
+ */
+export interface BackfillSlugRename {
+  sessionId: string;
+  localId: TicketId;
+  newId: TicketId;
+  title: string;
+  fromSlug: string;
+  toSlug: string;
 }
 
 /**
@@ -223,19 +282,16 @@ export interface BackfillCompletedEventV1 {
 }
 
 /**
- * #211: the one-time backfill's completion marker, version 2.
- *
- * Appended ONCE per import inside the same storage bracket as the rows it
- * vouches for. Its presence in the log IS the "the backfill ran" record,
- * exactly as in v1 — but where v1 recorded counts alone, v2 records WHAT
- * the importer ran (`importerVersion`), what it deliberately did not replay
- * (`skippedKinds`), and every single loss BY NAME (`droppedDependencies`,
- * `skippedPlans`, `skippedPhases`, `droppedRefusals`). A backfill that lost
- * nothing records empty lists, so silence and success are distinguishable.
- * The `ticketMap` lets a still-later importer finish the job without
- * importing anything twice.
+ * #211 round 1: the version-2 marker — importer version, per-run session
+ * ids, counts, every loss by name, and the whole ticket map. Retained so a
+ * log written between round 1 and round 2 still replays; no production
+ * workspace ever completed under it (the cutover had not run), but a
+ * scratch database might hold one, and replay must not call that corrupt.
+ * A v2 marker resumes exactly like a v3 one, except its ticketMap entries
+ * carry no source slug, so cross-batch SLUG references against its sessions
+ * cannot resolve (numeric references can).
  */
-export interface BackfillCompletedEvent {
+export interface BackfillCompletedEventV2 {
   kind: "backfill/completed";
   version: 2;
   /** The importer generation that wrote this marker (backfill.ts). */
@@ -275,9 +331,63 @@ export interface BackfillCompletedEvent {
   at: number;
 }
 
-/** Either marker generation the log can hold. */
+/**
+ * #211 round 2: the version-3 marker. Everything v2 records, plus the three
+ * lists the batched cutover needs to be lossless across batch boundaries:
+ * `pendingEdges` (edges waiting on sessions not yet handed in — neither
+ * rewritten nor dropped), `repairedEdges` (pendings a later batch rewired),
+ * and `slugRenames` (workspace-uniqueness renames). Session ids, ticket
+ * map, counts and loss lists are CUMULATIVE across runs, so the latest
+ * marker is always the complete account of the workspace import and the
+ * resume base for a batched driver. A run with all seven attention lists
+ * empty records `lossless` by report — and renames count: a rename loses
+ * nothing but still needs a human glance.
+ */
+export interface BackfillCompletedEvent {
+  kind: "backfill/completed";
+  version: 3;
+  /** The importer generation that wrote this marker (backfill.ts). */
+  importerVersion: 3;
+  /** Every imported session id, oldest run first. */
+  sessionIds: string[];
+  tickets: number;
+  evidence: number;
+  comments: number;
+  /** Plan, phase and refusal events replayed, cumulative. */
+  plans: number;
+  phases: number;
+  refusals: number;
+  /** Dependency references successfully (re)wired, cumulative. */
+  edgesRewritten: number;
+  /** Every dropped edge, by name — never a bare count. */
+  droppedDependencies: DroppedDependencyEdge[];
+  /** Every unmapped plan/change, by name with its reason. */
+  skippedPlans: SkippedPlanRecord[];
+  /** Every unmapped phase/set, by name with its reason. */
+  skippedPhases: SkippedPhaseRecord[];
+  /** Every unmapped refusal, by name with its reason. */
+  droppedRefusals: DroppedRefusalRecord[];
+  /** Edges waiting on sessions not yet handed in. */
+  pendingEdges: BackfillPendingEdge[];
+  /** Pending edges a later batch rewired. */
+  repairedEdges: BackfillRepairedEdge[];
+  /** Slug-collision renames. */
+  slugRenames: BackfillSlugRename[];
+  /**
+   * Event kinds seen in the source logs that got no direct replay — the
+   * source-local project records (`project/created`, `project/moved`),
+   * unioned across runs. See v2 for what is captured rather than skipped.
+   */
+  skippedKinds: string[];
+  /** Every imported ticket's (session, local, source-slug) -> id mapping. */
+  ticketMap: BackfillTicketMapEntry[];
+  at: number;
+}
+
+/** Every marker generation the log can hold. */
 export type AnyBackfillCompletedEvent =
   | BackfillCompletedEventV1
+  | BackfillCompletedEventV2
   | BackfillCompletedEvent;
 
 /** Every event the aidos log can hold. */
@@ -295,4 +405,5 @@ export type AidosEvent =
   | ProjectMovedEvent
   | PhaseSetEvent
   | BackfillCompletedEventV1
+  | BackfillCompletedEventV2
   | BackfillCompletedEvent;

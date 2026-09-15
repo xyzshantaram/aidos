@@ -19,6 +19,9 @@ import type { BackfillSessionLog, FoldedSessionLog } from "./backfill";
 import type {
   AnyBackfillCompletedEvent,
   BackfillCompletedEvent,
+  BackfillPendingEdge,
+  BackfillRepairedEdge,
+  BackfillSlugRename,
   BackfillTicketMapEntry,
   DroppedDependencyEdge,
   DroppedRefusalRecord,
@@ -103,10 +106,11 @@ export interface TicketSearchHit {
 
 /**
  * What one backfill run did. Counts are THIS run's deltas (zero plus
- * `alreadyRan` when it skipped); the loss lists are what this run newly
- * recorded — a v1 completion recomputes the drops v1 never wrote, a resume
- * records only its fresh sessions. The MARKER accumulates across runs, so
- * the durable cumulative account lives on `backfillReport()`, not here.
+ * `alreadyRan` when it skipped); the edge/skip/pending lists are what this
+ * run newly recorded or resolved — a v1 completion recomputes the drops v1
+ * never wrote, a resume records only its fresh sessions. The MARKER
+ * accumulates across runs, so the durable cumulative account lives on
+ * `backfillReport()`, not here.
  */
 export interface BackfillResult {
   alreadyRan: boolean;
@@ -118,7 +122,7 @@ export interface BackfillResult {
   plans: number;
   phases: number;
   refusals: number;
-  /** #211: dependency references rewritten through the renumbering map. */
+  /** #211: dependency references (re)wired through the renumbering map. */
   edgesRewritten: number;
   /**
    * #211: every dropped edge, named with the ticket that lost it and the
@@ -131,15 +135,26 @@ export interface BackfillResult {
   skippedPhases: SkippedPhaseRecord[];
   /** #211: every unmapped refusal, named with its reason. */
   droppedRefusals: DroppedRefusalRecord[];
+  /**
+   * #211 round 2: edges waiting on sessions not yet handed in. Neither
+   * rewritten nor dropped — a later batch carrying the target session
+   * rewires them (see repairedEdges). Non-empty means the import is not
+   * finished, only paused.
+   */
+  pendingEdges: BackfillPendingEdge[];
+  /** #211 round 2: pending edges this run rewired with a corrective set. */
+  repairedEdges: BackfillRepairedEdge[];
+  /** #211 round 2: slug-collision renames this run applied. */
+  slugRenames: BackfillSlugRename[];
   /** #211: source-local kinds seen but given no direct replay. */
   skippedKinds: string[];
   /** #211: the importer generation that ran. */
   importerVersion: number;
   /**
-   * #211: true when this call named no loss — every drop and skip list is
-   * empty — so a clean report and an unexamined one are distinguishable.
-   * (Ticket history stays intentionally collapsed to create + final set
-   * per #41's design; see backfillSessionLogs.)
+   * #211: true when this call needs no human glance — every drop, skip,
+   * pending and rename list is empty. (Ticket history stays intentionally
+   * collapsed to create + final set per #41's design; see
+   * backfillSessionLogs.)
    */
   lossless: boolean;
 }
@@ -165,6 +180,12 @@ export interface BackfillReport {
   skippedPlans: SkippedPlanRecord[];
   skippedPhases: SkippedPhaseRecord[];
   droppedRefusals: DroppedRefusalRecord[];
+  /** #211 round 2: edges still waiting on unhanded sessions, cumulative. */
+  pendingEdges: BackfillPendingEdge[];
+  /** #211 round 2: pending edges rewired so far, cumulative. */
+  repairedEdges: BackfillRepairedEdge[];
+  /** #211 round 2: slug-collision renames applied so far, cumulative. */
+  slugRenames: BackfillSlugRename[];
   skippedKinds: string[];
   ticketMap: BackfillTicketMapEntry[];
   /**
@@ -173,7 +194,7 @@ export interface BackfillReport {
    * print its caveat rather than a comforting zero.
    */
   dropsUnknown: boolean;
-  /** True when every loss list is known-empty. Never true for v1. */
+  /** True when every attention list is known-empty. Never true for v1. */
   lossless: boolean;
   at: number;
 }
@@ -184,6 +205,22 @@ const EMPTY_PLAN: PlanValue = {
   context: { preamble: "", contextSections: [] },
   rules: "",
 };
+
+/**
+ * One classified dependency reference (see Store._classifyDependency).
+ * `mapped` carries the rewritten `workspaceKey:newId` and is the ONLY
+ * outcome counted as rewired. `pending` waits on a session the driver
+ * claimed but has not handed in yet. `dropped` carries the reason.
+ */
+export type DependencyOutcome =
+  | { kind: "mapped"; ref: string }
+  | {
+      kind: "pending";
+      targetSessionId: string | null;
+      targetLocalId: TicketId | null;
+      slug: string | null;
+    }
+  | { kind: "dropped"; reason: string };
 
 /** Freeze one value and everything it holds. */
 function deepFreeze<T>(value: T): T {
@@ -480,11 +517,12 @@ export class Store {
 
   /**
    * #211: what the latest backfill marker records, for the #209 migration
-   * script's summary — real rewritten/dropped edge lists, not a predicted
-   * fold. Null when no backfill has run. A v1 marker predates reporting:
-   * it reads back with `dropsUnknown` true and `lossless` false, because
-   * its drops were never recorded and silence must not parse as success.
-   * Copies: mutating the report never touches the log.
+   * script's summary — real (re)written/dropped/pending edge lists, not a
+   * predicted fold. Null when no backfill has run. A v1 marker predates
+   * reporting: it reads back with `dropsUnknown` true and `lossless` false,
+   * because its drops were never recorded and silence must not parse as
+   * success. A v2 marker predates pending/repair/rename tracking and reads
+   * those back empty. Copies: mutating the report never touches the log.
    */
   backfillReport(): BackfillReport | null {
     const marker = this._latestBackfillMarker();
@@ -506,6 +544,9 @@ export class Store {
         skippedPlans: [],
         skippedPhases: [],
         droppedRefusals: [],
+        pendingEdges: [],
+        repairedEdges: [],
+        slugRenames: [],
         skippedKinds: [...V1_SKIPPED_KINDS],
         ticketMap: [],
         dropsUnknown: true,
@@ -513,6 +554,12 @@ export class Store {
         at: marker.at,
       };
     }
+    const pendingEdges =
+      marker.version === 3 ? marker.pendingEdges.map((entry) => ({ ...entry })) : [];
+    const repairedEdges =
+      marker.version === 3 ? marker.repairedEdges.map((entry) => ({ ...entry })) : [];
+    const slugRenames =
+      marker.version === 3 ? marker.slugRenames.map((entry) => ({ ...entry })) : [];
     return {
       importerVersion: marker.importerVersion,
       sessionIds: [...marker.sessionIds],
@@ -527,6 +574,9 @@ export class Store {
       skippedPlans: marker.skippedPlans.map((entry) => ({ ...entry })),
       skippedPhases: marker.skippedPhases.map((entry) => ({ ...entry })),
       droppedRefusals: marker.droppedRefusals.map((entry) => ({ ...entry })),
+      pendingEdges,
+      repairedEdges,
+      slugRenames,
       skippedKinds: [...marker.skippedKinds],
       ticketMap: marker.ticketMap.map((entry) => ({ ...entry })),
       dropsUnknown: false,
@@ -534,7 +584,9 @@ export class Store {
         marker.droppedDependencies.length === 0 &&
         marker.skippedPlans.length === 0 &&
         marker.skippedPhases.length === 0 &&
-        marker.droppedRefusals.length === 0,
+        marker.droppedRefusals.length === 0 &&
+        pendingEdges.length === 0 &&
+        slugRenames.length === 0,
       at: marker.at,
     };
   }
@@ -983,51 +1035,84 @@ export class Store {
   backfillSessionLogs(
     projectId: ProjectId,
     logs: readonly BackfillSessionLog[],
+    opts?: { expectedSessionIds?: readonly string[] },
   ): BackfillResult {
     const project = this._state.projects.get(projectId);
     if (!project) {
       throw new UnknownProject(projectId);
     }
     const workspaceKey = workspaceKeyFromPath(project.absPath);
+    // #221: the driver's claim of the FULL session set, when it batches.
+    // A session-scoped reference naming an expected-but-unimported session
+    // becomes a PENDING edge (repaired when the session arrives) instead of
+    // a drop. Without the claim, such a reference is dropped and recorded:
+    // the importer can never know whether the session is merely late.
+    const expected =
+      opts?.expectedSessionIds === undefined ? null : new Set(opts.expectedSessionIds);
 
     const folded = logs.map(foldSessionLog);
     const latest = this._latestBackfillMarker();
     // The import base: what previous runs already finished.
     //
     // - No marker: a fresh import. Nothing is prior to anything.
-    // - A v1 marker (#41's counts-only record): INCOMPLETE. The map v1 never
-    //   recorded is rebuilt from the origin columns v1 did stamp (see
-    //   _reconstructTicketMap), and the drops v1 never recorded are
-    //   recomputed below from the source logs.
-    // - A v2 marker: RESUME (#221). Its sessionIds name every fully-imported
-    //   log and its ticketMap carries every imported ticket, so a driver
-    //   that batches logs to bound memory can hand the next batch and only
-    //   the unimported sessions are flushed; the rest are skipped without a
-    //   sound. When every handed-in session is already imported the call is
-    //   a no-op. Carried lists go straight onto the next marker, so the
-    //   marker stays the cumulative account of the whole workspace import.
+    // - A v1 marker (#41's counts-only record): tickets flushed, history
+    //   unfinished for every session it lists. The ticket map v1 never
+    //   recorded is rebuilt per handed-in batch from the origin columns v1
+    //   did stamp (see _reconstructTicketMap); v1's ticket/evidence/comment
+    //   counts carry forward so the cumulative counts stay truthful.
+    // - A v2/v3 marker: RESUME (#221). Its sessionIds name every
+    //   history-finished log and its ticketMap carries every imported
+    //   ticket, so a driver that batches logs to bound memory hands any
+    //   subset and only unfinished sessions flush. When every handed-in
+    //   session is already finished the call is a no-op. Carried lists go
+    //   straight onto the next marker, so the marker stays the cumulative
+    //   account of the whole workspace import.
+    //
+    // `historyDone` is deliberately narrow: sessions whose tickets AND
+    // history both landed. A v1 session is NOT history-done until a later
+    // call replays its history — listing it early would make a later call
+    // skip it as finished and lose that history silently (F4 in reverse).
+    // Under-claiming is safe (re-handing is idempotent: scan-matched
+    // tickets skip, finished histories don't replay); over-claiming loses
+    // data. The marker's session list therefore only ever grows with
+    // sessions this importer actually finished.
+    //
+    // A session whose history is finished is never re-examined: its tickets
+    // are never re-imported, its drops never recomputed, its plans, phases
+    // and refusals never replayed. A handed-in session whose history is NOT
+    // finished but whose tickets the map already holds (the v1 shape: v1
+    // flushed tickets without history) is completed: tickets skipped,
+    // history replayed, silent drops recomputed.
     let priorMap = new Map<string, TicketId>();
-    let priorSessionIds: string[] = [];
+    let historyDone: string[] = [];
     let carriedEdgesRewritten = 0;
     let carriedCounts = { tickets: 0, evidence: 0, comments: 0, plans: 0, phases: 0, refusals: 0 };
     let carriedDrops: DroppedDependencyEdge[] = [];
     let carriedSkippedPlans: SkippedPlanRecord[] = [];
     let carriedSkippedPhases: SkippedPhaseRecord[] = [];
     let carriedDroppedRefusals: DroppedRefusalRecord[] = [];
+    let carriedPendings: BackfillPendingEdge[] = [];
+    let carriedRepaired: BackfillRepairedEdge[] = [];
+    let carriedRenames: BackfillSlugRename[] = [];
     let carriedSkippedKinds: string[] = [];
-    // True only on the v1 path: the one generation whose drops went
-    // unrecorded, and therefore the only one whose prior drops are
-    // recomputed. Recomputing on a v2 resume would duplicate the carried
-    // lists (or invent drops for folds that are not even handed in).
-    let recomputePriorDrops = false;
+    // Carried ticket source slugs, for cross-batch slug references.
+    const carriedSlugs = new Map<string, string>();
     if (latest !== null && latest.version === 1) {
-      priorMap = this._reconstructTicketMap(folded);
-      recomputePriorDrops = true;
-    } else if (latest !== null && latest.version === 2) {
-      priorMap = new Map(
-        latest.ticketMap.map((entry) => [`${entry.sessionId}#${entry.localId}`, entry.newId]),
-      );
-      priorSessionIds = [...latest.sessionIds];
+      carriedCounts = {
+        tickets: latest.tickets,
+        evidence: latest.evidence,
+        comments: latest.comments,
+        plans: 0,
+        phases: 0,
+        refusals: 0,
+      };
+    } else if (latest !== null && (latest.version === 2 || latest.version === 3)) {      for (const entry of latest.ticketMap) {
+        priorMap.set(`${entry.sessionId}#${entry.localId}`, entry.newId);
+        if (latest.version === 3 && entry.slug !== undefined) {
+          carriedSlugs.set(`${entry.sessionId}#${entry.localId}`, entry.slug);
+        }
+      }
+      historyDone = [...latest.sessionIds];
       carriedEdgesRewritten = latest.edgesRewritten;
       carriedCounts = {
         tickets: latest.tickets,
@@ -1042,8 +1127,13 @@ export class Store {
       carriedSkippedPhases = latest.skippedPhases.map((entry) => ({ ...entry }));
       carriedDroppedRefusals = latest.droppedRefusals.map((entry) => ({ ...entry }));
       carriedSkippedKinds = [...latest.skippedKinds];
-      const imported = new Set(priorSessionIds);
-      if (folded.every((fold) => imported.has(fold.sessionId))) {
+      if (latest.version === 3) {
+        carriedPendings = latest.pendingEdges.map((entry) => ({ ...entry }));
+        carriedRepaired = latest.repairedEdges.map((entry) => ({ ...entry }));
+        carriedRenames = latest.slugRenames.map((entry) => ({ ...entry }));
+      }
+      const finished = new Set(historyDone);
+      if (folded.every((fold) => finished.has(fold.sessionId))) {
         return {
           alreadyRan: true,
           sessionIds: [],
@@ -1058,10 +1148,25 @@ export class Store {
           skippedPlans: [],
           skippedPhases: [],
           droppedRefusals: [],
+          pendingEdges: [],
+          repairedEdges: [],
+          slugRenames: [],
           skippedKinds: [],
           importerVersion: BACKFILL_IMPORTER_VERSION,
           lossless: true,
         };
+      }
+    }
+    // Origin re-derivation for the handed-in folds, on EVERY path: the
+    // marker's map covers sessions it finished, but a v1-origin session
+    // handed in after a v3 marker was written (subset completion) is in no
+    // map yet — while its tickets' origins ARE in storage. Unioning the
+    // scan cannot contradict the carried map (origins are immutable and the
+    // fold recomputes them deterministically); it only fills the gaps that
+    // would otherwise re-import as duplicates (F4).
+    for (const [key, id] of this._reconstructTicketMap(folded)) {
+      if (!priorMap.has(key)) {
+        priorMap.set(key, id);
       }
     }
 
@@ -1090,8 +1195,10 @@ export class Store {
     // Pass 2 — slugs. The workspace slug is unique per workspace; two
     // sessions can hold the same slug, so later collisions get a numeric
     // suffix, deterministically in import order. Previously imported
-    // tickets keep the slugs they landed with.
+    // tickets keep the slugs they landed with. Every rename is recorded:
+    // the ticket is intact, but anyone holding the old slug must update.
     const slugOf = new Map<string, string>();
+    const slugRenames: BackfillSlugRename[] = [];
     const takenSlugs = new Set<string>();
     for (const snapshot of this._state.tickets.values()) {
       if (snapshot.workspaceKey === workspaceKey) {
@@ -1113,6 +1220,16 @@ export class Store {
         }
         takenSlugs.add(slug);
         slugOf.set(key, slug);
+        if (slug !== final.slug) {
+          slugRenames.push({
+            sessionId: fold.sessionId,
+            localId,
+            newId: newIdOf.get(key)!,
+            title: final.title,
+            fromSlug: final.slug,
+            toSlug: slug,
+          });
+        }
       }
     }
 
@@ -1122,6 +1239,61 @@ export class Store {
     const skippedKinds = [...new Set(folded.flatMap((fold) => fold.seenKinds))].filter(
       (kind) => kind === "project/created" || kind === "project/moved",
     );
+
+    // The cumulative slug index: source slug -> workspace id, for slug-form
+    // references. Handed-in folds first (they carry full snapshots), then
+    // already-imported sessions via the carried source slugs. Session order
+    // is always explicit at the call site — own session first for
+    // workspace-scoped refs, exactly one session for session-scoped ones —
+    // so this lookup never guesses across sessions on its own.
+    const lookupSlugIn = (slug: string, sessionIds: readonly string[]): TicketId | null => {
+      for (const sessionId of sessionIds) {
+        const fold = folded.find((candidate) => candidate.sessionId === sessionId);
+        if (fold !== undefined) {
+          for (const localId of sortedLocalIds(fold)) {
+            if (fold.state.tickets.get(localId)!.slug === slug) {
+              const newId = newIdOf.get(`${sessionId}#${localId}`);
+              if (newId !== undefined) {
+                return newId;
+              }
+            }
+          }
+        }
+        for (const [key, sourceSlug] of carriedSlugs) {
+          if (sourceSlug !== slug) {
+            continue;
+          }
+          const hash = key.lastIndexOf("#");
+          if (key.slice(0, hash) !== sessionId) {
+            continue;
+          }
+          const newId = newIdOf.get(key);
+          if (newId !== undefined) {
+            return newId;
+          }
+        }
+      }
+      return null;
+    };
+    // Workspace-scoped lookup order: the depending ticket's own session
+    // first, then the other handed-in sessions in order, then the carried
+    // sessions nobody handed in. Deterministic, so a repeated import
+    // resolves identically.
+    const workspaceSlugOrder = (ownSessionId: string): string[] => {
+      const order = [ownSessionId];
+      for (const fold of folded) {
+        if (!order.includes(fold.sessionId)) {
+          order.push(fold.sessionId);
+        }
+      }
+      for (const key of carriedSlugs.keys()) {
+        const sessionId = key.slice(0, key.lastIndexOf("#"));
+        if (!order.includes(sessionId)) {
+          order.push(sessionId);
+        }
+      }
+      return order;
+    };
 
     // Pass 3 — flush, all inside one bracket.
     const storage = this._storage;
@@ -1143,6 +1315,8 @@ export class Store {
     const skippedPlans: SkippedPlanRecord[] = [];
     const skippedPhases: SkippedPhaseRecord[] = [];
     const droppedRefusals: DroppedRefusalRecord[] = [];
+    const pendings: BackfillPendingEdge[] = [];
+    const repaired: BackfillRepairedEdge[] = [];
     try {
       for (const fold of folded) {
         const rows = importedRowsOf(fold);
@@ -1234,26 +1408,38 @@ export class Store {
           }
 
           // The set: the final snapshot — final state, remapped deps,
-          // folded tags — at revision 2, no earlier than any write. A dep
-          // whose target no imported log holds is DROPPED and recorded by
-          // name: keeping it raw would leave a local id pointing at
-          // whatever new ticket later claims that number.
+          // folded tags — at revision 2, no earlier than any write. Every
+          // reference is CLASSIFIED, never guessed: mapped (wired and
+          // counted), pending (the target session is expected but not here
+          // yet — left out of the set, repaired on arrival), or dropped and
+          // recorded by name. A session prefix naming no handed-in log never
+          // falls back to the own session: that miswire (F2) is what made a
+          // corrupt graph report success.
           const remappedDeps: string[] = [];
           for (const ref of final.dependsOn) {
-            const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
-            if (mapped === null) {
-              droppedDependencies.push({
-                fromSessionId: fold.sessionId,
-                fromLocalId: localId,
-                fromNewId: newId,
-                fromTitle: final.title,
-                ref,
-                reason: this._dropReasonFor(ref, fold, folded, newIdOf),
-              });
-            } else {
-              remappedDeps.push(mapped);
-              edgesRewritten += 1;
-            }
+            const outcome = this._classifyDependency(
+              ref,
+              fold,
+              folded,
+              newIdOf,
+              lookupSlugIn,
+              workspaceSlugOrder(fold.sessionId),
+              workspaceKey,
+              expected,
+            );
+            this._collectRefOutcome(
+              outcome,
+              { sessionId: fold.sessionId, localId, newId, title: final.title },
+              ref,
+              {
+                remapped: remappedDeps,
+                drops: droppedDependencies,
+                pendings,
+                onMapped: () => {
+                  edgesRewritten += 1;
+                },
+              },
+            );
           }
           const setAt = Math.max(final.updatedAt, lastWriteAt);
           this._emit(
@@ -1278,36 +1464,50 @@ export class Store {
           tickets += 1;
         }
       }
-      // Pass 3b — the drops v1 left silently. Its sets already landed
-      // without them, so there is nothing to re-emit: the source logs still
-      // hold the original references, and recomputing them here names every
-      // edge the workspace lost. Runs ONLY on the v1 path — a first import
-      // has no prior tickets and skips for free, and a v2 resume carries its
-      // recorded drops forward instead of recomputing them.
-      if (recomputePriorDrops) {
-        for (const fold of folded) {
-          for (const localId of sortedLocalIds(fold)) {
-            const key = `${fold.sessionId}#${localId}`;
-            if (!priorMap.has(key)) {
-              continue;
-            }
-            const final = fold.state.tickets.get(localId)!;
-            const newId = priorMap.get(key)!;
-            for (const ref of final.dependsOn) {
-              const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
-              if (mapped === null) {
-                droppedDependencies.push({
-                  fromSessionId: fold.sessionId,
-                  fromLocalId: localId,
-                  fromNewId: newId,
-                  fromTitle: final.title,
-                  ref,
-                  reason: this._dropReasonFor(ref, fold, folded, newIdOf),
-                });
-              } else {
-                edgesRewritten += 1;
-              }
-            }
+      // Pass 3b — the wiring a previous run left unreported. Its sets
+      // already landed, so there is nothing to re-emit: the source logs
+      // still hold the original references, and reclassifying them here
+      // names every edge the workspace lost — or pends it, when the driver
+      // claimed the target session up front. Runs ONLY for handed-in
+      // sessions whose history no marker finished (the v1 shape: tickets
+      // flushed, history skipped). A first import has no prior tickets and
+      // skips for free; a resume carries its recorded wiring forward
+      // instead of recomputing it.
+      for (const fold of folded) {
+        if (historyDone.includes(fold.sessionId)) {
+          continue;
+        }
+        for (const localId of sortedLocalIds(fold)) {
+          const key = `${fold.sessionId}#${localId}`;
+          if (!priorMap.has(key)) {
+            continue;
+          }
+          const final = fold.state.tickets.get(localId)!;
+          const newId = priorMap.get(key)!;
+          for (const ref of final.dependsOn) {
+            const outcome = this._classifyDependency(
+              ref,
+              fold,
+              folded,
+              newIdOf,
+              lookupSlugIn,
+              workspaceSlugOrder(fold.sessionId),
+              workspaceKey,
+              expected,
+            );
+            this._collectRefOutcome(
+              outcome,
+              { sessionId: fold.sessionId, localId, newId, title: final.title },
+              ref,
+              {
+                remapped: [],
+                drops: droppedDependencies,
+                pendings,
+                onMapped: () => {
+                  edgesRewritten += 1;
+                },
+              },
+            );
           }
         }
       }
@@ -1320,7 +1520,7 @@ export class Store {
       // replay verbatim. An over-cap plan is SKIPPED, never refused: one
       // long document must not fail the whole cutover.
       for (const fold of folded) {
-        if (priorSessionIds.includes(fold.sessionId)) {
+        if (historyDone.includes(fold.sessionId)) {
           continue;
         }
         for (const plan of fold.planEvents) {
@@ -1420,32 +1620,123 @@ export class Store {
           refusals += 1;
         }
       }
+      // Pass 5 — repairs: carried pendings plus this run's, resolved against
+      // the cumulative map now that this batch's tickets hold ids. A pending
+      // whose target session is imported either rewires — a corrective set
+      // built from the ticket's CURRENT snapshot, so intervening writes
+      // survive — or becomes a recorded drop (the session holds no such
+      // ticket). Anything still waiting stays pending for a later batch. One
+      // corrupt edge can never refuse the batch: a refused repair is itself
+      // recorded as a drop.
+      // Sessions this call finished: the already-finished plus every
+      // handed-in session (each got its tickets flushed or skipped and its
+      // history replayed — or was already finished and skipped whole).
+      const allSessionIds = [...historyDone];
+      for (const fold of folded) {
+        if (!allSessionIds.includes(fold.sessionId)) {
+          allSessionIds.push(fold.sessionId);
+        }
+      }
+      const importedNow = new Set(allSessionIds);
+      const bareSlugOrder: string[] = folded.map((fold) => fold.sessionId);
+      for (const key of carriedSlugs.keys()) {
+        const sessionId = key.slice(0, key.lastIndexOf("#"));
+        if (!bareSlugOrder.includes(sessionId)) {
+          bareSlugOrder.push(sessionId);
+        }
+      }
+      const stillPending: BackfillPendingEdge[] = [];
+      for (const pending of [...carriedPendings, ...pendings]) {
+        const resolution = this._resolvePendingEdge(
+          pending,
+          newIdOf,
+          lookupSlugIn,
+          bareSlugOrder,
+          importedNow,
+        );
+        if (resolution.status === "waiting") {
+          stillPending.push(pending);
+          continue;
+        }
+        if (resolution.status === "missing") {
+          droppedDependencies.push({
+            fromSessionId: pending.fromSessionId,
+            fromLocalId: pending.fromLocalId,
+            fromNewId: pending.fromNewId,
+            fromTitle: pending.fromTitle,
+            ref: pending.ref,
+            reason:
+              pending.targetSessionId !== null && pending.targetLocalId !== null
+                ? `target session ${pending.targetSessionId} holds no ticket ${pending.targetLocalId}`
+                : pending.targetSessionId !== null
+                  ? `target session ${pending.targetSessionId} holds no ticket with slug ${JSON.stringify(pending.slug)}`
+                  : `reference ${JSON.stringify(pending.ref)} matches no ticket slug in the imported logs`,
+          });
+          continue;
+        }
+        const repair = this._repairDependencyEdge(pending, resolution.newId, workspaceKey);
+        if ("repaired" in repair) {
+          repaired.push(repair.repaired);
+          edgesRewritten += 1;
+        } else {
+          droppedDependencies.push(repair.dropped);
+        }
+      }
+      // Pass 6 — finalize: with the full session claim satisfied, anything
+      // still waiting names a target that will never materialize, so it
+      // becomes a recorded drop rather than a forever-pending maybe.
+      if (expected !== null && [...expected].every((id) => importedNow.has(id))) {
+        for (const pending of stillPending.splice(0)) {
+          droppedDependencies.push({
+            fromSessionId: pending.fromSessionId,
+            fromLocalId: pending.fromLocalId,
+            fromNewId: pending.fromNewId,
+            fromTitle: pending.fromTitle,
+            ref: pending.ref,
+            reason:
+              pending.targetSessionId !== null && pending.targetLocalId !== null
+                ? `target session ${pending.targetSessionId} holds no ticket ${pending.targetLocalId}`
+                : pending.targetSessionId !== null
+                  ? `target session ${pending.targetSessionId} holds no ticket with slug ${JSON.stringify(pending.slug)}`
+                  : `reference ${JSON.stringify(pending.ref)} matches no ticket slug in the imported logs`,
+          });
+        }
+      }
       // The marker: the record that this backfill ran, committed in the
-      // same bracket as the rows it vouches for. Version 2 names the
+      // same bracket as the rows it vouches for. Version 3 names the
       // importer, EVERY imported session, the whole ticket map, and every
       // loss — a backfill that lost nothing records empty lists, so silence
       // and success are distinguishable. Everything here is CUMULATIVE
       // across runs (this run's work plus what earlier markers carried), so
       // the latest marker is always the complete account of the workspace
       // import — the shape #221's batched driver resumes from.
+      // Source slugs for the ticket map: handed-in folds carry full
+      // snapshots; carried entries refresh from them when present (a v2
+      // marker's entries predate slug recording and stay slug-less until
+      // their session is handed in again).
+      const sourceSlugOf = new Map<string, string>(carriedSlugs);
+      for (const fold of folded) {
+        for (const localId of sortedLocalIds(fold)) {
+          sourceSlugOf.set(
+            `${fold.sessionId}#${localId}`,
+            fold.state.tickets.get(localId)!.slug,
+          );
+        }
+      }
       const ticketMap: BackfillTicketMapEntry[] = [...newIdOf.entries()]
         .map(([key, newId]) => {
           const hash = key.lastIndexOf("#");
+          const slug = sourceSlugOf.get(key);
           return {
             sessionId: key.slice(0, hash),
             localId: Number(key.slice(hash + 1)),
             newId,
+            ...(slug === undefined ? {} : { slug }),
           };
         })
         .sort(
           (a, b) => (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : a.localId - b.localId),
         );
-      const sessionIds = [...priorSessionIds];
-      for (const fold of folded) {
-        if (!sessionIds.includes(fold.sessionId)) {
-          sessionIds.push(fold.sessionId);
-        }
-      }
       const unionKinds = [...carriedSkippedKinds];
       for (const kind of skippedKinds) {
         if (!unionKinds.includes(kind)) {
@@ -1454,9 +1745,9 @@ export class Store {
       }
       const marker: BackfillCompletedEvent = {
         kind: "backfill/completed",
-        version: 2,
+        version: 3,
         importerVersion: BACKFILL_IMPORTER_VERSION,
-        sessionIds,
+        sessionIds: allSessionIds,
         tickets: carriedCounts.tickets + tickets,
         evidence: carriedCounts.evidence + evidence,
         comments: carriedCounts.comments + comments,
@@ -1468,6 +1759,9 @@ export class Store {
         skippedPlans: [...carriedSkippedPlans, ...skippedPlans],
         skippedPhases: [...carriedSkippedPhases, ...skippedPhases],
         droppedRefusals: [...carriedDroppedRefusals, ...droppedRefusals],
+        pendingEdges: stillPending,
+        repairedEdges: [...carriedRepaired, ...repaired],
+        slugRenames: [...carriedRenames, ...slugRenames],
         skippedKinds: unionKinds,
         ticketMap,
         at: this._nowFn(),
@@ -1490,7 +1784,9 @@ export class Store {
       droppedDependencies.length === 0 &&
       skippedPlans.length === 0 &&
       skippedPhases.length === 0 &&
-      droppedRefusals.length === 0;
+      droppedRefusals.length === 0 &&
+      pendings.length === 0 &&
+      slugRenames.length === 0;
     return {
       alreadyRan: false,
       sessionIds: folded.map((fold) => fold.sessionId),
@@ -1505,6 +1801,9 @@ export class Store {
       skippedPlans,
       skippedPhases,
       droppedRefusals,
+      pendingEdges: pendings,
+      repairedEdges: repaired,
+      slugRenames,
       skippedKinds: [...skippedKinds],
       importerVersion: BACKFILL_IMPORTER_VERSION,
       lossless,
@@ -1547,61 +1846,253 @@ export class Store {
   }
 
   /**
-   * Rewrite one `workspaceKey:localId` (or `sessionId:localId`) dependency
-   * reference through the renumbering map. The reference resolves within
-   * its own session's log first; when the prefix names ANOTHER imported
-   * session, that session's mapping answers. A reference whose target no
-   * imported log holds maps to null — the caller records it BY NAME (see
-   * _dropReasonFor): keeping it raw would leave a local id pointing at
-   * whatever new ticket later claims that number.
+   * One classified dependency reference — see the module-level
+   * `DependencyOutcome` type. `mapped` carries the rewritten
+   * `workspaceKey:newId` and is the ONLY outcome counted as
+   * `edgesRewritten`. `pending` means the target session is claimed by the
+   * driver's full set but not handed in yet — the edge waits on the marker,
+   * it is not wired anywhere. `dropped` carries the human-readable reason.
    */
-  private _remapDependency(
+
+  /**
+   * Classify one `dependsOn` reference from one source ticket. Host parity
+   * (`resolveDependencyRef`): the FIRST colon splits scope from tail, a
+   * missing scope means the own workspace, `/^\d+$/` tails are ticket
+   * numbers, anything else a slug. Numeric tails resolve through the
+   * renumbering map; slug tails through the source slugs.
+   *
+   * The rule that fixes F1/F2: the own session answers ONLY for the
+   * workspace-key scope (and, by exact session match, for its own session
+   * id). A session prefix naming no handed-in log NEVER falls back to the
+   * own log — that fallback wired edges onto strangers and reported
+   * success. With a full session claim it waits; otherwise it is dropped
+   * and named.
+   */
+  private _classifyDependency(
     ref: string,
     own: FoldedSessionLog,
     folded: readonly FoldedSessionLog[],
     newIdOf: Map<string, TicketId>,
+    lookupSlugIn: (slug: string, sessionIds: readonly string[]) => TicketId | null,
+    workspaceOrder: readonly string[],
     workspaceKey: string,
-  ): string | null {
-    const colon = ref.lastIndexOf(":");
-    if (colon < 0) {
-      return null;
+    expected: Set<string> | null,
+  ): DependencyOutcome {
+    const colon = ref.indexOf(":");
+    const prefix = colon >= 0 ? ref.slice(0, colon) : workspaceKey;
+    const tail = colon >= 0 ? ref.slice(colon + 1) : ref;
+    if (tail === "") {
+      return { kind: "dropped", reason: `reference ${JSON.stringify(ref)} names no ticket or slug` };
     }
-    const localId = Number(ref.slice(colon + 1));
-    if (!Number.isInteger(localId) || localId < 1) {
-      return null;
+    if (/^\d+$/.test(tail)) {
+      const localId = Number(tail);
+      if (localId < 1) {
+        return { kind: "dropped", reason: `reference ${JSON.stringify(ref)} names no ticket number` };
+      }
+      if (prefix === workspaceKey) {
+        const newId = newIdOf.get(`${own.sessionId}#${localId}`);
+        return newId === undefined
+          ? {
+              kind: "dropped",
+              reason: `target ${ref} is in no imported log (${own.sessionId} holds no ticket ${localId})`,
+            }
+          : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      if (folded.some((fold) => fold.sessionId === prefix)) {
+        const newId = newIdOf.get(`${prefix}#${localId}`);
+        return newId === undefined
+          ? {
+              kind: "dropped",
+              reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket ${localId})`,
+            }
+          : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      if (expected !== null && expected.has(prefix)) {
+        return { kind: "pending", targetSessionId: prefix, targetLocalId: localId, slug: null };
+      }
+      return {
+        kind: "dropped",
+        reason:
+          prefix.startsWith("--") && prefix.endsWith("--")
+            ? `target ${ref} names workspace ${prefix}, which is not this import's workspace (${workspaceKey})`
+            : `target ${ref} names session ${prefix}, which was not handed to this import` +
+              (expected !== null ? ` and is not among the expected sessions` : ``),
+      };
     }
-    const prefix = ref.slice(0, colon);
-    const source =
-      folded.find((fold) => fold.sessionId === prefix) ?? own;
-    const newId = newIdOf.get(`${source.sessionId}#${localId}`);
-    return newId === undefined ? null : `${workspaceKey}:${newId}`;
+    // Slug tail: workspace scope (or bare) searches own session first, then
+    // the other handed-in sessions in order, then the carried ones — the
+    // import's equivalent of the host's workspace-wide scan. A session scope
+    // searches exactly that session.
+    if (prefix === workspaceKey || colon < 0) {
+      const newId = lookupSlugIn(tail, workspaceOrder);
+      if (newId !== null) {
+        return { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      if (expected !== null) {
+        return { kind: "pending", targetSessionId: null, targetLocalId: null, slug: tail };
+      }
+      return {
+        kind: "dropped",
+        reason: `reference ${JSON.stringify(ref)} matches no ticket slug in the imported logs`,
+      };
+    }
+    if (folded.some((fold) => fold.sessionId === prefix)) {
+      const newId = lookupSlugIn(tail, [prefix]);
+      return newId === null
+        ? {
+            kind: "dropped",
+            reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket with slug ${JSON.stringify(tail)})`,
+          }
+        : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+    }
+    if (expected !== null && expected.has(prefix)) {
+      return { kind: "pending", targetSessionId: prefix, targetLocalId: null, slug: tail };
+    }
+    return {
+      kind: "dropped",
+      reason:
+        `target ${ref} names session ${prefix}, which was not handed to this import` +
+        (expected !== null ? ` and is not among the expected sessions` : ``),
+    };
   }
 
   /**
-   * #211: WHY one dependency reference did not survive the import, in words
-   * a human can act on. Only called for references _remapDependency already
-   * refused, so every branch below is a drop with its reason.
+   * File one classified reference: wire it, pend it, or name its loss. Only
+   * `mapped` advances the rewritten count — a misresolved edge must never
+   * be counted as rewritten (F2).
    */
-  private _dropReasonFor(
+  private _collectRefOutcome(
+    outcome: DependencyOutcome,
+    from: { sessionId: string; localId: TicketId; newId: TicketId; title: string },
     ref: string,
-    own: FoldedSessionLog,
-    folded: readonly FoldedSessionLog[],
+    into: {
+      remapped: string[];
+      drops: DroppedDependencyEdge[];
+      pendings: BackfillPendingEdge[];
+      onMapped: () => void;
+    },
+  ): void {
+    if (outcome.kind === "mapped") {
+      into.remapped.push(outcome.ref);
+      into.onMapped();
+    } else if (outcome.kind === "pending") {
+      into.pendings.push({
+        fromSessionId: from.sessionId,
+        fromLocalId: from.localId,
+        fromNewId: from.newId,
+        fromTitle: from.title,
+        ref,
+        targetSessionId: outcome.targetSessionId,
+        targetLocalId: outcome.targetLocalId,
+        slug: outcome.slug,
+      });
+    } else {
+      into.drops.push({
+        fromSessionId: from.sessionId,
+        fromLocalId: from.localId,
+        fromNewId: from.newId,
+        fromTitle: from.title,
+        ref,
+        reason: outcome.reason,
+      });
+    }
+  }
+
+  /**
+   * Resolve one pending edge against the cumulative import: numeric tails
+   * through the renumbering map once the target session is imported, slug
+   * tails through the cumulative slug index. `waiting` keeps it on the
+   * marker; `missing` drops it with a name; `found` rewires it.
+   */
+  private _resolvePendingEdge(
+    pending: BackfillPendingEdge,
     newIdOf: Map<string, TicketId>,
-  ): string {
-    const colon = ref.lastIndexOf(":");
-    if (colon < 0) {
-      return `malformed reference ${JSON.stringify(ref)} carries no workspace prefix`;
+    lookupSlugIn: (slug: string, sessionIds: readonly string[]) => TicketId | null,
+    bareSlugOrder: readonly string[],
+    imported: Set<string>,
+  ): { status: "waiting" } | { status: "missing" } | { status: "found"; newId: TicketId } {
+    if (pending.targetSessionId !== null) {
+      if (!imported.has(pending.targetSessionId)) {
+        return { status: "waiting" };
+      }
+      if (pending.targetLocalId !== null) {
+        const newId = newIdOf.get(`${pending.targetSessionId}#${pending.targetLocalId}`);
+        return newId === undefined ? { status: "missing" } : { status: "found", newId };
+      }
+      const newId = lookupSlugIn(pending.slug!, [pending.targetSessionId]);
+      return newId === null ? { status: "missing" } : { status: "found", newId };
     }
-    const localId = Number(ref.slice(colon + 1));
-    if (!Number.isInteger(localId) || localId < 1) {
-      return `malformed reference ${JSON.stringify(ref)} names no ticket number`;
+    const newId = lookupSlugIn(pending.slug!, bareSlugOrder);
+    return newId === null ? { status: "waiting" } : { status: "found", newId };
+  }
+
+  /**
+   * Rewire one resolved pending edge with a corrective `set` built from the
+   * ticket's CURRENT snapshot — only `dependsOn` changes, so writes that
+   * landed after the import survive. Revision continues, `at` never falls.
+   * A refused repair (a cross-session cycle, a vanished ticket, a
+   * self-edge) is recorded as a drop, never thrown: one corrupt edge must
+   * not refuse the batch.
+   */
+  private _repairDependencyEdge(
+    pending: BackfillPendingEdge,
+    resolvedNewId: TicketId,
+    workspaceKey: string,
+  ): { repaired: BackfillRepairedEdge } | { dropped: DroppedDependencyEdge } {
+    const drop = (reason: string): { dropped: DroppedDependencyEdge } => ({
+      dropped: {
+        fromSessionId: pending.fromSessionId,
+        fromLocalId: pending.fromLocalId,
+        fromNewId: pending.fromNewId,
+        fromTitle: pending.fromTitle,
+        ref: pending.ref,
+        reason,
+      },
+    });
+    const repaired = (resolvedTo: string): { repaired: BackfillRepairedEdge } => ({
+      repaired: {
+        fromSessionId: pending.fromSessionId,
+        fromLocalId: pending.fromLocalId,
+        fromNewId: pending.fromNewId,
+        fromTitle: pending.fromTitle,
+        ref: pending.ref,
+        resolvedTo,
+      },
+    });
+    if (resolvedNewId === pending.fromNewId) {
+      return drop(`repair of ${JSON.stringify(pending.ref)} would create a self-edge`);
     }
-    const prefix = ref.slice(0, colon);
-    const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
-    if (prefix !== source.sessionId) {
-      return `target ${ref} is in no imported log (it resolves to session ${source.sessionId}, which holds no ticket ${localId})`;
+    const current = this._state.tickets.get(pending.fromNewId);
+    if (current === undefined) {
+      return drop(`ticket ${pending.fromNewId} no longer exists, cannot restore ${JSON.stringify(pending.ref)}`);
     }
-    return `target ${ref} is in no imported log (session ${source.sessionId} holds no ticket ${localId})`;
+    const resolved = `${workspaceKey}:${resolvedNewId}`;
+    if (current.dependsOn.includes(resolved)) {
+      return repaired(resolved);
+    }
+    const at = this._atFor(pending.fromNewId, current.updatedAt);
+    const updatedAt = Math.max(current.updatedAt, at);
+    try {
+      this._emit(
+        {
+          kind: "ticket/change",
+          version: 1,
+          operation: "set",
+          ticket: {
+            ...current,
+            dependsOn: [...current.dependsOn, resolved],
+            revision: current.revision + 1,
+            updatedAt,
+          },
+          at: updatedAt,
+        },
+        { sessionId: pending.fromSessionId, localSeq: null },
+      );
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      return drop(`repair of ${JSON.stringify(pending.ref)} refused: ${cause}`);
+    }
+    return repaired(resolved);
   }
 
   // ---- projects ----

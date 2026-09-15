@@ -187,8 +187,8 @@ describe("#41 criterion 2: a second open does not import again", () => {
       expect(marker).toMatchObject({ sessionIds: ["session-a"], tickets: 1 });
 
       const second: BackfillResult = store.backfillSessionLogs(projectId, [logA]);
-      // #211: the no-op result carries the full v2 report shape — zeros and
-      // empty loss lists, so a skipped run is still a readable report.
+      // #211: the no-op result carries the full report shape — zeros and
+      // empty lists, so a skipped run is still a readable report.
       expect(second).toEqual({
         alreadyRan: true,
         sessionIds: [],
@@ -203,8 +203,11 @@ describe("#41 criterion 2: a second open does not import again", () => {
         skippedPlans: [],
         skippedPhases: [],
         droppedRefusals: [],
+        pendingEdges: [],
+        repairedEdges: [],
+        slugRenames: [],
         skippedKinds: [],
-        importerVersion: 2,
+        importerVersion: 3,
         lossless: true,
       });
       expect(storage.readAll().length).toBe(rowsAfterFirst);

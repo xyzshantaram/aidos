@@ -132,6 +132,60 @@ const SKIPPED_PHASE_KEYS = [
 ];
 const DROPPED_REFUSAL_KEYS = ["sessionId", "localTicketId", "at", "reason"];
 const TICKET_MAP_KEYS = ["sessionId", "localId", "newId"];
+/**
+ * #211 round 2: the v3 marker's exact field set — v2 plus the batched
+ * cutover's three lists. `slug` stays OPTIONAL on ticket map entries: v2
+ * markers predate slug recording and must still replay.
+ */
+const BACKFILL_V3_KEYS = [
+  "kind",
+  "version",
+  "importerVersion",
+  "sessionIds",
+  "tickets",
+  "evidence",
+  "comments",
+  "plans",
+  "phases",
+  "refusals",
+  "edgesRewritten",
+  "droppedDependencies",
+  "skippedPlans",
+  "skippedPhases",
+  "droppedRefusals",
+  "pendingEdges",
+  "repairedEdges",
+  "slugRenames",
+  "skippedKinds",
+  "ticketMap",
+  "at",
+];
+const PENDING_EDGE_KEYS = [
+  "fromSessionId",
+  "fromLocalId",
+  "fromNewId",
+  "fromTitle",
+  "ref",
+  "targetSessionId",
+  "targetLocalId",
+  "slug",
+];
+const REPAIRED_EDGE_KEYS = [
+  "fromSessionId",
+  "fromLocalId",
+  "fromNewId",
+  "fromTitle",
+  "ref",
+  "resolvedTo",
+];
+const SLUG_RENAME_KEYS = [
+  "sessionId",
+  "localId",
+  "newId",
+  "title",
+  "fromSlug",
+  "toSlug",
+];
 
 // ---- checks ----
 
@@ -776,8 +830,9 @@ function validatePhaseSet(
  * history like a refusal: replay keeps it, the projection ignores it.
  *
  * #211: version-aware. A version-1 marker is #41's counts-only record; a
- * version-2 marker carries the importer version and every loss BY NAME, and
- * each entry of each list is shape-checked so a corrupt report is a
+ * version-2 marker carries the importer version and every loss BY NAME; a
+ * version-3 marker adds the batched cutover's pending, repaired and rename
+ * lists. Each entry of each list is shape-checked so a corrupt report is a
  * rejected log rather than a migration that prints garbage.
  */
 function validateBackfillCompleted(raw: Record<string, unknown>): void {
@@ -789,7 +844,11 @@ function validateBackfillCompleted(raw: Record<string, unknown>): void {
     validateBackfillCompletedV2(raw);
     return;
   }
-  invariant("backfill/completed version must be 1 or 2");
+  if (raw.version === 3) {
+    validateBackfillCompletedV3(raw);
+    return;
+  }
+  invariant("backfill/completed version must be 1, 2, or 3");
 }
 
 function validateBackfillCompletedV1(raw: Record<string, unknown>): void {
@@ -808,9 +867,121 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
   if (raw.importerVersion !== 2) {
     invariant("backfill/completed importerVersion must be 2");
   }
+  validateBackfillSessionIds(raw);
+  validateBackfillCounts(raw);
+  validateBackfillDroppedDependencies(raw);
+  validateBackfillSkippedPlans(raw);
+  validateBackfillSkippedPhases(raw);
+  validateBackfillDroppedRefusals(raw);
+  validateBackfillTicketMapV2(raw);
+  expectNumber(raw.at, "backfill/completed at");
+}
+
+/**
+ * #211 round 2: the version-3 marker — v2's full account plus the batched
+ * cutover's pending, repaired and rename lists. Ticket map entries may
+ * carry the source slug (written since v3); v2 entries without one replay
+ * here too, since a v2 log can be completed by a v3 importer.
+ */
+function validateBackfillCompletedV3(raw: Record<string, unknown>): void {
+  expectKeys(raw, BACKFILL_V3_KEYS, "backfill/completed");
+  if (raw.importerVersion !== 3) {
+    invariant("backfill/completed importerVersion must be 3");
+  }
+  validateBackfillSessionIds(raw);
+  validateBackfillCounts(raw);
+  validateBackfillDroppedDependencies(raw);
+  validateBackfillSkippedPlans(raw);
+  validateBackfillSkippedPhases(raw);
+  validateBackfillDroppedRefusals(raw);
+  if (!Array.isArray(raw.pendingEdges)) {
+    invariant("backfill/completed pendingEdges must be an array");
+  }
+  for (const entry of raw.pendingEdges as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed pendingEdges entries must be objects");
+    }
+    expectKeys(entry, PENDING_EDGE_KEYS, "backfill pending edge");
+    expectString(entry.fromSessionId, "backfill pending edge fromSessionId");
+    expectInt(entry.fromLocalId, "backfill pending edge fromLocalId", 1);
+    expectInt(entry.fromNewId, "backfill pending edge fromNewId", 1);
+    expectString(entry.fromTitle, "backfill pending edge fromTitle");
+    expectString(entry.ref, "backfill pending edge ref");
+    if (entry.targetSessionId !== null) {
+      expectString(entry.targetSessionId, "backfill pending edge targetSessionId");
+    }
+    if (entry.targetLocalId !== null) {
+      expectInt(entry.targetLocalId, "backfill pending edge targetLocalId", 1);
+    }
+    if (entry.slug !== null) {
+      expectString(entry.slug, "backfill pending edge slug");
+    }
+  }
+  if (!Array.isArray(raw.repairedEdges)) {
+    invariant("backfill/completed repairedEdges must be an array");
+  }
+  for (const entry of raw.repairedEdges as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed repairedEdges entries must be objects");
+    }
+    expectKeys(entry, REPAIRED_EDGE_KEYS, "backfill repaired edge");
+    expectString(entry.fromSessionId, "backfill repaired edge fromSessionId");
+    expectInt(entry.fromLocalId, "backfill repaired edge fromLocalId", 1);
+    expectInt(entry.fromNewId, "backfill repaired edge fromNewId", 1);
+    expectString(entry.fromTitle, "backfill repaired edge fromTitle");
+    expectString(entry.ref, "backfill repaired edge ref");
+    expectString(entry.resolvedTo, "backfill repaired edge resolvedTo");
+  }
+  if (!Array.isArray(raw.slugRenames)) {
+    invariant("backfill/completed slugRenames must be an array");
+  }
+  for (const entry of raw.slugRenames as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed slugRenames entries must be objects");
+    }
+    expectKeys(entry, SLUG_RENAME_KEYS, "backfill slug rename");
+    expectString(entry.sessionId, "backfill slug rename sessionId");
+    expectInt(entry.localId, "backfill slug rename localId", 1);
+    expectInt(entry.newId, "backfill slug rename newId", 1);
+    expectString(entry.title, "backfill slug rename title");
+    expectString(entry.fromSlug, "backfill slug rename fromSlug");
+    expectString(entry.toSlug, "backfill slug rename toSlug");
+  }
+  if (!Array.isArray(raw.ticketMap)) {
+    invariant("backfill/completed ticketMap must be an array");
+  }
+  for (const entry of raw.ticketMap as unknown[]) {
+    if (!isPlainObject(entry)) {
+      invariant("backfill/completed ticketMap entries must be objects");
+    }
+    // `slug` is optional (v2 entries predate it); every other key is exact.
+    for (const key of Object.keys(entry)) {
+      if (![...TICKET_MAP_KEYS, "slug"].includes(key)) {
+        invariant(`backfill ticket map entry has an unknown key ${key}`);
+      }
+    }
+    for (const key of TICKET_MAP_KEYS) {
+      if (!(key in entry)) {
+        invariant(`backfill ticket map entry is missing key ${key}`);
+      }
+    }
+    expectString(entry.sessionId, "backfill ticket map sessionId");
+    expectInt(entry.localId, "backfill ticket map localId", 1);
+    expectInt(entry.newId, "backfill ticket map newId", 1);
+    if ("slug" in entry && entry.slug !== undefined) {
+      expectString(entry.slug, "backfill ticket map slug");
+    }
+  }
+  expectNumber(raw.at, "backfill/completed at");
+}
+
+function validateBackfillSessionIds(raw: Record<string, unknown>): void {
   if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
     invariant("backfill/completed sessionIds must be an array of strings");
   }
+}
+
+function validateBackfillCounts(raw: Record<string, unknown>): void {
   expectInt(raw.tickets, "backfill tickets", 0);
   expectInt(raw.evidence, "backfill evidence", 0);
   expectInt(raw.comments, "backfill comments", 0);
@@ -819,6 +990,9 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
   expectInt(raw.refusals, "backfill refusals", 0);
   expectInt(raw.edgesRewritten, "backfill edgesRewritten", 0);
   expectStringArray(raw.skippedKinds, "backfill skippedKinds");
+}
+
+function validateBackfillDroppedDependencies(raw: Record<string, unknown>): void {
   if (!Array.isArray(raw.droppedDependencies)) {
     invariant("backfill/completed droppedDependencies must be an array");
   }
@@ -834,6 +1008,9 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
     expectString(entry.ref, "backfill dropped edge ref");
     expectString(entry.reason, "backfill dropped edge reason");
   }
+}
+
+function validateBackfillSkippedPlans(raw: Record<string, unknown>): void {
   if (!Array.isArray(raw.skippedPlans)) {
     invariant("backfill/completed skippedPlans must be an array");
   }
@@ -848,6 +1025,9 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
     expectNumber(entry.at, "backfill skipped plan at");
     expectString(entry.reason, "backfill skipped plan reason");
   }
+}
+
+function validateBackfillSkippedPhases(raw: Record<string, unknown>): void {
   if (!Array.isArray(raw.skippedPhases)) {
     invariant("backfill/completed skippedPhases must be an array");
   }
@@ -863,6 +1043,9 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
     expectNumber(entry.at, "backfill skipped phase at");
     expectString(entry.reason, "backfill skipped phase reason");
   }
+}
+
+function validateBackfillDroppedRefusals(raw: Record<string, unknown>): void {
   if (!Array.isArray(raw.droppedRefusals)) {
     invariant("backfill/completed droppedRefusals must be an array");
   }
@@ -876,6 +1059,9 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
     expectNumber(entry.at, "backfill dropped refusal at");
     expectString(entry.reason, "backfill dropped refusal reason");
   }
+}
+
+function validateBackfillTicketMapV2(raw: Record<string, unknown>): void {
   if (!Array.isArray(raw.ticketMap)) {
     invariant("backfill/completed ticketMap must be an array");
   }
@@ -888,7 +1074,6 @@ function validateBackfillCompletedV2(raw: Record<string, unknown>): void {
     expectInt(entry.localId, "backfill ticket map localId", 1);
     expectInt(entry.newId, "backfill ticket map newId", 1);
   }
-  expectNumber(raw.at, "backfill/completed at");
 }
 
 /** An array of strings and nothing else. */

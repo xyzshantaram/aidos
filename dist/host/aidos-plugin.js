@@ -85,9 +85,9 @@ var __privateGet = (obj, member, getter) => (__accessCheck(obj, member, "read fr
 var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "access private method"), method);
 
-// node_modules/.pnpm/kind-of@6.0.3/node_modules/kind-of/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/kind-of@6.0.3/node_modules/kind-of/index.js
 var require_kind_of = __commonJS({
-  "node_modules/.pnpm/kind-of@6.0.3/node_modules/kind-of/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/kind-of@6.0.3/node_modules/kind-of/index.js"(exports2, module2) {
     var toString = Object.prototype.toString;
     module2.exports = function kindOf(val) {
       if (val === void 0) return "undefined";
@@ -206,9 +206,9 @@ var require_kind_of = __commonJS({
   }
 });
 
-// node_modules/.pnpm/is-extendable@0.1.1/node_modules/is-extendable/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/is-extendable@0.1.1/node_modules/is-extendable/index.js
 var require_is_extendable = __commonJS({
-  "node_modules/.pnpm/is-extendable@0.1.1/node_modules/is-extendable/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/is-extendable@0.1.1/node_modules/is-extendable/index.js"(exports2, module2) {
     "use strict";
     module2.exports = function isExtendable(val) {
       return typeof val !== "undefined" && val !== null && (typeof val === "object" || typeof val === "function");
@@ -216,9 +216,9 @@ var require_is_extendable = __commonJS({
   }
 });
 
-// node_modules/.pnpm/extend-shallow@2.0.1/node_modules/extend-shallow/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/extend-shallow@2.0.1/node_modules/extend-shallow/index.js
 var require_extend_shallow = __commonJS({
-  "node_modules/.pnpm/extend-shallow@2.0.1/node_modules/extend-shallow/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/extend-shallow@2.0.1/node_modules/extend-shallow/index.js"(exports2, module2) {
     "use strict";
     var isObject2 = require_is_extendable();
     module2.exports = function extend2(o) {
@@ -247,9 +247,9 @@ var require_extend_shallow = __commonJS({
   }
 });
 
-// node_modules/.pnpm/section-matter@1.0.0/node_modules/section-matter/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/section-matter@1.0.0/node_modules/section-matter/index.js
 var require_section_matter = __commonJS({
-  "node_modules/.pnpm/section-matter@1.0.0/node_modules/section-matter/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/section-matter@1.0.0/node_modules/section-matter/index.js"(exports2, module2) {
     "use strict";
     var typeOf = require_kind_of();
     var extend2 = require_extend_shallow();
@@ -354,9 +354,9 @@ var require_section_matter = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/common.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/common.js
 var require_common = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/common.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/common.js"(exports2, module2) {
     "use strict";
     function isNothing(subject) {
       return typeof subject === "undefined" || subject === null;
@@ -399,9 +399,9 @@ var require_common = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/exception.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/exception.js
 var require_exception = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/exception.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/exception.js"(exports2, module2) {
     "use strict";
     function YAMLException(reason, mark) {
       Error.call(this);
@@ -429,9 +429,9 @@ var require_exception = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/mark.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/mark.js
 var require_mark = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/mark.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/mark.js"(exports2, module2) {
     "use strict";
     var common = require_common();
     function Mark(name, buffer, position, line, column) {
@@ -487,9 +487,9 @@ var require_mark = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type.js
 var require_type = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type.js"(exports2, module2) {
     "use strict";
     var YAMLException = require_exception();
     var TYPE_CONSTRUCTOR_OPTIONS = [
@@ -546,9 +546,9 @@ var require_type = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema.js
 var require_schema = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema.js"(exports2, module2) {
     "use strict";
     var common = require_common();
     var YAMLException = require_exception();
@@ -634,9 +634,9 @@ var require_schema = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/str.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/str.js
 var require_str = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/str.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/str.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     module2.exports = new Type("tag:yaml.org,2002:str", {
@@ -648,9 +648,9 @@ var require_str = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/seq.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/seq.js
 var require_seq = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/seq.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/seq.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     module2.exports = new Type("tag:yaml.org,2002:seq", {
@@ -662,9 +662,9 @@ var require_seq = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/map.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/map.js
 var require_map = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/map.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/map.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     module2.exports = new Type("tag:yaml.org,2002:map", {
@@ -676,9 +676,9 @@ var require_map = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/failsafe.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/failsafe.js
 var require_failsafe = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/failsafe.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/failsafe.js"(exports2, module2) {
     "use strict";
     var Schema = require_schema();
     module2.exports = new Schema({
@@ -691,9 +691,9 @@ var require_failsafe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/null.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/null.js
 var require_null = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/null.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/null.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     function resolveYamlNull(data) {
@@ -731,9 +731,9 @@ var require_null = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/bool.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/bool.js
 var require_bool = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/bool.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/bool.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     function resolveYamlBoolean(data) {
@@ -768,9 +768,9 @@ var require_bool = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/int.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/int.js
 var require_int = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/int.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/int.js"(exports2, module2) {
     "use strict";
     var common = require_common();
     var Type = require_type();
@@ -901,9 +901,9 @@ var require_int = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/float.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/float.js
 var require_float = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/float.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/float.js"(exports2, module2) {
     "use strict";
     var common = require_common();
     var Type = require_type();
@@ -996,9 +996,9 @@ var require_float = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/json.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/json.js
 var require_json = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/json.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/json.js"(exports2, module2) {
     "use strict";
     var Schema = require_schema();
     module2.exports = new Schema({
@@ -1015,9 +1015,9 @@ var require_json = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/core.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/core.js
 var require_core = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/core.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/core.js"(exports2, module2) {
     "use strict";
     var Schema = require_schema();
     module2.exports = new Schema({
@@ -1028,9 +1028,9 @@ var require_core = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/timestamp.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/timestamp.js
 var require_timestamp = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/timestamp.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/timestamp.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     var YAML_DATE_REGEXP = new RegExp(
@@ -1089,9 +1089,9 @@ var require_timestamp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/merge.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/merge.js
 var require_merge = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/merge.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/merge.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     function resolveYamlMerge(data) {
@@ -1104,9 +1104,9 @@ var require_merge = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/binary.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/binary.js
 var require_binary = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/binary.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/binary.js"(exports2, module2) {
     "use strict";
     var NodeBuffer;
     try {
@@ -1197,9 +1197,9 @@ var require_binary = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/omap.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/omap.js
 var require_omap = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/omap.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/omap.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     var _hasOwnProperty = Object.prototype.hasOwnProperty;
@@ -1234,9 +1234,9 @@ var require_omap = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/pairs.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/pairs.js
 var require_pairs = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/pairs.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/pairs.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     var _toString = Object.prototype.toString;
@@ -1272,9 +1272,9 @@ var require_pairs = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/set.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/set.js
 var require_set = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/set.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/set.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     var _hasOwnProperty = Object.prototype.hasOwnProperty;
@@ -1299,9 +1299,9 @@ var require_set = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_safe.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_safe.js
 var require_default_safe = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_safe.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_safe.js"(exports2, module2) {
     "use strict";
     var Schema = require_schema();
     module2.exports = new Schema({
@@ -1322,9 +1322,9 @@ var require_default_safe = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/undefined.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/undefined.js
 var require_undefined = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/undefined.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/undefined.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     function resolveJavascriptUndefined() {
@@ -1349,9 +1349,9 @@ var require_undefined = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/regexp.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/regexp.js
 var require_regexp = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/regexp.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/regexp.js"(exports2, module2) {
     "use strict";
     var Type = require_type();
     function resolveJavascriptRegExp(data) {
@@ -1393,9 +1393,9 @@ var require_regexp = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/function.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/function.js
 var require_function = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/function.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/type/js/function.js"(exports2, module2) {
     "use strict";
     var esprima;
     try {
@@ -1448,9 +1448,9 @@ var require_function = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_full.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_full.js
 var require_default_full = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_full.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/schema/default_full.js"(exports2, module2) {
     "use strict";
     var Schema = require_schema();
     module2.exports = Schema.DEFAULT = new Schema({
@@ -1466,9 +1466,9 @@ var require_default_full = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/loader.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/loader.js
 var require_loader = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/loader.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/loader.js"(exports2, module2) {
     "use strict";
     var common = require_common();
     var YAMLException = require_exception();
@@ -2598,9 +2598,9 @@ var require_loader = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/dumper.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/dumper.js
 var require_dumper = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/dumper.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml/dumper.js"(exports2, module2) {
     "use strict";
     var common = require_common();
     var YAMLException = require_exception();
@@ -3146,9 +3146,9 @@ var require_dumper = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml.js
 var require_js_yaml = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/lib/js-yaml.js"(exports2, module2) {
     "use strict";
     var loader = require_loader();
     var dumper = require_dumper();
@@ -3181,18 +3181,18 @@ var require_js_yaml = __commonJS({
   }
 });
 
-// node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/index.js
 var require_js_yaml2 = __commonJS({
-  "node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/js-yaml@3.15.2/node_modules/js-yaml/index.js"(exports2, module2) {
     "use strict";
     var yaml2 = require_js_yaml();
     module2.exports = yaml2;
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engines.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engines.js
 var require_engines = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engines.js"(exports, module) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engines.js"(exports, module) {
     "use strict";
     var yaml = require_js_yaml2();
     var engines = exports = module.exports;
@@ -3228,9 +3228,9 @@ var require_engines = __commonJS({
   }
 });
 
-// node_modules/.pnpm/strip-bom-string@1.0.0/node_modules/strip-bom-string/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/strip-bom-string@1.0.0/node_modules/strip-bom-string/index.js
 var require_strip_bom_string = __commonJS({
-  "node_modules/.pnpm/strip-bom-string@1.0.0/node_modules/strip-bom-string/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/strip-bom-string@1.0.0/node_modules/strip-bom-string/index.js"(exports2, module2) {
     "use strict";
     module2.exports = function(str2) {
       if (typeof str2 === "string" && str2.charAt(0) === "\uFEFF") {
@@ -3241,9 +3241,9 @@ var require_strip_bom_string = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/utils.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/utils.js
 var require_utils = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/utils.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/utils.js"(exports2) {
     "use strict";
     var stripBom = require_strip_bom_string();
     var typeOf = require_kind_of();
@@ -3281,9 +3281,9 @@ var require_utils = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/defaults.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/defaults.js
 var require_defaults = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/defaults.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/defaults.js"(exports2, module2) {
     "use strict";
     var engines2 = require_engines();
     var utils = require_utils();
@@ -3300,9 +3300,9 @@ var require_defaults = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engine.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engine.js
 var require_engine = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engine.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/engine.js"(exports2, module2) {
     "use strict";
     module2.exports = function(name, options2) {
       let engine = options2.engines[name] || options2.engines[aliase(name)];
@@ -3334,9 +3334,9 @@ var require_engine = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/stringify.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/stringify.js
 var require_stringify = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/stringify.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/stringify.js"(exports2, module2) {
     "use strict";
     var typeOf = require_kind_of();
     var getEngine = require_engine();
@@ -3387,9 +3387,9 @@ var require_stringify = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/excerpt.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/excerpt.js
 var require_excerpt = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/excerpt.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/excerpt.js"(exports2, module2) {
     "use strict";
     var defaults = require_defaults();
     module2.exports = function(file2, options2) {
@@ -3414,9 +3414,9 @@ var require_excerpt = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/to-file.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/to-file.js
 var require_to_file = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/to-file.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/to-file.js"(exports2, module2) {
     "use strict";
     var typeOf = require_kind_of();
     var stringify = require_stringify();
@@ -3448,9 +3448,9 @@ var require_to_file = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/parse.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/parse.js
 var require_parse = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/parse.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/lib/parse.js"(exports2, module2) {
     "use strict";
     var getEngine = require_engine();
     var defaults = require_defaults();
@@ -3465,9 +3465,9 @@ var require_parse = __commonJS({
   }
 });
 
-// node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/index.js
 var require_gray_matter = __commonJS({
-  "node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/index.js"(exports2, module2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/gray-matter@4.0.3/node_modules/gray-matter/index.js"(exports2, module2) {
     "use strict";
     var fs = __require("fs");
     var sections = require_section_matter();
@@ -3581,9 +3581,9 @@ var require_gray_matter = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js
 var require_identity = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/identity.js"(exports2) {
     "use strict";
     var ALIAS = /* @__PURE__ */ Symbol.for("yaml.alias");
     var DOC = /* @__PURE__ */ Symbol.for("yaml.document");
@@ -3638,9 +3638,9 @@ var require_identity = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/visit.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/visit.js
 var require_visit = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/visit.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/visit.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var BREAK = /* @__PURE__ */ Symbol("break visit");
@@ -3796,9 +3796,9 @@ var require_visit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/directives.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/directives.js
 var require_directives = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/directives.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/directives.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var visit = require_visit();
@@ -3967,9 +3967,9 @@ var require_directives = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/anchors.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/anchors.js
 var require_anchors = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/anchors.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/anchors.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var visit = require_visit();
@@ -4037,9 +4037,9 @@ var require_anchors = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/applyReviver.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/applyReviver.js
 var require_applyReviver = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/applyReviver.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/applyReviver.js"(exports2) {
     "use strict";
     function applyReviver(reviver, obj, key, val) {
       if (val && typeof val === "object") {
@@ -4087,9 +4087,9 @@ var require_applyReviver = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/toJS.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/toJS.js
 var require_toJS = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/toJS.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/toJS.js"(exports2) {
     "use strict";
     var identity = require_identity();
     function toJS(value, arg, ctx) {
@@ -4117,9 +4117,9 @@ var require_toJS = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Node.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Node.js
 var require_Node = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Node.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Node.js"(exports2) {
     "use strict";
     var applyReviver = require_applyReviver();
     var identity = require_identity();
@@ -4158,9 +4158,9 @@ var require_Node = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Alias.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Alias.js
 var require_Alias = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Alias.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Alias.js"(exports2) {
     "use strict";
     var anchors = require_anchors();
     var visit = require_visit();
@@ -4274,9 +4274,9 @@ var require_Alias = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Scalar.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Scalar.js
 var require_Scalar = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Scalar.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Scalar.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Node = require_Node();
@@ -4304,9 +4304,9 @@ var require_Scalar = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/createNode.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/createNode.js
 var require_createNode = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/createNode.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/createNode.js"(exports2) {
     "use strict";
     var Alias = require_Alias();
     var identity = require_identity();
@@ -4379,9 +4379,9 @@ var require_createNode = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Collection.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Collection.js
 var require_Collection = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Collection.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Collection.js"(exports2) {
     "use strict";
     var createNode = require_createNode();
     var identity = require_identity();
@@ -4522,9 +4522,9 @@ var require_Collection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyComment.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyComment.js
 var require_stringifyComment = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyComment.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyComment.js"(exports2) {
     "use strict";
     var stringifyComment = (str2) => str2.replace(/^(?!$)(?: $)?/gm, "#");
     function indentComment(comment, indent) {
@@ -4539,9 +4539,9 @@ var require_stringifyComment = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/foldFlowLines.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/foldFlowLines.js
 var require_foldFlowLines = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/foldFlowLines.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/foldFlowLines.js"(exports2) {
     "use strict";
     var FOLD_FLOW = "flow";
     var FOLD_BLOCK = "block";
@@ -4675,9 +4675,9 @@ ${indent}${text.slice(fold + 1, end2)}`;
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyString.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyString.js
 var require_stringifyString = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyString.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyString.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var foldFlowLines = require_foldFlowLines();
@@ -4958,9 +4958,9 @@ ${indent}`);
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringify.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringify.js
 var require_stringify2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringify.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringify.js"(exports2) {
     "use strict";
     var anchors = require_anchors();
     var identity = require_identity();
@@ -5082,9 +5082,9 @@ ${ctx.indent}${str2}`;
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyPair.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyPair.js
 var require_stringifyPair = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyPair.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyPair.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -5215,9 +5215,9 @@ ${ctx.indent}`;
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/log.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/log.js
 var require_log = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/log.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/log.js"(exports2) {
     "use strict";
     var node_process = __require("process");
     function debug(logLevel, ...messages) {
@@ -5237,9 +5237,9 @@ var require_log = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/merge.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/merge.js
 var require_merge2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/merge.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -5297,9 +5297,9 @@ var require_merge2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/addPairToJSMap.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/addPairToJSMap.js
 var require_addPairToJSMap = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/addPairToJSMap.js"(exports2) {
     "use strict";
     var log = require_log();
     var merge2 = require_merge2();
@@ -5361,9 +5361,9 @@ var require_addPairToJSMap = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Pair.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Pair.js
 var require_Pair = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Pair.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/Pair.js"(exports2) {
     "use strict";
     var createNode = require_createNode();
     var stringifyPair = require_stringifyPair();
@@ -5401,9 +5401,9 @@ var require_Pair = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyCollection.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyCollection.js
 var require_stringifyCollection = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyCollection.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var stringify = require_stringify2();
@@ -5552,9 +5552,9 @@ ${indent}${end}`;
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLMap.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLMap.js
 var require_YAMLMap = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLMap.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLMap.js"(exports2) {
     "use strict";
     var stringifyCollection = require_stringifyCollection();
     var addPairToJSMap = require_addPairToJSMap();
@@ -5696,9 +5696,9 @@ var require_YAMLMap = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/map.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/map.js
 var require_map2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/map.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/map.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var YAMLMap = require_YAMLMap();
@@ -5718,9 +5718,9 @@ var require_map2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLSeq.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLSeq.js
 var require_YAMLSeq = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLSeq.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/nodes/YAMLSeq.js"(exports2) {
     "use strict";
     var createNode = require_createNode();
     var stringifyCollection = require_stringifyCollection();
@@ -5834,9 +5834,9 @@ var require_YAMLSeq = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/seq.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/seq.js
 var require_seq2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/seq.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/seq.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var YAMLSeq = require_YAMLSeq();
@@ -5856,9 +5856,9 @@ var require_seq2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/string.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/string.js
 var require_string = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/string.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/string.js"(exports2) {
     "use strict";
     var stringifyString = require_stringifyString();
     var string4 = {
@@ -5875,9 +5875,9 @@ var require_string = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/null.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/null.js
 var require_null2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/null.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/common/null.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var nullTag = {
@@ -5893,9 +5893,9 @@ var require_null2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/bool.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/bool.js
 var require_bool2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/bool.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/bool.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var boolTag = {
@@ -5917,9 +5917,9 @@ var require_bool2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyNumber.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyNumber.js
 var require_stringifyNumber = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyNumber.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyNumber.js"(exports2) {
     "use strict";
     function stringifyNumber({ format, minFractionDigits, tag, value }) {
       if (typeof value === "bigint")
@@ -5944,9 +5944,9 @@ var require_stringifyNumber = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/float.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/float.js
 var require_float2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/float.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/float.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -5990,9 +5990,9 @@ var require_float2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/int.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/int.js
 var require_int2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/int.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/int.js"(exports2) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -6035,9 +6035,9 @@ var require_int2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/schema.js
 var require_schema2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/schema.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/core/schema.js"(exports2) {
     "use strict";
     var map2 = require_map2();
     var _null4 = require_null2();
@@ -6063,9 +6063,9 @@ var require_schema2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/json/schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/json/schema.js
 var require_schema3 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/json/schema.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/json/schema.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var map2 = require_map2();
@@ -6130,9 +6130,9 @@ var require_schema3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/binary.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/binary.js
 var require_binary2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/binary.js"(exports2) {
     "use strict";
     var node_buffer = __require("buffer");
     var Scalar = require_Scalar();
@@ -6196,9 +6196,9 @@ var require_binary2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/pairs.js
 var require_pairs2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/pairs.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Pair = require_Pair();
@@ -6274,9 +6274,9 @@ ${cn.comment}` : item.comment;
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/omap.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/omap.js
 var require_omap2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/omap.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var toJS = require_toJS();
@@ -6352,9 +6352,9 @@ var require_omap2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/bool.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/bool.js
 var require_bool3 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/bool.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     function boolStringify({ value, source }, ctx) {
@@ -6384,9 +6384,9 @@ var require_bool3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/float.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/float.js
 var require_float3 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/float.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var stringifyNumber = require_stringifyNumber();
@@ -6433,9 +6433,9 @@ var require_float3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/int.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/int.js
 var require_int3 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/int.js"(exports2) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     var intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
@@ -6512,9 +6512,9 @@ var require_int3 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/set.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/set.js
 var require_set2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/set.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Pair = require_Pair();
@@ -6601,9 +6601,9 @@ var require_set2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js
 var require_timestamp2 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/timestamp.js"(exports2) {
     "use strict";
     var stringifyNumber = require_stringifyNumber();
     function parseSexagesimal(str2, asBigInt) {
@@ -6689,9 +6689,9 @@ var require_timestamp2 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/schema.js
 var require_schema4 = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/yaml-1.1/schema.js"(exports2) {
     "use strict";
     var map2 = require_map2();
     var _null4 = require_null2();
@@ -6733,9 +6733,9 @@ var require_schema4 = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/tags.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/tags.js
 var require_tags = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/tags.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/tags.js"(exports2) {
     "use strict";
     var map2 = require_map2();
     var _null4 = require_null2();
@@ -6827,9 +6827,9 @@ var require_tags = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/Schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/Schema.js
 var require_Schema = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/Schema.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/schema/Schema.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var map2 = require_map2();
@@ -6859,9 +6859,9 @@ var require_Schema = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyDocument.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyDocument.js
 var require_stringifyDocument = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/stringify/stringifyDocument.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var stringify = require_stringify2();
@@ -6939,9 +6939,9 @@ var require_stringifyDocument = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/Document.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/Document.js
 var require_Document = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/Document.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/doc/Document.js"(exports2) {
     "use strict";
     var Alias = require_Alias();
     var Collection = require_Collection();
@@ -7248,9 +7248,9 @@ var require_Document = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/errors.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/errors.js
 var require_errors = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/errors.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/errors.js"(exports2) {
     "use strict";
     var YAMLError = class extends Error {
       constructor(name, pos, code, message) {
@@ -7313,9 +7313,9 @@ ${pointer}
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-props.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-props.js
 var require_resolve_props = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-props.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-props.js"(exports2) {
     "use strict";
     function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
       let spaceBefore = false;
@@ -7447,9 +7447,9 @@ var require_resolve_props = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-contains-newline.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-contains-newline.js
 var require_util_contains_newline = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-contains-newline.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-contains-newline.js"(exports2) {
     "use strict";
     function containsNewline(key) {
       if (!key)
@@ -7489,9 +7489,9 @@ var require_util_contains_newline = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-flow-indent-check.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-flow-indent-check.js
 var require_util_flow_indent_check = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-flow-indent-check.js"(exports2) {
     "use strict";
     var utilContainsNewline = require_util_contains_newline();
     function flowIndentCheck(indent, fc, onError) {
@@ -7507,9 +7507,9 @@ var require_util_flow_indent_check = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-map-includes.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-map-includes.js
 var require_util_map_includes = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-map-includes.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-map-includes.js"(exports2) {
     "use strict";
     var identity = require_identity();
     function mapIncludes(ctx, items, search) {
@@ -7523,9 +7523,9 @@ var require_util_map_includes = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-map.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-map.js
 var require_resolve_block_map = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-map.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-map.js"(exports2) {
     "use strict";
     var Pair = require_Pair();
     var YAMLMap = require_YAMLMap();
@@ -7631,9 +7631,9 @@ var require_resolve_block_map = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-seq.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-seq.js
 var require_resolve_block_seq = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-seq.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-seq.js"(exports2) {
     "use strict";
     var YAMLSeq = require_YAMLSeq();
     var resolveProps = require_resolve_props();
@@ -7682,9 +7682,9 @@ var require_resolve_block_seq = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-end.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-end.js
 var require_resolve_end = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-end.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-end.js"(exports2) {
     "use strict";
     function resolveEnd(end, offset, reqSpace, onError) {
       let comment = "";
@@ -7725,9 +7725,9 @@ var require_resolve_end = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-collection.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-collection.js
 var require_resolve_flow_collection = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-collection.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Pair = require_Pair();
@@ -7919,9 +7919,9 @@ var require_resolve_flow_collection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-collection.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-collection.js
 var require_compose_collection = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-collection.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-collection.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -7984,9 +7984,9 @@ var require_compose_collection = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-scalar.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-scalar.js
 var require_resolve_block_scalar = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-block-scalar.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     function resolveBlockScalar(ctx, scalar, onError) {
@@ -8167,9 +8167,9 @@ var require_resolve_block_scalar = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-scalar.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-scalar.js
 var require_resolve_flow_scalar = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/resolve-flow-scalar.js"(exports2) {
     "use strict";
     var Scalar = require_Scalar();
     var resolveEnd = require_resolve_end();
@@ -8387,9 +8387,9 @@ var require_resolve_flow_scalar = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-scalar.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-scalar.js
 var require_compose_scalar = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-scalar.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-scalar.js"(exports2) {
     "use strict";
     var identity = require_identity();
     var Scalar = require_Scalar();
@@ -8468,9 +8468,9 @@ var require_compose_scalar = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-empty-scalar-position.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-empty-scalar-position.js
 var require_util_empty_scalar_position = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/util-empty-scalar-position.js"(exports2) {
     "use strict";
     function emptyScalarPosition(offset, before, pos) {
       if (before) {
@@ -8498,9 +8498,9 @@ var require_util_empty_scalar_position = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-node.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-node.js
 var require_compose_node = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-node.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-node.js"(exports2) {
     "use strict";
     var Alias = require_Alias();
     var identity = require_identity();
@@ -8604,9 +8604,9 @@ var require_compose_node = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-doc.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-doc.js
 var require_compose_doc = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-doc.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/compose-doc.js"(exports2) {
     "use strict";
     var Document = require_Document();
     var composeNode = require_compose_node();
@@ -8647,9 +8647,9 @@ var require_compose_doc = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/composer.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/composer.js
 var require_composer = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/composer.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/compose/composer.js"(exports2) {
     "use strict";
     var node_process = __require("process");
     var directives = require_directives();
@@ -8855,9 +8855,9 @@ ${end.comment}` : end.comment;
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-scalar.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-scalar.js
 var require_cst_scalar = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-scalar.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-scalar.js"(exports2) {
     "use strict";
     var resolveBlockScalar = require_resolve_block_scalar();
     var resolveFlowScalar = require_resolve_flow_scalar();
@@ -9040,9 +9040,9 @@ var require_cst_scalar = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-stringify.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-stringify.js
 var require_cst_stringify = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-stringify.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-stringify.js"(exports2) {
     "use strict";
     var stringify = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
     function stringifyToken(token) {
@@ -9101,9 +9101,9 @@ var require_cst_stringify = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-visit.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-visit.js
 var require_cst_visit = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-visit.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst-visit.js"(exports2) {
     "use strict";
     var BREAK = /* @__PURE__ */ Symbol("break visit");
     var SKIP = /* @__PURE__ */ Symbol("skip children");
@@ -9163,9 +9163,9 @@ var require_cst_visit = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst.js
 var require_cst = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/cst.js"(exports2) {
     "use strict";
     var cstScalar = require_cst_scalar();
     var cstStringify = require_cst_stringify();
@@ -9265,9 +9265,9 @@ var require_cst = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/lexer.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/lexer.js
 var require_lexer = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/lexer.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/lexer.js"(exports2) {
     "use strict";
     var cst = require_cst();
     function isEmpty(ch) {
@@ -9854,9 +9854,9 @@ var require_lexer = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/line-counter.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/line-counter.js
 var require_line_counter = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/line-counter.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/line-counter.js"(exports2) {
     "use strict";
     var LineCounter = class {
       constructor() {
@@ -9885,9 +9885,9 @@ var require_line_counter = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/parser.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/parser.js
 var require_parser = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/parser.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/parse/parser.js"(exports2) {
     "use strict";
     var node_process = __require("process");
     var cst = require_cst();
@@ -10759,9 +10759,9 @@ var require_parser = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/public-api.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/public-api.js
 var require_public_api = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/public-api.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/public-api.js"(exports2) {
     "use strict";
     var composer = require_composer();
     var Document = require_Document();
@@ -10856,9 +10856,9 @@ var require_public_api = __commonJS({
   }
 });
 
-// node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/index.js
 var require_dist = __commonJS({
-  "node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/index.js"(exports2) {
+  "../../../../../home/sid/repos/aidos/node_modules/.pnpm/yaml@2.9.0/node_modules/yaml/dist/index.js"(exports2) {
     "use strict";
     var composer = require_composer();
     var Document = require_Document();
@@ -10914,7 +10914,7 @@ import z3 from "@deepseek-ai/schemastery";
 // src/host/aidos-core.ts
 import z2 from "@deepseek-ai/schemastery";
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
 var external_exports = {};
 __export(external_exports, {
   $brand: () => $brand,
@@ -11157,7 +11157,7 @@ __export(external_exports, {
   xor: () => xor
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/index.js
 var core_exports2 = {};
 __export(core_exports2, {
   $ZodAny: () => $ZodAny,
@@ -11436,7 +11436,7 @@ __export(core_exports2, {
   version: () => version
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/core.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/core.js
 var _a;
 var NEVER = /* @__PURE__ */ Object.freeze({
   status: "aborted"
@@ -11513,7 +11513,7 @@ function config(newConfig) {
   return globalConfig;
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/util.js
 var util_exports = {};
 __export(util_exports, {
   BIGINT_FORMAT_RANGES: () => BIGINT_FORMAT_RANGES,
@@ -12209,7 +12209,7 @@ var Class = class {
   }
 };
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/errors.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/errors.js
 var initializer = (inst, def) => {
   inst.name = "$ZodError";
   Object.defineProperty(inst, "_zod", {
@@ -12348,7 +12348,7 @@ function prettifyError(error51) {
   return lines.join("\n");
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/parse.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
   const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
@@ -12436,7 +12436,7 @@ var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
 };
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync($ZodRealError);
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/regexes.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/regexes.js
 var regexes_exports = {};
 __export(regexes_exports, {
   base64: () => base64,
@@ -12595,7 +12595,7 @@ var sha512_hex = /^[0-9a-fA-F]{128}$/;
 var sha512_base64 = /* @__PURE__ */ fixedBase64(86, "==");
 var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/checks.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
   var _a4;
   inst._zod ?? (inst._zod = {});
@@ -13143,7 +13143,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor("$ZodCheckOverwrite", (ins
   };
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/doc.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/doc.js
 var Doc = class {
   constructor(args = []) {
     this.content = [];
@@ -13179,14 +13179,14 @@ var Doc = class {
   }
 };
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/versions.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 4,
   patch: 3
 };
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/schemas.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
   var _a4;
   inst ?? (inst = {});
@@ -15279,7 +15279,7 @@ function handleRefineResult(result, payload, input, inst) {
   }
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/index.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/index.js
 var locales_exports = {};
 __export(locales_exports, {
   ar: () => ar_default,
@@ -15336,7 +15336,7 @@ __export(locales_exports, {
   zhTW: () => zh_TW_default
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ar.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ar.js
 var error = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -15443,7 +15443,7 @@ function ar_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/az.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/az.js
 var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
@@ -15549,7 +15549,7 @@ function az_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/be.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/be.js
 function getBelarusianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -15706,7 +15706,7 @@ function be_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/bg.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/bg.js
 var error4 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
@@ -15827,7 +15827,7 @@ function bg_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ca.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ca.js
 var error5 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
@@ -15936,7 +15936,7 @@ function ca_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/cs.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/cs.js
 var error6 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
@@ -16048,7 +16048,7 @@ function cs_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/da.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/da.js
 var error7 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
@@ -16164,7 +16164,7 @@ function da_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/de.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/de.js
 var error8 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
@@ -16273,7 +16273,7 @@ function de_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/el.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/el.js
 var error9 = () => {
   const Sizable = {
     string: { unit: "\u03C7\u03B1\u03C1\u03B1\u03BA\u03C4\u03AE\u03C1\u03B5\u03C2", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
@@ -16383,7 +16383,7 @@ function el_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/en.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/en.js
 var error10 = () => {
   const Sizable = {
     string: { unit: "characters", verb: "to have" },
@@ -16496,7 +16496,7 @@ function en_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/eo.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/eo.js
 var error11 = () => {
   const Sizable = {
     string: { unit: "karaktrojn", verb: "havi" },
@@ -16606,7 +16606,7 @@ function eo_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/es.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/es.js
 var error12 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "tener" },
@@ -16739,7 +16739,7 @@ function es_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fa.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fa.js
 var error13 = () => {
   const Sizable = {
     string: { unit: "\u06A9\u0627\u0631\u0627\u06A9\u062A\u0631", verb: "\u062F\u0627\u0634\u062A\u0647 \u0628\u0627\u0634\u062F" },
@@ -16854,7 +16854,7 @@ function fa_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fi.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fi.js
 var error14 = () => {
   const Sizable = {
     string: { unit: "merkki\xE4", subject: "merkkijonon" },
@@ -16967,7 +16967,7 @@ function fi_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fr.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fr.js
 var error15 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -17093,7 +17093,7 @@ function fr_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fr-CA.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/fr-CA.js
 var error16 = () => {
   const Sizable = {
     string: { unit: "caract\xE8res", verb: "avoir" },
@@ -17201,7 +17201,7 @@ function fr_CA_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/he.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/he.js
 var error17 = () => {
   const TypeNames = {
     string: { label: "\u05DE\u05D7\u05E8\u05D5\u05D6\u05EA", gender: "f" },
@@ -17396,7 +17396,7 @@ function he_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hr.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hr.js
 var error18 = () => {
   const Sizable = {
     string: { unit: "znakova", verb: "imati" },
@@ -17519,7 +17519,7 @@ function hr_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hu.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hu.js
 var error19 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
@@ -17628,7 +17628,7 @@ function hu_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hy.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/hy.js
 function getArmenianPlural(count, one, many) {
   return Math.abs(count) === 1 ? one : many;
 }
@@ -17776,7 +17776,7 @@ function hy_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/id.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/id.js
 var error21 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
@@ -17883,7 +17883,7 @@ function id_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/is.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/is.js
 var error22 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "a\xF0 hafa" },
@@ -17993,7 +17993,7 @@ function is_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/it.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/it.js
 var error23 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
@@ -18102,7 +18102,7 @@ function it_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ja.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ja.js
 var error24 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
@@ -18210,7 +18210,7 @@ function ja_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ka.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ka.js
 var error25 = () => {
   const Sizable = {
     string: { unit: "\u10E1\u10D8\u10DB\u10D1\u10DD\u10DA\u10DD", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
@@ -18323,7 +18323,7 @@ function ka_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/km.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/km.js
 var error26 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -18434,12 +18434,12 @@ function km_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/kh.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/kh.js
 function kh_default() {
   return km_default();
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ko.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ko.js
 var error27 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
@@ -18551,7 +18551,7 @@ function ko_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/lt.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/lt.js
 var capitalizeFirstCharacter = (text) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
@@ -18755,7 +18755,7 @@ function lt_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/mk.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/mk.js
 var error29 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -18865,7 +18865,7 @@ function mk_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ms.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ms.js
 var error30 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
@@ -18973,7 +18973,7 @@ function ms_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/nl.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/nl.js
 var error31 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
@@ -19084,7 +19084,7 @@ function nl_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/no.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/no.js
 var error32 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
@@ -19193,7 +19193,7 @@ function no_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ota.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ota.js
 var error33 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
@@ -19303,7 +19303,7 @@ function ota_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ps.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ps.js
 var error34 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
@@ -19418,7 +19418,7 @@ function ps_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/pl.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/pl.js
 var error35 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
@@ -19528,7 +19528,7 @@ function pl_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/pt.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/pt.js
 var error36 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
@@ -19637,7 +19637,7 @@ function pt_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ro.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ro.js
 var error37 = () => {
   const Sizable = {
     string: { unit: "caractere", verb: "s\u0103 aib\u0103" },
@@ -19757,7 +19757,7 @@ function ro_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ru.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ru.js
 function getRussianPlural(count, one, few, many) {
   const absCount = Math.abs(count);
   const lastDigit = absCount % 10;
@@ -19914,7 +19914,7 @@ function ru_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/sl.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/sl.js
 var error39 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
@@ -20024,7 +20024,7 @@ function sl_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/sv.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/sv.js
 var error40 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
@@ -20135,7 +20135,7 @@ function sv_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ta.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ta.js
 var error41 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -20246,7 +20246,7 @@ function ta_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/th.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/th.js
 var error42 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -20357,7 +20357,7 @@ function th_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/tr.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/tr.js
 var error43 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmal\u0131" },
@@ -20463,7 +20463,7 @@ function tr_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/uk.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/uk.js
 var error44 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -20572,12 +20572,12 @@ function uk_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ua.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ua.js
 function ua_default() {
   return uk_default();
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ur.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/ur.js
 var error45 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
@@ -20688,7 +20688,7 @@ function ur_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/uz.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/uz.js
 var error46 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo\u2018lishi kerak" },
@@ -20799,7 +20799,7 @@ function uz_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/vi.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/vi.js
 var error47 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
@@ -20908,7 +20908,7 @@ function vi_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/zh-CN.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/zh-CN.js
 var error48 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
@@ -21018,7 +21018,7 @@ function zh_CN_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/zh-TW.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/zh-TW.js
 var error49 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
@@ -21126,7 +21126,7 @@ function zh_TW_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/yo.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/locales/yo.js
 var error50 = () => {
   const Sizable = {
     string: { unit: "\xE0mi", verb: "n\xED" },
@@ -21234,7 +21234,7 @@ function yo_default() {
   };
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/registries.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/registries.js
 var _a2;
 var $output = /* @__PURE__ */ Symbol("ZodOutput");
 var $input = /* @__PURE__ */ Symbol("ZodInput");
@@ -21284,7 +21284,7 @@ function registry() {
 (_a2 = globalThis).__zod_globalRegistry ?? (_a2.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/api.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/api.js
 // @__NO_SIDE_EFFECTS__
 function _string(Class2, params) {
   return new Class2({
@@ -22323,7 +22323,7 @@ function _stringFormat(Class2, format, fnOrRegex, _params = {}) {
   return inst;
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/to-json-schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/to-json-schema.js
 function initializeContext(params) {
   let target = params?.target ?? "draft-2020-12";
   if (target === "draft-4")
@@ -22682,7 +22682,7 @@ var createStandardJSONSchemaMethod = (schema, io, processors = {}) => (params) =
   return finalize(ctx, schema);
 };
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema-processors.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema-processors.js
 var formatMap = {
   guid: "uuid",
   url: "uri",
@@ -23226,7 +23226,7 @@ function toJSONSchema(input, params) {
   return finalize(ctx, input);
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema-generator.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema-generator.js
 var JSONSchemaGenerator = class {
   /** @deprecated Access via ctx instead */
   get metadataRegistry() {
@@ -23301,10 +23301,10 @@ var JSONSchemaGenerator = class {
   }
 };
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/core/json-schema.js
 var json_schema_exports = {};
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
 var schemas_exports2 = {};
 __export(schemas_exports2, {
   ZodAny: () => ZodAny,
@@ -23475,7 +23475,7 @@ __export(schemas_exports2, {
   xor: () => xor
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/checks.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/checks.js
 var checks_exports2 = {};
 __export(checks_exports2, {
   endsWith: () => _endsWith,
@@ -23509,7 +23509,7 @@ __export(checks_exports2, {
   uppercase: () => _uppercase
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/iso.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/iso.js
 var iso_exports = {};
 __export(iso_exports, {
   ZodISODate: () => ZodISODate,
@@ -23550,7 +23550,7 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/errors.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/errors.js
 var initializer2 = (inst, issues) => {
   $ZodError.init(inst, issues);
   inst.name = "ZodError";
@@ -23590,7 +23590,7 @@ var ZodRealError = /* @__PURE__ */ $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/parse.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/parse.js
 var parse3 = /* @__PURE__ */ _parse(ZodRealError);
 var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
 var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
@@ -23604,7 +23604,7 @@ var safeDecode2 = /* @__PURE__ */ _safeDecode(ZodRealError);
 var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/schemas.js
 var _installedGroups = /* @__PURE__ */ new WeakMap();
 function _installLazyMethods(inst, group, methods) {
   const proto = Object.getPrototypeOf(inst);
@@ -24894,7 +24894,7 @@ function preprocess(fn, schema) {
   });
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/compat.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
   invalid_type: "invalid_type",
   too_big: "too_big",
@@ -24920,7 +24920,7 @@ var ZodFirstPartyTypeKind;
 /* @__PURE__ */ (function(ZodFirstPartyTypeKind2) {
 })(ZodFirstPartyTypeKind || (ZodFirstPartyTypeKind = {}));
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/from-json-schema.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/from-json-schema.js
 var z = {
   ...schemas_exports2,
   ...checks_exports2,
@@ -25400,7 +25400,7 @@ function fromJSONSchema(schema, params) {
   return convertSchema(normalized, ctx);
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/coerce.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/coerce.js
 var coerce_exports = {};
 __export(coerce_exports, {
   bigint: () => bigint3,
@@ -25425,7 +25425,7 @@ function date4(params) {
   return _coercedDate(ZodDate, params);
 }
 
-// node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
+// ../../../../../home/sid/repos/aidos/node_modules/.pnpm/zod@4.4.3/node_modules/zod/v4/classic/external.js
 config(en_default());
 
 // src/host/aidos-core.ts
@@ -26209,6 +26209,55 @@ var SKIPPED_PHASE_KEYS = [
 ];
 var DROPPED_REFUSAL_KEYS = ["sessionId", "localTicketId", "at", "reason"];
 var TICKET_MAP_KEYS = ["sessionId", "localId", "newId"];
+var BACKFILL_V3_KEYS = [
+  "kind",
+  "version",
+  "importerVersion",
+  "sessionIds",
+  "tickets",
+  "evidence",
+  "comments",
+  "plans",
+  "phases",
+  "refusals",
+  "edgesRewritten",
+  "droppedDependencies",
+  "skippedPlans",
+  "skippedPhases",
+  "droppedRefusals",
+  "pendingEdges",
+  "repairedEdges",
+  "slugRenames",
+  "skippedKinds",
+  "ticketMap",
+  "at"
+];
+var PENDING_EDGE_KEYS = [
+  "fromSessionId",
+  "fromLocalId",
+  "fromNewId",
+  "fromTitle",
+  "ref",
+  "targetSessionId",
+  "targetLocalId",
+  "slug"
+];
+var REPAIRED_EDGE_KEYS = [
+  "fromSessionId",
+  "fromLocalId",
+  "fromNewId",
+  "fromTitle",
+  "ref",
+  "resolvedTo"
+];
+var SLUG_RENAME_KEYS = [
+  "sessionId",
+  "localId",
+  "newId",
+  "title",
+  "fromSlug",
+  "toSlug"
+];
 function invariant(message) {
   throw new InvariantError(message);
 }
@@ -26713,7 +26762,11 @@ function validateBackfillCompleted(raw) {
     validateBackfillCompletedV2(raw);
     return;
   }
-  invariant("backfill/completed version must be 1 or 2");
+  if (raw.version === 3) {
+    validateBackfillCompletedV3(raw);
+    return;
+  }
+  invariant("backfill/completed version must be 1, 2, or 3");
 }
 function validateBackfillCompletedV1(raw) {
   expectKeys(raw, BACKFILL_KEYS, "backfill/completed");
@@ -26730,9 +26783,111 @@ function validateBackfillCompletedV2(raw) {
   if (raw.importerVersion !== 2) {
     invariant("backfill/completed importerVersion must be 2");
   }
+  validateBackfillSessionIds(raw);
+  validateBackfillCounts(raw);
+  validateBackfillDroppedDependencies(raw);
+  validateBackfillSkippedPlans(raw);
+  validateBackfillSkippedPhases(raw);
+  validateBackfillDroppedRefusals(raw);
+  validateBackfillTicketMapV2(raw);
+  expectNumber(raw.at, "backfill/completed at");
+}
+function validateBackfillCompletedV3(raw) {
+  expectKeys(raw, BACKFILL_V3_KEYS, "backfill/completed");
+  if (raw.importerVersion !== 3) {
+    invariant("backfill/completed importerVersion must be 3");
+  }
+  validateBackfillSessionIds(raw);
+  validateBackfillCounts(raw);
+  validateBackfillDroppedDependencies(raw);
+  validateBackfillSkippedPlans(raw);
+  validateBackfillSkippedPhases(raw);
+  validateBackfillDroppedRefusals(raw);
+  if (!Array.isArray(raw.pendingEdges)) {
+    invariant("backfill/completed pendingEdges must be an array");
+  }
+  for (const entry of raw.pendingEdges) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed pendingEdges entries must be objects");
+    }
+    expectKeys(entry, PENDING_EDGE_KEYS, "backfill pending edge");
+    expectString(entry.fromSessionId, "backfill pending edge fromSessionId");
+    expectInt(entry.fromLocalId, "backfill pending edge fromLocalId", 1);
+    expectInt(entry.fromNewId, "backfill pending edge fromNewId", 1);
+    expectString(entry.fromTitle, "backfill pending edge fromTitle");
+    expectString(entry.ref, "backfill pending edge ref");
+    if (entry.targetSessionId !== null) {
+      expectString(entry.targetSessionId, "backfill pending edge targetSessionId");
+    }
+    if (entry.targetLocalId !== null) {
+      expectInt(entry.targetLocalId, "backfill pending edge targetLocalId", 1);
+    }
+    if (entry.slug !== null) {
+      expectString(entry.slug, "backfill pending edge slug");
+    }
+  }
+  if (!Array.isArray(raw.repairedEdges)) {
+    invariant("backfill/completed repairedEdges must be an array");
+  }
+  for (const entry of raw.repairedEdges) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed repairedEdges entries must be objects");
+    }
+    expectKeys(entry, REPAIRED_EDGE_KEYS, "backfill repaired edge");
+    expectString(entry.fromSessionId, "backfill repaired edge fromSessionId");
+    expectInt(entry.fromLocalId, "backfill repaired edge fromLocalId", 1);
+    expectInt(entry.fromNewId, "backfill repaired edge fromNewId", 1);
+    expectString(entry.fromTitle, "backfill repaired edge fromTitle");
+    expectString(entry.ref, "backfill repaired edge ref");
+    expectString(entry.resolvedTo, "backfill repaired edge resolvedTo");
+  }
+  if (!Array.isArray(raw.slugRenames)) {
+    invariant("backfill/completed slugRenames must be an array");
+  }
+  for (const entry of raw.slugRenames) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed slugRenames entries must be objects");
+    }
+    expectKeys(entry, SLUG_RENAME_KEYS, "backfill slug rename");
+    expectString(entry.sessionId, "backfill slug rename sessionId");
+    expectInt(entry.localId, "backfill slug rename localId", 1);
+    expectInt(entry.newId, "backfill slug rename newId", 1);
+    expectString(entry.title, "backfill slug rename title");
+    expectString(entry.fromSlug, "backfill slug rename fromSlug");
+    expectString(entry.toSlug, "backfill slug rename toSlug");
+  }
+  if (!Array.isArray(raw.ticketMap)) {
+    invariant("backfill/completed ticketMap must be an array");
+  }
+  for (const entry of raw.ticketMap) {
+    if (!isPlainObject2(entry)) {
+      invariant("backfill/completed ticketMap entries must be objects");
+    }
+    for (const key of Object.keys(entry)) {
+      if (![...TICKET_MAP_KEYS, "slug"].includes(key)) {
+        invariant(`backfill ticket map entry has an unknown key ${key}`);
+      }
+    }
+    for (const key of TICKET_MAP_KEYS) {
+      if (!(key in entry)) {
+        invariant(`backfill ticket map entry is missing key ${key}`);
+      }
+    }
+    expectString(entry.sessionId, "backfill ticket map sessionId");
+    expectInt(entry.localId, "backfill ticket map localId", 1);
+    expectInt(entry.newId, "backfill ticket map newId", 1);
+    if ("slug" in entry && entry.slug !== void 0) {
+      expectString(entry.slug, "backfill ticket map slug");
+    }
+  }
+  expectNumber(raw.at, "backfill/completed at");
+}
+function validateBackfillSessionIds(raw) {
   if (!Array.isArray(raw.sessionIds) || raw.sessionIds.some((id) => typeof id !== "string")) {
     invariant("backfill/completed sessionIds must be an array of strings");
   }
+}
+function validateBackfillCounts(raw) {
   expectInt(raw.tickets, "backfill tickets", 0);
   expectInt(raw.evidence, "backfill evidence", 0);
   expectInt(raw.comments, "backfill comments", 0);
@@ -26741,6 +26896,8 @@ function validateBackfillCompletedV2(raw) {
   expectInt(raw.refusals, "backfill refusals", 0);
   expectInt(raw.edgesRewritten, "backfill edgesRewritten", 0);
   expectStringArray(raw.skippedKinds, "backfill skippedKinds");
+}
+function validateBackfillDroppedDependencies(raw) {
   if (!Array.isArray(raw.droppedDependencies)) {
     invariant("backfill/completed droppedDependencies must be an array");
   }
@@ -26756,6 +26913,8 @@ function validateBackfillCompletedV2(raw) {
     expectString(entry.ref, "backfill dropped edge ref");
     expectString(entry.reason, "backfill dropped edge reason");
   }
+}
+function validateBackfillSkippedPlans(raw) {
   if (!Array.isArray(raw.skippedPlans)) {
     invariant("backfill/completed skippedPlans must be an array");
   }
@@ -26770,6 +26929,8 @@ function validateBackfillCompletedV2(raw) {
     expectNumber(entry.at, "backfill skipped plan at");
     expectString(entry.reason, "backfill skipped plan reason");
   }
+}
+function validateBackfillSkippedPhases(raw) {
   if (!Array.isArray(raw.skippedPhases)) {
     invariant("backfill/completed skippedPhases must be an array");
   }
@@ -26785,6 +26946,8 @@ function validateBackfillCompletedV2(raw) {
     expectNumber(entry.at, "backfill skipped phase at");
     expectString(entry.reason, "backfill skipped phase reason");
   }
+}
+function validateBackfillDroppedRefusals(raw) {
   if (!Array.isArray(raw.droppedRefusals)) {
     invariant("backfill/completed droppedRefusals must be an array");
   }
@@ -26798,6 +26961,8 @@ function validateBackfillCompletedV2(raw) {
     expectNumber(entry.at, "backfill dropped refusal at");
     expectString(entry.reason, "backfill dropped refusal reason");
   }
+}
+function validateBackfillTicketMapV2(raw) {
   if (!Array.isArray(raw.ticketMap)) {
     invariant("backfill/completed ticketMap must be an array");
   }
@@ -26810,7 +26975,6 @@ function validateBackfillCompletedV2(raw) {
     expectInt(entry.localId, "backfill ticket map localId", 1);
     expectInt(entry.newId, "backfill ticket map newId", 1);
   }
-  expectNumber(raw.at, "backfill/completed at");
 }
 function expectStringArray(value, what) {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
@@ -27959,7 +28123,7 @@ function followSupersedeChain(startRefs, lookup) {
 }
 
 // src/kernel/backfill.ts
-var BACKFILL_IMPORTER_VERSION = 2;
+var BACKFILL_IMPORTER_VERSION = 3;
 var V1_SKIPPED_KINDS = [
   "plan/change",
   "phase/set",
@@ -28431,11 +28595,12 @@ var Store = class {
   }
   /**
    * #211: what the latest backfill marker records, for the #209 migration
-   * script's summary — real rewritten/dropped edge lists, not a predicted
-   * fold. Null when no backfill has run. A v1 marker predates reporting:
-   * it reads back with `dropsUnknown` true and `lossless` false, because
-   * its drops were never recorded and silence must not parse as success.
-   * Copies: mutating the report never touches the log.
+   * script's summary — real (re)written/dropped/pending edge lists, not a
+   * predicted fold. Null when no backfill has run. A v1 marker predates
+   * reporting: it reads back with `dropsUnknown` true and `lossless` false,
+   * because its drops were never recorded and silence must not parse as
+   * success. A v2 marker predates pending/repair/rename tracking and reads
+   * those back empty. Copies: mutating the report never touches the log.
    */
   backfillReport() {
     const marker = this._latestBackfillMarker();
@@ -28457,6 +28622,9 @@ var Store = class {
         skippedPlans: [],
         skippedPhases: [],
         droppedRefusals: [],
+        pendingEdges: [],
+        repairedEdges: [],
+        slugRenames: [],
         skippedKinds: [...V1_SKIPPED_KINDS],
         ticketMap: [],
         dropsUnknown: true,
@@ -28464,6 +28632,9 @@ var Store = class {
         at: marker.at
       };
     }
+    const pendingEdges = marker.version === 3 ? marker.pendingEdges.map((entry) => ({ ...entry })) : [];
+    const repairedEdges = marker.version === 3 ? marker.repairedEdges.map((entry) => ({ ...entry })) : [];
+    const slugRenames = marker.version === 3 ? marker.slugRenames.map((entry) => ({ ...entry })) : [];
     return {
       importerVersion: marker.importerVersion,
       sessionIds: [...marker.sessionIds],
@@ -28478,10 +28649,13 @@ var Store = class {
       skippedPlans: marker.skippedPlans.map((entry) => ({ ...entry })),
       skippedPhases: marker.skippedPhases.map((entry) => ({ ...entry })),
       droppedRefusals: marker.droppedRefusals.map((entry) => ({ ...entry })),
+      pendingEdges,
+      repairedEdges,
+      slugRenames,
       skippedKinds: [...marker.skippedKinds],
       ticketMap: marker.ticketMap.map((entry) => ({ ...entry })),
       dropsUnknown: false,
-      lossless: marker.droppedDependencies.length === 0 && marker.skippedPlans.length === 0 && marker.skippedPhases.length === 0 && marker.droppedRefusals.length === 0,
+      lossless: marker.droppedDependencies.length === 0 && marker.skippedPlans.length === 0 && marker.skippedPhases.length === 0 && marker.droppedRefusals.length === 0 && pendingEdges.length === 0 && slugRenames.length === 0,
       at: marker.at
     };
   }
@@ -28879,32 +29053,45 @@ var Store = class {
    * event that produced it, so every row traces back to the log it came
    * from.
    */
-  backfillSessionLogs(projectId, logs) {
+  backfillSessionLogs(projectId, logs, opts) {
     const project = this._state.projects.get(projectId);
     if (!project) {
       throw new UnknownProject(projectId);
     }
     const workspaceKey = workspaceKeyFromPath(project.absPath);
+    const expected = opts?.expectedSessionIds === void 0 ? null : new Set(opts.expectedSessionIds);
     const folded = logs.map(foldSessionLog);
     const latest = this._latestBackfillMarker();
     let priorMap = /* @__PURE__ */ new Map();
-    let priorSessionIds = [];
+    let historyDone = [];
     let carriedEdgesRewritten = 0;
     let carriedCounts = { tickets: 0, evidence: 0, comments: 0, plans: 0, phases: 0, refusals: 0 };
     let carriedDrops = [];
     let carriedSkippedPlans = [];
     let carriedSkippedPhases = [];
     let carriedDroppedRefusals = [];
+    let carriedPendings = [];
+    let carriedRepaired = [];
+    let carriedRenames = [];
     let carriedSkippedKinds = [];
-    let recomputePriorDrops = false;
+    const carriedSlugs = /* @__PURE__ */ new Map();
     if (latest !== null && latest.version === 1) {
-      priorMap = this._reconstructTicketMap(folded);
-      recomputePriorDrops = true;
-    } else if (latest !== null && latest.version === 2) {
-      priorMap = new Map(
-        latest.ticketMap.map((entry) => [`${entry.sessionId}#${entry.localId}`, entry.newId])
-      );
-      priorSessionIds = [...latest.sessionIds];
+      carriedCounts = {
+        tickets: latest.tickets,
+        evidence: latest.evidence,
+        comments: latest.comments,
+        plans: 0,
+        phases: 0,
+        refusals: 0
+      };
+    } else if (latest !== null && (latest.version === 2 || latest.version === 3)) {
+      for (const entry of latest.ticketMap) {
+        priorMap.set(`${entry.sessionId}#${entry.localId}`, entry.newId);
+        if (latest.version === 3 && entry.slug !== void 0) {
+          carriedSlugs.set(`${entry.sessionId}#${entry.localId}`, entry.slug);
+        }
+      }
+      historyDone = [...latest.sessionIds];
       carriedEdgesRewritten = latest.edgesRewritten;
       carriedCounts = {
         tickets: latest.tickets,
@@ -28919,8 +29106,13 @@ var Store = class {
       carriedSkippedPhases = latest.skippedPhases.map((entry) => ({ ...entry }));
       carriedDroppedRefusals = latest.droppedRefusals.map((entry) => ({ ...entry }));
       carriedSkippedKinds = [...latest.skippedKinds];
-      const imported = new Set(priorSessionIds);
-      if (folded.every((fold) => imported.has(fold.sessionId))) {
+      if (latest.version === 3) {
+        carriedPendings = latest.pendingEdges.map((entry) => ({ ...entry }));
+        carriedRepaired = latest.repairedEdges.map((entry) => ({ ...entry }));
+        carriedRenames = latest.slugRenames.map((entry) => ({ ...entry }));
+      }
+      const finished = new Set(historyDone);
+      if (folded.every((fold) => finished.has(fold.sessionId))) {
         return {
           alreadyRan: true,
           sessionIds: [],
@@ -28935,10 +29127,18 @@ var Store = class {
           skippedPlans: [],
           skippedPhases: [],
           droppedRefusals: [],
+          pendingEdges: [],
+          repairedEdges: [],
+          slugRenames: [],
           skippedKinds: [],
           importerVersion: BACKFILL_IMPORTER_VERSION,
           lossless: true
         };
+      }
+    }
+    for (const [key, id] of this._reconstructTicketMap(folded)) {
+      if (!priorMap.has(key)) {
+        priorMap.set(key, id);
       }
     }
     const newIdOf = new Map(priorMap);
@@ -28958,6 +29158,7 @@ var Store = class {
       }
     }
     const slugOf = /* @__PURE__ */ new Map();
+    const slugRenames = [];
     const takenSlugs = /* @__PURE__ */ new Set();
     for (const snapshot of this._state.tickets.values()) {
       if (snapshot.workspaceKey === workspaceKey) {
@@ -28979,11 +29180,65 @@ var Store = class {
         }
         takenSlugs.add(slug);
         slugOf.set(key, slug);
+        if (slug !== final.slug) {
+          slugRenames.push({
+            sessionId: fold.sessionId,
+            localId,
+            newId: newIdOf.get(key),
+            title: final.title,
+            fromSlug: final.slug,
+            toSlug: slug
+          });
+        }
       }
     }
     const skippedKinds = [...new Set(folded.flatMap((fold) => fold.seenKinds))].filter(
       (kind) => kind === "project/created" || kind === "project/moved"
     );
+    const lookupSlugIn = (slug, sessionIds) => {
+      for (const sessionId of sessionIds) {
+        const fold = folded.find((candidate) => candidate.sessionId === sessionId);
+        if (fold !== void 0) {
+          for (const localId of sortedLocalIds(fold)) {
+            if (fold.state.tickets.get(localId).slug === slug) {
+              const newId = newIdOf.get(`${sessionId}#${localId}`);
+              if (newId !== void 0) {
+                return newId;
+              }
+            }
+          }
+        }
+        for (const [key, sourceSlug] of carriedSlugs) {
+          if (sourceSlug !== slug) {
+            continue;
+          }
+          const hash2 = key.lastIndexOf("#");
+          if (key.slice(0, hash2) !== sessionId) {
+            continue;
+          }
+          const newId = newIdOf.get(key);
+          if (newId !== void 0) {
+            return newId;
+          }
+        }
+      }
+      return null;
+    };
+    const workspaceSlugOrder = (ownSessionId) => {
+      const order = [ownSessionId];
+      for (const fold of folded) {
+        if (!order.includes(fold.sessionId)) {
+          order.push(fold.sessionId);
+        }
+      }
+      for (const key of carriedSlugs.keys()) {
+        const sessionId = key.slice(0, key.lastIndexOf("#"));
+        if (!order.includes(sessionId)) {
+          order.push(sessionId);
+        }
+      }
+      return order;
+    };
     const storage = this._storage;
     const transactional = typeof storage.beginTransaction === "function" && typeof storage.commitTransaction === "function";
     if (transactional) {
@@ -29001,6 +29256,8 @@ var Store = class {
     const skippedPlans = [];
     const skippedPhases = [];
     const droppedRefusals = [];
+    const pendings = [];
+    const repaired = [];
     try {
       for (const fold of folded) {
         const rows = importedRowsOf(fold);
@@ -29080,20 +29337,29 @@ var Store = class {
           }
           const remappedDeps = [];
           for (const ref of final.dependsOn) {
-            const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
-            if (mapped === null) {
-              droppedDependencies.push({
-                fromSessionId: fold.sessionId,
-                fromLocalId: localId,
-                fromNewId: newId,
-                fromTitle: final.title,
-                ref,
-                reason: this._dropReasonFor(ref, fold, folded, newIdOf)
-              });
-            } else {
-              remappedDeps.push(mapped);
-              edgesRewritten += 1;
-            }
+            const outcome = this._classifyDependency(
+              ref,
+              fold,
+              folded,
+              newIdOf,
+              lookupSlugIn,
+              workspaceSlugOrder(fold.sessionId),
+              workspaceKey,
+              expected
+            );
+            this._collectRefOutcome(
+              outcome,
+              { sessionId: fold.sessionId, localId, newId, title: final.title },
+              ref,
+              {
+                remapped: remappedDeps,
+                drops: droppedDependencies,
+                pendings,
+                onMapped: () => {
+                  edgesRewritten += 1;
+                }
+              }
+            );
           }
           const setAt = Math.max(final.updatedAt, lastWriteAt);
           this._emit(
@@ -29118,35 +29384,46 @@ var Store = class {
           tickets += 1;
         }
       }
-      if (recomputePriorDrops) {
-        for (const fold of folded) {
-          for (const localId of sortedLocalIds(fold)) {
-            const key = `${fold.sessionId}#${localId}`;
-            if (!priorMap.has(key)) {
-              continue;
-            }
-            const final = fold.state.tickets.get(localId);
-            const newId = priorMap.get(key);
-            for (const ref of final.dependsOn) {
-              const mapped = this._remapDependency(ref, fold, folded, newIdOf, workspaceKey);
-              if (mapped === null) {
-                droppedDependencies.push({
-                  fromSessionId: fold.sessionId,
-                  fromLocalId: localId,
-                  fromNewId: newId,
-                  fromTitle: final.title,
-                  ref,
-                  reason: this._dropReasonFor(ref, fold, folded, newIdOf)
-                });
-              } else {
-                edgesRewritten += 1;
+      for (const fold of folded) {
+        if (historyDone.includes(fold.sessionId)) {
+          continue;
+        }
+        for (const localId of sortedLocalIds(fold)) {
+          const key = `${fold.sessionId}#${localId}`;
+          if (!priorMap.has(key)) {
+            continue;
+          }
+          const final = fold.state.tickets.get(localId);
+          const newId = priorMap.get(key);
+          for (const ref of final.dependsOn) {
+            const outcome = this._classifyDependency(
+              ref,
+              fold,
+              folded,
+              newIdOf,
+              lookupSlugIn,
+              workspaceSlugOrder(fold.sessionId),
+              workspaceKey,
+              expected
+            );
+            this._collectRefOutcome(
+              outcome,
+              { sessionId: fold.sessionId, localId, newId, title: final.title },
+              ref,
+              {
+                remapped: [],
+                drops: droppedDependencies,
+                pendings,
+                onMapped: () => {
+                  edgesRewritten += 1;
+                }
               }
-            }
+            );
           }
         }
       }
       for (const fold of folded) {
-        if (priorSessionIds.includes(fold.sessionId)) {
+        if (historyDone.includes(fold.sessionId)) {
           continue;
         }
         for (const plan of fold.planEvents) {
@@ -29240,22 +29517,85 @@ var Store = class {
           refusals += 1;
         }
       }
+      const allSessionIds = [...historyDone];
+      for (const fold of folded) {
+        if (!allSessionIds.includes(fold.sessionId)) {
+          allSessionIds.push(fold.sessionId);
+        }
+      }
+      const importedNow = new Set(allSessionIds);
+      const bareSlugOrder = folded.map((fold) => fold.sessionId);
+      for (const key of carriedSlugs.keys()) {
+        const sessionId = key.slice(0, key.lastIndexOf("#"));
+        if (!bareSlugOrder.includes(sessionId)) {
+          bareSlugOrder.push(sessionId);
+        }
+      }
+      const stillPending = [];
+      for (const pending of [...carriedPendings, ...pendings]) {
+        const resolution = this._resolvePendingEdge(
+          pending,
+          newIdOf,
+          lookupSlugIn,
+          bareSlugOrder,
+          importedNow
+        );
+        if (resolution.status === "waiting") {
+          stillPending.push(pending);
+          continue;
+        }
+        if (resolution.status === "missing") {
+          droppedDependencies.push({
+            fromSessionId: pending.fromSessionId,
+            fromLocalId: pending.fromLocalId,
+            fromNewId: pending.fromNewId,
+            fromTitle: pending.fromTitle,
+            ref: pending.ref,
+            reason: pending.targetSessionId !== null && pending.targetLocalId !== null ? `target session ${pending.targetSessionId} holds no ticket ${pending.targetLocalId}` : pending.targetSessionId !== null ? `target session ${pending.targetSessionId} holds no ticket with slug ${JSON.stringify(pending.slug)}` : `reference ${JSON.stringify(pending.ref)} matches no ticket slug in the imported logs`
+          });
+          continue;
+        }
+        const repair = this._repairDependencyEdge(pending, resolution.newId, workspaceKey);
+        if ("repaired" in repair) {
+          repaired.push(repair.repaired);
+          edgesRewritten += 1;
+        } else {
+          droppedDependencies.push(repair.dropped);
+        }
+      }
+      if (expected !== null && [...expected].every((id) => importedNow.has(id))) {
+        for (const pending of stillPending.splice(0)) {
+          droppedDependencies.push({
+            fromSessionId: pending.fromSessionId,
+            fromLocalId: pending.fromLocalId,
+            fromNewId: pending.fromNewId,
+            fromTitle: pending.fromTitle,
+            ref: pending.ref,
+            reason: pending.targetSessionId !== null && pending.targetLocalId !== null ? `target session ${pending.targetSessionId} holds no ticket ${pending.targetLocalId}` : pending.targetSessionId !== null ? `target session ${pending.targetSessionId} holds no ticket with slug ${JSON.stringify(pending.slug)}` : `reference ${JSON.stringify(pending.ref)} matches no ticket slug in the imported logs`
+          });
+        }
+      }
+      const sourceSlugOf = new Map(carriedSlugs);
+      for (const fold of folded) {
+        for (const localId of sortedLocalIds(fold)) {
+          sourceSlugOf.set(
+            `${fold.sessionId}#${localId}`,
+            fold.state.tickets.get(localId).slug
+          );
+        }
+      }
       const ticketMap = [...newIdOf.entries()].map(([key, newId]) => {
         const hash2 = key.lastIndexOf("#");
+        const slug = sourceSlugOf.get(key);
         return {
           sessionId: key.slice(0, hash2),
           localId: Number(key.slice(hash2 + 1)),
-          newId
+          newId,
+          ...slug === void 0 ? {} : { slug }
         };
       }).sort(
         (a, b) => a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : a.localId - b.localId
       );
-      const sessionIds = [...priorSessionIds];
-      for (const fold of folded) {
-        if (!sessionIds.includes(fold.sessionId)) {
-          sessionIds.push(fold.sessionId);
-        }
-      }
       const unionKinds = [...carriedSkippedKinds];
       for (const kind of skippedKinds) {
         if (!unionKinds.includes(kind)) {
@@ -29264,9 +29604,9 @@ var Store = class {
       }
       const marker = {
         kind: "backfill/completed",
-        version: 2,
+        version: 3,
         importerVersion: BACKFILL_IMPORTER_VERSION,
-        sessionIds,
+        sessionIds: allSessionIds,
         tickets: carriedCounts.tickets + tickets,
         evidence: carriedCounts.evidence + evidence,
         comments: carriedCounts.comments + comments,
@@ -29278,6 +29618,9 @@ var Store = class {
         skippedPlans: [...carriedSkippedPlans, ...skippedPlans],
         skippedPhases: [...carriedSkippedPhases, ...skippedPhases],
         droppedRefusals: [...carriedDroppedRefusals, ...droppedRefusals],
+        pendingEdges: stillPending,
+        repairedEdges: [...carriedRepaired, ...repaired],
+        slugRenames: [...carriedRenames, ...slugRenames],
         skippedKinds: unionKinds,
         ticketMap,
         at: this._nowFn()
@@ -29294,7 +29637,7 @@ var Store = class {
       }
       throw new StoreWriteRefused(error51);
     }
-    const lossless = droppedDependencies.length === 0 && skippedPlans.length === 0 && skippedPhases.length === 0 && droppedRefusals.length === 0;
+    const lossless = droppedDependencies.length === 0 && skippedPlans.length === 0 && skippedPhases.length === 0 && droppedRefusals.length === 0 && pendings.length === 0 && slugRenames.length === 0;
     return {
       alreadyRan: false,
       sessionIds: folded.map((fold) => fold.sessionId),
@@ -29309,6 +29652,9 @@ var Store = class {
       skippedPlans,
       skippedPhases,
       droppedRefusals,
+      pendingEdges: pendings,
+      repairedEdges: repaired,
+      slugRenames,
       skippedKinds: [...skippedKinds],
       importerVersion: BACKFILL_IMPORTER_VERSION,
       lossless
@@ -29344,48 +29690,204 @@ var Store = class {
     return map2;
   }
   /**
-   * Rewrite one `workspaceKey:localId` (or `sessionId:localId`) dependency
-   * reference through the renumbering map. The reference resolves within
-   * its own session's log first; when the prefix names ANOTHER imported
-   * session, that session's mapping answers. A reference whose target no
-   * imported log holds maps to null — the caller records it BY NAME (see
-   * _dropReasonFor): keeping it raw would leave a local id pointing at
-   * whatever new ticket later claims that number.
+   * One classified dependency reference — see the module-level
+   * `DependencyOutcome` type. `mapped` carries the rewritten
+   * `workspaceKey:newId` and is the ONLY outcome counted as
+   * `edgesRewritten`. `pending` means the target session is claimed by the
+   * driver's full set but not handed in yet — the edge waits on the marker,
+   * it is not wired anywhere. `dropped` carries the human-readable reason.
    */
-  _remapDependency(ref, own, folded, newIdOf, workspaceKey) {
-    const colon = ref.lastIndexOf(":");
-    if (colon < 0) {
-      return null;
+  /**
+   * Classify one `dependsOn` reference from one source ticket. Host parity
+   * (`resolveDependencyRef`): the FIRST colon splits scope from tail, a
+   * missing scope means the own workspace, `/^\d+$/` tails are ticket
+   * numbers, anything else a slug. Numeric tails resolve through the
+   * renumbering map; slug tails through the source slugs.
+   *
+   * The rule that fixes F1/F2: the own session answers ONLY for the
+   * workspace-key scope (and, by exact session match, for its own session
+   * id). A session prefix naming no handed-in log NEVER falls back to the
+   * own log — that fallback wired edges onto strangers and reported
+   * success. With a full session claim it waits; otherwise it is dropped
+   * and named.
+   */
+  _classifyDependency(ref, own, folded, newIdOf, lookupSlugIn, workspaceOrder, workspaceKey, expected) {
+    const colon = ref.indexOf(":");
+    const prefix = colon >= 0 ? ref.slice(0, colon) : workspaceKey;
+    const tail = colon >= 0 ? ref.slice(colon + 1) : ref;
+    if (tail === "") {
+      return { kind: "dropped", reason: `reference ${JSON.stringify(ref)} names no ticket or slug` };
     }
-    const localId = Number(ref.slice(colon + 1));
-    if (!Number.isInteger(localId) || localId < 1) {
-      return null;
+    if (/^\d+$/.test(tail)) {
+      const localId = Number(tail);
+      if (localId < 1) {
+        return { kind: "dropped", reason: `reference ${JSON.stringify(ref)} names no ticket number` };
+      }
+      if (prefix === workspaceKey) {
+        const newId = newIdOf.get(`${own.sessionId}#${localId}`);
+        return newId === void 0 ? {
+          kind: "dropped",
+          reason: `target ${ref} is in no imported log (${own.sessionId} holds no ticket ${localId})`
+        } : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      if (folded.some((fold) => fold.sessionId === prefix)) {
+        const newId = newIdOf.get(`${prefix}#${localId}`);
+        return newId === void 0 ? {
+          kind: "dropped",
+          reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket ${localId})`
+        } : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      if (expected !== null && expected.has(prefix)) {
+        return { kind: "pending", targetSessionId: prefix, targetLocalId: localId, slug: null };
+      }
+      return {
+        kind: "dropped",
+        reason: prefix.startsWith("--") && prefix.endsWith("--") ? `target ${ref} names workspace ${prefix}, which is not this import's workspace (${workspaceKey})` : `target ${ref} names session ${prefix}, which was not handed to this import` + (expected !== null ? ` and is not among the expected sessions` : ``)
+      };
     }
-    const prefix = ref.slice(0, colon);
-    const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
-    const newId = newIdOf.get(`${source.sessionId}#${localId}`);
-    return newId === void 0 ? null : `${workspaceKey}:${newId}`;
+    if (prefix === workspaceKey || colon < 0) {
+      const newId = lookupSlugIn(tail, workspaceOrder);
+      if (newId !== null) {
+        return { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+      }
+      if (expected !== null) {
+        return { kind: "pending", targetSessionId: null, targetLocalId: null, slug: tail };
+      }
+      return {
+        kind: "dropped",
+        reason: `reference ${JSON.stringify(ref)} matches no ticket slug in the imported logs`
+      };
+    }
+    if (folded.some((fold) => fold.sessionId === prefix)) {
+      const newId = lookupSlugIn(tail, [prefix]);
+      return newId === null ? {
+        kind: "dropped",
+        reason: `target ${ref} is in no imported log (session ${prefix} holds no ticket with slug ${JSON.stringify(tail)})`
+      } : { kind: "mapped", ref: `${workspaceKey}:${newId}` };
+    }
+    if (expected !== null && expected.has(prefix)) {
+      return { kind: "pending", targetSessionId: prefix, targetLocalId: null, slug: tail };
+    }
+    return {
+      kind: "dropped",
+      reason: `target ${ref} names session ${prefix}, which was not handed to this import` + (expected !== null ? ` and is not among the expected sessions` : ``)
+    };
   }
   /**
-   * #211: WHY one dependency reference did not survive the import, in words
-   * a human can act on. Only called for references _remapDependency already
-   * refused, so every branch below is a drop with its reason.
+   * File one classified reference: wire it, pend it, or name its loss. Only
+   * `mapped` advances the rewritten count — a misresolved edge must never
+   * be counted as rewritten (F2).
    */
-  _dropReasonFor(ref, own, folded, newIdOf) {
-    const colon = ref.lastIndexOf(":");
-    if (colon < 0) {
-      return `malformed reference ${JSON.stringify(ref)} carries no workspace prefix`;
+  _collectRefOutcome(outcome, from, ref, into) {
+    if (outcome.kind === "mapped") {
+      into.remapped.push(outcome.ref);
+      into.onMapped();
+    } else if (outcome.kind === "pending") {
+      into.pendings.push({
+        fromSessionId: from.sessionId,
+        fromLocalId: from.localId,
+        fromNewId: from.newId,
+        fromTitle: from.title,
+        ref,
+        targetSessionId: outcome.targetSessionId,
+        targetLocalId: outcome.targetLocalId,
+        slug: outcome.slug
+      });
+    } else {
+      into.drops.push({
+        fromSessionId: from.sessionId,
+        fromLocalId: from.localId,
+        fromNewId: from.newId,
+        fromTitle: from.title,
+        ref,
+        reason: outcome.reason
+      });
     }
-    const localId = Number(ref.slice(colon + 1));
-    if (!Number.isInteger(localId) || localId < 1) {
-      return `malformed reference ${JSON.stringify(ref)} names no ticket number`;
+  }
+  /**
+   * Resolve one pending edge against the cumulative import: numeric tails
+   * through the renumbering map once the target session is imported, slug
+   * tails through the cumulative slug index. `waiting` keeps it on the
+   * marker; `missing` drops it with a name; `found` rewires it.
+   */
+  _resolvePendingEdge(pending, newIdOf, lookupSlugIn, bareSlugOrder, imported) {
+    if (pending.targetSessionId !== null) {
+      if (!imported.has(pending.targetSessionId)) {
+        return { status: "waiting" };
+      }
+      if (pending.targetLocalId !== null) {
+        const newId3 = newIdOf.get(`${pending.targetSessionId}#${pending.targetLocalId}`);
+        return newId3 === void 0 ? { status: "missing" } : { status: "found", newId: newId3 };
+      }
+      const newId2 = lookupSlugIn(pending.slug, [pending.targetSessionId]);
+      return newId2 === null ? { status: "missing" } : { status: "found", newId: newId2 };
     }
-    const prefix = ref.slice(0, colon);
-    const source = folded.find((fold) => fold.sessionId === prefix) ?? own;
-    if (prefix !== source.sessionId) {
-      return `target ${ref} is in no imported log (it resolves to session ${source.sessionId}, which holds no ticket ${localId})`;
+    const newId = lookupSlugIn(pending.slug, bareSlugOrder);
+    return newId === null ? { status: "waiting" } : { status: "found", newId };
+  }
+  /**
+   * Rewire one resolved pending edge with a corrective `set` built from the
+   * ticket's CURRENT snapshot — only `dependsOn` changes, so writes that
+   * landed after the import survive. Revision continues, `at` never falls.
+   * A refused repair (a cross-session cycle, a vanished ticket, a
+   * self-edge) is recorded as a drop, never thrown: one corrupt edge must
+   * not refuse the batch.
+   */
+  _repairDependencyEdge(pending, resolvedNewId, workspaceKey) {
+    const drop = (reason) => ({
+      dropped: {
+        fromSessionId: pending.fromSessionId,
+        fromLocalId: pending.fromLocalId,
+        fromNewId: pending.fromNewId,
+        fromTitle: pending.fromTitle,
+        ref: pending.ref,
+        reason
+      }
+    });
+    const repaired = (resolvedTo) => ({
+      repaired: {
+        fromSessionId: pending.fromSessionId,
+        fromLocalId: pending.fromLocalId,
+        fromNewId: pending.fromNewId,
+        fromTitle: pending.fromTitle,
+        ref: pending.ref,
+        resolvedTo
+      }
+    });
+    if (resolvedNewId === pending.fromNewId) {
+      return drop(`repair of ${JSON.stringify(pending.ref)} would create a self-edge`);
     }
-    return `target ${ref} is in no imported log (session ${source.sessionId} holds no ticket ${localId})`;
+    const current = this._state.tickets.get(pending.fromNewId);
+    if (current === void 0) {
+      return drop(`ticket ${pending.fromNewId} no longer exists, cannot restore ${JSON.stringify(pending.ref)}`);
+    }
+    const resolved = `${workspaceKey}:${resolvedNewId}`;
+    if (current.dependsOn.includes(resolved)) {
+      return repaired(resolved);
+    }
+    const at = this._atFor(pending.fromNewId, current.updatedAt);
+    const updatedAt = Math.max(current.updatedAt, at);
+    try {
+      this._emit(
+        {
+          kind: "ticket/change",
+          version: 1,
+          operation: "set",
+          ticket: {
+            ...current,
+            dependsOn: [...current.dependsOn, resolved],
+            revision: current.revision + 1,
+            updatedAt
+          },
+          at: updatedAt
+        },
+        { sessionId: pending.fromSessionId, localSeq: null }
+      );
+    } catch (error51) {
+      const cause = error51 instanceof Error ? error51.message : String(error51);
+      return drop(`repair of ${JSON.stringify(pending.ref)} refused: ${cause}`);
+    }
+    return repaired(resolved);
   }
   // ---- projects ----
   createProject(absPath, name) {

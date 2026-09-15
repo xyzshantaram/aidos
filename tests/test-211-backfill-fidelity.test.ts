@@ -106,7 +106,7 @@ function richLog(sessionId: string): ReturnType<typeof sessionLog> {
 }
 
 describe("#211 criterion 1: the marker versions the importer and its skips", () => {
-  it("a v2 marker names the importer version and the unreplayed kinds", () => {
+  it("a v3 marker names the importer version and the unreplayed kinds", () => {
     withSqlite((storage) => {
       const { store, projectId } = targetStore(storage);
       expect(store.backfillReport()).toBeNull();
@@ -114,10 +114,10 @@ describe("#211 criterion 1: the marker versions the importer and its skips", () 
 
       const marker = store.events().at(-1)!;
       expect(marker.kind).toBe("backfill/completed");
-      if (marker.kind !== "backfill/completed" || marker.version !== 2) {
-        throw new Error("expected the v2 marker");
+      if (marker.kind !== "backfill/completed" || marker.version !== 3) {
+        throw new Error("expected the v3 marker");
       }
-      expect(marker.importerVersion).toBe(2);
+      expect(marker.importerVersion).toBe(3);
       // The source-local project records get no direct replay: the import
       // targets the single project it was handed.
       expect(marker.skippedKinds).toContain("project/created");
@@ -125,7 +125,7 @@ describe("#211 criterion 1: the marker versions the importer and its skips", () 
 
       // And the #209-shaped report reads the same record back.
       const report = store.backfillReport()!;
-      expect(report.importerVersion).toBe(2);
+      expect(report.importerVersion).toBe(3);
       expect(report.dropsUnknown).toBe(false);
       expect(report.skippedKinds).toContain("project/created");
     });
@@ -290,11 +290,11 @@ describe("#211 criterion 2: v2 completes a v1 workspace and imports nothing twic
       expect(refusals.length).toBe(1);
       expect(refusals[0]).toMatchObject({ ticketId: keptId });
 
-      // The completion wrote the v2 marker, so the next call is a no-op —
+      // The completion wrote the v3 marker, so the next call is a no-op —
       // and still a readable report.
       const marker = store.events().at(-1)!;
-      if (marker.kind !== "backfill/completed" || marker.version !== 2) {
-        throw new Error("expected the v2 marker");
+      if (marker.kind !== "backfill/completed" || marker.version !== 3) {
+        throw new Error("expected the v3 marker");
       }
       expect(marker.ticketMap.length).toBe(2);
       expect(marker.droppedDependencies.length).toBe(1);
@@ -401,8 +401,8 @@ describe("#211 criteria 4+5: every dropped edge is named and readable", () => {
       // #209's consumer: the marker — not a predicted fold — carries the
       // real lists, and the report reads them back.
       const marker = store.events().at(-1)!;
-      if (marker.kind !== "backfill/completed" || marker.version !== 2) {
-        throw new Error("expected the v2 marker");
+      if (marker.kind !== "backfill/completed" || marker.version !== 3) {
+        throw new Error("expected the v3 marker");
       }
       expect(marker.edgesRewritten).toBe(1);
       expect(marker.droppedDependencies.length).toBe(2);
@@ -430,15 +430,21 @@ describe("#211 criterion 6: a clean backfill records that it lost nothing", () =
       expect(result.skippedPlans).toEqual([]);
       expect(result.skippedPhases).toEqual([]);
       expect(result.droppedRefusals).toEqual([]);
+      expect(result.pendingEdges).toEqual([]);
+      expect(result.repairedEdges).toEqual([]);
+      expect(result.slugRenames).toEqual([]);
       const marker = store.events().at(-1)!;
-      if (marker.kind !== "backfill/completed" || marker.version !== 2) {
-        throw new Error("expected the v2 marker");
+      if (marker.kind !== "backfill/completed" || marker.version !== 3) {
+        throw new Error("expected the v3 marker");
       }
       // Recorded empty — present and blank, not absent.
       expect(marker.droppedDependencies).toEqual([]);
       expect(marker.skippedPlans).toEqual([]);
       expect(marker.skippedPhases).toEqual([]);
       expect(marker.droppedRefusals).toEqual([]);
+      expect(marker.pendingEdges).toEqual([]);
+      expect(marker.repairedEdges).toEqual([]);
+      expect(marker.slugRenames).toEqual([]);
       expect(store.backfillReport()!.lossless).toBe(true);
     });
   });
@@ -448,7 +454,7 @@ describe("#211/#221: the marker resumes a batched import", () => {
   /**
    * #221's seam: the host driver OOMs accumulating every log before
    * importing, so it must batch — and a marker that can only say "all done"
-   * or "never ran" forces the restart that causes the crash. The v2 marker
+   * or "never ran" forces the restart that causes the crash. The v3 marker
    * instead names every imported session plus the whole ticket map, so a
    * later call flushes only its fresh sessions and accumulates the marker.
    */
@@ -540,6 +546,330 @@ describe("#211/#221: the marker resumes a batched import", () => {
       expect(
         store.events().filter((event) => event.kind === "backfill/completed").length,
       ).toBe(markersBefore);
+    });
+  });
+});
+
+describe("#211 round 2: subset batches never misresolve (F1/F2)", () => {
+  /**
+   * F1: a batch naming a session it was not handed must NOT refuse. Before
+   * the fix, `session-b:1` fell back to the own log, misresolved to the
+   * depending ticket itself, and the self-edge refused the whole bracket —
+   * retrying the identical batch failed identically (STUCK, not skipped).
+   */
+  it("a batch with an unhanded session ref succeeds and names the drop", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Lone", "d", {
+          dependsOn: ["session-b:1"],
+        });
+      });
+      const { store, projectId } = targetStore(storage);
+      // No throw: the batch lands.
+      const result = store.backfillSessionLogs(projectId, [logA]);
+      expect(result.alreadyRan).toBe(false);
+      expect(result.tickets).toBe(1);
+      // Never counted as rewired: nothing was wired anywhere.
+      expect(result.edgesRewritten).toBe(0);
+      expect(result.droppedDependencies.length).toBe(1);
+      expect(result.droppedDependencies[0]).toMatchObject({
+        fromSessionId: "session-a",
+        fromTitle: "Lone",
+        ref: "session-b:1",
+      });
+      expect(result.droppedDependencies[0]!.reason).toMatch(/not handed to this import/);
+      expect(result.lossless).toBe(false);
+      const lone = store.ticketsFor(projectId).find((row) => row.title === "Lone")!;
+      expect(lone.dependsOn).toEqual([]);
+    });
+  });
+
+  /**
+   * F2: the critical one. Awaiting session, claimed up front, must PEND —
+   * left out of the set, reported as waiting — and rewire on arrival. Before
+   * the fix, `Top` silently inherited `Base`'s id, reported
+   * `edgesRewritten: 1, lossless: true`, and nothing repaired it later.
+   */
+  it("an expected-but-absent session pends the edge and repairs it on arrival", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Base", "d");
+        store.createTicket(project, "Top", "d", {
+          dependsOn: ["session-b:1"],
+        });
+      });
+      const logB = sessionLog("session-b", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "FarBase", "d");
+      });
+      const expected = ["session-a", "session-b"];
+      const { store, projectId } = targetStore(storage);
+
+      const first = store.backfillSessionLogs(projectId, [logA], {
+        expectedSessionIds: expected,
+      });
+      expect(first.tickets).toBe(2);
+      const top = store.ticketsFor(projectId).find((row) => row.title === "Top")!;
+      const base = store.ticketsFor(projectId).find((row) => row.title === "Base")!;
+      // NOT wired to Base: the edge waits, out loud.
+      expect(top.dependsOn).toEqual([]);
+      expect(first.edgesRewritten).toBe(0);
+      expect(first.droppedDependencies).toEqual([]);
+      expect(first.pendingEdges.length).toBe(1);
+      expect(first.pendingEdges[0]).toMatchObject({
+        fromSessionId: "session-a",
+        fromLocalId: 2,
+        fromNewId: top.id,
+        fromTitle: "Top",
+        ref: "session-b:1",
+        targetSessionId: "session-b",
+        targetLocalId: 1,
+      });
+      expect(first.lossless).toBe(false);
+      expect(base.dependsOn).toEqual([]);
+
+      // The target session arrives: the corrective set rewires Top.
+      const second = store.backfillSessionLogs(projectId, [logB], {
+        expectedSessionIds: expected,
+      });
+      expect(second.alreadyRan).toBe(false);
+      expect(second.tickets).toBe(1);
+      const farBase = store.ticketsFor(projectId).find((row) => row.title === "FarBase")!;
+      expect(store.getTicket(top.id).dependsOn).toEqual([`${KEY}:${farBase.id}`]);
+      expect(second.repairedEdges.length).toBe(1);
+      expect(second.repairedEdges[0]).toMatchObject({
+        fromTitle: "Top",
+        ref: "session-b:1",
+        resolvedTo: `${KEY}:${farBase.id}`,
+      });
+      expect(second.edgesRewritten).toBe(1);
+      expect(second.lossless).toBe(true);
+
+      // The marker tells the whole story cumulatively.
+      const report = store.backfillReport()!;
+      expect(report.pendingEdges).toEqual([]);
+      expect(report.repairedEdges.length).toBe(1);
+      expect(report.edgesRewritten).toBe(1);
+      expect(report.droppedDependencies).toEqual([]);
+      expect(report.lossless).toBe(true);
+    });
+  });
+});
+
+describe("#211 round 2: slug and bare refs resolve like the host (F3)", () => {
+  /**
+   * F3: `KEY:slug` and bare legacy refs resolve through source slugs instead
+   * of dropping as "malformed". The host's own `resolveDependencyRef`
+   * handles all three shapes; the importer now matches it.
+   */
+  it("workspace slug, bare number and bare slug refs all resolve", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Real Base", "d", { slug: "real-base" });
+        store.createTicket(project, "Alias", "d", {
+          dependsOn: [`${KEY}:real-base`],
+        });
+        store.createTicket(project, "BareNum", "d", { dependsOn: ["1"] });
+        store.createTicket(project, "BareSlug", "d", {
+          dependsOn: ["real-base"],
+        });
+        store.createTicket(project, "Lost", "d", {
+          dependsOn: [`${KEY}:no-such-slug`],
+        });
+      });
+      const { store, projectId } = targetStore(storage);
+      const result = store.backfillSessionLogs(projectId, [logA]);
+
+      const rows = store.ticketsFor(projectId);
+      const base = rows.find((row) => row.title === "Real Base")!;
+      // All three shapes land on the same edge.
+      for (const title of ["Alias", "BareNum", "BareSlug"]) {
+        expect(rows.find((row) => row.title === title)!.dependsOn).toEqual([
+          `${KEY}:${base.id}`,
+        ]);
+      }
+      expect(result.edgesRewritten).toBe(3);
+      // The unresolvable slug drops — accurately labeled, not "malformed".
+      expect(result.droppedDependencies.length).toBe(1);
+      expect(result.droppedDependencies[0]).toMatchObject({
+        fromTitle: "Lost",
+        ref: `${KEY}:no-such-slug`,
+      });
+      expect(result.droppedDependencies[0]!.reason).toMatch(/matches no ticket slug/);
+      expect(result.droppedDependencies[0]!.reason).not.toMatch(/malformed/);
+      expect(result.lossless).toBe(false);
+    });
+  });
+
+  it("a session-scoped slug ref resolves against that session", () => {
+    withSqlite((storage) => {
+      const logB = sessionLog("session-b", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Far Base", "d", { slug: "far-base" });
+      });
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Seeker", "d", {
+          dependsOn: ["session-b:far-base"],
+        });
+      });
+      const { store, projectId } = targetStore(storage);
+      const result = store.backfillSessionLogs(projectId, [logA, logB]);
+      const rows = store.ticketsFor(projectId);
+      const farBase = rows.find((row) => row.title === "Far Base")!;
+      expect(rows.find((row) => row.title === "Seeker")!.dependsOn).toEqual([
+        `${KEY}:${farBase.id}`,
+      ]);
+      expect(result.edgesRewritten).toBe(1);
+      expect(result.droppedDependencies).toEqual([]);
+    });
+  });
+});
+
+describe("#211 round 2: subset v1-completion remembers every session (F4)", () => {
+  /**
+   * F4: a v1 marker covering A+B, completed one batch at a time, must
+   * neither forget sessions nor duplicate tickets. Before the fix, handing
+   * [A] wrote sessionIds ["session-a"], and handing [B] next re-imported
+   * Beta alongside itself.
+   */
+  it("completing one v1 session at a time imports nothing twice", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Alpha", "d");
+      });
+      const logB = sessionLog("session-b", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Beta", "d");
+      });
+
+      // The v1 aftermath for BOTH sessions: tickets flushed with origins,
+      // counts-only marker on top — the faithful pre-2340247 shape.
+      const { store, projectId } = targetStore(storage);
+      const stageV1Ticket = (
+        log: ReturnType<typeof sessionLog>,
+        localId: number,
+      ): number => {
+        const fold = foldSessionLog(log);
+        const final = fold.state.tickets.get(localId)!;
+        const newId = store.allocateTicketId();
+        store.commitHostMirror(
+          {
+            kind: "ticket/change",
+            version: 1,
+            operation: "create",
+            ticket: {
+              ...final,
+              id: newId,
+              projectId,
+              workspaceKey: KEY,
+              state: "open",
+              dependsOn: [],
+              revision: 1,
+              createdAt: final.createdAt,
+              updatedAt: final.createdAt,
+            },
+            at: final.createdAt,
+          },
+          () => undefined,
+          { sessionId: log.sessionId, localSeq: fold.seqOfTicket.get(localId) ?? null },
+        );
+        store.commitHostMirror(
+          {
+            kind: "ticket/change",
+            version: 1,
+            operation: "set",
+            ticket: {
+              ...final,
+              id: newId,
+              projectId,
+              workspaceKey: KEY,
+              dependsOn: [],
+              revision: 2,
+              updatedAt: final.updatedAt,
+            },
+            at: final.updatedAt,
+          },
+          () => undefined,
+        );
+        return newId;
+      };
+      stageV1Ticket(logA, 1);
+      stageV1Ticket(logB, 1);
+      store.commitHostMirror(
+        {
+          kind: "backfill/completed",
+          version: 1,
+          sessionIds: ["session-a", "session-b"],
+          tickets: 2,
+          evidence: 0,
+          comments: 0,
+          at: FIXED_NOW,
+        },
+        () => undefined,
+      );
+      const titles = (): string[] =>
+        store.ticketsFor(projectId).map((row) => row.title);
+
+      // Complete with [A] alone: nothing re-imported. The marker lists only
+      // the session this importer actually finished — B's tickets are in the
+      // store (v1 put them there) but B's history is still pending, so B
+      // stays unlisted rather than skipped-as-done. Counts still account
+      // for v1's flushed tickets.
+      const first = store.backfillSessionLogs(projectId, [logA]);
+      expect(first.alreadyRan).toBe(false);
+      expect(first.tickets).toBe(0);
+      expect(titles().sort()).toEqual(["Alpha", "Beta"]);
+      expect(store.backfillReport()!.sessionIds).toEqual(["session-a"]);
+      expect(store.backfillReport()!.tickets).toBe(2);
+
+      // Complete with [B]: still nothing re-imported — Beta appears once —
+      // and now both sessions are finished.
+      const second = store.backfillSessionLogs(projectId, [logB]);
+      expect(second.alreadyRan).toBe(false);
+      expect(second.tickets).toBe(0);
+      expect(titles().sort()).toEqual(["Alpha", "Beta"]);
+      expect(store.backfillReport()!.sessionIds).toEqual([
+        "session-a",
+        "session-b",
+      ]);
+      expect(store.backfillReport()!.ticketMap.length).toBe(2);
+
+      // Now everything is finished: a full re-hand is a no-op.
+      const third = store.backfillSessionLogs(projectId, [logA, logB]);
+      expect(third.alreadyRan).toBe(true);
+      expect(titles().sort()).toEqual(["Alpha", "Beta"]);
+    });
+  });
+});
+
+describe("#211 round 2: slug renames are recorded", () => {
+  it("a collision rename lands on the marker and clears lossless", () => {
+    withSqlite((storage) => {
+      const logA = sessionLog("session-a", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Clash A", "d", { slug: "clash" });
+      });
+      const logB = sessionLog("session-b", (store) => {
+        const project = store.findProject(WORKSPACE)!;
+        store.createTicket(project, "Clash B", "d", { slug: "clash" });
+      });
+      const { store, projectId } = targetStore(storage);
+      const result = store.backfillSessionLogs(projectId, [logA, logB]);
+      expect(result.tickets).toBe(2);
+      expect(result.slugRenames.length).toBe(1);
+      expect(result.slugRenames[0]).toMatchObject({
+        fromSlug: "clash",
+        toSlug: "clash-2",
+      });
+      expect(result.lossless).toBe(false);
+      const report = store.backfillReport()!;
+      expect(report.slugRenames.length).toBe(1);
+      expect(report.lossless).toBe(false);
     });
   });
 });

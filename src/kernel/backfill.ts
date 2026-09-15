@@ -37,12 +37,15 @@ import type {
 
 /**
  * #211: the importer generation. v1 (#41) imported tickets, evidence and
- * comments only, and its marker recorded counts alone. v2 imports plan
- * meta, phases and refusal history too, and its marker records every drop
- * BY NAME. A v2 importer that finds a v1 marker completes the workspace
- * instead of skipping it.
+ * comments only, and its marker recorded counts alone. v2 imported plan
+ * meta, phases and refusal history too, and its marker recorded every drop
+ * BY NAME. v3 (round 2) additionally refuses to misresolve a reference
+ * across batch boundaries: session-scoped refs to expected-but-unimported
+ * sessions become PENDING edges the marker carries until the target session
+ * arrives, slug-form and bare legacy refs resolve like the host's own
+ * resolver, and slug renames are recorded.
  */
-export const BACKFILL_IMPORTER_VERSION = 2;
+export const BACKFILL_IMPORTER_VERSION = 3;
 
 /**
  * #211: the v1 importer's known blind spots, for a marker that predates
