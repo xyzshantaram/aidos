@@ -997,3 +997,65 @@ describe("#211 round 3: colon-bearing session ids parse", () => {
     });
   });
 });
+
+/**
+ * The version-3 marker EVENT accepts importer version 3 or 4 (round 3 raised
+ * the importer to 4 because behaviour changed, while the event shape stayed
+ * v3). Round 3's independent review found that dual acceptance was entirely
+ * UNPINNED: requiring exactly 4 killed no test, so a later tightening to
+ * `!== 4` would refuse to replay every version-3 marker already on disk --
+ * including this workspace's own -- and the suite would stay green.
+ *
+ * The reviewer drove this by hand; these tests make it permanent. The marker
+ * is taken from a REAL backfill and only its importer version is swapped, so
+ * the assertion cannot rot as the v3 key set grows.
+ */
+describe("#211 the version-3 marker replays at either importer version", () => {
+  /** A genuine marker event, produced by a real import. */
+  function realMarker(): Record<string, unknown> {
+    let marker: Record<string, unknown> | undefined;
+    withSqlite((storage) => {
+      const { store, projectId } = targetStore(storage);
+      store.backfillSessionLogs(projectId, [
+        sessionLog("session-a", (source) => {
+          const project = source.findProject(WORKSPACE)!;
+          source.createTicket(project, "Only", "d");
+        }),
+      ]);
+      marker = store.events().find((event) => event.kind === "backfill/completed") as
+        | Record<string, unknown>
+        | undefined;
+    });
+    return { ...marker! };
+  }
+
+  it("accepts importer version 3 and 4, at commit time and on reopen", () => {
+    const marker = realMarker();
+    // The importer that wrote it is the current one.
+    expect(marker.importerVersion).toBe(4);
+    for (const importerVersion of [3, 4]) {
+      withSqlite((storage) => {
+        const { store } = targetStore(storage);
+        store.commitHostMirror({ ...marker, importerVersion } as never, () => undefined);
+        expect(store.backfillReport()!.importerVersion).toBe(importerVersion);
+        // Reopen over the same storage: the fold replays it rather than
+        // refusing a marker an older importer wrote.
+        const reopened = new Store(makeConfig(), { now: () => FIXED_NOW, storage });
+        expect(reopened.backfillReport()!.importerVersion).toBe(importerVersion);
+        expect(reopened.hasBackfillCompleted()).toBe(true);
+      });
+    }
+  });
+
+  it("refuses an importer version the v3 shape never had", () => {
+    const marker = realMarker();
+    for (const importerVersion of [2, 5]) {
+      withSqlite((storage) => {
+        const { store } = targetStore(storage);
+        expect(() =>
+          store.commitHostMirror({ ...marker, importerVersion } as never, () => undefined),
+        ).toThrow(/importerVersion must be 3 or 4/);
+      });
+    }
+  });
+});
