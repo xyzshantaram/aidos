@@ -1012,6 +1012,72 @@ export class OwnerUnavailable extends Error {
 }
 
 /**
+ * #222: how many board rows the message samples before it truncates.
+ *
+ * A bare number is nearly useless six months from now, so the divergence
+ * log names rows — but it must not print 138 titles. The QUERYABLE result
+ * (`StoreCoverage.missing`) carries the full list; only the human-facing
+ * log line is capped, with an explicit "…and N more" tail.
+ */
+export const STORE_COVERAGE_SAMPLE_CAP = 10;
+
+/** One board row with no store row: enough identity to start looking. */
+export interface StoreCoverageMissing {
+  id: number;
+  title: string;
+}
+
+/**
+ * #222: what the board-vs-store comparison found.
+ *
+ * `checked` is false only when no workspace store is open — nothing was
+ * compared. A zero divergence reads `checked: true, missingCount: 0,
+ * lossless: true`, never silence: in the spirit of #211, "the check ran
+ * and found nothing" must be distinguishable from "the check never ran".
+ * `backfillVerified` is false while the one-time import is still in
+ * flight, so a mid-import divergence reads transient, never settled.
+ * `reason` names why nothing was compared; null whenever checked.
+ */
+export interface StoreCoverage {
+  checked: boolean;
+  backfillVerified: boolean;
+  boardRows: number;
+  storeRows: number;
+  missingCount: number;
+  missing: StoreCoverageMissing[];
+  lossless: boolean;
+  reason: string | null;
+}
+
+/**
+ * #222: the board rows with no store row, by DEDUPE identity.
+ *
+ * Identity is `workspaceKey:slug` — the same durable id #83 dedupes on,
+ * stable across a fork because a copy keeps both parts. Deliberately NOT
+ * the numeric id: a live session's local counter and the store's port
+ * counter mint in different spaces, so two unrelated tickets routinely
+ * share a numeric id, and matching on it would call a store-unknown row
+ * "covered" whenever any store row happens to hold its number.
+ *
+ * Pure, and separate from the Remote, so it is testable: logic trapped
+ * inside a Remote is logic no test can reach. The full missing list is
+ * returned in id order; the caller caps what it PRINTS.
+ */
+export function boardStoreDivergence(
+  board: readonly { id: number; title: string; workspaceKey: string; slug: string }[],
+  storeIdentities: ReadonlySet<string>,
+): { missingCount: number; missing: StoreCoverageMissing[] } {
+  const missing: StoreCoverageMissing[] = [];
+  for (const row of board) {
+    if (!storeIdentities.has(row.workspaceKey + ":" + row.slug)) {
+      missing.push({ id: row.id, title: row.title });
+    }
+  }
+  missing.sort((a, b) => a.id - b.id);
+  return { missingCount: missing.length, missing };
+}
+
+/**
  * #217: a one-ticket read for a plain numeric id while the workspace's
  * one-time import has not completed yet. The ticket may simply not be
  * loaded — this is NOT the settled "no such ticket" fact, and it must
@@ -2659,6 +2725,9 @@ registerAidosSessionEventTypes(ctx);
       );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+      // #222: the merge already holds both sides — the board it just built
+      // and the store it read — so the coverage check rides here, throttled.
+      this._reportStoreCoverage(agent, out, workspaceStore, includeRetired);
       return {
         tickets: out,
         evidence: keptEvidence,
@@ -2668,6 +2737,9 @@ registerAidosSessionEventTypes(ctx);
     }
 
     tickets.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
+    // #222: same check as the deduped exit above — one hook per exit, so a
+    // board without duplicates is still compared, not silently skipped.
+    this._reportStoreCoverage(agent, tickets, workspaceStore, includeRetired);
     return { tickets, evidence, comments, workspaceLabels };
   }
 
@@ -2765,6 +2837,153 @@ registerAidosSessionEventTypes(ctx);
       workspaceLabels: merge.workspaceLabels,
       version: this._stampBoardVersion(nowGate),
     };
+  }
+
+  /**
+   * #222: the board-vs-store divergence, queryable.
+   *
+   * The cutover (#219) turns the store into the board, so it must be able
+   * to ASK "does the store hold everything the board shows" and refuse on
+   * a bad answer — a log line cannot be consumed programmatically. This is
+   * that question: the same computation the merge's automatic log is built
+   * on, awaited to settlement first. The browser read awaits the one-time
+   * import before merging (the shared single-flight run), so by the time
+   * the rows are compared the import has either verified or refused; the
+   * result still carries `backfillVerified` so a caller can tell a settled
+   * zero from a transient one. Read-only: it opens the store and derives
+   * views, and writes nothing.
+   */
+  @Remote("storeCoverage")
+  async storeCoverage(agent: Agent, args?: { includeRetired?: boolean }): Promise<StoreCoverage> {
+    const includeRetired = args?.includeRetired === true;
+    const entry = this._workspaceStore(agent);
+    if (entry === null) {
+      return this._storeCoverageOf(agent, [], null, includeRetired);
+    }
+    await this._backfillRun(agent, entry);
+    // The merge reports its own coverage through _reportStoreCoverage as a
+    // side effect; the throttle map keeps that to one line per change, and
+    // this return is the consumable answer regardless.
+    const merge = this._workspaceBoardMerge(agent, includeRetired, { backfillAwaited: true });
+    return this._storeCoverageOf(agent, merge.tickets, entry, includeRetired);
+  }
+
+  /**
+   * #222: compare one merge's rows against the store alone.
+   *
+   * Both sides are scoped to the workspace's project and filtered by the
+   * same retired rule the merge applied, so the counts reconcile: every
+   * board row the store cannot reproduce is named, and a fully covered
+   * board reads `missingCount: 0` with `lossless: true` rather than
+   * silence. Synchronous on purpose — it reads the already-open store
+   * fold, never the persistence layer — so the merge can call it on every
+   * read while the IMPORT stays awaited only in the Remote above.
+   */
+  private _storeCoverageOf(
+    agent: Agent,
+    rows: readonly BoardTicketView[],
+    entry: { store: Store; projectId: ProjectId } | null,
+    includeRetired: boolean,
+  ): StoreCoverage {
+    if (entry === null) {
+      return {
+        checked: false,
+        backfillVerified: false,
+        boardRows: 0,
+        storeRows: 0,
+        missingCount: 0,
+        missing: [],
+        lossless: false,
+        reason: "no workspace store is open for this workspace, so there is nothing to compare against",
+      };
+    }
+    const storeState = entry.store.state;
+    const storeIdentities = new Set<string>();
+    for (const snapshot of storeState.tickets.values()) {
+      if (snapshot.projectId !== entry.projectId) continue;
+      if (!includeRetired && this._isRetired(storeState, snapshot.id)) continue;
+      storeIdentities.add(snapshot.workspaceKey + ":" + snapshot.slug);
+    }
+    const scoped = rows.filter((row) => row.projectId === entry.projectId);
+    const { missingCount, missing } = boardStoreDivergence(scoped, storeIdentities);
+    const verified = this._isBackfillVerified(agent);
+    return {
+      checked: true,
+      backfillVerified: verified,
+      boardRows: scoped.length,
+      storeRows: storeIdentities.size,
+      missingCount,
+      missing,
+      lossless: verified && missingCount === 0,
+      reason: null,
+    };
+  }
+
+  /**
+   * #222: log one merge's coverage, at most once per divergence.
+   *
+   * The merge runs on every board read — at least twice per boot — so an
+   * unconditional log here would be a second #83: 166 info lines per merge
+   * is the noise problem that drowned the journal during the OOM
+   * diagnosis. Instead this logs only when the answer CHANGES per
+   * workspace path (first verified read included, so a clean board still
+   * leaves its one "complete" line and zero is distinguishable from
+   * never-checked), and stays silent on every identical repeat. It never
+   * runs mid-import: a divergence while batches are still landing is
+   * expected transient, not signal, so unverified merges are skipped
+   * without recording anything. It never throws: a coverage check must
+   * not break the board read it rides on, so even its own failure is
+   * throttled to one warning per message.
+   */
+  private readonly _lastCoverageSignature = new Map<string, string>();
+
+  private _reportStoreCoverage(
+    agent: Agent,
+    rows: readonly BoardTicketView[],
+    entry: { store: Store; projectId: ProjectId } | null,
+    includeRetired: boolean,
+  ): void {
+    if (entry === null) return;
+    let path: string;
+    try {
+      path = this._workspacePath(agent);
+    } catch {
+      return;
+    }
+    if (!this._isBackfillVerified(agent)) return;
+    let coverage: StoreCoverage;
+    try {
+      coverage = this._storeCoverageOf(agent, rows, entry, includeRetired);
+    } catch (error) {
+      const failure = `error:${error instanceof Error ? error.message : String(error)}`;
+      if (this._lastCoverageSignature.get(path) === failure) return;
+      this._lastCoverageSignature.set(path, failure);
+      this.ctx.logger?.warn?.(
+        `aidos: #222 store coverage check failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    const signature = `${coverage.boardRows}:${coverage.storeRows}:${coverage.missing.map((m) => m.id).join(",")}`;
+    if (this._lastCoverageSignature.get(path) === signature) return;
+    this._lastCoverageSignature.set(path, signature);
+    if (coverage.missingCount > 0) {
+      const sample = coverage.missing
+        .slice(0, STORE_COVERAGE_SAMPLE_CAP)
+        .map((m) => `#${m.id} ${JSON.stringify(m.title)}`)
+        .join(", ");
+      const rest =
+        coverage.missingCount > STORE_COVERAGE_SAMPLE_CAP
+          ? `, …and ${coverage.missingCount - STORE_COVERAGE_SAMPLE_CAP} more`
+          : "";
+      this.ctx.logger?.warn?.(
+        `aidos: #222 store coverage DIVERGED: ${coverage.missingCount} of ${coverage.boardRows} board rows have no store row ` +
+          `(store holds ${coverage.storeRows} rows); e.g. ${sample}${rest} — the #219 cutover must not run while this is non-zero`,
+      );
+    } else {
+      this.ctx.logger?.info?.(
+        `aidos: #222 store coverage complete: all ${coverage.boardRows} board rows have a store row (store holds ${coverage.storeRows} rows)`,
+      );
+    }
   }
 
   /**
