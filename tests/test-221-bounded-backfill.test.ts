@@ -490,6 +490,12 @@ describe("#221 v1 marker: the driver defers subset completion (F4 gate)", () => 
       droppedRefusals: [],
       skippedKinds: ["plan/change", "phase/set", "aidos/refusal"],
       ticketMap: [],
+      // #211 round 2 added these three. A v1 marker records none of them --
+      // it predates the concepts -- which is precisely why dropsUnknown is
+      // true: empty here means "never recorded", not "nothing happened".
+      pendingEdges: [],
+      repairedEdges: [],
+      slugRenames: [],
       dropsUnknown: true,
       lossless: false,
       at: FIXED_NOW,
