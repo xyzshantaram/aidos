@@ -66,8 +66,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store } from "../src/kernel/store";
@@ -510,106 +510,18 @@ describe("#221 resume skips sessions the live mirror already owns", () => {
   });
 });
 
-describe("#221 finding B: a real v1 marker no longer freezes the board", () => {
-  it("fresh sessions import once on a v1 store; the marker upgrades with carried counts", async (ctx) => {
-    // A COPY of the real `--home-sid-repos-aidos--` store (v1 marker, 323
-    // sessions, 164 tickets — measured read-only) under a throwaway
-    // DSH_HOME. The real store is never written. The stub lists ONLY fresh
-    // kernel logs: the 323 real v1 logs (1 GB) stay on disk, so this test
-    // proves the freeze is gone and the upgrade is exact — v1-history
-    // completion with handed-in v1 logs is pinned by the synthetic test
-    // below and measured at scale in the criterion-5 re-run.
-    const savedHome = process.env.DSH_HOME;
-    const fixtureHome = mkdtempSync(join(tmpdir(), "t221-v1fixture-home-"));
-    process.env.DSH_HOME = fixtureHome;
-    try {
-      const key = "--home-sid-repos-aidos--";
-      const dest = join(fixtureHome, "aidos", "storage", key);
-      mkdirSync(dest, { recursive: true });
-      const realStore = join(homedir(), ".dsh", "aidos", "storage", key);
-      copyFileSync(join(realStore, "board.db"), join(dest, "board.db"));
-      copyFileSync(join(realStore, "board.db-wal"), join(dest, "board.db-wal"));
-
-      const harness = createHarness(undefined, { cwd: "/home/sid/repos/aidos" });
-      harness.installService();
-      // Pre-state, read directly (test-217 precedent): the v1 marker's facts.
-      const preStore = new Store(makeConfig(), { storage: openWorkspaceStorage("/home/sid/repos/aidos") });
-      const pre = preStore.backfillReport()!;
-      // This fixture is the REAL store, and the real store's v1 marker is now
-      // GONE: the v1 completion RAN IN PRODUCTION on this machine after a
-      // restart picked up #221 (refusals 0 -> 56, phases 0 -> 14, plan/change
-      // 0 -> 2, one marker -> 37 cumulative batch markers, tickets unchanged
-      // at 166 — exactly what the capped-child rehearsal predicted). That is
-      // the behaviour this test was written to anticipate, and it cannot be
-      // anticipated twice: a completed store can never be v1 again, so from
-      // here this assertion would fail forever on machine state rather than
-      // on code. Skip instead of asserting; the synthetic v1 test below pins
-      // the behaviour reproducibly, and production pinned it at scale.
-      if (pre.importerVersion !== 1) {
-        ctx.skip();
-        return;
-      }
-      expect(pre.dropsUnknown).toBe(true);
-      expect(pre.sessionIds.length).toBeGreaterThan(100);
-      const preTickets = pre.tickets;
-      const preProject = preStore.findProject("/home/sid/repos/aidos")!;
-      const preRows = preStore.ticketsFor(preProject).length;
-
-      const freshIds = ["t221-v1c-fresh-0", "t221-v1c-fresh-1", "t221-v1c-fresh-2"];
-      const freshLogs = new Map<string, { cwd: string; events: LogEvents }>();
-      for (const [index, id] of freshIds.entries()) {
-        const log = kernelLog(id, "/home/sid/repos/aidos", (store, projectId) => {
-          kernelTicket(store, projectId, `t221 v1c fresh ticket ${index}`);
-        });
-        freshLogs.set(id, { cwd: "/home/sid/repos/aidos", events: log.events });
-      }
-      const inspected: string[] = [];
-      harness.ctx.reflect.provide("sessionPersistence", {
-        list: async () => freshIds.map((id) => ({ id: SessionId(id), cwd: "/home/sid/repos/aidos" })),
-        inspect: async (id: string) => {
-          await Promise.resolve();
-          inspected.push(id);
-          const fresh = freshLogs.get(id);
-          if (fresh === undefined) throw new Error(`unexpected inspect: ${id}`);
-          return { meta: { id, cwd: "/home/sid/repos/aidos" }, events: fresh.events as never[] };
-        },
-      });
-
-      await harness.service.workspaceTickets(harness.asAgent());
-      const { store, projectId } = workspaceEntry(harness, "/home/sid/repos/aidos");
-      const rows = store.ticketsFor(projectId);
-      // The freeze is gone: fresh landed exactly once...
-      for (const index of [0, 1, 2]) {
-        expect(rows.filter((row) => row.title === `t221 v1c fresh ticket ${index}`).length).toBe(1);
-      }
-      expect([...inspected].sort()).toEqual([...freshIds].sort());
-      // ...and totals are exact: any duplicate would inflate them.
-      expect(rows.length).toBe(preRows + freshIds.length);
-      // The marker upgraded instead of resetting: v1's counts carried
-      // forward plus the fresh batch, under the new generation. sessionIds
-      // names only sessions this importer finished (round-2 narrowness);
-      // the v1 row itself persists in the log behind it.
-      const post = store.backfillReport()!;
-      expect(post.dropsUnknown).toBe(false);
-      // The point is that the marker left v1 behind, not which number the
-      // importer is on today: #211 round 3 moved it from 3 to 4 while this
-      // file sat in a parallel worktree, and a literal here broke on merge.
-      expect(post.importerVersion).toBe(BACKFILL_IMPORTER_VERSION);
-      expect(post.tickets).toBe(preTickets + freshIds.length);
-      for (const id of freshIds) expect(post.sessionIds).toContain(id);
-      expect(
-        store.events().some((event) => event.kind === "backfill/completed" && event.version === 1),
-      ).toBe(true);
-    } finally {
-      if (savedHome === undefined) {
-        delete process.env.DSH_HOME;
-      } else {
-        process.env.DSH_HOME = savedHome;
-      }
-      rmSync(fixtureHome, { recursive: true, force: true });
-    }
-  });
-
+/**
+ * #221 finding B. A companion test here used to copy the REAL
+ * `--home-sid-repos-aidos--` store, whose v1 marker made it the highest-
+ * fidelity fixture available. It was deleted on 2026-09-16: the v1 -> v3
+ * completion RAN in production (refusals 0 -> 56, phases 0 -> 14,
+ * plan/change 0 -> 2, tickets unchanged at 166), so that store can never be
+ * v1 again and the precondition would fail forever on machine state rather
+ * than on code. The test was made obsolete by its own subject succeeding.
+ * The synthetic case below pins the same behaviour reproducibly, on any
+ * machine, which is what a test is for.
+ */
+describe("#221 finding B: a v1 marker no longer freezes the board", () => {
   it("v1-listed sessions handed back in replay their history and land nothing twice", async () => {
     // Synthetic v1 aftermath, small: two sessions whose tickets were
     // flushed with origins stamped plus a counts-only v1 marker — the exact
