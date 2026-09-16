@@ -1296,6 +1296,11 @@ export function findBoardMigrationDuplicates(
       const key = loser.workspaceKey + ":" + loser.slug;
       if (droppedSlugs.has(key)) continue;
       droppedSlugs.add(key);
+      // The reason names the decider, not the clock reading: the twin
+      // moved further, the bare row moved further, or a true tie kept
+      // the bare form by convention. The real run reads these sides to
+      // exonerate a dropped row its candidate certifiably holds elsewhere.
+      const winnerSuffixed = /-\d+$/.test(winner.slug);
       const tied = winner.updatedAt === loser.updatedAt;
       pairs.push({
         workspaceKey: loser.workspaceKey,
@@ -1309,8 +1314,10 @@ export function findBoardMigrationDuplicates(
         keptState: winner.state,
         droppedState: loser.state,
         reason: tied
-          ? `tied updatedAt ${winner.updatedAt}; #83 order prefers ${winner.oldSource}, bare by convention`
-          : `newer updatedAt wins: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
+          ? `tie → bare by convention at updatedAt ${winner.updatedAt}`
+          : winnerSuffixed
+            ? `twin newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`
+            : `bare newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
         nontrivial: winner.state !== loser.state || winner.title !== loser.title,
       });
     }
@@ -1408,6 +1415,14 @@ export interface BoardMigrationRunResult {
      * the check's execution is observable, not implied.
      */
     exportLoss: Array<{ slug: string; title: string }>;
+    /**
+     * Missing board rows the export certified as duplicates whose keeper
+     * the candidate HOLDS (dropped slug → kept slug, both from the
+     * export's duplicateResolutions). Exonerated, named, never refused —
+     * and never silent: this is the certified explanation for why a
+     * board-visible row is certifiably absent from the candidate.
+     */
+    exoneratedDuplicates: Array<{ droppedSlug: string; keptSlug: string }>;
     /** Born after the export and missing from the candidate: expected on a live board, named, never refused. */
     drift: Array<{ slug: string; title: string }>;
     /** In the export report but cut from the document by hand: acknowledged deletions, named, never refused. */
@@ -1719,6 +1734,7 @@ export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
       retiredExcluded,
       backfillVerified: input.backfillVerified,
       exportedSlugs: docTickets.map((ticket) => ticket.slug),
+      duplicateResolutions: pairs,
     },
   };
   const report: BoardMigrationReport = {
@@ -3785,7 +3801,8 @@ registerAidosSessionEventTypes(ctx);
       exportReport === undefined ||
       typeof exportReport.retiredExcluded !== "number" ||
       typeof exportReport.backfillVerified !== "boolean" ||
-      !Array.isArray(exportReport.exportedSlugs)
+      !Array.isArray(exportReport.exportedSlugs) ||
+      !Array.isArray(exportReport.duplicateResolutions)
     ) {
       throw new Error(
         `board migration: ${jsonPath} carries no export report — run a dry run first (it embeds the export's certification prerequisites) and edit the tickets, not the header`,
@@ -3819,6 +3836,25 @@ registerAidosSessionEventTypes(ctx);
       throw new Error(
         `board migration: refusing to write the candidate over the live store ${storePathForWorkspace(cwd)} — the candidate must be a NEW path`,
       );
+    }
+    // A refused run unlinks the candidate it created, so a non-empty file
+    // here is a BLESSED candidate from an earlier success: loading into it
+    // would merge two exports, never refresh one. Refused before the
+    // loader opens the file — a 0-byte residue from an abandoned run is
+    // not a candidate and the run proceeds. Removal is the owner's
+    // explicit filesystem act, never this tool's.
+    if (existsSync(storePath)) {
+      let priorBytes = -1;
+      try {
+        priorBytes = readFileSync(storePath, "utf8").length;
+      } catch {
+        priorBytes = -1;
+      }
+      if (priorBytes > 0) {
+        throw new Error(
+          `board migration: refusing — ${storePath} already holds a non-empty candidate from an earlier run; loading into it would merge two exports, so delete it by hand (or choose a fresh storePath) and re-run`,
+        );
+      }
     }
     // The live board side, through the same walk and the same winner
     // selection as the export, so both sides resolve copies identically.
@@ -3880,7 +3916,23 @@ registerAidosSessionEventTypes(ctx);
     // A row the document lists but the candidate lacks is loader loss —
     // structurally impossible through the bracket, and refused all the same.
     const exportLoss: Array<{ slug: string; title: string }> = [];
+    const exoneratedDuplicates: Array<{ droppedSlug: string; keptSlug: string }> = [];
     const drift: Array<{ slug: string; title: string }> = [];
+    // Dropped slug → kept slug, from the export's own resolutions: the
+    // only exoneration the real run trusts, and only when the candidate
+    // holds the keeper (a hand-trimmed keeper is loss, not exoneration).
+    const keeperByDroppedSlug = new Map<string, string>();
+    if (Array.isArray(exportReport.duplicateResolutions)) {
+      for (const resolution of exportReport.duplicateResolutions) {
+        if (
+          typeof resolution?.droppedSlug === "string" &&
+          typeof resolution?.keptSlug === "string" &&
+          !keeperByDroppedSlug.has(resolution.droppedSlug)
+        ) {
+          keeperByDroppedSlug.set(resolution.droppedSlug, resolution.keptSlug);
+        }
+      }
+    }
     for (const winner of liveWinners) {
       if (candidateSlugs.has(winner.slug)) continue;
       if (docSlugs.has(winner.slug)) {
@@ -3895,6 +3947,13 @@ registerAidosSessionEventTypes(ctx);
         drift.push(named(winner.slug, winner.title));
         continue;
       }
+      // Certified at export time as this keeper's duplicate, and the
+      // candidate holds the keeper: exonerated, never refused.
+      const keeper = keeperByDroppedSlug.get(winner.slug);
+      if (keeper !== undefined && candidateSlugs.has(keeper)) {
+        exoneratedDuplicates.push({ droppedSlug: winner.slug, keptSlug: keeper });
+        continue;
+      }
       exportLoss.push(named(winner.slug, winner.title));
     }
     const candidateExtra = [...candidateSlugs]
@@ -3905,7 +3964,7 @@ registerAidosSessionEventTypes(ctx);
       abandonCandidate();
       const names = exportLoss.map((entry) => entry.slug).join(", ");
       throw new Error(
-        `board migration: refusing — ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the export lost them, so re-run the dry run rather than blessing this candidate`,
+        `board migration: refusing — ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the candidate lost them (expected when the document was hand-trimmed after the dry run); if the loss is unexpected, re-run the dry run rather than blessing this candidate`,
       );
     }
     fresh.close();
@@ -3920,6 +3979,7 @@ registerAidosSessionEventTypes(ctx);
         storeTickets: storeTickets.length,
         boardRows: liveWinners.length,
         exportLoss,
+        exoneratedDuplicates,
         drift,
         humanRemoved,
         candidateExtra,

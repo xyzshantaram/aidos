@@ -176,7 +176,7 @@ describe("#222 resolution keeps the newer updatedAt on either side", () => {
     const { pairs, droppedSlugs } = findBoardMigrationDuplicates([bare, twin]);
     expect(pairs).toHaveLength(1);
     expect(pairs[0]).toMatchObject({ keptSlug: "some-ticket", droppedSlug: "some-ticket-2" });
-    expect(pairs[0]!.reason).toContain("newer updatedAt wins");
+    expect(pairs[0]!.reason).toContain("bare newer");
     expect(droppedSlugs.size).toBe(1);
   });
 
@@ -206,7 +206,7 @@ describe("#222 resolution keeps the newer updatedAt on either side", () => {
     expect(pair.nontrivial).toBe(true);
     expect(pair.keptState).toBe("in_progress");
     expect(pair.droppedState).toBe("open");
-    expect(pair.reason).toContain("newer updatedAt wins");
+    expect(pair.reason).toContain("twin newer");
     expect(droppedSlugs.size).toBe(1);
   });
 
@@ -216,6 +216,7 @@ describe("#222 resolution keeps the newer updatedAt on either side", () => {
     const { pairs } = findBoardMigrationDuplicates([bare, twin]);
     expect(pairs).toHaveLength(1);
     expect(pairs[0]).toMatchObject({ keptSlug: "tied", droppedSlug: "tied-2", nontrivial: false });
+    expect(pairs[0]!.reason).toContain("tie → bare by convention");
   });
 
   it("chains (S / S-2 / S-3) collapse to the newest, naming every drop", () => {
@@ -927,5 +928,186 @@ describe("#222 the Remote never runs automatically and writes new paths only", (
     expect(real.verification.drift.map((entry) => entry.slug)).toEqual(["born-late"]);
     expect(real.verification.exportLoss).toEqual([]);
     expect(real.verification.lossless).toBe(false);
+  });
+});
+
+describe("#222 the dry-to-real seam with stem pairs on the board", () => {
+  const HARNESS_WS = "/home/sid/repos/aidos";
+
+  function provideEmptyPersistence(harness: ReturnType<typeof createHarness>): void {
+    harness.ctx.reflect.provide("sessionPersistence", {
+      list: async () => [],
+      inspect: async () => {
+        throw new Error("not found");
+      },
+    });
+  }
+
+  function seedPeerPair(now: () => number, harness: ReturnType<typeof createHarness>): void {
+    // Two folds holding dupe and dupe-2 with identical createdAt — the
+    // exact shape of all 82 live pairs. The fixed clock makes the pair
+    // deterministic; the direction depends on the passed clock.
+    const peer = harness.makeAgent({ id: "session-peer" });
+    (peer.session.header as { cwd?: string }).cwd = HARNESS_WS;
+    const peerStore = makeStore(makeConfig(), { now, storage: new MemoryStorage() });
+    const peerProject = peerStore.createProject(HARNESS_WS, "aidos");
+    peerStore.createTicket(peerProject, "dupe", "dupe body");
+    peerStore.createTicket(peerProject, "dupe-2", "dupe-2 body");
+    for (const event of peerStore.events()) {
+      harness.appendAidosEvent(peer, event);
+    }
+  }
+
+  it("bare survives: the dropped twin exonerates, lossless holds", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    seedPeerPair(() => FIXED_NOW, harness);
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    const dry = await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    expect(dry.dryRun).toBe(true);
+    if (!dry.dryRun) throw new Error("expected a dry run");
+    expect(dry.report.duplicatesMatched).toBe(1);
+    expect(dry.report.duplicatesDropped).toEqual(["dupe-2"]);
+
+    const real = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: join(dir, "board.migrated.db") });
+    expect(real.dryRun).toBe(false);
+    if (real.dryRun) throw new Error("expected a real run");
+    expect(real.verification.exportLoss).toEqual([]);
+    expect(real.verification.exoneratedDuplicates).toEqual([{ droppedSlug: "dupe-2", keptSlug: "dupe" }]);
+    expect(real.verification.lossless).toBe(true);
+  });
+
+  it("suffixed survives: the dropped bare exonerates, lossless holds", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    // The twin moves further after the shared birth: same createdAt,
+    // newer updatedAt — the 68/150 direction. One clock for the birth,
+    // a later set for the move (a set bumps updatedAt, never createdAt).
+    let now = FIXED_NOW;
+    const peer = harness.makeAgent({ id: "session-peer" });
+    (peer.session.header as { cwd?: string }).cwd = HARNESS_WS;
+    const peerStore = makeStore(makeConfig(), { now: () => now, storage: new MemoryStorage() });
+    const peerProject = peerStore.createProject(HARNESS_WS, "aidos");
+    peerStore.createTicket(peerProject, "dupe", "dupe body");
+    peerStore.createTicket(peerProject, "dupe-2", "dupe-2 body");
+    now = FIXED_NOW + 100;
+    peerStore.setTicket(2, { description: "moved further" });
+    for (const event of peerStore.events()) {
+      harness.appendAidosEvent(peer, event);
+    }
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    const dry = await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    expect(dry.dryRun).toBe(true);
+    if (!dry.dryRun) throw new Error("expected a dry run");
+    expect(dry.report.duplicatesMatched).toBe(1);
+    expect(dry.report.duplicatesDropped).toEqual(["dupe"]);
+
+    const real = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: join(dir, "board.migrated.db") });
+    expect(real.dryRun).toBe(false);
+    if (real.dryRun) throw new Error("expected a real run");
+    expect(real.verification.exportLoss).toEqual([]);
+    expect(real.verification.exoneratedDuplicates).toEqual([{ droppedSlug: "dupe", keptSlug: "dupe-2" }]);
+    expect(real.verification.lossless).toBe(true);
+  });
+
+  it("loading into a pre-existing non-empty file refuses before any write", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    const storePath = join(dir, "board.migrated.db");
+    const first = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath });
+    expect(first.dryRun).toBe(false);
+    if (first.dryRun) throw new Error("expected a real run");
+    const blessed = readFileSync(storePath, "utf8");
+
+    // The board moves on; the second document differs — but the refusal
+    // must fire before the loader opens the file, not after growing it.
+    service.userSetTicket(harness.asAgent(), { title: "Other" });
+    const jsonPath2 = join(dir, "board-migration-2.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath: jsonPath2 });
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath: jsonPath2, storePath }),
+    ).rejects.toThrow("non-empty");
+    expect(readFileSync(storePath, "utf8")).toBe(blessed);
+  });
+});
+
+describe("#222 exoneration requires the keeper in the candidate", () => {
+  const HARNESS_WS = "/home/sid/repos/aidos";
+
+  function provideEmptyPersistence(harness: ReturnType<typeof createHarness>): void {
+    harness.ctx.reflect.provide("sessionPersistence", {
+      list: async () => [],
+      inspect: async () => {
+        throw new Error("not found");
+      },
+    });
+  }
+
+  it("hand-trimming the keeper refuses, naming the keeper and the unexonerated drop", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    // Tie pair: bare dupe kept, dupe-2 dropped by convention.
+    const peer = harness.makeAgent({ id: "session-peer" });
+    (peer.session.header as { cwd?: string }).cwd = HARNESS_WS;
+    const peerStore = makeStore(makeConfig(), { now: () => FIXED_NOW, storage: new MemoryStorage() });
+    const peerProject = peerStore.createProject(HARNESS_WS, "aidos");
+    peerStore.createTicket(peerProject, "dupe", "dupe body");
+    peerStore.createTicket(peerProject, "dupe-2", "dupe-2 body");
+    for (const event of peerStore.events()) {
+      harness.appendAidosEvent(peer, event);
+    }
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+
+    // The EDIT step: trim the keeper, its evidence and its comments —
+    // the drop's exoneration dies with the keeper it names.
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as {
+      tickets: Array<{ slug: string }>;
+      evidence: Array<{ ticketSlug: string }>;
+      comments: Array<{ ticketSlug: string }>;
+    };
+    doc.tickets = doc.tickets.filter((ticket) => ticket.slug !== "dupe");
+    doc.evidence = doc.evidence.filter((row) => row.ticketSlug !== "dupe");
+    doc.comments = doc.comments.filter((row) => row.ticketSlug !== "dupe");
+    writeFileSync(jsonPath, JSON.stringify(doc, null, 2) + "\n");
+
+    const storePath = join(dir, "board.migrated.db");
+    const attempt = service.migrateBoardToFreshStore(harness.asAgent(), {
+      dryRun: false,
+      jsonPath,
+      storePath,
+    });
+    await expect(attempt).rejects.toThrow("dupe");
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath }),
+    ).rejects.toThrow("dupe-2");
+    // Nothing blessed: no candidate on disk.
+    expect(existsSync(storePath)).toBe(false);
   });
 });

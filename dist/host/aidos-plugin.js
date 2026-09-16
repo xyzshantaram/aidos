@@ -31810,6 +31810,7 @@ function findBoardMigrationDuplicates(tickets, callerSessionId) {
       const key = loser.workspaceKey + ":" + loser.slug;
       if (droppedSlugs.has(key)) continue;
       droppedSlugs.add(key);
+      const winnerSuffixed = /-\d+$/.test(winner.slug);
       const tied = winner.updatedAt === loser.updatedAt;
       pairs.push({
         workspaceKey: loser.workspaceKey,
@@ -31822,7 +31823,7 @@ function findBoardMigrationDuplicates(tickets, callerSessionId) {
         droppedTitle: loser.title,
         keptState: winner.state,
         droppedState: loser.state,
-        reason: tied ? `tied updatedAt ${winner.updatedAt}; #83 order prefers ${winner.oldSource}, bare by convention` : `newer updatedAt wins: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
+        reason: tied ? `tie \u2192 bare by convention at updatedAt ${winner.updatedAt}` : winnerSuffixed ? `twin newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}` : `bare newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
         nontrivial: winner.state !== loser.state || winner.title !== loser.title
       });
     }
@@ -32070,7 +32071,8 @@ function buildBoardMigrationDocument(input) {
     exportReport: {
       retiredExcluded,
       backfillVerified: input.backfillVerified,
-      exportedSlugs: docTickets.map((ticket) => ticket.slug)
+      exportedSlugs: docTickets.map((ticket) => ticket.slug),
+      duplicateResolutions: pairs
     }
   };
   const report = {
@@ -33245,7 +33247,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       );
     }
     const exportReport = doc.exportReport;
-    if (exportReport === void 0 || typeof exportReport.retiredExcluded !== "number" || typeof exportReport.backfillVerified !== "boolean" || !Array.isArray(exportReport.exportedSlugs)) {
+    if (exportReport === void 0 || typeof exportReport.retiredExcluded !== "number" || typeof exportReport.backfillVerified !== "boolean" || !Array.isArray(exportReport.exportedSlugs) || !Array.isArray(exportReport.duplicateResolutions)) {
       throw new Error(
         `board migration: ${jsonPath} carries no export report \u2014 run a dry run first (it embeds the export's certification prerequisites) and edit the tickets, not the header`
       );
@@ -33275,6 +33277,19 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       throw new Error(
         `board migration: refusing to write the candidate over the live store ${storePathForWorkspace(cwd)} \u2014 the candidate must be a NEW path`
       );
+    }
+    if (existsSync(storePath)) {
+      let priorBytes = -1;
+      try {
+        priorBytes = readFileSync(storePath, "utf8").length;
+      } catch {
+        priorBytes = -1;
+      }
+      if (priorBytes > 0) {
+        throw new Error(
+          `board migration: refusing \u2014 ${storePath} already holds a non-empty candidate from an earlier run; loading into it would merge two exports, so delete it by hand (or choose a fresh storePath) and re-run`
+        );
+      }
     }
     const live = this._migrationExportCopies(agent, cwd, workspaceKey);
     const liveWinners = selectMigrationWinners(live.rows, agent.session.id);
@@ -33320,7 +33335,16 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const exportedSlugs = new Set(exportReport.exportedSlugs);
     const humanRemoved = [...exportedSlugs].filter((slug) => !docSlugs.has(slug)).map((slug) => named(slug, liveBySlug.get(slug)?.title ?? "(not on the live board)"));
     const exportLoss = [];
+    const exoneratedDuplicates = [];
     const drift = [];
+    const keeperByDroppedSlug = /* @__PURE__ */ new Map();
+    if (Array.isArray(exportReport.duplicateResolutions)) {
+      for (const resolution of exportReport.duplicateResolutions) {
+        if (typeof resolution?.droppedSlug === "string" && typeof resolution?.keptSlug === "string" && !keeperByDroppedSlug.has(resolution.droppedSlug)) {
+          keeperByDroppedSlug.set(resolution.droppedSlug, resolution.keptSlug);
+        }
+      }
+    }
     for (const winner of liveWinners) {
       if (candidateSlugs.has(winner.slug)) continue;
       if (docSlugs.has(winner.slug)) {
@@ -33332,6 +33356,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         drift.push(named(winner.slug, winner.title));
         continue;
       }
+      const keeper = keeperByDroppedSlug.get(winner.slug);
+      if (keeper !== void 0 && candidateSlugs.has(keeper)) {
+        exoneratedDuplicates.push({ droppedSlug: winner.slug, keptSlug: keeper });
+        continue;
+      }
       exportLoss.push(named(winner.slug, winner.title));
     }
     const candidateExtra = [...candidateSlugs].filter((slug) => !liveBySlug.has(slug)).map((slug) => named(slug, doc.tickets.find((ticket) => ticket.slug === slug)?.title ?? "(unknown)"));
@@ -33340,7 +33369,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       abandonCandidate();
       const names = exportLoss.map((entry) => entry.slug).join(", ");
       throw new Error(
-        `board migration: refusing \u2014 ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the export lost them, so re-run the dry run rather than blessing this candidate`
+        `board migration: refusing \u2014 ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the candidate lost them (expected when the document was hand-trimmed after the dry run); if the loss is unexpected, re-run the dry run rather than blessing this candidate`
       );
     }
     fresh.close();
@@ -33355,6 +33384,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         storeTickets: storeTickets.length,
         boardRows: liveWinners.length,
         exportLoss,
+        exoneratedDuplicates,
         drift,
         humanRemoved,
         candidateExtra,

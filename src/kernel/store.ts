@@ -295,11 +295,15 @@ export interface BoardMigrationDocument {
  * counts DISTINCT identities (one retired ticket in two folds counts once);
  * `exportedSlugs` lets the real run tell owner-deleted rows (humanRemoved,
  * acknowledged) from walk-missed rows (exportLoss, refused).
+ * `duplicateResolutions` names each dropped row's keeper so the real run
+ * can EXONERATE a missing board row it already certified as a duplicate —
+ * without the keeper's slug in the file, a kept twin would read as loss.
  */
 export interface BoardMigrationExportReport {
   retiredExcluded: number;
   backfillVerified: boolean;
   exportedSlugs: string[];
+  duplicateResolutions: Array<{ keptSlug: string; droppedSlug: string }>;
 }
 
 /** #222: one dependency reference the loader could not resolve. */
