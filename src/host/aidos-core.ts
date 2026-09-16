@@ -31,6 +31,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -1296,10 +1297,13 @@ export function findBoardMigrationDuplicates(
       const key = loser.workspaceKey + ":" + loser.slug;
       if (droppedSlugs.has(key)) continue;
       droppedSlugs.add(key);
-      // The reason names the decider, not the clock reading: the twin
-      // moved further, the bare row moved further, or a true tie kept
-      // the bare form by convention. The real run reads these sides to
-      // exonerate a dropped row its candidate certifiably holds elsewhere.
+      // The reason names the decider, not the clock reading — computed
+      // from the ACTUAL winner, never the common case. A tie usually
+      // keeps the bare row by convention, but #83 order can prefer the
+      // twin's source on a tie, and then the label must say twin: the
+      // owner reads ~82 of these by eye, and a wrong decider misdirects
+      // the triage. The real run reads these sides to exonerate a
+      // dropped row its candidate certifiably holds elsewhere.
       const winnerSuffixed = /-\d+$/.test(winner.slug);
       const tied = winner.updatedAt === loser.updatedAt;
       pairs.push({
@@ -1314,7 +1318,9 @@ export function findBoardMigrationDuplicates(
         keptState: winner.state,
         droppedState: loser.state,
         reason: tied
-          ? `tie → bare by convention at updatedAt ${winner.updatedAt}`
+          ? winnerSuffixed
+            ? `tie → twin by #83 order at updatedAt ${winner.updatedAt}`
+            : `tie → bare by convention at updatedAt ${winner.updatedAt}`
           : winnerSuffixed
             ? `twin newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`
             : `bare newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
@@ -3840,13 +3846,14 @@ registerAidosSessionEventTypes(ctx);
     // A refused run unlinks the candidate it created, so a non-empty file
     // here is a BLESSED candidate from an earlier success: loading into it
     // would merge two exports, never refresh one. Refused before the
-    // loader opens the file — a 0-byte residue from an abandoned run is
-    // not a candidate and the run proceeds. Removal is the owner's
-    // explicit filesystem act, never this tool's.
+    // loader opens the file — statSync measures without reading, and a
+    // 0-byte residue from an abandoned run is not a candidate so the run
+    // proceeds. Removal is the owner's explicit filesystem act, never
+    // this tool's.
     if (existsSync(storePath)) {
       let priorBytes = -1;
       try {
-        priorBytes = readFileSync(storePath, "utf8").length;
+        priorBytes = statSync(storePath).size;
       } catch {
         priorBytes = -1;
       }
@@ -3917,6 +3924,9 @@ registerAidosSessionEventTypes(ctx);
     // structurally impossible through the bracket, and refused all the same.
     const exportLoss: Array<{ slug: string; title: string }> = [];
     const exoneratedDuplicates: Array<{ droppedSlug: string; keptSlug: string }> = [];
+    // Drops whose certified keeper the candidate does NOT hold: named in
+    // the refusal so the absent keeper is visible, not inferable.
+    const missingKeepers: Array<{ droppedSlug: string; keptSlug: string }> = [];
     const drift: Array<{ slug: string; title: string }> = [];
     // Dropped slug → kept slug, from the export's own resolutions: the
     // only exoneration the real run trusts, and only when the candidate
@@ -3948,11 +3958,18 @@ registerAidosSessionEventTypes(ctx);
         continue;
       }
       // Certified at export time as this keeper's duplicate, and the
-      // candidate holds the keeper: exonerated, never refused.
+      // candidate holds the keeper: exonerated, never refused. When the
+      // keeper itself is absent (hand-trimmed), the drop is NOT
+      // exonerated — and the refusal names the absent keeper alongside
+      // the drop, so the message explains the loss instead of merely
+      // listing it.
       const keeper = keeperByDroppedSlug.get(winner.slug);
       if (keeper !== undefined && candidateSlugs.has(keeper)) {
         exoneratedDuplicates.push({ droppedSlug: winner.slug, keptSlug: keeper });
         continue;
+      }
+      if (keeper !== undefined) {
+        missingKeepers.push({ droppedSlug: winner.slug, keptSlug: keeper });
       }
       exportLoss.push(named(winner.slug, winner.title));
     }
@@ -3963,8 +3980,14 @@ registerAidosSessionEventTypes(ctx);
     if (exportLoss.length > 0) {
       abandonCandidate();
       const names = exportLoss.map((entry) => entry.slug).join(", ");
+      // Quoted slugs: a bare "dupe" assertion must never pass as a
+      // substring of its twin "dupe-2" — the quotes make each name exact.
+      const keeperNote =
+        missingKeepers.length > 0
+          ? `; certified keeper(s) absent from the candidate: ${missingKeepers.map((pair) => `"${pair.keptSlug}" (named keeper of drop "${pair.droppedSlug}")`).join(", ")}`
+          : "";
       throw new Error(
-        `board migration: refusing — ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the candidate lost them (expected when the document was hand-trimmed after the dry run); if the loss is unexpected, re-run the dry run rather than blessing this candidate`,
+        `board migration: refusing — ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the candidate lost them (expected when the document was hand-trimmed after the dry run)${keeperNote}; if the loss is unexpected, re-run the dry run rather than blessing this candidate`,
       );
     }
     fresh.close();

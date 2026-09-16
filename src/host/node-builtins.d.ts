@@ -25,6 +25,8 @@ declare module "fs" {
   export function writeFileSync(path: string, data: string): void;
   export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
+  /** #222: the non-empty candidate gate measures bytes without reading. */
+  export function statSync(path: string): { size: number };
   /** #110: tests resolve tmpdir, which is behind a link on some platforms. */
   export function realpathSync(path: string): string;
   /** #101: link node_modules into a fresh worktree, which has none. */
@@ -44,6 +46,8 @@ declare module "node:fs" {
   export function writeFileSync(path: string, data: string): void;
   export function mkdirSync(path: string, options?: { recursive: boolean }): string | undefined;
   export function existsSync(path: string): boolean;
+  /** #222: the non-empty candidate gate measures bytes without reading. */
+  export function statSync(path: string): { size: number };
   /** #110: tests resolve tmpdir, which is behind a link on some platforms. */
   export function realpathSync(path: string): string;
   /** #101: link node_modules into a fresh worktree, which has none. */

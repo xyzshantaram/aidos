@@ -219,6 +219,17 @@ describe("#222 resolution keeps the newer updatedAt on either side", () => {
     expect(pairs[0]!.reason).toContain("tie → bare by convention");
   });
 
+  it("a tie the twin wins names the twin, not the bare convention", () => {
+    // Same clocks, but #83 order prefers the twin's source (lowest
+    // session id): the winner is the twin, so the label must say so.
+    const bare = makeRow({ slug: "tied", title: "Same", state: "open", createdAt: CREATED, updatedAt: UPDATED, oldSource: "session-z" });
+    const twin = makeRow({ slug: "tied-2", title: "Same", state: "open", createdAt: CREATED, updatedAt: UPDATED, oldSource: "session-a" });
+    const { pairs } = findBoardMigrationDuplicates([bare, twin]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]).toMatchObject({ keptSlug: "tied-2", droppedSlug: "tied", nontrivial: false });
+    expect(pairs[0]!.reason).toContain("tie → twin");
+  });
+
   it("chains (S / S-2 / S-3) collapse to the newest, naming every drop", () => {
     const base = makeRow({ slug: "chain", createdAt: CREATED, updatedAt: UPDATED, state: "open" });
     const mid = makeRow({ slug: "chain-2", createdAt: CREATED, updatedAt: UPDATED + 10, state: "in_progress" });
@@ -1103,10 +1114,12 @@ describe("#222 exoneration requires the keeper in the candidate", () => {
       jsonPath,
       storePath,
     });
-    await expect(attempt).rejects.toThrow("dupe");
+    // Exact phrases, quoted: a bare "dupe" must never pass as a substring
+    // of its twin "dupe-2" — the quotes make each name a whole name.
+    await expect(attempt).rejects.toThrow('"dupe" (named keeper of drop "dupe-2")');
     await expect(
       service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath }),
-    ).rejects.toThrow("dupe-2");
+    ).rejects.toThrow('drop "dupe-2"');
     // Nothing blessed: no candidate on disk.
     expect(existsSync(storePath)).toBe(false);
   });

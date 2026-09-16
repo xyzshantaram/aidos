@@ -25438,6 +25438,7 @@ import {
   mkdirSync as mkdirSync3,
   readFileSync,
   readdirSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync
@@ -31823,7 +31824,7 @@ function findBoardMigrationDuplicates(tickets, callerSessionId) {
         droppedTitle: loser.title,
         keptState: winner.state,
         droppedState: loser.state,
-        reason: tied ? `tie \u2192 bare by convention at updatedAt ${winner.updatedAt}` : winnerSuffixed ? `twin newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}` : `bare newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
+        reason: tied ? winnerSuffixed ? `tie \u2192 twin by #83 order at updatedAt ${winner.updatedAt}` : `tie \u2192 bare by convention at updatedAt ${winner.updatedAt}` : winnerSuffixed ? `twin newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}` : `bare newer: kept ${winner.updatedAt} > dropped ${loser.updatedAt}`,
         nontrivial: winner.state !== loser.state || winner.title !== loser.title
       });
     }
@@ -33281,7 +33282,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (existsSync(storePath)) {
       let priorBytes = -1;
       try {
-        priorBytes = readFileSync(storePath, "utf8").length;
+        priorBytes = statSync(storePath).size;
       } catch {
         priorBytes = -1;
       }
@@ -33336,6 +33337,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const humanRemoved = [...exportedSlugs].filter((slug) => !docSlugs.has(slug)).map((slug) => named(slug, liveBySlug.get(slug)?.title ?? "(not on the live board)"));
     const exportLoss = [];
     const exoneratedDuplicates = [];
+    const missingKeepers = [];
     const drift = [];
     const keeperByDroppedSlug = /* @__PURE__ */ new Map();
     if (Array.isArray(exportReport.duplicateResolutions)) {
@@ -33361,6 +33363,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         exoneratedDuplicates.push({ droppedSlug: winner.slug, keptSlug: keeper });
         continue;
       }
+      if (keeper !== void 0) {
+        missingKeepers.push({ droppedSlug: winner.slug, keptSlug: keeper });
+      }
       exportLoss.push(named(winner.slug, winner.title));
     }
     const candidateExtra = [...candidateSlugs].filter((slug) => !liveBySlug.has(slug)).map((slug) => named(slug, doc.tickets.find((ticket) => ticket.slug === slug)?.title ?? "(unknown)"));
@@ -33368,8 +33373,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     if (exportLoss.length > 0) {
       abandonCandidate();
       const names = exportLoss.map((entry) => entry.slug).join(", ");
+      const keeperNote = missingKeepers.length > 0 ? `; certified keeper(s) absent from the candidate: ${missingKeepers.map((pair) => `"${pair.keptSlug}" (named keeper of drop "${pair.droppedSlug}")`).join(", ")}` : "";
       throw new Error(
-        `board migration: refusing \u2014 ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the candidate lost them (expected when the document was hand-trimmed after the dry run); if the loss is unexpected, re-run the dry run rather than blessing this candidate`
+        `board migration: refusing \u2014 ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the candidate lost them (expected when the document was hand-trimmed after the dry run)${keeperNote}; if the loss is unexpected, re-run the dry run rather than blessing this candidate`
       );
     }
     fresh.close();
