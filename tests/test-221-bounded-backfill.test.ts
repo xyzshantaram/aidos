@@ -511,7 +511,7 @@ describe("#221 resume skips sessions the live mirror already owns", () => {
 });
 
 describe("#221 finding B: a real v1 marker no longer freezes the board", () => {
-  it("fresh sessions import once on a v1 store; the marker upgrades with carried counts", async () => {
+  it("fresh sessions import once on a v1 store; the marker upgrades with carried counts", async (ctx) => {
     // A COPY of the real `--home-sid-repos-aidos--` store (v1 marker, 323
     // sessions, 164 tickets — measured read-only) under a throwaway
     // DSH_HOME. The real store is never written. The stub lists ONLY fresh
@@ -535,7 +535,20 @@ describe("#221 finding B: a real v1 marker no longer freezes the board", () => {
       // Pre-state, read directly (test-217 precedent): the v1 marker's facts.
       const preStore = new Store(makeConfig(), { storage: openWorkspaceStorage("/home/sid/repos/aidos") });
       const pre = preStore.backfillReport()!;
-      expect(pre.importerVersion).toBe(1);
+      // This fixture is the REAL store, and the real store's v1 marker is now
+      // GONE: the v1 completion RAN IN PRODUCTION on this machine after a
+      // restart picked up #221 (refusals 0 -> 56, phases 0 -> 14, plan/change
+      // 0 -> 2, one marker -> 37 cumulative batch markers, tickets unchanged
+      // at 166 — exactly what the capped-child rehearsal predicted). That is
+      // the behaviour this test was written to anticipate, and it cannot be
+      // anticipated twice: a completed store can never be v1 again, so from
+      // here this assertion would fail forever on machine state rather than
+      // on code. Skip instead of asserting; the synthetic v1 test below pins
+      // the behaviour reproducibly, and production pinned it at scale.
+      if (pre.importerVersion !== 1) {
+        ctx.skip();
+        return;
+      }
       expect(pre.dropsUnknown).toBe(true);
       expect(pre.sessionIds.length).toBeGreaterThan(100);
       const preTickets = pre.tickets;
