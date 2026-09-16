@@ -281,6 +281,25 @@ export interface BoardMigrationDocument {
   comments: BoardMigrationComment[];
   plan: PlanValue;
   phases: Array<{ number: number; title: string; state: string }>;
+  /**
+   * The export's certification prerequisites, embedded in the file so the
+   * real run can REFUSE an incomplete export instead of blessing it. Set
+   * by the export builder; absent (or hand-stripped) refuses the load —
+   * unknown provenance cannot certify.
+   */
+  exportReport: BoardMigrationExportReport;
+}
+
+/**
+ * #222: what the export saw, for the real run's gates. `retiredExcluded`
+ * counts DISTINCT identities (one retired ticket in two folds counts once);
+ * `exportedSlugs` lets the real run tell owner-deleted rows (humanRemoved,
+ * acknowledged) from walk-missed rows (exportLoss, refused).
+ */
+export interface BoardMigrationExportReport {
+  retiredExcluded: number;
+  backfillVerified: boolean;
+  exportedSlugs: string[];
 }
 
 /** #222: one dependency reference the loader could not resolve. */
@@ -303,6 +322,13 @@ export interface BoardMigrationLoadResult {
   skippedPlans: Array<{ at: number; reason: string }>;
   /** Surviving slug -> the fresh id the store's own counter allocated. */
   newIds: Record<string, TicketId>;
+  /**
+   * Tickets whose `updatedAt` the load dragged forward: `setAt` is the
+   * later of `updatedAt` and the last write (Rule 6 forbids a falling `at`,
+   * so evidence or comments newer than the last ticket edit force it).
+   * Named so a future dedupe never mistakes the drag for newer work.
+   */
+  adjustedUpdatedAt: Array<{ slug: string; from: number; to: number }>;
 }
 
 /**
@@ -2398,9 +2424,13 @@ export class Store {
     }
 
     // Cycle pre-check over the remapped graph: the set validator would
-    // refuse a cycle mid-bracket, and this names the tickets up front.
+    // refuse a cycle mid-bracket, and this names the tickets up front —
+    // both the refs and the slugs, so the message identifies rows a human
+    // can find in the document.
     {
       const liveIds = new Set(newIds.values());
+      const slugOfId = new Map<TicketId, string>();
+      for (const [slug, id] of newIds) slugOfId.set(id, slug);
       const adjacency = new Map<string, string[]>();
       for (const ticket of doc.tickets) {
         const self = `${workspaceKey}:${newIds.get(ticket.slug)}`;
@@ -2427,7 +2457,11 @@ export class Store {
           if (color.get(next) === 2) continue;
           if (color.get(next) === 1) {
             const cycle = [...path.slice(path.indexOf(next)), next];
-            throw new Error(`board migration dependency cycle: ${cycle.join(" -> ")}`);
+            const named = cycle.map((ref) => {
+              const slug = slugOfId.get(Number(ref.slice(ref.lastIndexOf(":") + 1)));
+              return slug === undefined ? ref : `${ref} (${slug})`;
+            });
+            throw new Error(`board migration dependency cycle: ${named.join(" -> ")}`);
           }
           visit(next);
         }
@@ -2458,6 +2492,7 @@ export class Store {
       unresolvedDependencies: unresolved,
       skippedPlans: [],
       newIds: {},
+      adjustedUpdatedAt: [],
     };
     try {
       for (const ticket of doc.tickets) {
@@ -2533,6 +2568,9 @@ export class Store {
           }
         }
         const setAt = Math.max(ticket.updatedAt, lastWriteAt);
+        if (setAt > ticket.updatedAt) {
+          result.adjustedUpdatedAt.push({ slug: ticket.slug, from: ticket.updatedAt, to: setAt });
+        }
         this._emit({
           kind: "ticket/change",
           version: 1,

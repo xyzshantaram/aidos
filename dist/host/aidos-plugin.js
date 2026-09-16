@@ -30068,6 +30068,8 @@ var Store = class {
     }
     {
       const liveIds = new Set(newIds.values());
+      const slugOfId = /* @__PURE__ */ new Map();
+      for (const [slug, id] of newIds) slugOfId.set(id, slug);
       const adjacency = /* @__PURE__ */ new Map();
       for (const ticket of doc.tickets) {
         const self = `${workspaceKey}:${newIds.get(ticket.slug)}`;
@@ -30094,7 +30096,11 @@ var Store = class {
           if (color.get(next) === 2) continue;
           if (color.get(next) === 1) {
             const cycle = [...path.slice(path.indexOf(next)), next];
-            throw new Error(`board migration dependency cycle: ${cycle.join(" -> ")}`);
+            const named = cycle.map((ref) => {
+              const slug = slugOfId.get(Number(ref.slice(ref.lastIndexOf(":") + 1)));
+              return slug === void 0 ? ref : `${ref} (${slug})`;
+            });
+            throw new Error(`board migration dependency cycle: ${named.join(" -> ")}`);
           }
           visit(next);
         }
@@ -30121,7 +30127,8 @@ var Store = class {
       edgesRewritten,
       unresolvedDependencies: unresolved,
       skippedPlans: [],
-      newIds: {}
+      newIds: {},
+      adjustedUpdatedAt: []
     };
     try {
       for (const ticket of doc.tickets) {
@@ -30196,6 +30203,9 @@ var Store = class {
           }
         }
         const setAt = Math.max(ticket.updatedAt, lastWriteAt);
+        if (setAt > ticket.updatedAt) {
+          result.adjustedUpdatedAt.push({ slug: ticket.slug, from: ticket.updatedAt, to: setAt });
+        }
         this._emit({
           kind: "ticket/change",
           version: 1,
@@ -31845,10 +31855,10 @@ function utf8ByteLength(text) {
   }
   return bytes;
 }
-function buildBoardMigrationDocument(input) {
+function selectMigrationWinners(rows, callerSessionId) {
   const groups = /* @__PURE__ */ new Map();
   const groupOrder = [];
-  for (const row of input.rows) {
+  for (const row of rows) {
     const identity = row.workspaceKey + ":" + row.slug;
     const group = groups.get(identity);
     if (group === void 0) {
@@ -31858,7 +31868,7 @@ function buildBoardMigrationDocument(input) {
       group.push(row);
     }
   }
-  const ordering = compareBoardCopiesNewestFirst(input.callerSessionId);
+  const ordering = compareBoardCopiesNewestFirst(callerSessionId);
   const winners = [];
   for (const identity of groupOrder) {
     const group = groups.get(identity);
@@ -31867,6 +31877,10 @@ function buildBoardMigrationDocument(input) {
     );
     winners.push(ranked[0]);
   }
+  return winners;
+}
+function buildBoardMigrationDocument(input) {
+  const winners = selectMigrationWinners(input.rows, input.callerSessionId);
   const { pairs, droppedSlugs } = findBoardMigrationDuplicates(winners, input.callerSessionId);
   const survivors = winners.filter((row) => !droppedSlugs.has(row.workspaceKey + ":" + row.slug));
   const survivorKeys = new Set(survivors.map((row) => row.workspaceKey + ":" + row.slug));
@@ -32041,6 +32055,7 @@ function buildBoardMigrationDocument(input) {
   });
   docTickets.sort((a, b) => a.phase - b.phase || a.order - b.order || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
   const planJson = JSON.stringify(input.plan);
+  const retiredExcluded = new Set(input.retiredIdentities).size;
   const doc = {
     version: MIGRATION_DOCUMENT_VERSION,
     exportedAt: input.exportedAt,
@@ -32051,7 +32066,12 @@ function buildBoardMigrationDocument(input) {
     evidence: keptEvidence,
     comments: keptComments,
     plan: deepClone(input.plan),
-    phases: input.phases.map((phase) => ({ ...phase }))
+    phases: input.phases.map((phase) => ({ ...phase })),
+    exportReport: {
+      retiredExcluded,
+      backfillVerified: input.backfillVerified,
+      exportedSlugs: docTickets.map((ticket) => ticket.slug)
+    }
   };
   const report = {
     boardInputRows: input.rows.length,
@@ -32071,7 +32091,7 @@ function buildBoardMigrationDocument(input) {
     depsResolved,
     depsUnresolved,
     refusals: "not migrated, by owner decision: the 40 refusals die at cutover, no refusals table is built",
-    retiredExcluded: input.retiredExcluded,
+    retiredExcluded,
     plan: {
       frontmatterBytes: utf8ByteLength(input.plan.frontmatter),
       preambleBytes: utf8ByteLength(input.plan.context.preamble),
@@ -33170,21 +33190,28 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const jsonPath = args?.jsonPath ?? join(storageDir, "board-migration.json");
     const defaultStorePath = join(storageDir, "board.migrated.db");
     if (dryRun) {
+      const storeFileExists = existsSync(storePathForWorkspace(cwd));
       const copies = this._migrationExportCopies(agent, cwd, workspaceKey);
-      const planSource = this._planProjectSource(this._boardAgent(agent), void 0);
-      const planState = planSource.state;
-      const planRow = planState.plans.get(planSource.projectId);
-      const meta3 = this._planMetaOf(planSource.projectId, planState);
-      const plan = {
-        frontmatter: meta3.frontmatter,
-        context: {
-          preamble: meta3.preamble,
-          contextSections: meta3.contextSections.map((section) => ({ ...section }))
-        },
-        rules: planRow?.rules ?? ""
-      };
-      const phaseRows = planState.phases.get(planSource.projectId);
+      const storeEntryForPlan = storeFileExists ? this._workspaceStore(agent) : null;
+      const planSource = this._migrationPlanSource(this._boardAgent(agent), cwd, storeEntryForPlan);
+      let plan;
+      if (planSource === null) {
+        plan = { frontmatter: "", context: { preamble: "", contextSections: [] }, rules: "" };
+      } else {
+        const meta3 = this._planMetaOf(planSource.projectId, planSource.state);
+        const planRow = planSource.state.plans.get(planSource.projectId);
+        plan = {
+          frontmatter: meta3.frontmatter,
+          context: {
+            preamble: meta3.preamble,
+            contextSections: meta3.contextSections.map((section) => ({ ...section }))
+          },
+          rules: planRow?.rules ?? ""
+        };
+      }
+      const phaseRows = planSource === null ? void 0 : planSource.state.phases.get(planSource.projectId);
       const phases = phaseRows === void 0 ? [] : [...phaseRows.entries()].sort((a, b) => a[0] - b[0]).map(([number4, phase]) => ({ number: number4, title: phase.title, state: phase.state }));
+      const backfillVerified = this._isBackfillVerified(agent);
       const { doc: doc2, report } = buildBoardMigrationDocument({
         workspaceKey,
         absPath: cwd,
@@ -33196,7 +33223,8 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         comments: copies.comments,
         plan,
         phases,
-        retiredExcluded: copies.retiredExcluded
+        retiredIdentities: copies.retiredIdentities,
+        backfillVerified
       });
       mkdirSync3(dirname2(jsonPath), { recursive: true });
       writeFileSync(jsonPath, JSON.stringify(doc2, null, 2) + "\n");
@@ -33204,7 +33232,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         dryRun: true,
         jsonPath,
         defaultStorePath,
-        backfillVerified: this._isBackfillVerified(agent),
+        backfillVerified,
         report
       };
     }
@@ -33216,9 +33244,30 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         `board migration: cannot read ${jsonPath} \u2014 run a dry run first, then edit the JSON by hand: ${error51 instanceof Error ? error51.message : String(error51)}`
       );
     }
+    const exportReport = doc.exportReport;
+    if (exportReport === void 0 || typeof exportReport.retiredExcluded !== "number" || typeof exportReport.backfillVerified !== "boolean" || !Array.isArray(exportReport.exportedSlugs)) {
+      throw new Error(
+        `board migration: ${jsonPath} carries no export report \u2014 run a dry run first (it embeds the export's certification prerequisites) and edit the tickets, not the header`
+      );
+    }
     if (doc.workspaceKey !== workspaceKey) {
       throw new Error(
         `board migration: document workspace ${JSON.stringify(doc.workspaceKey)} does not match this workspace ${JSON.stringify(workspaceKey)}`
+      );
+    }
+    if (exportReport.retiredExcluded > 0) {
+      throw new Error(
+        `board migration: refusing an incomplete export \u2014 the dry run excluded ${exportReport.retiredExcluded} retired ticket(s); retired rows are board-invisible but cutover-irreversible, so resolve them before migrating`
+      );
+    }
+    if (exportReport.backfillVerified !== true) {
+      throw new Error(
+        `board migration: refusing an unverified export \u2014 the source backfill had not verified when the dry run exported; re-run the dry run after it verifies`
+      );
+    }
+    if (planContextLineCount(doc.plan) > PLAN_CONTEXT_LIMIT) {
+      throw new Error(
+        `board migration: refusing \u2014 the plan is ${planContextLineCount(doc.plan)} lines, over the ${PLAN_CONTEXT_LIMIT}-line cap, and the loader would skip it and bless a plan-less candidate; trim the plan in the JSON and re-run`
       );
     }
     const storePath = args?.storePath ?? defaultStorePath;
@@ -33227,42 +33276,93 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         `board migration: refusing to write the candidate over the live store ${storePathForWorkspace(cwd)} \u2014 the candidate must be a NEW path`
       );
     }
+    const live = this._migrationExportCopies(agent, cwd, workspaceKey);
+    const liveWinners = selectMigrationWinners(live.rows, agent.session.id);
+    const liveBySlug = new Map(liveWinners.map((winner) => [winner.slug, winner]));
+    const named = (slug, title) => ({ slug, title });
+    const candidateExisted = existsSync(storePath);
     const storage = openSqliteStorage(storePath);
     const fresh = new Store(this._resolvedConfig, { storage });
-    try {
-      const load = fresh.importBoardDocument(doc);
-      const storeTickets = fresh.ticketsFor(load.projectId);
-      const boardRows = doc.tickets.map((ticket) => ({
-        id: load.newIds[ticket.slug],
-        title: ticket.title,
-        workspaceKey: doc.workspaceKey,
-        slug: ticket.slug
-      }));
-      const storeIdentities = /* @__PURE__ */ new Set();
-      for (const snapshot of fresh.state.tickets.values()) {
-        if (snapshot.projectId !== load.projectId) continue;
-        storeIdentities.add(snapshot.workspaceKey + ":" + snapshot.slug);
+    const abandonCandidate = () => {
+      try {
+        fresh.close();
+      } catch {
       }
-      const { missingCount, missing } = boardStoreDivergence(boardRows, storeIdentities);
-      const ticketCountMatches = storeTickets.length === doc.tickets.length;
-      return {
-        dryRun: false,
-        jsonPath,
-        storePath,
-        exportedTicketCount: doc.tickets.length,
-        load,
-        verification: {
-          ticketCountMatches,
-          storeTickets: storeTickets.length,
-          missingCount,
-          missing,
-          lossless: ticketCountMatches && missingCount === 0
-        },
-        note: "candidate verified; swapping it over the live store is the owner's separate action, coordinated with #219 (which deletes the backfill path first)"
-      };
-    } finally {
-      fresh.close();
+      if (!candidateExisted) {
+        for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+          try {
+            unlinkSync(storePath + suffix);
+          } catch {
+          }
+        }
+      }
+    };
+    let load;
+    try {
+      load = fresh.importBoardDocument(doc);
+    } catch (error51) {
+      abandonCandidate();
+      throw error51;
     }
+    if (load.skippedPlans.length > 0) {
+      abandonCandidate();
+      throw new Error(
+        `board migration: refusing \u2014 the loader skipped the plan (${load.skippedPlans[0].reason}); fix the document and re-run`
+      );
+    }
+    const storeTickets = fresh.ticketsFor(load.projectId);
+    const candidateSlugs = /* @__PURE__ */ new Set();
+    for (const snapshot of fresh.state.tickets.values()) {
+      if (snapshot.projectId !== load.projectId) continue;
+      candidateSlugs.add(snapshot.slug);
+    }
+    const docSlugs = new Set(doc.tickets.map((ticket) => ticket.slug));
+    const exportedSlugs = new Set(exportReport.exportedSlugs);
+    const humanRemoved = [...exportedSlugs].filter((slug) => !docSlugs.has(slug)).map((slug) => named(slug, liveBySlug.get(slug)?.title ?? "(not on the live board)"));
+    const exportLoss = [];
+    const drift = [];
+    for (const winner of liveWinners) {
+      if (candidateSlugs.has(winner.slug)) continue;
+      if (docSlugs.has(winner.slug)) {
+        exportLoss.push(named(winner.slug, winner.title));
+        continue;
+      }
+      if (exportedSlugs.has(winner.slug)) continue;
+      if (winner.createdAt > doc.exportedAt) {
+        drift.push(named(winner.slug, winner.title));
+        continue;
+      }
+      exportLoss.push(named(winner.slug, winner.title));
+    }
+    const candidateExtra = [...candidateSlugs].filter((slug) => !liveBySlug.has(slug)).map((slug) => named(slug, doc.tickets.find((ticket) => ticket.slug === slug)?.title ?? "(unknown)"));
+    const ticketCountMatches = storeTickets.length === doc.tickets.length;
+    if (exportLoss.length > 0) {
+      abandonCandidate();
+      const names = exportLoss.map((entry) => entry.slug).join(", ");
+      throw new Error(
+        `board migration: refusing \u2014 ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the export lost them, so re-run the dry run rather than blessing this candidate`
+      );
+    }
+    fresh.close();
+    return {
+      dryRun: false,
+      jsonPath,
+      storePath,
+      exportedTicketCount: doc.tickets.length,
+      load,
+      verification: {
+        ticketCountMatches,
+        storeTickets: storeTickets.length,
+        boardRows: liveWinners.length,
+        exportLoss,
+        drift,
+        humanRemoved,
+        candidateExtra,
+        adjustedUpdatedAt: load.adjustedUpdatedAt,
+        lossless: ticketCountMatches && exportLoss.length === 0 && drift.length === 0 && humanRemoved.length === 0
+      },
+      note: "candidate verified board-complete; swapping it over the live store is the owner's separate action, coordinated with #219 (which deletes the backfill path first)"
+    };
   }
   /**
    * #222: walk the merged board's three sources with provenance attached.
@@ -33279,7 +33379,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const rows = [];
     const evidence = [];
     const comments = [];
-    let retiredExcluded = 0;
+    const retiredIdentities = [];
     let projectName = basename(cwd);
     const pushState = (state, oldSource) => {
       for (const project of state.projects.values()) {
@@ -33291,7 +33391,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       for (const snapshot of state.tickets.values()) {
         if (snapshot.workspaceKey !== workspaceKey) continue;
         if (this._isRetired(state, snapshot.id)) {
-          retiredExcluded += 1;
+          retiredIdentities.push(snapshot.workspaceKey + ":" + snapshot.slug);
           continue;
         }
         rows.push({
@@ -33357,7 +33457,39 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       }
     } catch {
     }
-    return { rows, evidence, comments, retiredExcluded, projectName };
+    retiredIdentities.sort();
+    return { rows, evidence, comments, retiredIdentities, projectName };
+  }
+  /**
+   * #222: the migration's plan source — the same project resolution the
+   * `planMeta` Remote reads (`_planProjectSource`), but creating NOTHING.
+   * `_planProjectSource` reaches the store through the first-open seam,
+   * which creates the store file (and its project row) when absent — the
+   * exact side effect the review caught the dry run leaving behind. This
+   * takes an already-opened store entry (or null when no file exists) and
+   * never opens one itself; with no project anywhere it answers null and
+   * the export carries an empty plan and no phases.
+   */
+  _migrationPlanSource(reader, cwd, storeEntry) {
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    let foldProjectId = null;
+    for (const [id, project] of cache.state.projects) {
+      if (project.absPath === cwd) {
+        foldProjectId = id;
+        break;
+      }
+    }
+    if (foldProjectId !== null && this._ticketsFor(foldProjectId, cache.state).length > 0) {
+      return { projectId: foldProjectId, state: cache.state };
+    }
+    if (storeEntry !== null && this._ticketsFor(storeEntry.projectId, storeEntry.store.state).length > 0) {
+      return { projectId: storeEntry.projectId, state: storeEntry.store.state };
+    }
+    if (foldProjectId !== null) {
+      return { projectId: foldProjectId, state: cache.state };
+    }
+    return null;
   }
   async retiredTickets(agent, args) {
     void args;

@@ -1332,8 +1332,14 @@ export interface BuildBoardMigrationInput {
   /** Live plan_meta (frontmatter, preamble, sections) plus live rules. */
   plan: PlanValue;
   phases: Array<{ number: number; title: string; state: string }>;
-  /** Retired rows skipped at the walk, censused so the report is exact. */
-  retiredExcluded: number;
+  /**
+   * Retired identities skipped at the walk (`workspaceKey:slug`), censused
+   * so the report is exact — and embedded in the file so the real run can
+   * refuse an export that excluded any.
+   */
+  retiredIdentities: string[];
+  /** Whether the source backfill had verified when the export ran. */
+  backfillVerified: boolean;
 }
 
 /** The export report: every stage counted, nothing asserted. */
@@ -1394,8 +1400,29 @@ export interface BoardMigrationRunResult {
   verification: {
     ticketCountMatches: boolean;
     storeTickets: number;
-    missingCount: number;
-    missing: StoreCoverageMissing[];
+    /** Live board winners at real-run time — the side export loss is visible on. */
+    boardRows: number;
+    /**
+     * Board rows predating the export and missing from the candidate.
+     * Always empty on success (non-empty refuses); kept in the shape so
+     * the check's execution is observable, not implied.
+     */
+    exportLoss: Array<{ slug: string; title: string }>;
+    /** Born after the export and missing from the candidate: expected on a live board, named, never refused. */
+    drift: Array<{ slug: string; title: string }>;
+    /** In the export report but cut from the document by hand: acknowledged deletions, named, never refused. */
+    humanRemoved: Array<{ slug: string; title: string }>;
+    /** In the candidate but not on the board (hand-added or board-moved): informational only. */
+    candidateExtra: Array<{ slug: string; title: string }>;
+    /** Tickets whose updatedAt the load dragged forward (see the loader): named, never silent. */
+    adjustedUpdatedAt: Array<{ slug: string; from: number; to: number }>;
+    /**
+     * STRICT board-completeness: true only when the candidate holds every
+     * live-board row by slug identity — gates pass, counts match, and
+     * exportLoss, drift and humanRemoved are all empty. Anything less is
+     * false with the exact gap named above. It never answers a narrower
+     * question than the one being asked.
+     */
     lossless: boolean;
   };
   note: string;
@@ -1425,15 +1452,19 @@ function utf8ByteLength(text: string): number {
   return bytes;
 }
 
-export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
-  doc: BoardMigrationDocument;
-  report: BoardMigrationReport;
-} {
-  // Winner selection per identity, newest first — the #83 rule, so the
-  // export carries the field values the board shows.
+/**
+ * #222: winner selection per identity, newest first — the #83 rule, so the
+ * export carries the field values the board shows. Shared by the export
+ * builder and the real run's live-board comparison, so both sides resolve
+ * copies identically.
+ */
+export function selectMigrationWinners(
+  rows: readonly MigrationExportRow[],
+  callerSessionId: string,
+): MigrationExportRow[] {
   const groups = new Map<string, MigrationExportRow[]>();
   const groupOrder: string[] = [];
-  for (const row of input.rows) {
+  for (const row of rows) {
     const identity = row.workspaceKey + ":" + row.slug;
     const group = groups.get(identity);
     if (group === undefined) {
@@ -1443,7 +1474,7 @@ export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
       group.push(row);
     }
   }
-  const ordering = compareBoardCopiesNewestFirst(input.callerSessionId);
+  const ordering = compareBoardCopiesNewestFirst(callerSessionId);
   const winners: MigrationExportRow[] = [];
   for (const identity of groupOrder) {
     const group = groups.get(identity)!;
@@ -1452,6 +1483,14 @@ export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
     );
     winners.push(ranked[0]!);
   }
+  return winners;
+}
+
+export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
+  doc: BoardMigrationDocument;
+  report: BoardMigrationReport;
+} {
+  const winners = selectMigrationWinners(input.rows, input.callerSessionId);
 
   // The refined duplicate rule over the winners: identity by stem plus
   // createdAt, resolution by newest updatedAt — either side may survive
@@ -1662,6 +1701,9 @@ export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
   docTickets.sort((a, b) => a.phase - b.phase || a.order - b.order || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
 
   const planJson = JSON.stringify(input.plan);
+  // DISTINCT identities here too: the walk may hand the same identity
+  // twice, and the gate reads this count — copies must never trip it.
+  const retiredExcluded = new Set(input.retiredIdentities).size;
   const doc: BoardMigrationDocument = {
     version: MIGRATION_DOCUMENT_VERSION,
     exportedAt: input.exportedAt,
@@ -1673,6 +1715,11 @@ export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
     comments: keptComments,
     plan: deepClone(input.plan),
     phases: input.phases.map((phase) => ({ ...phase })),
+    exportReport: {
+      retiredExcluded,
+      backfillVerified: input.backfillVerified,
+      exportedSlugs: docTickets.map((ticket) => ticket.slug),
+    },
   };
   const report: BoardMigrationReport = {
     boardInputRows: input.rows.length,
@@ -1692,7 +1739,7 @@ export function buildBoardMigrationDocument(input: BuildBoardMigrationInput): {
     depsResolved,
     depsUnresolved,
     refusals: "not migrated, by owner decision: the 40 refusals die at cutover, no refusals table is built",
-    retiredExcluded: input.retiredExcluded,
+    retiredExcluded,
     plan: {
       frontmatterBytes: utf8ByteLength(input.plan.frontmatter),
       preambleBytes: utf8ByteLength(input.plan.context.preamble),
@@ -3626,17 +3673,29 @@ registerAidosSessionEventTypes(ctx);
    * - dry run (`dryRun: true`, the default): walks the merged board's three
    *   sources with provenance attached, builds the JSON document, writes it
    *   to `jsonPath` for the human EDIT step, and returns the full report.
-   *   It writes NO store: the store side opens only when its file already
-   *   exists (#44's existsSync rule — a dry run must never create a store
-   *   as a side effect), and it kicks no backfill (unlike every board read,
-   *   which is exactly why this walk is separate from the merge).
-   * - real run (`dryRun: false`): READS the JSON back (hand-edits apply),
-   *   loads it into the NEW store path with fresh ids from the store's own
-   *   counter, and verifies before returning: ticket count equality plus
-   *   the `storeCoverage` identity check (`missingCount: 0`) against the
-   *   candidate. Swapping the candidate over the live store is the owner's
-   *   separate action, coordinated with #219 (which deletes the backfill
-   *   path — without that, opening the candidate would re-import).
+   *   It writes NO store and creates NO store file: the store side opens
+   *   only when its file already exists (#44's existsSync rule), the plan
+   *   source never reaches the first-open seam (`_migrationPlanSource`,
+   *   not `_planProjectSource`), and it kicks no backfill (unlike every
+   *   board read, which is exactly why this walk is separate from the
+   *   merge). A dry run on an unverified backfill says so in its report
+   *   rather than fixing it: verification belongs to board reads, and the
+   *   real run refuses an unverified export.
+   * - real run (`dryRun: false`): READS the JSON back (hand-edits apply)
+   *   and certifies BOARD-completeness, not just loader fidelity. It
+   *   refuses — throws, blessing nothing — when the export could not have
+   *   been complete (retired rows excluded, unverified source backfill, or
+   *   an over-cap plan the loader would skip), and it compares the LIVE
+   *   board against the candidate so export loss is visible to it. Rows
+   *   born after the export are reported as drift (expected on a live
+   *   board, never refused); rows the owner cut by hand are reported as
+   *   humanRemoved (acknowledged, never refused). `lossless: true` means
+   *   the candidate holds every live-board row by slug identity — gates
+   *   pass, counts match, and exportLoss, drift and humanRemoved are all
+   *   empty — and it never answers a narrower question than that.
+   *   Swapping the candidate over the live store is the owner's separate
+   *   action, coordinated with #219 (which deletes the backfill path —
+   *   without that, opening the candidate would re-import).
    */
   @Remote("migrateBoardToFreshStore")
   async migrateBoardToFreshStore(
@@ -3651,25 +3710,35 @@ registerAidosSessionEventTypes(ctx);
     const defaultStorePath = join(storageDir, "board.migrated.db");
 
     if (dryRun) {
+      const storeFileExists = existsSync(storePathForWorkspace(cwd));
       const copies = this._migrationExportCopies(agent, cwd, workspaceKey);
-      const planSource = this._planProjectSource(this._boardAgent(agent), undefined);
-      const planState = planSource.state;
-      const planRow = planState.plans.get(planSource.projectId);
-      const meta = this._planMetaOf(planSource.projectId, planState);
-      const plan: PlanValue = {
-        frontmatter: meta.frontmatter,
-        context: {
-          preamble: meta.preamble,
-          contextSections: meta.contextSections.map((section) => ({ ...section })),
-        },
-        rules: planRow?.rules ?? "",
-      };
-      const phaseRows = planState.phases.get(planSource.projectId);
+      // The plan source that creates nothing (see _migrationPlanSource):
+      // with no store file the board is folds-only and the plan comes
+      // from the fold project or defaults to empty.
+      const storeEntryForPlan = storeFileExists ? this._workspaceStore(agent) : null;
+      const planSource = this._migrationPlanSource(this._boardAgent(agent), cwd, storeEntryForPlan);
+      let plan: PlanValue;
+      if (planSource === null) {
+        plan = { frontmatter: "", context: { preamble: "", contextSections: [] }, rules: "" };
+      } else {
+        const meta = this._planMetaOf(planSource.projectId, planSource.state);
+        const planRow = planSource.state.plans.get(planSource.projectId);
+        plan = {
+          frontmatter: meta.frontmatter,
+          context: {
+            preamble: meta.preamble,
+            contextSections: meta.contextSections.map((section) => ({ ...section })),
+          },
+          rules: planRow?.rules ?? "",
+        };
+      }
+      const phaseRows = planSource === null ? undefined : planSource.state.phases.get(planSource.projectId);
       const phases = phaseRows === undefined
         ? []
         : [...phaseRows.entries()]
           .sort((a, b) => a[0] - b[0])
           .map(([number, phase]) => ({ number, title: phase.title, state: phase.state }));
+      const backfillVerified = this._isBackfillVerified(agent);
       const { doc, report } = buildBoardMigrationDocument({
         workspaceKey,
         absPath: cwd,
@@ -3681,7 +3750,8 @@ registerAidosSessionEventTypes(ctx);
         comments: copies.comments,
         plan,
         phases,
-        retiredExcluded: copies.retiredExcluded,
+        retiredIdentities: copies.retiredIdentities,
+        backfillVerified,
       });
       mkdirSync(dirname(jsonPath), { recursive: true });
       writeFileSync(jsonPath, JSON.stringify(doc, null, 2) + "\n");
@@ -3689,14 +3759,17 @@ registerAidosSessionEventTypes(ctx);
         dryRun: true as const,
         jsonPath,
         defaultStorePath,
-        backfillVerified: this._isBackfillVerified(agent),
+        backfillVerified,
         report,
       };
     }
 
     // The real run is file-driven: the JSON the dry run produced, possibly
     // hand-edited since, is the whole input. A missing file is a refusal,
-    // never a silent rebuild (which would discard the human's edits).
+    // never a silent rebuild (which would discard the human's edits). The
+    // certification below is BOARD-relative: the live board is compared
+    // against the candidate, so export loss is visible to it — a
+    // document-relative check would bless a lossy export as lossless.
     let doc: BoardMigrationDocument;
     try {
       doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
@@ -3705,9 +3778,40 @@ registerAidosSessionEventTypes(ctx);
         `board migration: cannot read ${jsonPath} — run a dry run first, then edit the JSON by hand: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    // Unknown provenance cannot certify: the header is what the real run's
+    // gates read, so a file without it is refused, never assumed complete.
+    const exportReport = (doc as Partial<BoardMigrationDocument>).exportReport;
+    if (
+      exportReport === undefined ||
+      typeof exportReport.retiredExcluded !== "number" ||
+      typeof exportReport.backfillVerified !== "boolean" ||
+      !Array.isArray(exportReport.exportedSlugs)
+    ) {
+      throw new Error(
+        `board migration: ${jsonPath} carries no export report — run a dry run first (it embeds the export's certification prerequisites) and edit the tickets, not the header`,
+      );
+    }
     if (doc.workspaceKey !== workspaceKey) {
       throw new Error(
         `board migration: document workspace ${JSON.stringify(doc.workspaceKey)} does not match this workspace ${JSON.stringify(workspaceKey)}`,
+      );
+    }
+    // Pre-load refusals, before the candidate is touched: a migration that
+    // knows it might be incomplete must not produce a candidate at all,
+    // let alone one that says lossless.
+    if (exportReport.retiredExcluded > 0) {
+      throw new Error(
+        `board migration: refusing an incomplete export — the dry run excluded ${exportReport.retiredExcluded} retired ticket(s); retired rows are board-invisible but cutover-irreversible, so resolve them before migrating`,
+      );
+    }
+    if (exportReport.backfillVerified !== true) {
+      throw new Error(
+        `board migration: refusing an unverified export — the source backfill had not verified when the dry run exported; re-run the dry run after it verifies`,
+      );
+    }
+    if (planContextLineCount(doc.plan) > PLAN_CONTEXT_LIMIT) {
+      throw new Error(
+        `board migration: refusing — the plan is ${planContextLineCount(doc.plan)} lines, over the ${PLAN_CONTEXT_LIMIT}-line cap, and the loader would skip it and bless a plan-less candidate; trim the plan in the JSON and re-run`,
       );
     }
     const storePath = args?.storePath ?? defaultStorePath;
@@ -3716,42 +3820,118 @@ registerAidosSessionEventTypes(ctx);
         `board migration: refusing to write the candidate over the live store ${storePathForWorkspace(cwd)} — the candidate must be a NEW path`,
       );
     }
+    // The live board side, through the same walk and the same winner
+    // selection as the export, so both sides resolve copies identically.
+    const live = this._migrationExportCopies(agent, cwd, workspaceKey);
+    const liveWinners = selectMigrationWinners(live.rows, agent.session.id);
+    const liveBySlug = new Map(liveWinners.map((winner) => [winner.slug, winner]));
+    const named = (slug: string, title: string): { slug: string; title: string } => ({ slug, title });
+    // What this run created it may also remove: a refused candidate stays
+    // on disk unblessed, which is exactly the misuse this migration
+    // exists to prevent. A pre-existing file is left alone and named.
+    const candidateExisted = existsSync(storePath);
     const storage = openSqliteStorage(storePath);
     const fresh = new Store(this._resolvedConfig, { storage });
-    try {
-      const load = fresh.importBoardDocument(doc);
-      const storeTickets = fresh.ticketsFor(load.projectId);
-      const boardRows = doc.tickets.map((ticket) => ({
-        id: load.newIds[ticket.slug]!,
-        title: ticket.title,
-        workspaceKey: doc.workspaceKey,
-        slug: ticket.slug,
-      }));
-      const storeIdentities = new Set<string>();
-      for (const snapshot of fresh.state.tickets.values()) {
-        if (snapshot.projectId !== load.projectId) continue;
-        storeIdentities.add(snapshot.workspaceKey + ":" + snapshot.slug);
+    const abandonCandidate = (): void => {
+      try {
+        fresh.close();
+      } catch {
+        // Already closed; the unlink below is what matters.
       }
-      const { missingCount, missing } = boardStoreDivergence(boardRows, storeIdentities);
-      const ticketCountMatches = storeTickets.length === doc.tickets.length;
-      return {
-        dryRun: false as const,
-        jsonPath,
-        storePath,
-        exportedTicketCount: doc.tickets.length,
-        load,
-        verification: {
-          ticketCountMatches,
-          storeTickets: storeTickets.length,
-          missingCount,
-          missing,
-          lossless: ticketCountMatches && missingCount === 0,
-        },
-        note: "candidate verified; swapping it over the live store is the owner's separate action, coordinated with #219 (which deletes the backfill path first)",
-      };
-    } finally {
-      fresh.close();
+      if (!candidateExisted) {
+        for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+          try {
+            unlinkSync(storePath + suffix);
+          } catch {
+            // Best-effort: the throw below already names the path.
+          }
+        }
+      }
+    };
+    let load: BoardMigrationLoadResult;
+    try {
+      load = fresh.importBoardDocument(doc);
+    } catch (error) {
+      abandonCandidate();
+      throw error;
     }
+    if (load.skippedPlans.length > 0) {
+      abandonCandidate();
+      throw new Error(
+        `board migration: refusing — the loader skipped the plan (${load.skippedPlans[0]!.reason}); fix the document and re-run`,
+      );
+    }
+    const storeTickets = fresh.ticketsFor(load.projectId);
+    const candidateSlugs = new Set<string>();
+    for (const snapshot of fresh.state.tickets.values()) {
+      if (snapshot.projectId !== load.projectId) continue;
+      candidateSlugs.add(snapshot.slug);
+    }
+    const docSlugs = new Set(doc.tickets.map((ticket) => ticket.slug));
+    const exportedSlugs = new Set(exportReport.exportedSlugs);
+    // Owner-deleted rows (in the export, cut from the document by hand):
+    // acknowledged deletions, named, never refused — but they gate
+    // lossless, because the candidate does not hold the whole board.
+    const humanRemoved = [...exportedSlugs]
+      .filter((slug) => !docSlugs.has(slug))
+      .map((slug) => named(slug, liveBySlug.get(slug)?.title ?? "(not on the live board)"));
+    // Board rows the candidate lacks: unacknowledged loss when they predate
+    // the export (refused), expected drift when born after it (reported).
+    // A row the document lists but the candidate lacks is loader loss —
+    // structurally impossible through the bracket, and refused all the same.
+    const exportLoss: Array<{ slug: string; title: string }> = [];
+    const drift: Array<{ slug: string; title: string }> = [];
+    for (const winner of liveWinners) {
+      if (candidateSlugs.has(winner.slug)) continue;
+      if (docSlugs.has(winner.slug)) {
+        // The document lists it but the candidate lacks it: loader loss,
+        // structurally impossible through the bracket — refused all the same.
+        exportLoss.push(named(winner.slug, winner.title));
+        continue;
+      }
+      // In the export but cut from the document by hand: acknowledged above.
+      if (exportedSlugs.has(winner.slug)) continue;
+      if (winner.createdAt > doc.exportedAt) {
+        drift.push(named(winner.slug, winner.title));
+        continue;
+      }
+      exportLoss.push(named(winner.slug, winner.title));
+    }
+    const candidateExtra = [...candidateSlugs]
+      .filter((slug) => !liveBySlug.has(slug))
+      .map((slug) => named(slug, doc.tickets.find((ticket) => ticket.slug === slug)?.title ?? "(unknown)"));
+    const ticketCountMatches = storeTickets.length === doc.tickets.length;
+    if (exportLoss.length > 0) {
+      abandonCandidate();
+      const names = exportLoss.map((entry) => entry.slug).join(", ");
+      throw new Error(
+        `board migration: refusing — ${exportLoss.length} board row(s) predate the export but are missing from the candidate (${names}); the export lost them, so re-run the dry run rather than blessing this candidate`,
+      );
+    }
+    fresh.close();
+    return {
+      dryRun: false as const,
+      jsonPath,
+      storePath,
+      exportedTicketCount: doc.tickets.length,
+      load,
+      verification: {
+        ticketCountMatches,
+        storeTickets: storeTickets.length,
+        boardRows: liveWinners.length,
+        exportLoss,
+        drift,
+        humanRemoved,
+        candidateExtra,
+        adjustedUpdatedAt: load.adjustedUpdatedAt,
+        lossless:
+          ticketCountMatches &&
+          exportLoss.length === 0 &&
+          drift.length === 0 &&
+          humanRemoved.length === 0,
+      },
+      note: "candidate verified board-complete; swapping it over the live store is the owner's separate action, coordinated with #219 (which deletes the backfill path first)",
+    };
   }
 
   /**
@@ -3773,13 +3953,16 @@ registerAidosSessionEventTypes(ctx);
     rows: MigrationExportRow[];
     evidence: MigrationExportEvidence[];
     comments: MigrationExportComment[];
-    retiredExcluded: number;
+    retiredIdentities: string[];
     projectName: string;
   } {
     const rows: MigrationExportRow[] = [];
     const evidence: MigrationExportEvidence[] = [];
     const comments: MigrationExportComment[] = [];
-    let retiredExcluded = 0;
+    // One entry per retired copy; the BUILDER counts distinct identities
+    // (that count gates a refusal, so the exactness lives there, pinned by
+    // its own test — a copy census here must never become the gate).
+    const retiredIdentities: string[] = [];
     let projectName = basename(cwd);
     const pushState = (state: AidosState, oldSource: string): void => {
       for (const project of state.projects.values()) {
@@ -3791,7 +3974,7 @@ registerAidosSessionEventTypes(ctx);
       for (const snapshot of state.tickets.values()) {
         if (snapshot.workspaceKey !== workspaceKey) continue;
         if (this._isRetired(state, snapshot.id)) {
-          retiredExcluded += 1;
+          retiredIdentities.push(snapshot.workspaceKey + ":" + snapshot.slug);
           continue;
         }
         rows.push({
@@ -3860,7 +4043,47 @@ registerAidosSessionEventTypes(ctx);
     } catch {
       // The store side is best-effort here; the report carries what ran.
     }
-    return { rows, evidence, comments, retiredExcluded, projectName };
+    retiredIdentities.sort();
+    return { rows, evidence, comments, retiredIdentities, projectName };
+  }
+
+  /**
+   * #222: the migration's plan source — the same project resolution the
+   * `planMeta` Remote reads (`_planProjectSource`), but creating NOTHING.
+   * `_planProjectSource` reaches the store through the first-open seam,
+   * which creates the store file (and its project row) when absent — the
+   * exact side effect the review caught the dry run leaving behind. This
+   * takes an already-opened store entry (or null when no file exists) and
+   * never opens one itself; with no project anywhere it answers null and
+   * the export carries an empty plan and no phases.
+   */
+  private _migrationPlanSource(
+    reader: Agent,
+    cwd: string,
+    storeEntry: { store: Store; projectId: ProjectId } | null,
+  ): { projectId: ProjectId; state: AidosState } | null {
+    const cache = this._cache(reader.session);
+    this._sync(reader.session, cache);
+    let foldProjectId: ProjectId | null = null;
+    for (const [id, project] of cache.state.projects) {
+      if (project.absPath === cwd) {
+        foldProjectId = id;
+        break;
+      }
+    }
+    if (foldProjectId !== null && this._ticketsFor(foldProjectId, cache.state).length > 0) {
+      return { projectId: foldProjectId, state: cache.state };
+    }
+    if (
+      storeEntry !== null &&
+      this._ticketsFor(storeEntry.projectId, storeEntry.store.state).length > 0
+    ) {
+      return { projectId: storeEntry.projectId, state: storeEntry.store.state };
+    }
+    if (foldProjectId !== null) {
+      return { projectId: foldProjectId, state: cache.state };
+    }
+    return null;
   }
 
   /**

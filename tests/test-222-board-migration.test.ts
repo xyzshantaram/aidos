@@ -15,12 +15,20 @@
  * than the bare row) resolves to the twin; every non-trivial resolution is
  * named in the report with both sides and the reason.
  *
+ * The real run certifies BOARD-completeness, not loader fidelity: the live
+ * board is compared against the candidate, and the run REFUSES (throws,
+ * blessing nothing) when the export could not have been complete —
+ * retired rows excluded, unverified source backfill, or a plan the loader
+ * would skip. `lossless: true` means the candidate holds every live-board
+ * row by slug identity, and never answers a narrower question than that.
+ *
  * Criterion map (one `it` per line, in order):
  *   identity is stem pair plus identical createdAt —
  *     differing createdAt is no pair even with a matching stem
  *   resolution keeps the newer updatedAt on either side —
  *     bare-newer keeps bare, twin-newer keeps the twin (68/150)
  *   exact ties keep the bare row by convention and are trivial
+ *   chains (S / S-2 / S-3) collapse to the newest, naming every drop
  *   a legitimately-suffixed non-duplicate survives —
  *     same stem shape, differing createdAt (the-one-time-backfill-2)
  *   a suffixed slug with no bare base survives, and a non-numeric
@@ -29,23 +37,37 @@
  *     exact row-identity dupes drop
  *   `builtin:imported_state` evidence is dropped at export and counted
  *   winner selection across copies is newest-wins
+ *   retired census counts distinct identities, and the file embeds it
  *   dependency refs into a dropped row land on the survivor whichever
  *     side survived (bare-kept and twin-kept directions)
  *   an unresolvable ref is carried verbatim AND reported by name
  *   a dep that would remap onto the ticket itself is carried and reported
+ *   a dependency cycle refuses naming the tickets (refs and slugs)
+ *   orphan evidence refuses naming the missing ticket
+ *   a double import refuses before any allocation, changing nothing
+ *   evidence or comments newer than the last edit drag updatedAt,
+ *     recorded by name in load.adjustedUpdatedAt
  *   arbitrary evidence payload keys survive verbatim (float `at` exact)
  *   createdAt/updatedAt floats are preserved exactly through JSON
  *   tags absent stays absent (untagged); tags present are kept
  *   states transfer as-is with no re-gating (done, no evidence)
  *   comments and plan/phases land in the fresh store
  *   the loaded store passes its own coverage check with missingCount 0
- *   a dry run writes no store (candidate absent, live bytes identical)
+ *   a dry run writes no store and creates no store file
+ *   a storeless dry run reports backfillVerified false and exports nothing
  *   a bare call defaults to dry run; the live path is refused as candidate
- *   the real run loads the (edited) JSON and verifies itself
+ *   the real run refuses a retired-excluding export
+ *   the real run refuses an unverified export and a headerless file
+ *   the real run refuses an over-cap plan before touching the candidate
+ *   the real run refuses board-relative export loss and deletes its file
+ *   hand-deleted rows are acknowledged (humanRemoved) without refusal
+ *   rows born after the export are drift (named, lossless false)
+ *   the quiet-board real run is lossless with every list empty
+ *   the live store is untouched by a real run (guard layers, counted)
  */
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,7 +137,8 @@ function makeInput(overrides: Partial<BuildBoardMigrationInput> = {}): BuildBoar
     comments: [],
     plan: TEST_PLAN,
     phases: [{ number: 1, title: "aidos core", state: "open" }],
-    retiredExcluded: 0,
+    retiredIdentities: [],
+    backfillVerified: true,
     ...overrides,
   };
 }
@@ -194,6 +217,18 @@ describe("#222 resolution keeps the newer updatedAt on either side", () => {
     expect(pairs).toHaveLength(1);
     expect(pairs[0]).toMatchObject({ keptSlug: "tied", droppedSlug: "tied-2", nontrivial: false });
   });
+
+  it("chains (S / S-2 / S-3) collapse to the newest, naming every drop", () => {
+    const base = makeRow({ slug: "chain", createdAt: CREATED, updatedAt: UPDATED, state: "open" });
+    const mid = makeRow({ slug: "chain-2", createdAt: CREATED, updatedAt: UPDATED + 10, state: "in_progress" });
+    const tip = makeRow({ slug: "chain-3", createdAt: CREATED, updatedAt: UPDATED + 20, state: "done" });
+    const { pairs, droppedSlugs } = findBoardMigrationDuplicates([base, mid, tip]);
+    expect(pairs).toHaveLength(2);
+    expect(pairs.map((pair) => pair.keptSlug)).toEqual(["chain-3", "chain-3"]);
+    expect(pairs.map((pair) => pair.droppedSlug).sort()).toEqual(["chain", "chain-2"]);
+    expect(droppedSlugs.size).toBe(2);
+    expect(pairs.every((pair) => pair.nontrivial)).toBe(true);
+  });
 });
 
 describe("#222 the export drops losers, forwards unique history, names resolutions", () => {
@@ -262,6 +297,14 @@ describe("#222 the export drops losers, forwards unique history, names resolutio
     expect(doc.tickets).toHaveLength(1);
     expect(doc.tickets[0]!.title).toBe("live");
     expect(doc.tickets[0]!.oldSource).toBe("session-live");
+  });
+
+  it("the retired census counts distinct identities, and the file embeds it", () => {
+    const { doc, report } = buildBoardMigrationDocument(
+      makeInput({ retiredIdentities: [`${KEY}:gone`, `${KEY}:gone`, `${KEY}:also-gone`], backfillVerified: false }),
+    );
+    expect(report.retiredExcluded).toBe(2);
+    expect(doc.exportReport).toMatchObject({ retiredExcluded: 2, backfillVerified: false, exportedSlugs: [] });
   });
 
   it("the 68/150 export keeps the twin and records the non-trivial resolution", () => {
@@ -396,6 +439,54 @@ describe("#222 dependency refs survive the renumbering whichever side wins", () 
     const depId = load.newIds["selfish"]!;
     expect(store.getTicket(depId).dependsOn).toEqual([`${KEY}:83`]);
   });
+
+  it("a dependency cycle refuses naming the tickets", () => {
+    const a = makeRow({ slug: "cycle-a", oldId: 1, oldSource: "s", dependsOn: [`${KEY}:2`] });
+    const b = makeRow({ slug: "cycle-b", oldId: 2, oldSource: "s", dependsOn: [`${KEY}:1`] });
+    const { doc } = buildBoardMigrationDocument(makeInput({ rows: [a, b] }));
+    const store = makeStore(makeConfig(), { now: () => FIXED_NOW, storage: new MemoryStorage() });
+    let message = "";
+    try {
+      store.importBoardDocument(doc);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("board migration dependency cycle");
+    expect(message).toContain("(cycle-a)");
+    expect(message).toContain("(cycle-b)");
+    expect(store.ticketsFor(1)).toHaveLength(0);
+  });
+
+  it("orphan evidence refuses naming the missing ticket", () => {
+    const row = makeRow({ slug: "orphan-host", oldId: 21, oldSource: "s" });
+    const { doc } = buildBoardMigrationDocument(makeInput({ rows: [row] }));
+    doc.evidence.push({ ticketSlug: "no-such-ticket", kind: "builtin:agent_report", author: "agent", at: UPDATED, payload: {} });
+    const store = makeStore(makeConfig(), { now: () => FIXED_NOW, storage: new MemoryStorage() });
+    let message = "";
+    try {
+      store.importBoardDocument(doc);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("no-such-ticket");
+    expect(store.ticketsFor(1)).toHaveLength(0);
+  });
+
+  it("a double import refuses before any allocation, changing nothing", () => {
+    const row = makeRow({ slug: "once", oldId: 31, oldSource: "s" });
+    const { doc } = buildBoardMigrationDocument(makeInput({ rows: [row] }));
+    const store = makeStore(makeConfig(), { now: () => FIXED_NOW, storage: new MemoryStorage() });
+    const first = store.importBoardDocument(doc);
+    expect(first.tickets).toBe(1);
+    let message = "";
+    try {
+      store.importBoardDocument(doc);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("once");
+    expect(store.ticketsFor(first.projectId)).toHaveLength(1);
+  });
 });
 
 describe("#222 the load is a faithful round trip", () => {
@@ -404,6 +495,21 @@ describe("#222 the load is a faithful round trip", () => {
     const load = store.importBoardDocument(doc);
     return { store, load };
   }
+
+  it("evidence newer than the last edit drags updatedAt, recorded by name", () => {
+    const row = makeRow({ slug: "dragged", oldId: 41, oldSource: "s", updatedAt: UPDATED });
+    const { doc } = buildBoardMigrationDocument(
+      makeInput({
+        rows: [row],
+        evidence: [
+          { oldSource: "s", oldId: 41, kind: "builtin:review_note", author: "agent", at: UPDATED + 100, payload: { late: true } },
+        ],
+      }),
+    );
+    const { store, load } = roundTrip(doc);
+    expect(load.adjustedUpdatedAt).toEqual([{ slug: "dragged", from: UPDATED, to: UPDATED + 100 }]);
+    expect(store.state.tickets.get(load.newIds["dragged"]!)!.updatedAt).toBe(UPDATED + 100);
+  });
 
   it("arbitrary evidence payload keys survive verbatim with the float at exact", () => {
     const row = makeRow({ slug: "weird", oldId: 11, oldSource: "session-fork" });
@@ -535,10 +641,69 @@ describe("#222 the Remote never runs automatically and writes new paths only", (
     const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
     expect(doc.version).toBe(1);
     expect(doc.tickets.length).toBeGreaterThanOrEqual(1);
+    expect(doc.exportReport).toMatchObject({ retiredExcluded: 0, backfillVerified: true });
+    expect(doc.exportReport.exportedSlugs).toHaveLength(doc.tickets.length);
     // No candidate store anywhere near the JSON, and no default-path file.
     expect(existsSync(join(jsonPath, "..", "board.migrated.db"))).toBe(false);
     expect(existsSync(out.defaultStorePath)).toBe(false);
     expect(out.report.ticketsExported).toBe(doc.tickets.length);
+  });
+
+  it("a storeless dry run creates no store file and reports unverified", async () => {
+    // No persistence, no tickets: nothing to verify against and nothing to
+    // create. The old plan-source path opened the store here (an empty file
+    // with a project row); the migration must not.
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    const service = harness.service;
+    const jsonPath = tmpJson();
+    const out = await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    expect(out.dryRun).toBe(true);
+    if (!out.dryRun) throw new Error("expected a dry run");
+    expect(out.backfillVerified).toBe(false);
+    const { storePathForWorkspace } = await import("../src/host/storage-sqlite");
+    expect(existsSync(storePathForWorkspace(HARNESS_WS))).toBe(false);
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    expect(doc.tickets).toEqual([]);
+    expect(doc.exportReport.backfillVerified).toBe(false);
+  });
+
+  it("one retired ticket in two folds counts once, and the real run refuses it", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    const ticket = service.userSetTicket(harness.asAgent(), { title: "Doomed" });
+    service.userRetireTicket(harness.asAgent(), { ticketId: ticket.id, reason: "stale" });
+    // A second fold holding the same identity, retired there too.
+    const peer = harness.makeAgent({ id: "session-peer" });
+    (peer.session.header as { cwd?: string }).cwd = HARNESS_WS;
+    const peerStore = makeStore(makeConfig(), { now: () => FIXED_NOW, storage: new MemoryStorage() });
+    const peerProject = peerStore.createProject(HARNESS_WS, "aidos");
+    peerStore.createTicket(peerProject, "Doomed", "Doomed body");
+    for (const event of peerStore.events()) {
+      harness.appendAidosEvent(peer, event);
+    }
+    harness.appendAidosEvent(peer, {
+      kind: "evidence/attached",
+      version: 1,
+      ticketId: 1,
+      row: { kind: "builtin:retired", author: "user", at: FIXED_NOW + 1, payload: { reason: "stale" } },
+    } as never);
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    const dry = await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    expect(dry.dryRun).toBe(true);
+    if (!dry.dryRun) throw new Error("expected a dry run");
+    // Two retired copies, one distinct identity.
+    expect(dry.report.retiredExcluded).toBe(1);
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    expect(doc.exportReport.retiredExcluded).toBe(1);
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: join(dir, "board.migrated.db") }),
+    ).rejects.toThrow("retired");
   });
 
   it("the live path is refused as a candidate, and the real run verifies itself", async () => {
@@ -559,24 +724,208 @@ describe("#222 the Remote never runs automatically and writes new paths only", (
     // The live store path is never a legal candidate.
     const { storePathForWorkspace } = await import("../src/host/storage-sqlite");
     const livePath = storePathForWorkspace(HARNESS_WS);
-    const liveText = existsSync(livePath) ? readFileSync(livePath, "utf8") : null;
     await expect(
       service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: livePath }),
     ).rejects.toThrow("refusing to write the candidate over the live store");
 
     const storePath = join(dir, "board.migrated.db");
+    const before = await service.storeCoverage(harness.asAgent());
     const real = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath });
     expect(real.dryRun).toBe(false);
     if (real.dryRun) throw new Error("expected a real run");
     expect(real.storePath).toBe(storePath);
     expect(real.verification.ticketCountMatches).toBe(true);
-    expect(real.verification.missingCount).toBe(0);
+    expect(real.verification.exportLoss).toEqual([]);
+    expect(real.verification.drift).toEqual([]);
+    expect(real.verification.humanRemoved).toEqual([]);
     expect(real.verification.lossless).toBe(true);
     expect(real.load.edgesRewritten).toBe(1);
-    // The live store is byte-identical: the candidate is a NEW path.
-    if (liveText !== null) {
-      expect(readFileSync(livePath, "utf8")).toBe(liveText);
+    // The evidence attached after the last edit may drag updatedAt forward
+    // (Rule 6) — recorded by name when it does, and it never gates
+    // lossless. Same-millisecond runs drag nothing; either outcome is
+    // honest, so the test pins the shape, not the count.
+    for (const entry of real.verification.adjustedUpdatedAt) {
+      expect(entry.slug).toBe("first");
+      expect(entry.to).toBeGreaterThanOrEqual(entry.from);
     }
+    // The live store is untouched: same rows before and after. Real-live
+    // safety rests on the guard layers (path, workspace, slug, fresh-file
+    // refusal — each pinned above or in the loader tests), which the
+    // reviewer verified manually; the count is the in-harness tripwire.
+    const after = await service.storeCoverage(harness.asAgent());
+    expect(after.storeRows).toBe(before.storeRows);
     expect(existsSync(storePath)).toBe(true);
+  });
+
+  it("a headerless file refuses: unknown provenance cannot certify", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as Record<string, unknown>;
+    delete doc["exportReport"];
+    writeFileSync(jsonPath, JSON.stringify(doc));
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: join(dir, "board.migrated.db") }),
+    ).rejects.toThrow("no export report");
+  });
+
+  it("an unverified export refuses before the candidate is touched", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    doc.exportReport.backfillVerified = false;
+    writeFileSync(jsonPath, JSON.stringify(doc));
+    const storePath = join(dir, "board.migrated.db");
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath }),
+    ).rejects.toThrow("unverified");
+    expect(existsSync(storePath)).toBe(false);
+  });
+
+  it("an over-cap plan refuses before the candidate is touched", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    doc.plan.context.preamble = "line\n".repeat(3000);
+    writeFileSync(jsonPath, JSON.stringify(doc));
+    const storePath = join(dir, "board.migrated.db");
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath }),
+    ).rejects.toThrow("over the 2000-line cap");
+    expect(existsSync(storePath)).toBe(false);
+  });
+
+  it("the pre-check fires before any load: a pre-existing candidate is untouched", async () => {
+    // Without the pre-check, this run would reach the loader and die on
+    // the slug guard (double import) instead — a different error, and the
+    // candidate would have been opened. The pre-check refuses first.
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    const storePath = join(dir, "board.migrated.db");
+    const first = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath });
+    expect(first.dryRun).toBe(false);
+    if (first.dryRun) throw new Error("expected a real run");
+    expect(first.verification.lossless).toBe(true);
+    const blessed = readFileSync(storePath, "utf8");
+
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    doc.plan.context.preamble = "line\n".repeat(3000);
+    writeFileSync(jsonPath, JSON.stringify(doc));
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath }),
+    ).rejects.toThrow("over the 2000-line cap");
+    expect(readFileSync(storePath, "utf8")).toBe(blessed);
+  });
+
+  it("export loss refuses board-relative and deletes its own file", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    service.userSetTicket(harness.asAgent(), { title: "Vanishes" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    // Simulate a walk that missed a row: strip it from the tickets AND
+    // from the export header, so it is loss rather than hand-removal.
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    const slug = doc.tickets.find((ticket) => ticket.title === "Vanishes")!.slug;
+    doc.tickets = doc.tickets.filter((ticket) => ticket.slug !== slug);
+    doc.exportReport.exportedSlugs = doc.exportReport.exportedSlugs.filter((entry) => entry !== slug);
+    writeFileSync(jsonPath, JSON.stringify(doc));
+    const storePath = join(dir, "board.migrated.db");
+    await expect(
+      service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath }),
+    ).rejects.toThrow(new RegExp(slug));
+    expect(existsSync(storePath)).toBe(false);
+  });
+
+  it("hand-deleted rows are acknowledged, not refused", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    service.userSetTicket(harness.asAgent(), { title: "Cut by hand" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    // The EDIT step: delete from the tickets, leave the header intact.
+    const doc = JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument;
+    const cutSlug = doc.tickets.find((ticket) => ticket.title === "Cut by hand")!.slug;
+    doc.tickets = doc.tickets.filter((ticket) => ticket.slug !== cutSlug);
+    writeFileSync(jsonPath, JSON.stringify(doc));
+    const real = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: join(dir, "board.migrated.db") });
+    expect(real.dryRun).toBe(false);
+    if (real.dryRun) throw new Error("expected a real run");
+    expect(real.verification.humanRemoved.map((entry) => entry.slug)).toEqual([cutSlug]);
+    expect(real.verification.exportLoss).toEqual([]);
+    expect(real.verification.lossless).toBe(false);
+  });
+
+  it("rows born after the export are drift: named, never refused", async () => {
+    const harness = createHarness(undefined, { cwd: HARNESS_WS });
+    harness.installService();
+    provideEmptyPersistence(harness);
+    const service = harness.service;
+    service.userSetTicket(harness.asAgent(), { title: "First" });
+    await service.workspaceTickets(harness.asAgent());
+
+    const dir = mkdtempSync(join(tmpdir(), "mig-"));
+    const jsonPath = join(dir, "board-migration.json");
+    await service.migrateBoardToFreshStore(harness.asAgent(), { jsonPath });
+    const exportedAt = (JSON.parse(readFileSync(jsonPath, "utf8")) as BoardMigrationDocument).exportedAt;
+    // The board moves on: a row born after exportedAt cannot be exported.
+    // A controlled clock (not wall time) keeps the partition deterministic.
+    const peer = harness.makeAgent({ id: "session-peer" });
+    (peer.session.header as { cwd?: string }).cwd = HARNESS_WS;
+    const peerStore = makeStore(makeConfig(), { now: () => exportedAt + 100, storage: new MemoryStorage() });
+    const peerProject = peerStore.createProject(HARNESS_WS, "aidos");
+    peerStore.createTicket(peerProject, "Born late", "Born late body");
+    for (const event of peerStore.events()) {
+      harness.appendAidosEvent(peer, event);
+    }
+    const real = await service.migrateBoardToFreshStore(harness.asAgent(), { dryRun: false, jsonPath, storePath: join(dir, "board.migrated.db") });
+    expect(real.dryRun).toBe(false);
+    if (real.dryRun) throw new Error("expected a real run");
+    expect(real.verification.drift.map((entry) => entry.slug)).toEqual(["born-late"]);
+    expect(real.verification.exportLoss).toEqual([]);
+    expect(real.verification.lossless).toBe(false);
   });
 });
