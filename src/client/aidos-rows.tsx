@@ -63,9 +63,9 @@ import {
   expandableFact,
   factText,
   findTicketsTabButton,
+  MOVE_TITLE_MAX,
   moveFacts,
-  moveTicketSummary,
-  planBlocksWritten,
+  moveTicketSummary,  planBlocksWritten,
   planImportFacts,
   planImportSummary,
   planMetaFacts,
@@ -279,6 +279,49 @@ function AidosRow(props: RowProps) {
    */
   const rich =
     props.summaryNode !== undefined && props.errorSummary === undefined ? props.summaryNode : null;
+  /*
+   * #223: IDENTITY SURVIVES A REFUSAL; OUTCOME DOES NOT.
+   *
+   * #144's rule stands: a refused card never renders its rich summary node,
+   * because the destination badge inside it would assert a state the ticket
+   * did not reach. The defect was that the ticket's identity lived inside
+   * that same suppressed node (or inside the flat summary the reason
+   * replaces), so a refusal named why but never what.
+   *
+   * Identity is true regardless of outcome, so the shell renders it from
+   * the ticketId + sessionId it already carries for click-through -- zero
+   * per-row changes, which is what makes this cover all sixteen rows at
+   * once instead of only MoveTicketRow. Outcome stays suppressed by the
+   * rule above, untouched.
+   *
+   * The reason keeps the line it already claims: it is still shown.text in
+   * the same span with the same error styling. The identity is only a
+   * bounded prefix on that line -- cut with the same id-first ellipsis as
+   * #144's move title (through the expander per #142; the hover restores
+   * the full label), so a long title costs the reason its tail, never its
+   * place. Plain text, deliberately: #163 owns making ids clickable and
+   * will attach to this without restructuring.
+   */
+  const identityFull =
+    props.errorSummary === undefined
+      ? null
+      : ticketLabel(props.sessionId, props.ticketId ?? null);
+  /*
+   * #142: through the expander, not past it to oneLine. Components never
+   * reach the flattener directly; only `.value` is read here, so no
+   * expander leaks onto the summary line -- the same pattern the commit
+   * subject's cut already uses. The full label survives on the hover below.
+   */
+  const identityCut =
+    identityFull === null
+      ? null
+      : expandableFact("identity", identityFull, { max: MOVE_TITLE_MAX }).value;
+  const identityNode =
+    identityCut === null ? null : (
+      <span title={identityFull ?? identityCut} data-dsh-tip="">
+        {identityCut + " · "}
+      </span>
+    );
 
   /*
    * CLICK-THROUGH (#73 round 3).
@@ -440,7 +483,7 @@ function AidosRow(props: RowProps) {
             className={"tool-render-summary" + (rich === null ? "" : " aidos-row-summary-rich")}
             tool-render-error={shown.isError ? true : undefined}
           >
-            {rich ?? shown.text}
+            {identityNode}{rich ?? shown.text}
           </span>
         )}
       </div>
