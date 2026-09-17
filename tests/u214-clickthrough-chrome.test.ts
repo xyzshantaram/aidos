@@ -4,19 +4,28 @@
  * WHAT THIS PINS (all source-level, the u114/u73 convention -- AidosRow
  * owns hooks, so no renderer; the live modal itself is human-verify).
  *
- * 1. ONE TITLE, ONE CLOSE BUTTON. The clickthrough mounts DetailView in a
- *    BARE ModalShell: the shell contributes no title row, and DetailView
- *    keeps its own header. So each context has exactly one header --
- *    the modal's from the panel, the board sidebar's from the panel --
- *    and the doubled chrome (two <h3>s, two close buttons doing
- *    different things) cannot come back.
+ * 1. ONE TITLE, ONE CLOSE BUTTON PER DIALOG. The clickthrough mounts
+ *    DetailView in a BARE ModalShell: the shell contributes no title row,
+ *    and DetailView keeps its own header -- so the resolved dialog's only
+ *    header is the panel's. The unresolved branch (no panel) brings its
+ *    own minimal head with the shell's classes. The doubled chrome (two
+ *    <h3>s, two close buttons doing different things) cannot come back,
+ *    and neither can the zero-close-button unresolved dialog the review
+ *    caught.
  * 2. NO PEEK. The strip-and-excerpt fallback is deleted: no TicketStrip,
  *    no projection `peeked`, no peek description body in the modal path.
  * 3. EXPLICIT UNRESOLVED. When the ticket does not resolve, the modal
- *    names why (no session / board not loaded / absent-or-foreign) in a
- *    status paragraph instead of degrading silently.
+ *    names why (board not loaded / absent-or-foreign, plus a defensive
+ *    no-session arm) in a status paragraph instead of degrading silently.
  * 4. CLOSE PATHS. Escape and the mask click still close, exactly once
  *    each -- they live outside the gated head, so bare changes nothing.
+ *
+ * Review note: two first-cut tests were DELETED here rather than kept as
+ * decoration -- "the board sidebar is not wrapped in a modal shell" and
+ * "no second-class branch" both pass with the mechanism removed, so they
+ * reported safety that did not exist. What they meant to guard is covered
+ * by the deletion test (single DetailView arm, no peek branch) and the
+ * header tests below, each of which fails without the fix.
  *
  * What this does NOT prove (owner's eye in the browser): that one header
  * LOOKS right -- spacing, alignment, the editable title in a wide dialog.
@@ -30,7 +39,6 @@ import { describe, expect, it } from "vitest";
 const rows = readFileSync(new URL("../src/client/aidos-rows.tsx", import.meta.url), "utf8");
 const ui = readFileSync(new URL("../src/client/ui.tsx", import.meta.url), "utf8");
 const panel = readFileSync(new URL("../src/client/detail-panel.tsx", import.meta.url), "utf8");
-const board = readFileSync(new URL("../src/client/local-ticket-view.tsx", import.meta.url), "utf8");
 
 /** The clickthrough's <ModalShell ...> opening tag, bare prop included. */
 function clickthroughShell(): string {
@@ -61,28 +69,29 @@ describe("#214 the clickthrough mounts DetailView in a bare shell", () => {
     expect(formAt).toBeGreaterThan(headAt);
   });
 
-  it("DetailView keeps its own header, so each context has exactly one", () => {
-    // The panel's header: one head, one close button -- the modal's only
-    // header, and the board sidebar's only header (the board never wraps
-    // the panel in a ModalShell -- pinned below).
+  it("the shell's title row exists only behind the bare gate, and the panel keeps its own header", () => {
+    // TEETH FIRST: without the gate string every ordering assertion below
+    // passes vacuously (indexOf returns -1 on un-bared code). This line is
+    // what makes the test fail when the gate is removed.
+    expect(ui).toContain("props.bare === true ? null : (");
+    const gateAt = ui.indexOf("props.bare === true ? null : (");
+    // The head (title + close button) exists exactly once in ui.tsx and
+    // sits inside the non-bare arm -- bare renders nothing in its place.
+    expect(ui.match(/aidos-modal-head/g)).toHaveLength(1);
+    expect(ui.match(/aidos-modal-title/g)).toHaveLength(1);
+    const headAt = ui.indexOf("aidos-modal-head");
+    expect(headAt).toBeGreaterThan(gateAt);
+    // The children render outside the gated head, so bare keeps the body.
+    const formAt = ui.indexOf("aidos-modal-form");
+    expect(formAt).toBeGreaterThan(headAt);
+    // The panel's header: one head, one close button -- the resolved
+    // dialog's only header.
     expect(panel.match(/aidos-detail-head/g)).toHaveLength(1);
     expect(panel.match(/aidos-close-btn/g)).toHaveLength(1);
-    const shellCloses = ui.match(/aidos-close-btn/g) ?? [];
-    expect(shellCloses).toHaveLength(1);
-    // ...and that one shell close button is the gated one, so a bare
+    // ...and the shell's single close button is the gated one, so a bare
     // shell contributes zero close buttons to the dialog.
-    expect(ui.indexOf("aidos-close-btn")).toBeGreaterThan(ui.indexOf("props.bare"));
-  });
-
-  it("the board sidebar is not wrapped in a modal shell", () => {
-    // The board's OTHER modals (queue, retired) keep their titled shells;
-    // only the detail fragment matters here: no shell around the panel,
-    // so the sidebar's header is the panel's own.
-    const start = board.indexOf("const detailPanel =");
-    expect(start).toBeGreaterThan(-1);
-    const end = board.indexOf("const createModal =", start);
-    expect(end).toBeGreaterThan(start);
-    expect(board.slice(start, end)).not.toContain("<ModalShell");
+    expect(ui.match(/aidos-close-btn/g)).toHaveLength(1);
+    expect(ui.indexOf("aidos-close-btn")).toBeGreaterThan(gateAt);
   });
 });
 
@@ -93,18 +102,6 @@ describe("#214 the strip-and-excerpt peek is deleted", () => {
     expect(rows).not.toContain("peeked.descriptionFull");
     expect(rows).not.toContain("aidos-ticket-peek-description");
     expect(rows).not.toContain('import { TicketStrip }');
-  });
-
-  it("no second-class branch: any resolved ticket gets the real panel", () => {
-    // The DetailView arm's predicate distinguishes only "resolved" from
-    // "not resolved" -- own and foreign tickets take the same view, so
-    // the same ticket can no longer open full from one session and thin
-    // from another. (Resolution itself is modalTicketFor, pinned by u114.)
-    const arm = rows.indexOf("{modalTicket !== null && props.sessionId !== undefined ? (");
-    expect(arm).toBeGreaterThan(-1);
-    const view = rows.indexOf("<DetailView", arm);
-    expect(view).toBeGreaterThan(arm);
-    expect(rows.slice(arm, view)).not.toContain("foreign");
   });
 });
 
@@ -117,10 +114,31 @@ describe("#214 an unresolvable clickthrough names its reason", () => {
     expect(rows.slice(para, para + 200)).toContain('role="status"');
   });
 
-  it("the reason distinguishes the three ways to land here", () => {
-    expect(rows).toContain("this card carries no session");
+  it("the reason distinguishes the reachable ways to land here", () => {
+    // The no-session arm is unreachable-by-construction (peekOpen needs
+    // canSelect) and stays as defense; the reader can only ever see the
+    // other two, and both must name their cause.
     expect(rows).toContain("this session's board has not loaded yet");
     expect(rows).toContain("belongs to another session");
+    // The defensive no-session arm is pinned as present, not as reachable.
+    expect(rows).toContain("this card carries no session");
+  });
+
+  it("the unresolved dialog brings its own title and close button", () => {
+    // Review catch: the bare shell gives this branch no chrome, so the
+    // branch renders a minimal head with the shell's own classes -- one
+    // title, one close button, wired to dismiss. Every count below is
+    // zero without the fix, so none of this passes vacuously.
+    expect(rows.match(/aidos-modal-head/g)).toHaveLength(1);
+    expect(rows.match(/aidos-modal-title/g)).toHaveLength(1);
+    expect(rows.match(/aidos-close-btn/g)).toHaveLength(1);
+    const marker = rows.indexOf("#214 unresolved head");
+    expect(marker).toBeGreaterThan(-1);
+    const frag = rows.slice(marker, marker + 600);
+    expect(frag).toContain("aidos-modal-head");
+    expect(frag).toContain("Ticket #");
+    expect(frag).toContain("aidos-close-btn");
+    expect(frag).toContain("setPeekOpen(false)");
   });
 });
 

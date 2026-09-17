@@ -80,30 +80,46 @@ export function Collapse(props: {
  * honors `working`, so a submit in flight never loses its modal. The old
  * hand-rolled chrome guarded all three; the first ModalShell cut did not.
  */
-export function ModalShell(props: {
-  /**
-   * The shell's own title row. Optional since #214: a modal whose child
-   * owns its header (the clickthrough mounts the board's real DetailView,
-   * header included) passes `bare` instead, so the title and close button
-   * appear exactly once. Every other modal keeps its title.
-   */
-  title?: string;
-  working?: boolean;
-  onClose: () => void;
-  onConfirm?: () => void;
-  confirmLabel?: string;
-  /** Wider layout for list surfaces (#93): the queue, pickers, search results. */
-  wide?: boolean;
-  /**
-   * #214: chromeless dialog -- mask, panel, body, and every close path, but
-   * no title row. For the ticket clickthrough, whose DetailView already
-   * renders the title editor and its own close button; a titled shell
-   * around it doubled both. Escape and mask click still close (they live
-   * outside the head), so the bare modal closes exactly like a titled one.
-   */
-  bare?: boolean;
-  children: react.ReactNode;
-}) {
+/**
+ * Which chrome the shell renders, as a union so the wrong combination is
+ * unrepresentable (#214 review): either a titled head, or explicitly bare.
+ * Neither (an empty heading) and both (a silently dropped title) do not
+ * typecheck. Every caller today is one of the two -- the clickthrough is
+ * the sole bare user.
+ */
+type ModalShellChrome =
+  | {
+      /**
+       * The shell's own title row. Every modal keeps its title except the
+       * clickthrough, whose child owns its header.
+       */
+      title: string;
+      bare?: false | undefined;
+    }
+  | {
+      /**
+       * #214: chromeless dialog -- mask, panel, body, and every close path,
+       * but no title row. For the ticket clickthrough, whose DetailView
+       * already renders the title editor and its own close button; a titled
+       * shell around it doubled both. Escape and mask click still close
+       * (they live outside the head), so the bare modal closes exactly
+       * like a titled one.
+       */
+      bare: true;
+      title?: undefined;
+    };
+
+export function ModalShell(
+  props: {
+    working?: boolean;
+    onClose: () => void;
+    onConfirm?: () => void;
+    confirmLabel?: string;
+    /** Wider layout for list surfaces (#93): the queue, pickers, search results. */
+    wide?: boolean;
+    children: react.ReactNode;
+  } & ModalShellChrome,
+) {
   const working = props.working === true;
   react.useEffect(function () {
     const onKey = (event: KeyboardEvent) => {

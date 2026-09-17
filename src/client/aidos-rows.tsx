@@ -405,11 +405,11 @@ function AidosRow(props: RowProps) {
   );
   /*
    * #214: why this clickthrough cannot show the panel, in the reader's
-   * own terms. Three ways to land in the unresolved state: the card has
-   * no session (so the ticket cannot even be addressed), the session's
-   * board has not loaded (nothing to resolve against yet), or the
-   * ticket is absent from it (not on this board, or owned by another
-   * session). The modal names which one instead of degrading to a peek.
+   * own terms. The first arm is unreachable-by-construction and stays as
+   * defense: peekOpen starts false and only becomes true via `select`,
+   * which exists solely when canSelect holds (ticketId AND sessionId
+   * defined) -- so a reader can only ever see the second or third. The
+   * modal names which one instead of degrading to a peek.
    */
   const unresolvedReason =
     props.sessionId === undefined
@@ -501,10 +501,11 @@ function AidosRow(props: RowProps) {
         >
           {/*
            * #214: BARE shell -- DetailView renders the only header in
-           * this dialog (its title editor plus its own close button),
-           * and the unresolved state below names its own reason, so
-           * the shell contributes no title row. Escape and the mask
-           * still close; the panel's button dismisses from inside.
+           * the resolved dialog (its title editor plus its own close
+           * button), and the unresolved branch below brings its own
+           * minimal head, so each dialog shows exactly one title row
+           * and one close button. Escape and the mask still close;
+           * the panel's button dismisses from inside.
            */}
           {modalTicket !== null && props.sessionId !== undefined ? (
             <>
@@ -548,7 +549,23 @@ function AidosRow(props: RowProps) {
                 * here is deleted: when the ticket does not resolve, the
                 * modal says so and names why, instead of showing less
                 * than the truth as if it were a feature.
+                *
+                * #214 review: the bare shell contributes no chrome, so
+                * this branch brings its own minimal head -- one title,
+                * one close button, the shell's own classes. Without it
+                * the dialog's only exits were Escape and the mask.
                 */}
+              {/* #214 unresolved head */}
+              <div className="aidos-modal-head">
+                <h3 className="aidos-modal-title">{`Ticket #${props.ticketId ?? "?"}`}</h3>
+                <button
+                  className="aidos-close-btn"
+                  onClick={() => setPeekOpen(false)}
+                  aria-label="Close"
+                >
+                  {"\u00d7"}
+                </button>
+              </div>
               <p className="aidos-ticket-peek-empty" role="status">
                 {unresolvedReason}
               </p>
