@@ -52,7 +52,10 @@ describe("aidos enforcement stands down for a non-aidos agent at call time", () 
       harness.asAgent(),
       "/home/sid/repos/other/notes.md",
     );
-    expect(reason).toMatch(/allowlist union/);
+    // #226: this path is outside the harness workspace, so it takes the
+    // foreign-path branch rather than the union branch. The intent stands —
+    // the write is still refused — but the wording moved with the branch.
+    expect(reason).toMatch(/outside the session workspace/);
   });
 
   it("the delegation guard lets a standard-preset agent's board calls pass", () => {

@@ -77,6 +77,26 @@ function refusalFor(harness: Harness, agent: FakeAgent | ReturnType<Harness["asA
   return reason as string;
 }
 
+/**
+ * A refused write INSIDE the workspace that no allowlist covers.
+ *
+ * Since #226, a path outside the workspace takes the foreign-path branch
+ * (its own reason, its own route, no ticket-id list), so the orchestrator
+ * union assertions below — request_allowlist, the candidate list — are only
+ * reachable from inside the workspace. The cwd comes from the harness, not
+ * a literal, so the path stays inside whatever workspace it binds.
+ */
+function refusalForInWorkspace(harness: Harness, agent: FakeAgent | ReturnType<Harness["asAgent"]>): string {
+  const cwd = harness.agent.session.header.cwd as string;
+  const reason = writeBoundaryReason(
+    asContext(harness.ctx),
+    agent as never,
+    `${cwd}/docs/not-allowed.md`,
+  );
+  expect(reason, "the write must be refused for this test to mean anything").toBeDefined();
+  return reason as string;
+}
+
 describe("#159 a subagent is not told to do the impossible", () => {
   it("never tells a subagent to extend an allowlist", () => {
     // The headline defect. request_allowlist refuses subagents outright, so
@@ -153,7 +173,7 @@ describe("#159 the orchestrator gets a remedy it can perform", () => {
   it("points at request_allowlist, which it CAN call", () => {
     const harness = riggedHarness();
     front(harness, ["src/client"]);
-    expect(refusalFor(harness, harness.asAgent())).toMatch(/request_allowlist/);
+    expect(refusalForInWorkspace(harness, harness.asAgent())).toMatch(/request_allowlist/);
   });
 
   it("does not claim an arbitrary ticket owns the path", () => {
@@ -165,7 +185,7 @@ describe("#159 the orchestrator gets a remedy it can perform", () => {
     const harness = riggedHarness();
     front(harness, ["src/client"]);
     front(harness, ["src/host"]);
-    const message = refusalFor(harness, harness.asAgent());
+    const message = refusalForInWorkspace(harness, harness.asAgent());
     expect(message).not.toMatch(/allowlist of in-progress ticket/);
     expect(message).toMatch(/no in-progress ticket covers it/);
   });
@@ -176,14 +196,14 @@ describe("#159 the orchestrator gets a remedy it can perform", () => {
     const harness = riggedHarness();
     const a = front(harness, ["src/client"]);
     const b = front(harness, ["src/host"]);
-    const message = refusalFor(harness, harness.asAgent());
+    const message = refusalForInWorkspace(harness, harness.asAgent());
     expect(message).toContain(`#${a}`);
     expect(message).toContain(`#${b}`);
   });
 
   it("still says so plainly when the board is empty", () => {
     const harness = riggedHarness();
-    const message = refusalFor(harness, harness.asAgent());
+    const message = refusalForInWorkspace(harness, harness.asAgent());
     expect(message).toMatch(/board is empty/);
   });
 
@@ -197,7 +217,7 @@ describe("#159 the orchestrator gets a remedy it can perform", () => {
     const agent = harness.asAgent();
     const ticket = harness.service.setTicket(agent, { title: "Parked" });
     harness.seedEvidence(harness.agent, ticket.id, "builtin:user_signoff");
-    const message = refusalFor(harness, harness.asAgent());
+    const message = refusalForInWorkspace(harness, harness.asAgent());
     expect(message).toMatch(/none is in progress/i);
     expect(message).toMatch(/move the ticket .* in progress/i);
     expect(message).toMatch(/request its allowlist/);

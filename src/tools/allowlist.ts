@@ -97,7 +97,10 @@ export class FsWriteRefused extends Error {
  * that no in-progress ticket allowlist covers — listing the in-progress
  * candidates and leaving the ownership judgement to the caller (#159: a
  * confidently named single ticket was the defect, not the remedy) — or
- * undefined to allow the write.
+ * undefined to allow the write. A path outside the session workspace takes
+ * its own branch (#226): no ticket here can cover another repository, so
+ * the message names the worktree-in-scratch route instead of an allowlist
+ * remedy, and lists no ticket ids.
  */
 export function writeBoundaryReason(
   ctx: Context,
@@ -277,6 +280,43 @@ export function writeBoundaryReason(
       " If this path genuinely needs to change, put it in your report: your PARENT " +
       "must request the allowlist for it — that is the ask to make, and the " +
       "orchestrator is the one who can act on it."
+    );
+  }
+  /*
+   * #226: the path is not in THIS workspace at all, so no ticket on this
+   * board can ever cover it — and the union message below would advise
+   * request_allowlist, which only admits paths inside the workspace. That
+   * advice cannot be taken (measured 2026-09-17: the owner approved an
+   * escalation for a cross-repo write and the refusal still named it).
+   * Name the real reason and the route that works instead: a detached
+   * worktree of the other repository hosted under the scratch root, where
+   * writes need no allowlist. This sits AFTER the subagent branch on
+   * purpose: a subagent cannot create the worktree itself (creation needs
+   * an escalation, which auto-rejects here), so its actionable move is
+   * still the report to its parent above. Containment reuses isUnder, the
+   * one lexical notion of "inside" this boundary has (#110).
+   */
+  if (cwd !== undefined && !isUnder(cwd, path)) {
+    let scratchRoot = "the scratch root";
+    try {
+      scratchRoot = scratchRootForAgent(agent);
+    } catch {
+      // No scratch root to name (no cwd on the agent); the generic name
+      // still points the way.
+    }
+    return (
+      `write to ${path} is outside the session workspace (${cwd}), so no ` +
+      "ticket on this board can cover it. To work in another repository, cut a " +
+      "detached worktree of it under the scratch root: from that repository run " +
+      `\`git worktree add --detach ${scratchRoot}/<name> <commit>\`. ` +
+      "Creating the worktree needs a one-time sandbox escalation, because git records " +
+      "it inside the source repo's .git (without it the add fails with a " +
+      "read-only-filesystem error that looks like a git failure). Writes inside the " +
+      "worktree need no allowlist, and the other repository needs no board or ticket. " +
+      "A worktree shares the origin's object store, so commits made in it are visible " +
+      "to the source repo with no push or fetch; committing from inside it writes " +
+      "into the source repo's .git, so each commit needs escalation again — edit " +
+      "freely, escalate per commit."
     );
   }
   if (rows.length === 0) {
