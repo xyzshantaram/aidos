@@ -5,8 +5,9 @@
  * 1. RESOLUTION (`modalTicketFor`, pure): the modal's ticket comes from the
  *    session's cached merge addressed by board key -- an own row matches by
  *    bare id, a foreign row only by its composite key, and anything absent
- *    is null (the caller keeps the thin strip peek, never another board's
- *    ticket). Evidence and comments ride the same board key the board reads.
+ *    is null (the caller shows #214's explicit unresolved state, never
+ *    another board's ticket). Evidence and comments ride the same board
+ *    key the board reads.
  * 2. WIRING: the modal mounts the board's real `DetailView` (not the strip)
  *    with the merge's evidence/comments, the session as write identity, and
  *    the LARGE modal size. AidosRow owns hooks so it cannot be invoked
@@ -121,7 +122,7 @@ describe("#114 modalTicketFor resolves the modal ticket by board key", () => {
     expect((fromB?.evidence[0] as unknown as { text: string }).text).toBe("note 2");
   });
 
-  it("a ticket absent from the merge is null, so the caller keeps the thin peek", () => {
+  it("a ticket absent from the merge is null, so the caller shows the explicit unresolved state", () => {
     const m = merge("a", [row(7, "a", "Seven", false)]);
     expect(modalTicketFor(m, "8")).toBeNull();
     expect(modalTicketFor(m, "b:7")).toBeNull();

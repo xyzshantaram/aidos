@@ -829,7 +829,7 @@ describe("#73 a failed call renders, it does not dump JSON", () => {
   });
 });
 
-describe("ticketFromProjection (the click-through peek's data source)", () => {
+describe("ticketFromProjection (the deleted peek's data source, retained in place)", () => {
   const projection = {
     "ws:12": {
       id: 12,
@@ -990,13 +990,19 @@ describe("#135 findTicketsTabButton activates the Tickets tab a human would clic
     expect(body).toContain("setActivationNotice(found.reason)");
   });
 
-  it("renders the FULL description through the safe renderer, never the excerpt (mutation: excerpt render)", () => {
-    expect(rows).toContain("renderMarkdownSafe(peeked.descriptionFull)");
-    // The modal body must not read descriptionExcerpt — that string may
-    // appear elsewhere (strips), so pin the modal's own class instead.
-    const bodyStart = rows.indexOf("aidos-ticket-peek-description");
-    const body = rows.slice(bodyStart - 200, bodyStart + 200);
-    expect(body).not.toContain("descriptionExcerpt");
+  it("the strip-and-excerpt peek is gone, never the excerpt (mutation: peek restored)", () => {
+    // #214 DELETED the fallback this test used to pin: the modal branch
+    // renders DetailView off the merge or the explicit unresolved state.
+    // A restored peek would bring back exactly these strings -- the
+    // projection ticket, its full-text render, and the peek body class.
+    // (TicketStrip itself stays: dependency cards, the queue and the
+    // retired panel render it; only the modal's peek is gone.)
+    expect(rows).not.toContain("ticketFromProjection(");
+    expect(rows).not.toContain("peeked.descriptionFull");
+    expect(rows).not.toContain("aidos-ticket-peek-description");
+    expect(rows).not.toContain("<TicketStrip ticket={peeked}");
+    // And the resolver the peek read from is no longer this file's input.
+    expect(rows).not.toContain("props.useProjection(");
   });
 });
 

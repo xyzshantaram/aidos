@@ -39,7 +39,6 @@ import {
   InlineTicketAction,
   isInlineActionId,
 } from "./inline-actions";
-import { TicketStrip } from "./ticket-strip";
 import { ModalShell } from "./ui";
 import {
   AlertCircleIcon,
@@ -76,7 +75,6 @@ import {
   evidenceComments,
   ticketCaptionOf,
   ticketFacts,
-  ticketFromProjection,
   ticketTables,
   writtenFields,
   type Fact,
@@ -300,9 +298,10 @@ function AidosRow(props: RowProps) {
    * without any tab-activation API at all: show the ticket RIGHT HERE.
    *
    * A click still writes the selection (so opening the Tickets tab still
-   * lands on the right ticket, per #100/#73's existing tests) AND opens a
-   * peek showing the SAME `TicketStrip` every other ticket reference uses,
-   * pulled live from the projection. This works whether or not the Tickets
+   * lands on the right ticket, per #100/#73's existing tests) AND opens
+   * the board's real DetailView for the ticket in a bare modal (#114,
+   * #214) -- or an explicit unresolved state naming why, when the ticket
+   * is not in this session's merge. This works whether or not the Tickets
    * tab exists, is mounted, or is the active view -- the actual problem,
    * not a workaround for the missing platform primitive.
    */
@@ -350,21 +349,31 @@ function AidosRow(props: RowProps) {
         setPeekOpen(true);
       }
     : undefined;
-  const peeked =
-    props.useProjection !== undefined
-      ? ticketFromProjection(props.useProjection("aidos.tickets"), props.ticketId)
-      : null;
   /*
    * #114: the full-detail inputs, read from the session's cached merge at
    * render time -- opening the modal re-renders, so it picks up the latest
    * pull. Null whenever the board has not loaded in this session (or the
-   * ticket is foreign to it): the modal keeps the thin strip peek, which is
-   * also what a no-projection card shows.
+   * ticket is foreign to it): #214 shows the explicit unresolved state
+   * for that case, never another board's ticket and never the old peek.
    */
   const modalTicket = modalTicketFor(
     props.sessionId === undefined ? null : getMerge(props.sessionId),
     props.ticketId,
   );
+  /*
+   * #214: why this clickthrough cannot show the panel, in the reader's
+   * own terms. Three ways to land in the unresolved state: the card has
+   * no session (so the ticket cannot even be addressed), the session's
+   * board has not loaded (nothing to resolve against yet), or the
+   * ticket is absent from it (not on this board, or owned by another
+   * session). The modal names which one instead of degrading to a peek.
+   */
+  const unresolvedReason =
+    props.sessionId === undefined
+      ? `Ticket #${props.ticketId ?? "?"} cannot be opened: this card carries no session, so the ticket cannot be addressed.`
+      : getMerge(props.sessionId) === null
+        ? `Ticket #${props.ticketId ?? "?"} cannot be opened: this session's board has not loaded yet. Close this and retry.`
+        : `#${props.ticketId ?? "?"} isn't in this session's own board yet, or belongs to another session. Open the Tickets tab to look it up there.`;
 
   return (
     <div className="tool-render-card" data-error={props.state === "error" || undefined}>
@@ -443,14 +452,17 @@ function AidosRow(props: RowProps) {
       ) : null}
       {peekOpen ? (
         <ModalShell
-          title={
-            modalTicket !== null
-              ? `#${modalTicket.ticket.id} ${modalTicket.ticket.title}`
-              : "Ticket"
-          }
+          bare
           wide={modalTicket !== null}
           onClose={() => setPeekOpen(false)}
         >
+          {/*
+           * #214: BARE shell -- DetailView renders the only header in
+           * this dialog (its title editor plus its own close button),
+           * and the unresolved state below names its own reason, so
+           * the shell contributes no title row. Escape and the mask
+           * still close; the panel's button dismisses from inside.
+           */}
           {modalTicket !== null && props.sessionId !== undefined ? (
             <>
               {/*
@@ -486,21 +498,17 @@ function AidosRow(props: RowProps) {
                 }}
               />
             </>
-          ) : peeked !== null ? (
+          ) : (
             <>
-              <TicketStrip ticket={peeked} />
               {/*
-                * #135: the whole description, rendered as markdown through
-                * the SAME safe renderer the detail panel uses. The excerpt
-                * still feeds the collapsed, no-projection strip contexts;
-                * the modal body is always the full text.
+                * #214: NO PEEK. The strip-plus-excerpt fallback that lived
+                * here is deleted: when the ticket does not resolve, the
+                * modal says so and names why, instead of showing less
+                * than the truth as if it were a feature.
                 */}
-              {peeked.descriptionFull !== undefined ? (
-                <div
-                  className="aidos-md aidos-ticket-peek-description"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdownSafe(peeked.descriptionFull) }}
-                />
-              ) : null}
+              <p className="aidos-ticket-peek-empty" role="status">
+                {unresolvedReason}
+              </p>
               {/*
                 * #135: OPEN ON BOARD. Writes the selection FIRST (the
                 * #73/#100 seam -- the board adopts it on change and on
@@ -555,12 +563,6 @@ function AidosRow(props: RowProps) {
                 </p>
               ) : null}
             </>
-          ) : (
-            <p className="aidos-ticket-peek-empty">
-              {"#" +
-                (props.ticketId ?? "?") +
-                " isn't in this session's own board yet, or belongs to another session. Open the Tickets tab to look it up there."}
-            </p>
           )}
         </ModalShell>
       ) : null}

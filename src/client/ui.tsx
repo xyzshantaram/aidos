@@ -81,13 +81,27 @@ export function Collapse(props: {
  * hand-rolled chrome guarded all three; the first ModalShell cut did not.
  */
 export function ModalShell(props: {
-  title: string;
+  /**
+   * The shell's own title row. Optional since #214: a modal whose child
+   * owns its header (the clickthrough mounts the board's real DetailView,
+   * header included) passes `bare` instead, so the title and close button
+   * appear exactly once. Every other modal keeps its title.
+   */
+  title?: string;
   working?: boolean;
   onClose: () => void;
   onConfirm?: () => void;
   confirmLabel?: string;
   /** Wider layout for list surfaces (#93): the queue, pickers, search results. */
   wide?: boolean;
+  /**
+   * #214: chromeless dialog -- mask, panel, body, and every close path, but
+   * no title row. For the ticket clickthrough, whose DetailView already
+   * renders the title editor and its own close button; a titled shell
+   * around it doubled both. Escape and mask click still close (they live
+   * outside the head), so the bare modal closes exactly like a titled one.
+   */
+  bare?: boolean;
   children: react.ReactNode;
 }) {
   const working = props.working === true;
@@ -115,17 +129,19 @@ export function ModalShell(props: {
           event.stopPropagation();
         }}
       >
-        <div className="aidos-modal-head">
-          <h3 className="aidos-modal-title">{props.title}</h3>
-          <button
-            className="aidos-close-btn"
-            onClick={props.onClose}
-            disabled={working}
-            aria-label="Close"
-          >
-            {"\u00d7"}
-          </button>
-        </div>
+        {props.bare === true ? null : (
+          <div className="aidos-modal-head">
+            <h3 className="aidos-modal-title">{props.title}</h3>
+            <button
+              className="aidos-close-btn"
+              onClick={props.onClose}
+              disabled={working}
+              aria-label="Close"
+            >
+              {"\u00d7"}
+            </button>
+          </div>
+        )}
         <div className="aidos-modal-form">
           {props.children}
           {props.onConfirm !== undefined ? (

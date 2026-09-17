@@ -188,6 +188,9 @@
   min-height: 0;
   padding-bottom: var(--aidos-bottom-clearance);
   overflow-y: auto;
+  /* #213: the board sidebar's sizing lives HERE, in the mounting context,
+     not on .aidos-detail itself: fixed, non-flexing, beside the grid. */
+  flex: none;
   width: auto;
 }
 
@@ -375,9 +378,16 @@
   width: 180px;
 }
 
+/*
+ * #213: NO intrinsic width on this rule. The 300px that lived here is the
+ * BOARD sidebar's width, and DetailView carried it into the 720px
+ * clickthrough modal -- a 300px column beside ~400px of empty dialog.
+ * Width now lives in the mounting context: the board's layout rule
+ * (.aidos-layout > .aidos-detail, which already overrode this width to
+ * auto, so the board's computed width does not change) and the modal
+ * rule beside .aidos-modal-wide.
+ */
 .aidos-detail {
-  flex: none;
-  width: 300px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2860,6 +2870,20 @@
    chips, and its actions, and cramps badly at that width. */
 .aidos-modal-wide {
   width: 720px;
+}
+
+/*
+ * #213: the detail panel fills a modal. .aidos-detail carries no width of
+ * its own any more, so without this the panel would collapse to a narrow
+ * column inside the wide dialog. The dialog itself stays clamped by
+ * .aidos-modal's max-width/max-height, and .aidos-modal-form keeps
+ * scrolling the body, so the #93 safe-box rule still holds.
+ */
+.aidos-modal .aidos-detail {
+  flex: 1 1 auto;
+  align-self: stretch;
+  width: 100%;
+  min-width: 0;
 }
 
 /* #93: the queue's header — count on the left, sort on the right. */
