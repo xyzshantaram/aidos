@@ -17,6 +17,7 @@ import type { Agent } from "@deepseek-ai/dsh-agent";
 import { Session } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
 import { settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 // The Remote decorator and the Typert service base: the B2 human surface.
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 // Load the Context augmentations the service reads (workspace binding and
@@ -119,9 +120,46 @@ const BACKFILL_BATCH_SESSIONS = 10;
  * worst case is therefore BUDGET + 4 × largest-log — ~336 MB text,
  * ~1.3 GB parsed, against a machine that died at 5.5 GB — and no
  * host-side scheme can do better without serialising inspects (killing
- * import speed) or pre-fetch size metadata the headers do not carry.
+ * import speed) or pre-fetch size metadata: #232 stats each artifact
+ * before any inspect and takes every log at or above
+ * BACKFILL_LARGE_LOG_BYTES compressed as a batch of one, so no giant
+ * ever shares an in-flight window. The irreducible worst case is
+ * therefore BUDGET + 4 x largest-SMALL-log, plus one large log flushing
+ * alone — and a SINGLE log larger than memory still OOMs inside one
+ * `inspect`, which no host-side batching can bound (see
+ * BACKFILL_BATCH_SESSIONS).
  */
 const BACKFILL_BATCH_BYTES = 64 * 1024 * 1024;
+
+/**
+ * #232: the COMPRESSED artifact size at or above which one closed log is
+ * inspected alone (concurrency 1) instead of four-up.
+ *
+ * The persistence API offers only whole-log inspection and the headers
+ * carry no size, so no host-side batching can bound a SINGLE log — but the
+ * size IS knowable before decoding it: the artifact on disk
+ * (`$DSH_HOME/sessions/<workspace-key>/<session-id>/session.jsonl.zstd`,
+ * the layout thursday's `findSessionArtifacts` also documents) stats in
+ * microseconds, while decoding it costs gigabytes. BACKFILL_BATCH_BYTES
+ * budgets 64 MiB of retained DECOMPRESSED text, so a budget expressed in
+ * compressed bytes needs the expansion ratio: measured on this machine,
+ * 29 MB -> 72 MB text (thursday), 52 MB -> 237 MB (aidos),
+ * 39/25/21/18 MB -> 91/76/47/60 MB (dotfiles-ai) — roughly 2.5-4.5x.
+ * At 8x the 8 MiB threshold decodes to the full 64 MiB budget, so a log
+ * this big busts the batch on its own: sharing an in-flight inspect with
+ * it is pure overshoot. Measured placement: dotfiles-ai's six orchestrator
+ * giants run 11-40 MB (all solo), its largest subagent log is 4 MB and
+ * every other small stays on the 4-up path, so cold workspaces keep their
+ * throughput and only the logs that can OOM the import serialize.
+ *
+ * A log whose artifact cannot be stat'ed (unfamiliar layout, a test
+ * double with no file, a permissions failure) sizes as UNKNOWN and flows
+ * through the existing post-inspect byte cut — today's bound, not
+ * nothing. Serializing on unknown would crawl every cold workspace the
+ * day the layout changes, with no evidence of danger; the miss is logged
+ * once per import so a silent layout drift stays visible.
+ */
+const BACKFILL_LARGE_LOG_BYTES = 8 * 1024 * 1024;
 
 import { createInitialState } from "../kernel/fold";
 import type { AidosState } from "../kernel/fold";
@@ -4810,13 +4848,17 @@ registerAidosSessionEventTypes(ctx);
     // Finding A: the full-horizon claim. Every call names the whole resume
     // set, so cross-batch references pend instead of dropping terminally.
     const expected = fresh.map(String);
+    // #232: the artifact sizes, consulted BEFORE any inspect (never
+    // decoded for sizing). _takeBackfillBatch below spends them.
+    const sizes = this._backfillArtifactSizes(path, fresh);
+    const soloCount = fresh.filter((id) => this._isLargeBackfillLog(sizes, id)).length;
     this.ctx.logger?.info?.(
-      `aidos: backfill importing ${fresh.length} of ${closedIds.length} closed log(s) in batches of ${BACKFILL_BATCH_SESSIONS}`,
+      `aidos: backfill importing ${fresh.length} of ${closedIds.length} closed log(s) in batches of ${BACKFILL_BATCH_SESSIONS}${soloCount > 0 ? ` (${soloCount} large log(s) solo)` : ""}`,
     );
     let refused = false;
     let cursor = 0;
     while (cursor < fresh.length) {
-      const batch = fresh.slice(cursor, cursor + BACKFILL_BATCH_SESSIONS);
+      const batch = this._takeBackfillBatch(fresh, cursor, sizes);
       const outcome = await this._exclusiveBackfillBatch(() =>
         this._importBackfillBatch(entry, batch, persistence, expected),
       );
@@ -4875,6 +4917,98 @@ registerAidosSessionEventTypes(ctx);
   }
 
   /**
+   * #232: the compressed artifact size of every log about to import, read
+   * WITHOUT decoding anything. The id IS the directory name verbatim —
+   * orchestrator logs are stored as `session-<uuid>` and addressed as
+   * `session-<uuid>` (the header stamps the same prefixed id), subagent
+   * logs as the bare uuid — and the live file is always
+   * `session.jsonl.zstd` (the `.superseded-*`/`.backup-*` sidecars are
+   * rotation leftovers `inspect` never reads). The uncompressed
+   * `session.jsonl` fallback mirrors thursday's LOG_SUFFIXES order; no
+   * such file exists on this machine today, but the shape is documented
+   * there, so the fallback is a real branch, not a guess.
+   *
+   * Unknown (null) is a real answer, not an error: an unfamiliar layout,
+   * a test double with no file, or an unreadable artifact all size as
+   * unknown and flow through the existing post-inspect byte cut. The
+   * misses are counted into ONE info line per import so a silent layout
+   * drift stays visible without spamming one line per session.
+   */
+  private _backfillArtifactSizes(
+    workspacePath: string,
+    ids: SessionId[],
+  ): Map<string, number | null> {
+    const key = workspaceKeyFromPath(workspacePath);
+    const out = new Map<string, number | null>();
+    let misses = 0;
+    for (const id of ids) {
+      let size: number | null = null;
+      for (const name of ["session.jsonl.zstd", "session.jsonl"]) {
+        try {
+          size = statSync(dshHomePath("sessions", key, String(id), name)).size;
+          break;
+        } catch {
+          // Absent under this name; try the next, then unknown.
+        }
+      }
+      if (size === null) misses += 1;
+      out.set(String(id), size);
+    }
+    if (misses > 0) {
+      this.ctx.logger?.info?.(
+        `aidos: backfill could not stat ${misses} of ${ids.length} session artifact(s) under ${key}; sizing them as small (the post-inspect byte cut still bounds them)`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * #232: whether a log whose size is known must be inspected alone. Only
+   * a KNOWN size at or above BACKFILL_LARGE_LOG_BYTES qualifies — unknown
+   * never does (see _backfillArtifactSizes for why serializing on unknown
+   * would be a new way to crawl).
+   */
+  private _isLargeBackfillLog(
+    sizes: Map<string, number | null>,
+    id: SessionId,
+  ): boolean {
+    const size = sizes.get(String(id)) ?? null;
+    return size !== null && size >= BACKFILL_LARGE_LOG_BYTES;
+  }
+
+  /**
+   * #232: the next batch at `cursor`: a large log goes as a batch of one
+   * (a one-id batch spawns exactly one worker in `_importBackfillBatch`,
+   * so it inspects alone BY CONSTRUCTION and flushes alone, bounding the
+   * flush transient to the acknowledged single-log irreducible); small
+   * runs slice exactly as before, up to BACKFILL_BATCH_SESSIONS ids,
+   * stopping ahead of a large log so order is preserved. Always non-empty
+   * for a live cursor, and the inner first take is unconditional, so the
+   * driver's `cursor += outcome.taken` always advances and terminates.
+   * Never skips: every id of `fresh` starts exactly one batch (a large
+   * log that cannot be inspected warns inside the batch and stays
+   * unmarked for the next open — the existing retry path, unchanged).
+   */
+  private _takeBackfillBatch(
+    fresh: SessionId[],
+    cursor: number,
+    sizes: Map<string, number | null>,
+  ): SessionId[] {
+    const first = fresh[cursor]!;
+    if (this._isLargeBackfillLog(sizes, first)) return [first];
+    const batch = [first];
+    while (
+      batch.length < BACKFILL_BATCH_SESSIONS &&
+      cursor + batch.length < fresh.length
+    ) {
+      const next = fresh[cursor + batch.length]!;
+      if (this._isLargeBackfillLog(sizes, next)) break;
+      batch.push(next);
+    }
+    return batch;
+  }
+
+  /**
    * #221: run one backfill batch exclusive process-wide (criterion 7). The
    * tail chain serializes batches across workspaces, so N simultaneous
    * imports retain one batch between them instead of N full histories.
@@ -4898,6 +5032,11 @@ registerAidosSessionEventTypes(ctx);
    * leaving the workspace unverified so the next open retries exactly the
    * unlanded sessions. The `logs` array is released on return, so the next
    * batch starts from an empty retained set.
+   *
+   * #232: a batch holding exactly one large log (see _takeBackfillBatch)
+   * spawns exactly one worker below, so the giant inspects with nothing
+   * else in flight and flushes with nothing else retained — no change
+   * needed here, the serialism falls out of the batch shape.
    */
   private async _importBackfillBatch(
     entry: { store: Store; projectId: ProjectId },

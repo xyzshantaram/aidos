@@ -25768,6 +25768,7 @@ config(en_default());
 
 // src/host/aidos-core.ts
 import { settingsNamespace } from "@deepseek-ai/dsh-settings";
+import { dshHomePath as dshHomePath3 } from "@deepseek-ai/dsh-home-paths";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
@@ -31982,6 +31983,7 @@ var CLOSED_FOLD_CACHE_TTL_MS = 6e4;
 var CLOSED_INSPECT_CONCURRENCY = 4;
 var BACKFILL_BATCH_SESSIONS = 10;
 var BACKFILL_BATCH_BYTES = 64 * 1024 * 1024;
+var BACKFILL_LARGE_LOG_BYTES = 8 * 1024 * 1024;
 var BadPayloadError = class extends Error {
   constructor(message) {
     super(message);
@@ -34587,13 +34589,15 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
       return;
     }
     const expected = fresh.map(String);
+    const sizes = this._backfillArtifactSizes(path, fresh);
+    const soloCount = fresh.filter((id) => this._isLargeBackfillLog(sizes, id)).length;
     this.ctx.logger?.info?.(
-      `aidos: backfill importing ${fresh.length} of ${closedIds.length} closed log(s) in batches of ${BACKFILL_BATCH_SESSIONS}`
+      `aidos: backfill importing ${fresh.length} of ${closedIds.length} closed log(s) in batches of ${BACKFILL_BATCH_SESSIONS}${soloCount > 0 ? ` (${soloCount} large log(s) solo)` : ""}`
     );
     let refused = false;
     let cursor = 0;
     while (cursor < fresh.length) {
-      const batch = fresh.slice(cursor, cursor + BACKFILL_BATCH_SESSIONS);
+      const batch = this._takeBackfillBatch(fresh, cursor, sizes);
       const outcome = await this._exclusiveBackfillBatch(
         () => this._importBackfillBatch(entry, batch, persistence, expected)
       );
@@ -34635,6 +34639,81 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     return closedIds.filter((id) => !imported.has(String(id)));
   }
   /**
+   * #232: the compressed artifact size of every log about to import, read
+   * WITHOUT decoding anything. The id IS the directory name verbatim —
+   * orchestrator logs are stored as `session-<uuid>` and addressed as
+   * `session-<uuid>` (the header stamps the same prefixed id), subagent
+   * logs as the bare uuid — and the live file is always
+   * `session.jsonl.zstd` (the `.superseded-*`/`.backup-*` sidecars are
+   * rotation leftovers `inspect` never reads). The uncompressed
+   * `session.jsonl` fallback mirrors thursday's LOG_SUFFIXES order; no
+   * such file exists on this machine today, but the shape is documented
+   * there, so the fallback is a real branch, not a guess.
+   *
+   * Unknown (null) is a real answer, not an error: an unfamiliar layout,
+   * a test double with no file, or an unreadable artifact all size as
+   * unknown and flow through the existing post-inspect byte cut. The
+   * misses are counted into ONE info line per import so a silent layout
+   * drift stays visible without spamming one line per session.
+   */
+  _backfillArtifactSizes(workspacePath, ids) {
+    const key = workspaceKeyFromPath(workspacePath);
+    const out = /* @__PURE__ */ new Map();
+    let misses = 0;
+    for (const id of ids) {
+      let size = null;
+      for (const name2 of ["session.jsonl.zstd", "session.jsonl"]) {
+        try {
+          size = statSync(dshHomePath3("sessions", key, String(id), name2)).size;
+          break;
+        } catch {
+        }
+      }
+      if (size === null) misses += 1;
+      out.set(String(id), size);
+    }
+    if (misses > 0) {
+      this.ctx.logger?.info?.(
+        `aidos: backfill could not stat ${misses} of ${ids.length} session artifact(s) under ${key}; sizing them as small (the post-inspect byte cut still bounds them)`
+      );
+    }
+    return out;
+  }
+  /**
+   * #232: whether a log whose size is known must be inspected alone. Only
+   * a KNOWN size at or above BACKFILL_LARGE_LOG_BYTES qualifies — unknown
+   * never does (see _backfillArtifactSizes for why serializing on unknown
+   * would be a new way to crawl).
+   */
+  _isLargeBackfillLog(sizes, id) {
+    const size = sizes.get(String(id)) ?? null;
+    return size !== null && size >= BACKFILL_LARGE_LOG_BYTES;
+  }
+  /**
+   * #232: the next batch at `cursor`: a large log goes as a batch of one
+   * (a one-id batch spawns exactly one worker in `_importBackfillBatch`,
+   * so it inspects alone BY CONSTRUCTION and flushes alone, bounding the
+   * flush transient to the acknowledged single-log irreducible); small
+   * runs slice exactly as before, up to BACKFILL_BATCH_SESSIONS ids,
+   * stopping ahead of a large log so order is preserved. Always non-empty
+   * for a live cursor, and the inner first take is unconditional, so the
+   * driver's `cursor += outcome.taken` always advances and terminates.
+   * Never skips: every id of `fresh` starts exactly one batch (a large
+   * log that cannot be inspected warns inside the batch and stays
+   * unmarked for the next open — the existing retry path, unchanged).
+   */
+  _takeBackfillBatch(fresh, cursor, sizes) {
+    const first = fresh[cursor];
+    if (this._isLargeBackfillLog(sizes, first)) return [first];
+    const batch = [first];
+    while (batch.length < BACKFILL_BATCH_SESSIONS && cursor + batch.length < fresh.length) {
+      const next = fresh[cursor + batch.length];
+      if (this._isLargeBackfillLog(sizes, next)) break;
+      batch.push(next);
+    }
+    return batch;
+  }
+  /**
    * #221: run one backfill batch exclusive process-wide (criterion 7). The
    * tail chain serializes batches across workspaces, so N simultaneous
    * imports retain one batch between them instead of N full histories.
@@ -34657,6 +34736,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    * leaving the workspace unverified so the next open retries exactly the
    * unlanded sessions. The `logs` array is released on return, so the next
    * batch starts from an empty retained set.
+   *
+   * #232: a batch holding exactly one large log (see _takeBackfillBatch)
+   * spawns exactly one worker below, so the giant inspects with nothing
+   * else in flight and flushes with nothing else retained — no change
+   * needed here, the serialism falls out of the batch shape.
    */
   async _importBackfillBatch(entry, batch, persistence, expected) {
     const logs = [];
