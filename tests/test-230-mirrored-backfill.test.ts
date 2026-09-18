@@ -39,6 +39,8 @@ import { join } from "node:path";
 import { Store } from "../src/kernel/store";
 import type { BackfillReport } from "../src/kernel/store";
 import { foldSessionLog } from "../src/kernel/backfill";
+import { createInitialState, foldAidosEvents } from "../src/kernel/fold";
+import { InvariantError } from "../src/kernel/types";
 import { MemoryStorage } from "../src/kernel/storage-memory";
 import type { StoragePort, StoredEvent } from "../src/kernel/storage";
 import { openSqliteStorage } from "../src/host/storage-sqlite";
@@ -175,13 +177,15 @@ function slugsById(storage: StoragePort, ids: readonly TicketId[]): Map<TicketId
 }
 
 describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating", () => {
-  it("a partially mirrored log imports exactly its tickets: ids kept, zero -2 slugs", () => {
+  it("a partially mirrored log replays post-mirror history under the mirrored ids", () => {
     withSqlite((storage) => {
       // Four tickets; the live mirror owned two of them (a fraction of
       // the log — the thursday shape: 6 mirrored of 237). Gamma is
-      // touched again AFTER its mirror landed, so its last-touch seq
-      // advanced past anything storage holds: only the slug fallback
-      // can pair it.
+      // touched again AFTER its mirror landed — description revised, a
+      // signoff attached, a comment added — and Alpha gets a post-mirror
+      // comment too, so its last-touch seq also advanced past anything
+      // storage holds: only the slug fallback can pair either of them,
+      // and the replay must carry everything the mirror never did.
       const source = new Store(makeConfig(), {
         now: tickingClock(),
         storage: new MemoryStorage(),
@@ -196,10 +200,13 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
       const snapshotOf = (localId: number) => source.state.tickets.get(localId)!;
       const alphaId = mirrorSnapshot(store, projectId, "session-big", snapshotOf(1));
       const gammaId = mirrorSnapshot(store, projectId, "session-big", snapshotOf(3));
-      // Post-mirror touch: Gamma's description moves on in the session
-      // log after its create already landed in the store. Birth and
-      // slug are untouched, so the slug fallback still pairs it.
+      // Post-mirror life, in the session log after the mirror landed.
+      // Birth and slug are untouched, so the slug fallback still pairs
+      // both tickets — and every row below must survive the import.
       source.setTicket(3, { description: "d-gamma-revised" });
+      source.attachEvidence(3, "builtin:user_signoff", { ok: true }, "user");
+      source.addComment(3, "gamma post-mirror note", "user");
+      source.addComment(1, "alpha post-mirror note", "agent");
 
       const log = {
         sessionId: "session-big",
@@ -212,9 +219,12 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
 
       const result = store.backfillSessionLogs(projectId, [log]);
       expect(result.alreadyRan).toBe(false);
-      // Only the two unmirrored tickets flushed; the two mirrored ones
-      // scan-matched and were never re-imported.
-      expect(result.tickets).toBe(2);
+      // Two fresh tickets flushed (beta, delta) plus two mirror-stale
+      // replays (alpha, gamma) — every row the mirror never carried is
+      // counted in the run deltas, so the numbers are truthful.
+      expect(result.tickets).toBe(4);
+      expect(result.evidence).toBe(1);
+      expect(result.comments).toBe(2);
       expect(result.slugRenames).toEqual([]);
       expect(result.slugMatchConflicts).toEqual([]);
       expect(result.lossless).toBe(true);
@@ -226,6 +236,20 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
       // The preseeded tickets KEEP their original ids.
       expect(ids.has(alphaId)).toBe(true);
       expect(ids.has(gammaId)).toBe(true);
+
+      // The post-mirror history survived under the mirrored ids: the
+      // description revision, the signoff, and both comments.
+      expect(rows.find((row) => row.id === gammaId)!.description).toBe("d-gamma-revised");
+      expect(store.evidenceFor(gammaId).map((row) => row.kind)).toEqual([
+        "builtin:user_signoff",
+      ]);
+      expect(store.evidenceFor(gammaId)[0]!.payload).toEqual({ ok: true });
+      expect(store.commentsFor(gammaId).map((comment) => comment.text)).toEqual([
+        "gamma post-mirror note",
+      ]);
+      expect(store.commentsFor(alphaId).map((comment) => comment.text)).toEqual([
+        "alpha post-mirror note",
+      ]);
 
       // Zero suffixed slugs: every stored create kept its source slug.
       const slugs = [...slugsById(storage, [...ids]).values()].sort();
@@ -259,6 +283,206 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
         expect(origins.get(row.id)!.localSeq).not.toBeNull();
       }
     });
+  });
+
+  it("re-handing the same log is a genuine no-op: nothing duplicated, nothing lost", () => {
+    withSqlite((storage) => {
+      const source = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const sourceProject = source.createProject(WORKSPACE, "alpha");
+      source.createTicket(sourceProject, "Alpha task", "d-alpha");
+      source.createTicket(sourceProject, "Beta task", "d-beta");
+
+      const { store, projectId } = targetStore(storage);
+      const alphaId = mirrorSnapshot(
+        store,
+        projectId,
+        "session-repeat",
+        source.state.tickets.get(1)!,
+      );
+      source.setTicket(1, { description: "d-alpha-revised" });
+      source.attachEvidence(1, "builtin:user_signoff", { ok: true }, "user");
+      source.addComment(1, "alpha note", "user");
+
+      const log = {
+        sessionId: "session-repeat",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+
+      const first = store.backfillSessionLogs(projectId, [log]);
+      expect(first.alreadyRan).toBe(false);
+      expect(first.tickets).toBe(2);
+      expect(first.evidence).toBe(1);
+      expect(first.comments).toBe(1);
+
+      // The identical hand again: the marker already finished the
+      // session, so the call is a no-op — and the replayed history is
+      // NOT emitted a second time.
+      const second = store.backfillSessionLogs(projectId, [log]);
+      expect(second.alreadyRan).toBe(true);
+      expect(second.tickets).toBe(0);
+      expect(second.evidence).toBe(0);
+      expect(second.comments).toBe(0);
+      expect(store.ticketsFor(projectId).length).toBe(2);
+      expect(store.evidenceFor(alphaId).length).toBe(1);
+      expect(store.commentsFor(alphaId).length).toBe(1);
+      expect(store.ticketsFor(projectId).find((row) => row.id === alphaId)!.description).toBe(
+        "d-alpha-revised",
+      );
+
+      // The resume shape: the same session handed again ALONGSIDE a new
+      // one. The replayed ticket skips through the marker's ticket map
+      // (no second replay, no duplicated rows) while the new session's
+      // ticket imports normally.
+      const other = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const otherProject = other.createProject(WORKSPACE, "alpha");
+      other.createTicket(otherProject, "Gamma task", "d-gamma");
+      const otherLog = {
+        sessionId: "session-new",
+        events: other.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+      const third = store.backfillSessionLogs(projectId, [log, otherLog]);
+      expect(third.alreadyRan).toBe(false);
+      expect(third.tickets).toBe(1);
+      expect(third.evidence).toBe(0);
+      expect(third.comments).toBe(0);
+      expect(store.ticketsFor(projectId).length).toBe(3);
+      expect(store.evidenceFor(alphaId).length).toBe(1);
+      expect(store.commentsFor(alphaId).length).toBe(1);
+    });
+  });
+
+  it("preseeded production shape: mirrored fraction plus log yields the log's full count", () => {
+    withSqlite((storage) => {
+      // The shape production actually holds: the store carries a
+      // FRACTION of one session's tickets as seq-less mirrored rows
+      // (origin_session stamped, origin_seq NULL), and the session's own
+      // log is handed in. The import must land every ticket of the log —
+      // total equals the log's count, mirrored ids kept, every history
+      // row present — not the fraction plus the strangers.
+      const source = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const sourceProject = source.createProject(WORKSPACE, "alpha");
+      const titles = ["One", "Two", "Three", "Four", "Five", "Six"];
+      for (const title of titles) {
+        source.createTicket(sourceProject, `${title} task`, `d-${title.toLowerCase()}`);
+      }
+
+      const { store, projectId } = targetStore(storage);
+      const snapshotOf = (localId: number) => source.state.tickets.get(localId)!;
+      // Two of six mirrored, one of them touched afterwards.
+      const oneId = mirrorSnapshot(store, projectId, "session-prod", snapshotOf(1));
+      const threeId = mirrorSnapshot(store, projectId, "session-prod", snapshotOf(3));
+      source.setTicket(3, { description: "d-three-revised" });
+      source.attachEvidence(3, "builtin:user_signoff", { ok: true }, "user");
+      source.addComment(3, "three note", "user");
+      source.attachEvidence(5, "builtin:agent_report", { lines: 7 }, "agent");
+
+      const log = {
+        sessionId: "session-prod",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+
+      const result = store.backfillSessionLogs(projectId, [log]);
+      expect(result.alreadyRan).toBe(false);
+      // Four fresh plus one mirror-stale replay (ticket 3); ticket 1's
+      // mirror was already current, so its replay lands the set with no
+      // new rows — counted as a ticket, with nothing to count beneath.
+      expect(result.tickets).toBe(6);
+      expect(result.evidence).toBe(2);
+      expect(result.comments).toBe(1);
+      expect(result.lossless).toBe(true);
+
+      const rows = store.ticketsFor(projectId);
+      expect(rows.length).toBe(6);
+      const ids = new Set(rows.map((row) => row.id));
+      expect(ids.size).toBe(6);
+      expect(ids.has(oneId)).toBe(true);
+      expect(ids.has(threeId)).toBe(true);
+      expect(rows.find((row) => row.id === threeId)!.description).toBe("d-three-revised");
+      expect(store.evidenceFor(threeId).map((row) => row.kind)).toEqual([
+        "builtin:user_signoff",
+      ]);
+      expect(store.commentsFor(threeId).map((comment) => comment.text)).toEqual(["three note"]);
+      const five = rows.find((row) => row.title === "Five task")!;
+      expect(store.evidenceFor(five.id).map((row) => row.kind)).toEqual([
+        "builtin:agent_report",
+      ]);
+      // No suffixed duplicates anywhere.
+      const slugs = [...slugsById(storage, [...ids]).values()].sort();
+      expect(slugs).toEqual([
+        "five-task",
+        "four-task",
+        "one-task",
+        "six-task",
+        "three-task",
+        "two-task",
+      ]);
+    });
+  });
+
+  it("a non-create that rewrites createdAt is refused", () => {
+    // #230 round 2: the slug fallback pairs mirrored rows by (slug,
+    // createdAt). If a future or hand-written event could rewrite
+    // createdAt on a set, matches would silently flip into duplicates —
+    // so the invariant pins birth on every non-create.
+    const source = new Store(makeConfig(), {
+      now: tickingClock(),
+      storage: new MemoryStorage(),
+    });
+    const project = source.createProject(WORKSPACE, "alpha");
+    const id = source.createTicket(project, "T", "d");
+    const snap = source.state.tickets.get(id)!;
+    const at = snap.updatedAt + 1;
+    const honestSet: AidosEvent = {
+      kind: "ticket/change",
+      version: 1,
+      operation: "set",
+      ticket: { ...snap, description: "revised", revision: 2, updatedAt: at },
+      at,
+    };
+    const forgedSet: AidosEvent = {
+      kind: "ticket/change",
+      version: 1,
+      operation: "set",
+      ticket: {
+        ...snap,
+        description: "revised",
+        revision: 2,
+        createdAt: snap.createdAt + 100,
+        updatedAt: at,
+      },
+      at,
+    };
+    const honestState = createInitialState();
+    for (const event of source.events()) {
+      foldAidosEvents(honestState, event);
+    }
+    expect(() => foldAidosEvents(honestState, honestSet)).not.toThrow();
+    const forgedState = createInitialState();
+    for (const event of source.events()) {
+      foldAidosEvents(forgedState, event);
+    }
+    expect(() => foldAidosEvents(forgedState, forgedSet)).toThrow(InvariantError);
   });
 
   it("a ticket that reuses a renamed sibling's slug is imported fresh, never fused", () => {

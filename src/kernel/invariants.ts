@@ -464,6 +464,13 @@ function validateTicketChange(
     if (lastRevision === undefined || ticket.revision !== lastRevision + 1) {
       invariant(`ticket ${id} revision must continue from ${lastRevision}`);
     }
+    // #230 round 2: createdAt is birth data. The backfill slug fallback
+    // pairs mirrored rows by (slug, createdAt); a set that rewrote
+    // createdAt would silently flip matches into duplicates, so a
+    // non-create that changes it is a corrupt log, not an update.
+    if (ticket.createdAt !== prev.createdAt) {
+      invariant(`ticket ${id} createdAt must not change`);
+    }
   }
 
   // Rule 6: at and updatedAt must not fall.

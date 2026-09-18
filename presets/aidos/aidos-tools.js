@@ -26468,6 +26468,9 @@ function validateTicketChange(state, raw) {
     if (lastRevision === void 0 || ticket.revision !== lastRevision + 1) {
       invariant(`ticket ${id} revision must continue from ${lastRevision}`);
     }
+    if (ticket.createdAt !== prev.createdAt) {
+      invariant(`ticket ${id} createdAt must not change`);
+    }
   }
   if (lastAt !== void 0 && at < lastAt) {
     invariant(`ticket ${id} at must not fall below ${lastAt}`);
@@ -29043,7 +29046,10 @@ var Store = class {
    * the ticket's content, then its live evidence rows and comments
    * (ascending `at`, the order the source's Rule 7 already guarantees),
    * then one `set` carrying the final snapshot — final state, remapped
-   * dependencies, folded tags — at revision 2. Origin stamping: each
+   * dependencies, folded tags — at revision 2. A mirror-stale ticket
+   * (live-mirrored CREATE, history never imported) replays the same shape
+   * minus the create, with the set continuing the stored revision chain,
+   * and counts in the run deltas like a fresh import. Origin stamping: each
    * imported row carries the source session id and the seq of the source
    * event that produced it, so every row traces back to the log it came
    * from.
@@ -29133,12 +29139,18 @@ var Store = class {
       }
     }
     const scan = this._reconstructTicketMap(folded);
-    for (const [key, id] of scan.map) {
-      if (!priorMap.has(key)) {
-        priorMap.set(key, id);
+    const skipSet = new Set(priorMap.keys());
+    for (const key of scan.map.keys()) {
+      if (!scan.mirrorStale.has(key)) {
+        skipSet.add(key);
       }
     }
     const newIdOf = new Map(priorMap);
+    for (const [key, id] of scan.map) {
+      if (!newIdOf.has(key)) {
+        newIdOf.set(key, id);
+      }
+    }
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
         const key = `${fold.sessionId}#${localId}`;
@@ -29165,7 +29177,12 @@ var Store = class {
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
         const key = `${fold.sessionId}#${localId}`;
-        if (priorMap.has(key)) {
+        if (skipSet.has(key)) {
+          continue;
+        }
+        const stale = scan.mirrorStale.get(key);
+        if (stale !== void 0) {
+          slugOf.set(key, stale.slug);
           continue;
         }
         const final = fold.state.tickets.get(localId);
@@ -29261,7 +29278,7 @@ var Store = class {
         const rows = importedRowsOf(fold);
         for (const localId of sortedLocalIds(fold)) {
           const key = `${fold.sessionId}#${localId}`;
-          if (priorMap.has(key)) {
+          if (skipSet.has(key)) {
             continue;
           }
           const newId = newIdOf.get(key);
@@ -29272,34 +29289,38 @@ var Store = class {
             localSeq
           });
           const ticketOrigin = origin(fold.seqOfTicket.get(localId) ?? null);
-          this._emit(
-            {
-              kind: "ticket/change",
-              version: 1,
-              operation: "create",
-              ticket: {
-                id: newId,
-                projectId,
-                title: final.title,
-                description: final.description,
-                body: final.body,
-                criteria: final.criteria,
-                phase: final.phase,
-                order: final.order,
-                state: "open",
-                dependsOn: [],
-                allowlist: [...final.allowlist],
-                tags: [...final.tags],
-                slug,
-                workspaceKey,
-                revision: 1,
-                createdAt: final.createdAt,
-                updatedAt: final.createdAt
+          const stale = scan.mirrorStale.get(key);
+          const stored = stale !== void 0 ? this._state.tickets.get(newId) : null;
+          if (stale === void 0) {
+            this._emit(
+              {
+                kind: "ticket/change",
+                version: 1,
+                operation: "create",
+                ticket: {
+                  id: newId,
+                  projectId,
+                  title: final.title,
+                  description: final.description,
+                  body: final.body,
+                  criteria: final.criteria,
+                  phase: final.phase,
+                  order: final.order,
+                  state: "open",
+                  dependsOn: [],
+                  allowlist: [...final.allowlist],
+                  tags: [...final.tags],
+                  slug,
+                  workspaceKey,
+                  revision: 1,
+                  createdAt: final.createdAt,
+                  updatedAt: final.createdAt
+                },
+                at: final.createdAt
               },
-              at: final.createdAt
-            },
-            ticketOrigin
-          );
+              ticketOrigin
+            );
+          }
           const writes = [
             ...rows.evidence.filter((row) => row.ticketId === localId).map((row) => ({ at: row.row.at, kind: "evidence", row })),
             ...rows.comments.filter((comment) => comment.record.ticketId === localId).map((comment) => ({ at: comment.record.at, kind: "comment", comment }))
@@ -29359,7 +29380,8 @@ var Store = class {
               }
             );
           }
-          const setAt = Math.max(final.updatedAt, lastWriteAt);
+          const setAt = stale === void 0 ? Math.max(final.updatedAt, lastWriteAt) : Math.max(final.updatedAt, lastWriteAt, stored.updatedAt);
+          const setRevision = stale === void 0 ? 2 : stored.revision + 1;
           this._emit(
             {
               kind: "ticket/change",
@@ -29372,7 +29394,7 @@ var Store = class {
                 workspaceKey,
                 slug,
                 dependsOn: remappedDeps,
-                revision: 2,
+                revision: setRevision,
                 updatedAt: setAt
               },
               at: setAt
@@ -29388,11 +29410,11 @@ var Store = class {
         }
         for (const localId of sortedLocalIds(fold)) {
           const key = `${fold.sessionId}#${localId}`;
-          if (!priorMap.has(key)) {
+          if (!skipSet.has(key) || scan.mirrorStale.has(key)) {
             continue;
           }
           const final = fold.state.tickets.get(localId);
-          const newId = priorMap.get(key);
+          const newId = newIdOf.get(key);
           for (const ref of final.dependsOn) {
             const outcome = this._classifyDependency(
               ref,
@@ -29705,7 +29727,7 @@ var Store = class {
       }
       const slugKey = `${stored.sessionId}#${event.ticket.slug}`;
       const bucket = createsBySlug.get(slugKey);
-      const candidate = { id: event.ticket.id, createdAt: event.ticket.createdAt };
+      const candidate = { id: event.ticket.id, createdAt: event.ticket.createdAt, localSeq: stored.localSeq };
       if (bucket === void 0) {
         createsBySlug.set(slugKey, [candidate]);
       } else {
@@ -29714,6 +29736,7 @@ var Store = class {
     }
     const map2 = /* @__PURE__ */ new Map();
     const slugConflicts = [];
+    const mirrorStale = /* @__PURE__ */ new Map();
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
         const key = `${fold.sessionId}#${localId}`;
@@ -29724,25 +29747,28 @@ var Store = class {
         const agreeing = candidates.filter(
           (candidate) => candidate.createdAt === final.createdAt
         );
-        const slugFound = agreeing.length === 1 ? agreeing[0].id : void 0;
+        const slugFound = agreeing.length === 1 ? agreeing[0] : void 0;
         if (seqFound !== void 0) {
           map2.set(key, seqFound);
-          if (slugFound !== void 0 && slugFound !== seqFound) {
+          if (slugFound !== void 0 && slugFound.id !== seqFound) {
             slugConflicts.push({
               sessionId: fold.sessionId,
               localId,
               seqMatchedId: seqFound,
-              slugMatchedId: slugFound
+              slugMatchedId: slugFound.id
             });
           }
           continue;
         }
         if (slugFound !== void 0) {
-          map2.set(key, slugFound);
+          map2.set(key, slugFound.id);
+          if (slugFound.localSeq === null) {
+            mirrorStale.set(key, { newId: slugFound.id, slug: final.slug });
+          }
         }
       }
     }
-    return { map: map2, slugConflicts };
+    return { map: map2, slugConflicts, mirrorStale };
   }
   /**
    * One classified dependency reference — see the module-level

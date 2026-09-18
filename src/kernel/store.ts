@@ -1221,7 +1221,10 @@ export class Store {
    * the ticket's content, then its live evidence rows and comments
    * (ascending `at`, the order the source's Rule 7 already guarantees),
    * then one `set` carrying the final snapshot — final state, remapped
-   * dependencies, folded tags — at revision 2. Origin stamping: each
+   * dependencies, folded tags — at revision 2. A mirror-stale ticket
+   * (live-mirrored CREATE, history never imported) replays the same shape
+   * minus the create, with the set continuing the stored revision chain,
+   * and counts in the run deltas like a fresh import. Origin stamping: each
    * imported row carries the source session id and the seq of the source
    * event that produced it, so every row traces back to the log it came
    * from.
@@ -1361,10 +1364,18 @@ export class Store {
     // would otherwise re-import as duplicates (F4). #230: the scan also
     // covers live-mirrored rows through its slug fallback, which is what
     // lets the host hand mirrored sessions back in.
+    // #230 round 2: the scan's two provenances split HERE and never merge.
+    // A marker entry or a seq-keyed scan hit means "fully imported before,
+    // history landed" — skip. A slug-fallback hit on a seq-less mirrored
+    // row (scan.mirrorStale) means "mirrored CREATE only" — REPLAY under
+    // the matched id in pass 3a. Unioning them indistinguishably is what
+    // silently dropped post-mirror evidence, comments and sets while
+    // reporting lossless.
     const scan = this._reconstructTicketMap(folded);
-    for (const [key, id] of scan.map) {
-      if (!priorMap.has(key)) {
-        priorMap.set(key, id);
+    const skipSet = new Set<string>(priorMap.keys());
+    for (const key of scan.map.keys()) {
+      if (!scan.mirrorStale.has(key)) {
+        skipSet.add(key);
       }
     }
 
@@ -1372,8 +1383,15 @@ export class Store {
     // the same port counter every create uses; two logs may both hold a
     // local ticket 1, and they leave here with different ids. Tickets the
     // previous generation already mapped keep their ids: they are reported
-    // but never re-imported.
+    // but never re-imported. Scan-matched tickets keep the stored id the
+    // scan paired them with — mirrored replays and seq-matched skips alike
+    // resolve through the same map, so dependency wiring sees one identity.
     const newIdOf = new Map<string, TicketId>(priorMap);
+    for (const [key, id] of scan.map) {
+      if (!newIdOf.has(key)) {
+        newIdOf.set(key, id);
+      }
+    }
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
         const key = `${fold.sessionId}#${localId}`;
@@ -1406,7 +1424,16 @@ export class Store {
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
         const key = `${fold.sessionId}#${localId}`;
-        if (priorMap.has(key)) {
+        if (skipSet.has(key)) {
+          continue;
+        }
+        // #230 round 2: a mirror-stale replay keeps the slug it landed
+        // with — no fresh assignment, no rename, never a suffix. The slug
+        // is already taken (the mirrored row holds it) and the scan only
+        // matched because fold and storage agree on it.
+        const stale = scan.mirrorStale.get(key);
+        if (stale !== undefined) {
+          slugOf.set(key, stale.slug);
           continue;
         }
         const final = fold.state.tickets.get(localId)!;
@@ -1524,7 +1551,10 @@ export class Store {
           const key = `${fold.sessionId}#${localId}`;
           // A completion run never re-imports a ticket its predecessor
           // mapped: its drops are recomputed for the report below.
-          if (priorMap.has(key)) {
+          // #230 round 2: the skip is the MARKER's provenance plus the
+          // scan's seq-proven rows only — mirror-stale rows fall through
+          // to the replay below instead of vanishing here.
+          if (skipSet.has(key)) {
             continue;
           }
           const newId = newIdOf.get(key)!;
@@ -1535,37 +1565,50 @@ export class Store {
             localSeq,
           });
           const ticketOrigin = origin(fold.seqOfTicket.get(localId) ?? null);
+          // #230 round 2: a mirror-stale ticket already holds its create
+          // (the live mirror landed it) — replaying a second create would
+          // refuse (the id exists) or duplicate. Only the history the
+          // mirror never carried is emitted: the live writes, then the
+          // final set. The replayed set continues the STORED ticket's
+          // revision chain (normally 1 -> 2, the mirror create being
+          // revision 1) and never lets its timestamps fall below what the
+          // store already holds.
+          const stale = scan.mirrorStale.get(key);
+          const stored = stale !== undefined ? this._state.tickets.get(newId)! : null;
 
           // The create: content as-is, but a create is open, revision 1,
-          // createdAt = at — the invariants' only legal birth.
-          this._emit(
-            {
-              kind: "ticket/change",
-              version: 1,
-              operation: "create",
-              ticket: {
-                id: newId,
-                projectId,
-                title: final.title,
-                description: final.description,
-                body: final.body,
-                criteria: final.criteria,
-                phase: final.phase,
-                order: final.order,
-                state: "open",
-                dependsOn: [],
-                allowlist: [...final.allowlist],
-                tags: [...final.tags],
-                slug,
-                workspaceKey,
-                revision: 1,
-                createdAt: final.createdAt,
-                updatedAt: final.createdAt,
+          // createdAt = at — the invariants' only legal birth. Skipped
+          // for replays: the mirrored create already landed.
+          if (stale === undefined) {
+            this._emit(
+              {
+                kind: "ticket/change",
+                version: 1,
+                operation: "create",
+                ticket: {
+                  id: newId,
+                  projectId,
+                  title: final.title,
+                  description: final.description,
+                  body: final.body,
+                  criteria: final.criteria,
+                  phase: final.phase,
+                  order: final.order,
+                  state: "open",
+                  dependsOn: [],
+                  allowlist: [...final.allowlist],
+                  tags: [...final.tags],
+                  slug,
+                  workspaceKey,
+                  revision: 1,
+                  createdAt: final.createdAt,
+                  updatedAt: final.createdAt,
+                },
+                at: final.createdAt,
               },
-              at: final.createdAt,
-            },
-            ticketOrigin,
-          );
+              ticketOrigin,
+            );
+          }
 
           // The ticket's live writes, ascending at — the order the source
           // log's Rule 7 guarantees, so no at falls.
@@ -1641,7 +1684,16 @@ export class Store {
               },
             );
           }
-          const setAt = Math.max(final.updatedAt, lastWriteAt);
+          // A replay continues the stored ticket's chain instead of
+          // restarting it at revision 2: the mirror create is already
+          // revision 1, and the set must neither reuse a revision nor let
+          // the stored timestamps fall. A fresh import restarts at 2 by
+          // construction (create just landed at revision 1).
+          const setAt =
+            stale === undefined
+              ? Math.max(final.updatedAt, lastWriteAt)
+              : Math.max(final.updatedAt, lastWriteAt, stored!.updatedAt);
+          const setRevision = stale === undefined ? 2 : stored!.revision + 1;
           this._emit(
             {
               kind: "ticket/change",
@@ -1654,7 +1706,7 @@ export class Store {
                 workspaceKey,
                 slug,
                 dependsOn: remappedDeps,
-                revision: 2,
+                revision: setRevision,
                 updatedAt: setAt,
               },
               at: setAt,
@@ -1668,7 +1720,11 @@ export class Store {
       // already landed, so there is nothing to re-emit: the source logs
       // still hold the original references, and reclassifying them here
       // names every edge the workspace lost — or pends it, when the driver
-      // claimed the target session up front. Runs ONLY for handed-in
+      // claimed the target session up front. #230 round 2: mirror-stale
+      // replays are NOT re-examined here — their wiring was really
+      // remapped (and counted) by the replay set in pass 3a above, and
+      // reclassifying it here would double-count every edge. Runs ONLY for
+      // handed-in
       // sessions whose history no marker finished (the v1 shape: tickets
       // flushed, history skipped). A first import has no prior tickets and
       // skips for free; a resume carries its recorded wiring forward
@@ -1679,11 +1735,14 @@ export class Store {
         }
         for (const localId of sortedLocalIds(fold)) {
           const key = `${fold.sessionId}#${localId}`;
-          if (!priorMap.has(key)) {
+          if (!skipSet.has(key) || scan.mirrorStale.has(key)) {
             continue;
           }
           const final = fold.state.tickets.get(localId)!;
-          const newId = priorMap.get(key)!;
+          // #230 round 2: the renumbering map, not the marker map — the
+          // key may resolve through the origin scan (the v1 shape, no
+          // marker entry) rather than through a previous run.
+          const newId = newIdOf.get(key)!;
           for (const ref of final.dependsOn) {
             const outcome = this._classifyDependency(
               ref,
@@ -2055,9 +2114,10 @@ export class Store {
   private _reconstructTicketMap(folded: readonly FoldedSessionLog[]): {
     map: Map<string, TicketId>;
     slugConflicts: SlugMatchConflict[];
+    mirrorStale: Map<string, { newId: TicketId; slug: string }>;
   } {
     const createsByOrigin = new Map<string, TicketId>();
-    const createsBySlug = new Map<string, { id: TicketId; createdAt: number }[]>();
+    const createsBySlug = new Map<string, { id: TicketId; createdAt: number; localSeq: number | null }[]>();
     for (const stored of this._storage.readAll()) {
       const event = stored.event;
       if (
@@ -2072,7 +2132,7 @@ export class Store {
       }
       const slugKey = `${stored.sessionId}#${event.ticket.slug}`;
       const bucket = createsBySlug.get(slugKey);
-      const candidate = { id: event.ticket.id, createdAt: event.ticket.createdAt };
+      const candidate = { id: event.ticket.id, createdAt: event.ticket.createdAt, localSeq: stored.localSeq };
       if (bucket === undefined) {
         createsBySlug.set(slugKey, [candidate]);
       } else {
@@ -2081,6 +2141,7 @@ export class Store {
     }
     const map = new Map<string, TicketId>();
     const slugConflicts: SlugMatchConflict[] = [];
+    const mirrorStale = new Map<string, { newId: TicketId; slug: string }>();
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
         const key = `${fold.sessionId}#${localId}`;
@@ -2097,25 +2158,33 @@ export class Store {
         // Exactly one birth-matching row: a resolved identity. Zero, or
         // several that birth cannot tell apart, is no match — the ticket
         // imports fresh (suffixed on collision) instead of fused.
-        const slugFound = agreeing.length === 1 ? agreeing[0]!.id : undefined;
+        const slugFound = agreeing.length === 1 ? agreeing[0] : undefined;
         if (seqFound !== undefined) {
           map.set(key, seqFound);
-          if (slugFound !== undefined && slugFound !== seqFound) {
+          if (slugFound !== undefined && slugFound.id !== seqFound) {
             slugConflicts.push({
               sessionId: fold.sessionId,
               localId,
               seqMatchedId: seqFound,
-              slugMatchedId: slugFound,
+              slugMatchedId: slugFound.id,
             });
           }
           continue;
         }
         if (slugFound !== undefined) {
-          map.set(key, slugFound);
+          map.set(key, slugFound.id);
+          // #230 round 2: no seq hit, and the one birth-matching row is
+          // seq-less — a live-mirrored CREATE whose history never landed.
+          // The importer replays it under the matched id instead of
+          // skipping it. A birth-matching row that DOES carry a seq is a
+          // real prior import and keeps the skip behaviour.
+          if (slugFound.localSeq === null) {
+            mirrorStale.set(key, { newId: slugFound.id, slug: final.slug });
+          }
         }
       }
     }
-    return { map, slugConflicts };
+    return { map, slugConflicts, mirrorStale };
   }
 
   /**
