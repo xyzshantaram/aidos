@@ -29095,8 +29095,13 @@ var Store = class {
    * then one `set` carrying the final snapshot — final state, remapped
    * dependencies, folded tags — at revision 2. A mirror-stale ticket
    * (live-mirrored CREATE, history never imported) replays the same shape
-   * minus the create, with the set continuing the stored revision chain,
-   * and counts in the run deltas like a fresh import. Origin stamping: each
+   * minus the create, with the set continuing the stored revision chain —
+   * but only the DELTA the store does not already hold. The live mirror
+   * is lockstep, so replayed evidence/comments already present by row
+   * identity are skipped, and a ticket whose stored content already
+   * equals the fold final emits no set at all: a content-identical no-op
+   * plus its marker entry, contributing zero to the run deltas, which
+   * count only what was ACTUALLY emitted. Origin stamping: each
    * imported row carries the source session id and the seq of the source
    * event that produced it, so every row traces back to the log it came
    * from.
@@ -29338,6 +29343,18 @@ var Store = class {
           const ticketOrigin = origin(fold.seqOfTicket.get(localId) ?? null);
           const stale = scan.mirrorStale.get(key);
           const stored = stale !== void 0 ? this._state.tickets.get(newId) : null;
+          const heldEvidence = /* @__PURE__ */ new Map();
+          const heldComments = /* @__PURE__ */ new Map();
+          if (stale !== void 0) {
+            for (const row of this._state.evidence.get(newId) ?? []) {
+              const heldKey = `${row.at}\0${row.kind}`;
+              heldEvidence.set(heldKey, (heldEvidence.get(heldKey) ?? 0) + 1);
+            }
+            for (const record2 of this._state.comments.get(newId) ?? []) {
+              const heldKey = `${record2.at}\0${record2.author}\0${record2.text}`;
+              heldComments.set(heldKey, (heldComments.get(heldKey) ?? 0) + 1);
+            }
+          }
           if (stale === void 0) {
             this._emit(
               {
@@ -29374,6 +29391,24 @@ var Store = class {
           ].sort((a, b) => a.at - b.at);
           let lastWriteAt = final.createdAt;
           for (const write of writes) {
+            if (stale !== void 0) {
+              if (write.kind === "evidence") {
+                const heldKey = `${write.row.row.at}\0${write.row.row.kind}`;
+                const held = heldEvidence.get(heldKey) ?? 0;
+                if (held > 0) {
+                  heldEvidence.set(heldKey, held - 1);
+                  continue;
+                }
+              } else {
+                const record2 = write.comment.record;
+                const heldKey = `${record2.at}\0${record2.author}\0${record2.text}`;
+                const held = heldComments.get(heldKey) ?? 0;
+                if (held > 0) {
+                  heldComments.set(heldKey, held - 1);
+                  continue;
+                }
+              }
+            }
             lastWriteAt = Math.max(lastWriteAt, write.at);
             if (write.kind === "evidence") {
               this._emit(
@@ -29402,6 +29437,9 @@ var Store = class {
             }
           }
           const remappedDeps = [];
+          const ticketDrops = [];
+          const ticketPendings = [];
+          let ticketMapped = 0;
           for (const ref of final.dependsOn) {
             const outcome = this._classifyDependency(
               ref,
@@ -29419,15 +29457,28 @@ var Store = class {
               ref,
               {
                 remapped: remappedDeps,
-                drops: droppedDependencies,
-                pendings,
+                drops: ticketDrops,
+                pendings: ticketPendings,
                 onMapped: () => {
-                  edgesRewritten += 1;
+                  ticketMapped += 1;
                 }
               }
             );
           }
-          const setAt = stale === void 0 ? Math.max(final.updatedAt, lastWriteAt) : Math.max(final.updatedAt, lastWriteAt, stored.updatedAt);
+          const sameStrings = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
+          const storedEqualsFinal = stale !== void 0 && stored.title === final.title && stored.description === final.description && stored.body === final.body && stored.criteria === final.criteria && stored.phase === final.phase && stored.order === final.order && stored.state === final.state && stored.slug === stale.slug && sameStrings(stored.allowlist, final.allowlist) && sameStrings(stored.tags, final.tags) && sameStrings(stored.dependsOn, remappedDeps);
+          if (storedEqualsFinal) {
+            continue;
+          }
+          droppedDependencies.push(...ticketDrops);
+          pendings.push(...ticketPendings);
+          edgesRewritten += ticketMapped;
+          const setAt = stale === void 0 ? Math.max(final.updatedAt, lastWriteAt) : Math.max(
+            final.updatedAt,
+            lastWriteAt,
+            stored.updatedAt,
+            this._state.lastAt.get(newId) ?? stored.updatedAt
+          );
           const setRevision = stale === void 0 ? 2 : stored.revision + 1;
           this._emit(
             {

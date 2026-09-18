@@ -219,10 +219,12 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
 
       const result = store.backfillSessionLogs(projectId, [log]);
       expect(result.alreadyRan).toBe(false);
-      // Two fresh tickets flushed (beta, delta) plus two mirror-stale
-      // replays (alpha, gamma) — every row the mirror never carried is
-      // counted in the run deltas, so the numbers are truthful.
-      expect(result.tickets).toBe(4);
+      // Two fresh tickets flushed (beta, delta) plus gamma's mirror-stale
+      // replay (its description changed, so the set emits); alpha's replay
+      // carries only its post-mirror comment — its stored content already
+      // equals the fold final, so no content-identical set emits and the
+      // tickets delta counts only sets actually emitted.
+      expect(result.tickets).toBe(3);
       expect(result.evidence).toBe(1);
       expect(result.comments).toBe(2);
       expect(result.slugRenames).toEqual([]);
@@ -250,6 +252,9 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
       expect(store.commentsFor(alphaId).map((comment) => comment.text)).toEqual([
         "alpha post-mirror note",
       ]);
+      // Alpha's replay emitted no set (a comment changes no snapshot
+      // content), so its revision chain is untouched by the import.
+      expect(store.state.tickets.get(alphaId)!.revision).toBe(1);
 
       // Zero suffixed slugs: every stored create kept its source slug.
       const slugs = [...slugsById(storage, [...ids]).values()].sort();
@@ -405,9 +410,9 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
       const result = store.backfillSessionLogs(projectId, [log]);
       expect(result.alreadyRan).toBe(false);
       // Four fresh plus one mirror-stale replay (ticket 3); ticket 1's
-      // mirror was already current, so its replay lands the set with no
-      // new rows — counted as a ticket, with nothing to count beneath.
-      expect(result.tickets).toBe(6);
+      // mirror was already current, so it replays to a content-identical
+      // no-op contributing zero rather than a pointless revision bump.
+      expect(result.tickets).toBe(5);
       expect(result.evidence).toBe(2);
       expect(result.comments).toBe(1);
       expect(result.lossless).toBe(true);
@@ -614,6 +619,369 @@ describe("#230 kernel: mirrored NULL-seq rows scan-match instead of duplicating"
       const rows = store.ticketsFor(projectId);
       expect(rows.length).toBe(2);
       expect(new Set(rows.map((row) => row.title)).size).toBe(2);
+    });
+  });
+});
+
+/**
+ * #230 round 3: the lockstep mirror driver. Production's `_mirrorTarget`
+ * keeps mirrored tickets in LOCKSTEP — every later write mirrors too —
+ * so a mirrored store row is create PLUS later sets/evidence, NOT a bare
+ * create. Every earlier test in this file mirrored bare creates only,
+ * which is why two rounds shipped: the replay re-emitted history the
+ * store already held and either refused (Rule 7) or duplicated it.
+ *
+ * `mirrorSessionEvent` lands one session event into the workspace store
+ * the way the live mirror does: identical event object (up to the
+ * workspace id remap the id spaces force), origin session stamped, NO
+ * localSeq. `mirrorTail` lands every session event since the last call,
+ * so interleaving session writes with `mirrorTail()` reproduces the
+ * production shape exactly: a mirrored PREFIX of the log's history.
+ */
+function mirrorSessionEvent(
+  store: Store,
+  projectId: number,
+  sessionId: string,
+  ids: Map<number, number>,
+  event: AidosEvent,
+): void {
+  const done = () => undefined;
+  const origin = { sessionId };
+  switch (event.kind) {
+    case "project/created":
+    case "project/moved":
+    case "plan/change":
+    case "phase/set":
+    case "backfill/completed":
+      return;
+    case "ticket/change": {
+      if (event.operation === "create") {
+        const newId = store.allocateTicketId();
+        ids.set(event.ticket.id, newId);
+        store.commitHostMirror(
+          {
+            kind: "ticket/change",
+            version: 1,
+            operation: "create",
+            ticket: {
+              ...event.ticket,
+              id: newId,
+              projectId,
+              workspaceKey: KEY,
+              state: "open",
+              dependsOn: [],
+              revision: 1,
+              createdAt: event.ticket.createdAt,
+              updatedAt: event.ticket.createdAt,
+            },
+            at: event.at,
+          },
+          done,
+          origin,
+        );
+        return;
+      }
+      const newId = ids.get(event.ticket.id);
+      if (newId === undefined) {
+        throw new Error(`lockstep helper cannot mirror a write for unmapped ticket ${event.ticket.id}`);
+      }
+      store.commitHostMirror(
+        {
+          kind: "ticket/change",
+          version: 1,
+          operation: event.operation,
+          ticket: { ...event.ticket, id: newId, projectId, workspaceKey: KEY },
+          at: event.at,
+        },
+        done,
+        origin,
+      );
+      return;
+    }
+    case "evidence/attached": {
+      const newId = ids.get(event.ticketId);
+      if (newId === undefined) {
+        throw new Error(`lockstep helper cannot mirror evidence for unmapped ticket ${event.ticketId}`);
+      }
+      store.commitHostMirror(
+        {
+          kind: "evidence/attached",
+          version: 1,
+          ticketId: newId,
+          row: { ...event.row, payload: { ...event.row.payload } },
+        },
+        done,
+        origin,
+      );
+      return;
+    }
+    case "comment/added": {
+      const newId = ids.get(event.ticketId);
+      if (newId === undefined) {
+        throw new Error(`lockstep helper cannot mirror a comment for unmapped ticket ${event.ticketId}`);
+      }
+      store.commitHostMirror(
+        {
+          kind: "comment/added",
+          version: 1,
+          ticketId: newId,
+          text: event.text,
+          author: event.author,
+          at: event.at,
+        },
+        done,
+        origin,
+      );
+      return;
+    }
+    default:
+      throw new Error(`lockstep helper does not mirror ${(event as AidosEvent).kind}`);
+  }
+}
+
+describe("#230 round 3: lockstep-mirrored history replays as deltas", () => {
+  it("lockstep shape: mirrored create+evidence+set, later rows import with no refusal and no duplication", () => {
+    withSqlite((storage) => {
+      // The production shape round 2 refused: the stored row holds its
+      // create AND its mirrored evidence AND its mirrored set (revision
+      // 2, lastAt above the create), and the log carries all of that
+      // plus a tail the mirror never landed.
+      const { store, projectId } = targetStore(storage);
+      const source = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const sourceProject = source.createProject(WORKSPACE, "alpha");
+      const ids = new Map<number, number>();
+      let mirrored = 0;
+      const mirrorTail = () => {
+        const events = source.events();
+        for (let index = mirrored; index < events.length; index++) {
+          mirrorSessionEvent(store, projectId, "session-lockstep", ids, events[index]!);
+        }
+        mirrored = events.length;
+      };
+
+      source.createTicket(sourceProject, "Lockstep task", "d-one");
+      mirrorTail();
+      source.attachEvidence(1, "builtin:user_signoff", { ok: true }, "user");
+      mirrorTail();
+      source.setTicket(1, { description: "d-one-revised" });
+      mirrorTail();
+      // A second ticket, never mirrored at all.
+      source.createTicket(sourceProject, "Fresh task", "d-two");
+      // The tail the mirror never landed.
+      source.attachEvidence(1, "builtin:agent_report", { lines: 7 }, "agent");
+      source.addComment(1, "lockstep tail note", "user");
+      source.setTicket(1, { description: "d-one-v3" });
+
+      const workspaceId = ids.get(1)!;
+      expect(store.state.tickets.get(workspaceId)!.revision).toBe(2);
+      const log = {
+        sessionId: "session-lockstep",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+
+      const result = store.backfillSessionLogs(projectId, [log]);
+      expect(result.alreadyRan).toBe(false);
+      // Two tickets (one fresh create+set, one mirror-stale replay whose
+      // set carries the v3 content) and exactly the tail rows beneath.
+      expect(result.tickets).toBe(2);
+      expect(result.evidence).toBe(1);
+      expect(result.comments).toBe(1);
+      expect(result.lossless).toBe(true);
+
+      // No duplication: the mirrored signoff appears exactly once,
+      // followed by the tail report in ascending order.
+      expect(store.evidenceFor(workspaceId).map((row) => row.kind)).toEqual([
+        "builtin:user_signoff",
+        "builtin:agent_report",
+      ]);
+      expect(store.commentsFor(workspaceId).map((comment) => comment.text)).toEqual([
+        "lockstep tail note",
+      ]);
+      expect(store.state.tickets.get(workspaceId)!.description).toBe("d-one-v3");
+      // The replay set continued the STORED revision chain, not a fresh one.
+      expect(store.state.tickets.get(workspaceId)!.revision).toBe(3);
+      expect(store.ticketsFor(projectId).length).toBe(2);
+      const slugs = [...slugsById(storage, [workspaceId]).values()];
+      expect(slugs).toEqual(["lockstep-task"]);
+    });
+  });
+
+  it("boundary: stored lastAt equals the replayed at, so the row must be skipped, not duplicated", () => {
+    withSqlite((storage) => {
+      // Mirror create + exactly one evidence row: the stored lastAt IS
+      // the replayed evidence at. Round 2's replay SUCCEEDED here and
+      // wrote the identical row twice (evidence 1 -> 2, lossless true).
+      const { store, projectId } = targetStore(storage);
+      const source = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const sourceProject = source.createProject(WORKSPACE, "alpha");
+      const ids = new Map<number, number>();
+      let mirrored = 0;
+      const mirrorTail = () => {
+        const events = source.events();
+        for (let index = mirrored; index < events.length; index++) {
+          mirrorSessionEvent(store, projectId, "session-edge", ids, events[index]!);
+        }
+        mirrored = events.length;
+      };
+
+      source.createTicket(sourceProject, "Edge task", "d-edge");
+      mirrorTail();
+      source.attachEvidence(1, "builtin:user_signoff", { ok: true }, "user");
+      mirrorTail();
+
+      const workspaceId = ids.get(1)!;
+      const log = {
+        sessionId: "session-edge",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+
+      const result = store.backfillSessionLogs(projectId, [log]);
+      expect(result.alreadyRan).toBe(false);
+      // A fully mirrored ticket replays to a content-identical no-op:
+      // zero deltas, not a refusal and not a duplicate.
+      expect(result.tickets).toBe(0);
+      expect(result.evidence).toBe(0);
+      expect(result.comments).toBe(0);
+      expect(result.lossless).toBe(true);
+      expect(store.evidenceFor(workspaceId).length).toBe(1);
+      expect(store.state.tickets.get(workspaceId)!.revision).toBe(1);
+    });
+  });
+
+  it("partial mirror: exactly the un-mirrored rows are emitted, ascending, none dropped or duplicated", () => {
+    withSqlite((storage) => {
+      // The mirror landed create + first evidence, then stopped; the
+      // session added a second evidence, a comment, and a description
+      // revision afterwards.
+      const { store, projectId } = targetStore(storage);
+      const source = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const sourceProject = source.createProject(WORKSPACE, "alpha");
+      const ids = new Map<number, number>();
+      let mirrored = 0;
+      const mirrorTail = () => {
+        const events = source.events();
+        for (let index = mirrored; index < events.length; index++) {
+          mirrorSessionEvent(store, projectId, "session-partial", ids, events[index]!);
+        }
+        mirrored = events.length;
+      };
+
+      source.createTicket(sourceProject, "Partial task", "d-partial");
+      mirrorTail();
+      source.attachEvidence(1, "builtin:user_signoff", { ok: true }, "user");
+      mirrorTail();
+      source.attachEvidence(1, "builtin:agent_report", { lines: 3 }, "agent");
+      source.addComment(1, "partial tail note", "user");
+      source.setTicket(1, { description: "d-partial-revised" });
+
+      const workspaceId = ids.get(1)!;
+      const log = {
+        sessionId: "session-partial",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+
+      const result = store.backfillSessionLogs(projectId, [log]);
+      expect(result.alreadyRan).toBe(false);
+      expect(result.tickets).toBe(1);
+      expect(result.evidence).toBe(1);
+      expect(result.comments).toBe(1);
+      expect(result.lossless).toBe(true);
+
+      // The mirrored signoff exactly once, the tail report after it —
+      // ascending, none dropped, none duplicated.
+      const kinds = store.evidenceFor(workspaceId).map((row) => row.kind);
+      expect(kinds).toEqual(["builtin:user_signoff", "builtin:agent_report"]);
+      const ats = store.state.evidence.get(workspaceId)!.map((row) => row.at);
+      expect([...ats].sort((a, b) => a - b)).toEqual(ats);
+      expect(store.commentsFor(workspaceId).map((comment) => comment.text)).toEqual([
+        "partial tail note",
+      ]);
+      expect(store.state.tickets.get(workspaceId)!.description).toBe("d-partial-revised");
+      expect(store.state.tickets.get(workspaceId)!.revision).toBe(2);
+    });
+  });
+
+  it("full mirror: everything already in the store replays to a clean no-op with zero deltas", () => {
+    withSqlite((storage) => {
+      // Every session write mirrored as it happened: create, evidence,
+      // comment, final set. The import must change nothing and count
+      // nothing, while still marking the session finished.
+      const { store, projectId } = targetStore(storage);
+      const source = new Store(makeConfig(), {
+        now: tickingClock(),
+        storage: new MemoryStorage(),
+      });
+      const sourceProject = source.createProject(WORKSPACE, "alpha");
+      const ids = new Map<number, number>();
+      let mirrored = 0;
+      const mirrorTail = () => {
+        const events = source.events();
+        for (let index = mirrored; index < events.length; index++) {
+          mirrorSessionEvent(store, projectId, "session-full", ids, events[index]!);
+        }
+        mirrored = events.length;
+      };
+
+      source.createTicket(sourceProject, "Full task", "d-full");
+      mirrorTail();
+      source.attachEvidence(1, "builtin:user_signoff", { ok: true }, "user");
+      mirrorTail();
+      source.addComment(1, "full note", "user");
+      mirrorTail();
+      source.setTicket(1, { description: "d-full-revised" });
+      mirrorTail();
+
+      const workspaceId = ids.get(1)!;
+      const before = store.state.tickets.get(workspaceId)!;
+      expect(before.revision).toBe(2);
+      const log = {
+        sessionId: "session-full",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      };
+
+      const result = store.backfillSessionLogs(projectId, [log]);
+      expect(result.alreadyRan).toBe(false);
+      expect(result.tickets).toBe(0);
+      expect(result.evidence).toBe(0);
+      expect(result.comments).toBe(0);
+      expect(result.slugRenames).toEqual([]);
+      expect(result.lossless).toBe(true);
+
+      // Content-identical: no revision bump, no duplicated rows.
+      const after = store.state.tickets.get(workspaceId)!;
+      expect(after.revision).toBe(2);
+      expect(after.description).toBe("d-full-revised");
+      expect(store.evidenceFor(workspaceId).length).toBe(1);
+      expect(store.commentsFor(workspaceId).length).toBe(1);
+
+      // And the session IS finished now: re-handing is a marker no-op.
+      const again = store.backfillSessionLogs(projectId, [log]);
+      expect(again.alreadyRan).toBe(true);
     });
   });
 });

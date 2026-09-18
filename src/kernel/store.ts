@@ -1223,8 +1223,13 @@ export class Store {
    * then one `set` carrying the final snapshot — final state, remapped
    * dependencies, folded tags — at revision 2. A mirror-stale ticket
    * (live-mirrored CREATE, history never imported) replays the same shape
-   * minus the create, with the set continuing the stored revision chain,
-   * and counts in the run deltas like a fresh import. Origin stamping: each
+   * minus the create, with the set continuing the stored revision chain —
+   * but only the DELTA the store does not already hold. The live mirror
+   * is lockstep, so replayed evidence/comments already present by row
+   * identity are skipped, and a ticket whose stored content already
+   * equals the fold final emits no set at all: a content-identical no-op
+   * plus its marker entry, contributing zero to the run deltas, which
+   * count only what was ACTUALLY emitted. Origin stamping: each
    * imported row carries the source session id and the seq of the source
    * event that produced it, so every row traces back to the log it came
    * from.
@@ -1565,16 +1570,39 @@ export class Store {
             localSeq,
           });
           const ticketOrigin = origin(fold.seqOfTicket.get(localId) ?? null);
-          // #230 round 2: a mirror-stale ticket already holds its create
+          // #230 round 3: a mirror-stale ticket already holds its create
           // (the live mirror landed it) — replaying a second create would
-          // refuse (the id exists) or duplicate. Only the history the
-          // mirror never carried is emitted: the live writes, then the
-          // final set. The replayed set continues the STORED ticket's
-          // revision chain (normally 1 -> 2, the mirror create being
-          // revision 1) and never lets its timestamps fall below what the
-          // store already holds.
+          // refuse (the id exists) or duplicate. And the mirror is
+          // LOCKSTEP, not a bare create: every later session write to the
+          // ticket landed too, as the identical event object. Replaying
+          // the fold's FULL history would re-emit rows the store already
+          // holds — refusing under Rule 7 when their `at` falls below
+          // the stored lastAt, or silently duplicating them when it
+          // merely ties. So only the DELTA is emitted: rows the store
+          // does not already hold, by ROW IDENTITY. The replayed set
+          // continues the STORED ticket's revision chain (normally
+          // 1 -> 2, the mirror create being revision 1) and never lets
+          // its timestamps fall below what the store already holds.
           const stale = scan.mirrorStale.get(key);
           const stored = stale !== undefined ? this._state.tickets.get(newId)! : null;
+          // The row identities the store already holds for this ticket.
+          // Evidence identity is (at, kind) — the row half of evidenceKey
+          // (backfill.ts); the ticketId half is this loop's own ticket on
+          // both sides, so it is factored out, not dropped. Comments
+          // carry no kind, so (at, author, text) is the identity. Counts,
+          // not presence: two identical rows held twice skip twice.
+          const heldEvidence = new Map<string, number>();
+          const heldComments = new Map<string, number>();
+          if (stale !== undefined) {
+            for (const row of this._state.evidence.get(newId) ?? []) {
+              const heldKey = `${row.at}\0${row.kind}`;
+              heldEvidence.set(heldKey, (heldEvidence.get(heldKey) ?? 0) + 1);
+            }
+            for (const record of this._state.comments.get(newId) ?? []) {
+              const heldKey = `${record.at}\0${record.author}\0${record.text}`;
+              heldComments.set(heldKey, (heldComments.get(heldKey) ?? 0) + 1);
+            }
+          }
 
           // The create: content as-is, but a create is open, revision 1,
           // createdAt = at — the invariants' only legal birth. Skipped
@@ -1611,7 +1639,12 @@ export class Store {
           }
 
           // The ticket's live writes, ascending at — the order the source
-          // log's Rule 7 guarantees, so no at falls.
+          // log's Rule 7 guarantees, so no at falls. For a mirror-stale
+          // replay each write is checked against the rows the store
+          // already holds FIRST: held rows are skipped (and counted down,
+          // so a doubled row emits exactly its missing copies), the
+          // remainder emits ascending. The deltas count what was ACTUALLY
+          // emitted, so a fully mirrored ticket contributes zero.
           const writes = [
             ...rows.evidence
               .filter((row) => row.ticketId === localId)
@@ -1622,6 +1655,24 @@ export class Store {
           ].sort((a, b) => a.at - b.at);
           let lastWriteAt = final.createdAt;
           for (const write of writes) {
+            if (stale !== undefined) {
+              if (write.kind === "evidence") {
+                const heldKey = `${write.row.row.at}\0${write.row.row.kind}`;
+                const held = heldEvidence.get(heldKey) ?? 0;
+                if (held > 0) {
+                  heldEvidence.set(heldKey, held - 1);
+                  continue;
+                }
+              } else {
+                const record = write.comment.record;
+                const heldKey = `${record.at}\0${record.author}\0${record.text}`;
+                const held = heldComments.get(heldKey) ?? 0;
+                if (held > 0) {
+                  heldComments.set(heldKey, held - 1);
+                  continue;
+                }
+              }
+            }
             lastWriteAt = Math.max(lastWriteAt, write.at);
             if (write.kind === "evidence") {
               this._emit(
@@ -1657,8 +1708,14 @@ export class Store {
           // yet — left out of the set, repaired on arrival), or dropped and
           // recorded by name. A session prefix naming no handed-in log never
           // falls back to the own session: that miswire (F2) is what made a
-          // corrupt graph report success.
+          // corrupt graph report success. Classification lands in ticket
+          // locals first: a mirror-stale ticket whose stored content
+          // already equals the fold final emits NO set (see below), and
+          // nothing it classified may leak into the run's account then.
           const remappedDeps: string[] = [];
+          const ticketDrops: DroppedDependencyEdge[] = [];
+          const ticketPendings: BackfillPendingEdge[] = [];
+          let ticketMapped = 0;
           for (const ref of final.dependsOn) {
             const outcome = this._classifyDependency(
               ref,
@@ -1676,23 +1733,61 @@ export class Store {
               ref,
               {
                 remapped: remappedDeps,
-                drops: droppedDependencies,
-                pendings,
+                drops: ticketDrops,
+                pendings: ticketPendings,
                 onMapped: () => {
-                  edgesRewritten += 1;
+                  ticketMapped += 1;
                 },
               },
             );
           }
+          // #230 round 3: a mirror-stale ticket whose stored content
+          // already equals the fold final replays to a pure no-op plus
+          // its marker entry — NO content-identical set, NO revision
+          // bump. A set that changes nothing carries no information
+          // (the mirror already stamped the origin; the marker records
+          // the session as finished so nothing re-emits), while emitting
+          // it would churn the revision chain and inflate the tickets
+          // delta for work that never happened. Fresh imports always
+          // emit: their create just landed and the set IS the content.
+          const sameStrings = (a: readonly string[], b: readonly string[]): boolean =>
+            a.length === b.length && a.every((value, index) => value === b[index]);
+          const storedEqualsFinal =
+            stale !== undefined &&
+            stored!.title === final.title &&
+            stored!.description === final.description &&
+            stored!.body === final.body &&
+            stored!.criteria === final.criteria &&
+            stored!.phase === final.phase &&
+            stored!.order === final.order &&
+            stored!.state === final.state &&
+            stored!.slug === stale.slug &&
+            sameStrings(stored!.allowlist, final.allowlist) &&
+            sameStrings(stored!.tags, final.tags) &&
+            sameStrings(stored!.dependsOn, remappedDeps);
+          if (storedEqualsFinal) {
+            continue;
+          }
+          droppedDependencies.push(...ticketDrops);
+          pendings.push(...ticketPendings);
+          edgesRewritten += ticketMapped;
           // A replay continues the stored ticket's chain instead of
           // restarting it at revision 2: the mirror create is already
           // revision 1, and the set must neither reuse a revision nor let
-          // the stored timestamps fall. A fresh import restarts at 2 by
-          // construction (create just landed at revision 1).
+          // the stored timestamps fall. The floor is the ticket's live
+          // lastAt, not just its updatedAt: tag writes advance lastAt
+          // without touching updatedAt, so updatedAt alone falls short.
+          // A fresh import restarts at 2 by construction (create just
+          // landed at revision 1).
           const setAt =
             stale === undefined
               ? Math.max(final.updatedAt, lastWriteAt)
-              : Math.max(final.updatedAt, lastWriteAt, stored!.updatedAt);
+              : Math.max(
+                  final.updatedAt,
+                  lastWriteAt,
+                  stored!.updatedAt,
+                  this._state.lastAt.get(newId) ?? stored!.updatedAt,
+                );
           const setRevision = stale === undefined ? 2 : stored!.revision + 1;
           this._emit(
             {
