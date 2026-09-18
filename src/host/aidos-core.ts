@@ -882,6 +882,17 @@ export interface BoardTicketView extends TicketView {
    * ticket had exactly one copy, which is the common case.
    */
   supersededCopies?: Array<{ sessionId: string; updatedAt: number }>;
+  /**
+   * #233: at of the create event, plumbed from the owning snapshot by the
+   * merge (the projection views do not carry it).
+   *
+   * The backfill preserves it across import, so it is the durable identity
+   * that survives the backfill's slug-collision rename: a suffixed-slug row
+   * with the same createdAt as the base identity is a COPY of that ticket.
+   * Optional because rows predate it; the twin rule treats a missing value
+   * as no proof, never as a match.
+   */
+  createdAt?: number;
 }
 
 /** One superseded copy, for the dedupe's report. */
@@ -955,6 +966,12 @@ export interface DedupeReport {
   identity: string;
   winner: SupersededCopy;
   losers: SupersededCopy[];
+  /**
+   * #233: the suffixed-slug identities absorbed into this group by the twin
+   * rule (empty/absent for a plain fork-copy merge). The log names them so
+   * a twin-merge reads differently from a fork-merge.
+   */
+  twinSlugs?: string[];
 }
 
 /**
@@ -982,6 +999,26 @@ export interface DedupeReport {
  * swap one visible problem (duplicates) for a worse invisible one (a stale
  * row presented as authoritative).
  *
+ * #233 TWIN PASS. The backfill renames a slug it has already imported
+ * (`foo` -> `foo-2`) and renumbers the copy into the workspace id space, so
+ * a store copy of ticket `foo` reaches this dedupe as `workspaceKey:foo-2`
+ * — an identity the exact-match above never meets. Measured live: 82 such
+ * shadows, each sharing its base's createdAt (81 sharing updatedAt too; the
+ * 82nd is the fork moved one step further). A row whose slug is a numeric
+ * suffixed `S-N`, whose base identity `workspaceKey:S` is ALSO in this
+ * merge, and whose createdAt EQUALS a base row's createdAt is therefore a
+ * copy of that ticket — the same rule the #222 migration export proved on
+ * this exact data — so it joins the base group: newest updatedAt wins, the
+ * twin rides as a superseded copy, and the id it shadowed names the live
+ * ticket again (which is also what `get_ticket` resolves by id).
+ *
+ * The createdAt gate is load-bearing, never a bare suffix guess: a
+ * legitimately-suffixed ticket (different createdAt, or no base present, or
+ * a non-numeric tail, or a missing createdAt on either side) stays in its
+ * own group and stays visible — showing two rows beats hiding a real
+ * ticket. Chains (`S-2-3` whose base `S-2` is itself a twin) resolve to the
+ * surviving root, mirroring the migration.
+ *
  * Pure, and separate from the Remote, so it is testable: logic trapped
  * inside a Remote is logic no test can reach, which is how the allowlist
  * union and the backward-gate guard both shipped unverified.
@@ -1006,10 +1043,75 @@ export function dedupeBoardRows(
     group.push(row);
   }
 
-  const out: BoardTicketView[] = [];
-  const reports: DedupeReport[] = [];
+  /*
+   * #233: index each identity's createdAt values. A twin proves itself per
+   * ROW against this index — a twin-group row with no createdAt match stays
+   * visible rather than joining on a suffix alone. Non-numeric values never
+   * match: rows predate the field (and every u83 fixture omits it), and
+   * `undefined === undefined` must not read as proof of a copy.
+   */
+  const createdAts = new Map<string, Set<number>>();
+  for (const [identity, group] of groups) {
+    const ats = new Set<number>();
+    for (const row of group) {
+      if (typeof row.createdAt === "number") ats.add(row.createdAt);
+    }
+    createdAts.set(identity, ats);
+  }
+  const rootIdentityOf = (
+    identity: string,
+    slug: string,
+    workspaceKey: string,
+    createdAt: unknown,
+  ): string => {
+    let current = identity;
+    let stem = slug;
+    const seen = new Set<string>([identity]);
+    for (;;) {
+      if (typeof createdAt !== "number") return current;
+      const cut = stem.lastIndexOf("-");
+      if (cut <= 0) return current;
+      if (!/^\d+$/.test(stem.slice(cut + 1))) return current;
+      const base = workspaceKey + ":" + stem.slice(0, cut);
+      const baseAts = createdAts.get(base);
+      if (baseAts === undefined || !baseAts.has(createdAt)) return current;
+      if (seen.has(base)) return current;
+      seen.add(base);
+      current = base;
+      stem = stem.slice(0, cut);
+    }
+  };
+
+  // Regroup twin rows under their surviving root, keeping first-seen order.
+  const merged = new Map<string, BoardTicketView[]>();
+  const mergedOrder: string[] = [];
+  const absorbed = new Map<string, string[]>();
   for (const identity of order) {
     const group = groups.get(identity) as BoardTicketView[];
+    for (const row of group) {
+      const root = rootIdentityOf(identity, row.slug, row.workspaceKey, row.createdAt);
+      let target = merged.get(root);
+      if (target === undefined) {
+        target = [];
+        merged.set(root, target);
+        mergedOrder.push(root);
+      }
+      target.push(row);
+      if (root !== identity) {
+        const twins = absorbed.get(root);
+        if (twins === undefined) {
+          absorbed.set(root, [identity]);
+        } else if (!twins.includes(identity)) {
+          twins.push(identity);
+        }
+      }
+    }
+  }
+
+  const out: BoardTicketView[] = [];
+  const reports: DedupeReport[] = [];
+  for (const identity of mergedOrder) {
+    const group = merged.get(identity) as BoardTicketView[];
     if (group.length === 1) {
       out.push(group[0]);
       continue;
@@ -1025,6 +1127,7 @@ export function dedupeBoardRows(
       identity,
       winner: { sessionId: winner.sourceSessionId, updatedAt: winner.updatedAt },
       losers: copies,
+      twinSlugs: absorbed.get(identity) ?? [],
     });
   }
   return { rows: out, reports };
@@ -3302,7 +3405,14 @@ registerAidosSessionEventTypes(ctx);
 
     for (const view of [...ownViews.values()].sort(ownSort)) {
       if (!includeRetired && this._isRetired(cache.state, view.id)) continue;
-      tickets.push({ ...view, sourceSessionId: agent.session.id, foreign: false });
+      tickets.push({
+        ...view,
+        sourceSessionId: agent.session.id,
+        foreign: false,
+        // #233: the twin rule's identity proof — the projection views do
+        // not carry it, so it rides from the owning snapshot here.
+        createdAt: cache.state.tickets.get(view.id)?.createdAt,
+      });
       const key = String(view.id);
       evidence[key] = [...(cache.state.evidence.get(view.id) ?? [])];
       comments[key] = [...(cache.state.comments.get(view.id) ?? [])];
@@ -3323,6 +3433,8 @@ registerAidosSessionEventTypes(ctx);
           id: view.id,
           sourceSessionId: session.id,
           foreign: false,
+          // #233: the twin rule's identity proof; see the own-rows loop.
+          createdAt: state.tickets.get(view.id)?.createdAt,
         } as BoardTicketView);
         evidence[key] = [...(state.evidence.get(view.id) ?? [])];
         comments[key] = [...(state.comments.get(view.id) ?? [])];
@@ -3371,6 +3483,10 @@ registerAidosSessionEventTypes(ctx);
           id: view.id,
           sourceSessionId,
           foreign: false,
+          // #233: the twin rule's identity proof; see the own-rows loop.
+          // The backfill preserves createdAt across import, so a store copy
+          // proves itself against the base it was renamed from.
+          createdAt: storeState.tickets.get(view.id)?.createdAt,
         } as BoardTicketView;
         tickets.push(row);
         const key = boardKeyText(row);
@@ -3412,9 +3528,14 @@ registerAidosSessionEventTypes(ctx);
         if (comments[key] !== undefined) keptComments[key] = comments[key];
       }
       for (const report of deduped.reports) {
+        const twins =
+          report.twinSlugs !== undefined && report.twinSlugs.length > 0
+            ? `; #233 twins absorbed: ${report.twinSlugs.join(", ")}`
+            : "";
         this.ctx.logger?.info?.(
           `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` +
-            report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", "),
+            report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ") +
+            twins,
         );
       }
       this.ctx.logger?.info?.(

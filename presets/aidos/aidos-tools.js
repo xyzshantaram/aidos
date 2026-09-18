@@ -32324,10 +32324,60 @@ function dedupeBoardRows(rows, callerSessionId) {
     }
     group.push(row);
   }
-  const out = [];
-  const reports = [];
+  const createdAts = /* @__PURE__ */ new Map();
+  for (const [identity, group] of groups) {
+    const ats = /* @__PURE__ */ new Set();
+    for (const row of group) {
+      if (typeof row.createdAt === "number") ats.add(row.createdAt);
+    }
+    createdAts.set(identity, ats);
+  }
+  const rootIdentityOf = (identity, slug, workspaceKey, createdAt) => {
+    let current = identity;
+    let stem = slug;
+    const seen = /* @__PURE__ */ new Set([identity]);
+    for (; ; ) {
+      if (typeof createdAt !== "number") return current;
+      const cut = stem.lastIndexOf("-");
+      if (cut <= 0) return current;
+      if (!/^\d+$/.test(stem.slice(cut + 1))) return current;
+      const base = workspaceKey + ":" + stem.slice(0, cut);
+      const baseAts = createdAts.get(base);
+      if (baseAts === void 0 || !baseAts.has(createdAt)) return current;
+      if (seen.has(base)) return current;
+      seen.add(base);
+      current = base;
+      stem = stem.slice(0, cut);
+    }
+  };
+  const merged = /* @__PURE__ */ new Map();
+  const mergedOrder = [];
+  const absorbed = /* @__PURE__ */ new Map();
   for (const identity of order) {
     const group = groups.get(identity);
+    for (const row of group) {
+      const root = rootIdentityOf(identity, row.slug, row.workspaceKey, row.createdAt);
+      let target = merged.get(root);
+      if (target === void 0) {
+        target = [];
+        merged.set(root, target);
+        mergedOrder.push(root);
+      }
+      target.push(row);
+      if (root !== identity) {
+        const twins = absorbed.get(root);
+        if (twins === void 0) {
+          absorbed.set(root, [identity]);
+        } else if (!twins.includes(identity)) {
+          twins.push(identity);
+        }
+      }
+    }
+  }
+  const out = [];
+  const reports = [];
+  for (const identity of mergedOrder) {
+    const group = merged.get(identity);
     if (group.length === 1) {
       out.push(group[0]);
       continue;
@@ -32342,7 +32392,8 @@ function dedupeBoardRows(rows, callerSessionId) {
     reports.push({
       identity,
       winner: { sessionId: winner.sourceSessionId, updatedAt: winner.updatedAt },
-      losers: copies
+      losers: copies,
+      twinSlugs: absorbed.get(identity) ?? []
     });
   }
   return { rows: out, reports };
@@ -33604,7 +33655,14 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const comments = {};
     for (const view of [...ownViews.values()].sort(ownSort)) {
       if (!includeRetired && this._isRetired(cache.state, view.id)) continue;
-      tickets.push({ ...view, sourceSessionId: agent.session.id, foreign: false });
+      tickets.push({
+        ...view,
+        sourceSessionId: agent.session.id,
+        foreign: false,
+        // #233: the twin rule's identity proof — the projection views do
+        // not carry it, so it rides from the owning snapshot here.
+        createdAt: cache.state.tickets.get(view.id)?.createdAt
+      });
       const key = String(view.id);
       evidence[key] = [...cache.state.evidence.get(view.id) ?? []];
       comments[key] = [...cache.state.comments.get(view.id) ?? []];
@@ -33622,7 +33680,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
           ...view,
           id: view.id,
           sourceSessionId: session.id,
-          foreign: false
+          foreign: false,
+          // #233: the twin rule's identity proof; see the own-rows loop.
+          createdAt: state.tickets.get(view.id)?.createdAt
         });
         evidence[key] = [...state.evidence.get(view.id) ?? []];
         comments[key] = [...state.comments.get(view.id) ?? []];
@@ -33640,7 +33700,11 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
           ...view,
           id: view.id,
           sourceSessionId,
-          foreign: false
+          foreign: false,
+          // #233: the twin rule's identity proof; see the own-rows loop.
+          // The backfill preserves createdAt across import, so a store copy
+          // proves itself against the base it was renamed from.
+          createdAt: storeState.tickets.get(view.id)?.createdAt
         };
         tickets.push(row);
         const key = boardKeyText(row);
@@ -33659,8 +33723,9 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         if (comments[key] !== void 0) keptComments[key] = comments[key];
       }
       for (const report of deduped.reports) {
+        const twins = report.twinSlugs !== void 0 && report.twinSlugs.length > 0 ? `; #233 twins absorbed: ${report.twinSlugs.join(", ")}` : "";
         this.ctx.logger?.info?.(
-          `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` + report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ")
+          `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` + report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ") + twins
         );
       }
       this.ctx.logger?.info?.(
