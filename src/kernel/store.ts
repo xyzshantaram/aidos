@@ -106,6 +106,21 @@ export interface TicketSearchHit {
 }
 
 /**
+ * #230: one origin-scan disagreement the seq-keyed match won. Both the
+ * exact (session, last-touch seq) index and the slug fallback index named
+ * a stored create for the same folded ticket, but different stored ids —
+ * storage holds two rows claiming one source ticket. The import maps the
+ * ticket to `seqMatchedId` and names `slugMatchedId` as the overruled
+ * candidate, so the choice is on the record instead of silent.
+ */
+export interface SlugMatchConflict {
+  sessionId: string;
+  localId: TicketId;
+  seqMatchedId: TicketId;
+  slugMatchedId: TicketId;
+}
+
+/**
  * What one backfill run did. Counts are THIS run's deltas (zero plus
  * `alreadyRan` when it skipped); the edge/skip/pending lists are what this
  * run newly recorded or resolved — a v1 completion recomputes the drops v1
@@ -149,15 +164,25 @@ export interface BackfillResult {
   repairedEdges: BackfillRepairedEdge[];
   /** #211 round 2: slug-collision renames this run applied. */
   slugRenames: BackfillSlugRename[];
+  /**
+   * #230: seq-vs-slug scan-match disagreements this run resolved, by name.
+   * The seq-keyed match is exact and always wins; a conflict means storage
+   * held TWO rows claiming one source ticket (same session, same slug and
+   * birth instant, different stored ids), so the slug fallback's loser is
+   * named here rather than silently dropped. Recomputed by the origin scan
+   * on every call, never accumulated on the marker: re-handing the session
+   * re-derives the same entry.
+   */
+  slugMatchConflicts: SlugMatchConflict[];
   /** #211: source-local kinds seen but given no direct replay. */
   skippedKinds: string[];
   /** #211: the importer generation that ran. */
   importerVersion: number;
   /**
    * #211: true when this call needs no human glance — every drop, skip,
-   * pending and rename list is empty. (Ticket history stays intentionally
-   * collapsed to create + final set per #41's design; see
-   * backfillSessionLogs.)
+   * pending, rename AND scan-match conflict list is empty. (Ticket history
+   * stays intentionally collapsed to create + final set per #41's design;
+   * see backfillSessionLogs.)
    */
   lossless: boolean;
 }
@@ -531,6 +556,17 @@ export class Store {
    * happens to be reading. Updates carry no origin (only creates are
    * noted). `localSeq` is null — unknown at mirror time, and the
    * columns stay nullable on purpose.
+   *
+   * #230: the null seq is structural, not a TODO. The session envelope
+   * seq is assigned by the session append, which runs AFTER the store
+   * row stages (the #40 order above); the port is append-only, so the
+   * staged row cannot be patched afterwards, and running the session
+   * first would leave a session event with no store row on a store
+   * refusal - the exact disagreement #40 exists to prevent. Predicting
+   * the seq would be inventing one. So mirrored rows stay seq-less and
+   * the backfill origin scan matches them by slug (+ createdAt)
+   * instead: the slug fallback is the standing mechanism, not a
+   * migration crutch.
    */
   commitHostMirror(
     event: AidosEvent,
@@ -1309,6 +1345,7 @@ export class Store {
           pendingEdges: [],
           repairedEdges: [],
           slugRenames: [],
+          slugMatchConflicts: [],
           skippedKinds: [],
           importerVersion: BACKFILL_IMPORTER_VERSION,
           lossless: true,
@@ -1321,8 +1358,11 @@ export class Store {
     // map yet — while its tickets' origins ARE in storage. Unioning the
     // scan cannot contradict the carried map (origins are immutable and the
     // fold recomputes them deterministically); it only fills the gaps that
-    // would otherwise re-import as duplicates (F4).
-    for (const [key, id] of this._reconstructTicketMap(folded)) {
+    // would otherwise re-import as duplicates (F4). #230: the scan also
+    // covers live-mirrored rows through its slug fallback, which is what
+    // lets the host hand mirrored sessions back in.
+    const scan = this._reconstructTicketMap(folded);
+    for (const [key, id] of scan.map) {
       if (!priorMap.has(key)) {
         priorMap.set(key, id);
       }
@@ -1955,7 +1995,8 @@ export class Store {
       skippedPhases.length === 0 &&
       droppedRefusals.length === 0 &&
       newStillPending.length === 0 &&
-      slugRenames.length === 0;
+      slugRenames.length === 0 &&
+      scan.slugConflicts.length === 0;
     return {
       alreadyRan: false,
       sessionIds: folded.map((fold) => fold.sessionId),
@@ -1973,6 +2014,7 @@ export class Store {
       pendingEdges: newStillPending,
       repairedEdges: repaired,
       slugRenames,
+      slugMatchConflicts: scan.slugConflicts,
       skippedKinds: [...skippedKinds],
       importerVersion: BACKFILL_IMPORTER_VERSION,
       lossless,
@@ -1984,34 +2026,96 @@ export class Store {
    * left behind. Each imported create's origin columns are the source
    * ticket's last-touch seq, which the fold recomputes deterministically,
    * so matching them pairs every source ticket with the id v1 gave it.
+   *
+   * #230: plus the slug-keyed fallback for LIVE-mirrored rows. A mirrored
+   * create stamps its origin session but no localSeq (unknown at mirror
+   * time — see commitHostMirror), so the seq-keyed index above is blind to
+   * exactly the rows the old host-side mirrored exclusion used to protect.
+   * The fallback indexes stored creates of each handed-in session by slug
+   * (the stable identity the migration path already keys on, unique per
+   * project) and matches folded tickets the seq lookup missed. A slug hit
+   * must ALSO agree on createdAt — birth data no write path rewrites, and
+   * the mirror lands the same event object in both homes — so a ticket
+   * that reused a renamed sibling's slug is imported fresh (suffixed)
+   * instead of fused onto the sibling's id. Several stored rows may
+   * share a slug (rename-then-reuse); the birth instant disambiguates,
+   * and an ambiguity that birth cannot resolve (same slug AND same
+   * instant, different ids) declines to match rather than guessing —
+   * a suffixed fresh import is always safer than a fused identity.
+   * The seq match stays primary: where both match and disagree, the seq
+   * id wins and the disagreement is returned alongside the map, never
+   * silently picked.
+   *
+   * Known residual, deliberately out of scope: a ticket renamed AFTER its
+   * mirrored create carries its NEW slug at lookup while storage holds the
+   * OLD one, so the fallback misses and the ticket imports fresh (suffixed)
+   * next to its mirrored row. Narrower than the stranding it replaces, and
+   * visible rather than silent — but not yet closed.
    */
-  private _reconstructTicketMap(folded: readonly FoldedSessionLog[]): Map<string, TicketId> {
+  private _reconstructTicketMap(folded: readonly FoldedSessionLog[]): {
+    map: Map<string, TicketId>;
+    slugConflicts: SlugMatchConflict[];
+  } {
     const createsByOrigin = new Map<string, TicketId>();
+    const createsBySlug = new Map<string, { id: TicketId; createdAt: number }[]>();
     for (const stored of this._storage.readAll()) {
       const event = stored.event;
       if (
-        event.kind === "ticket/change" &&
-        event.operation === "create" &&
-        stored.sessionId !== null &&
-        stored.localSeq !== null
+        event.kind !== "ticket/change" ||
+        event.operation !== "create" ||
+        stored.sessionId === null
       ) {
+        continue;
+      }
+      if (stored.localSeq !== null) {
         createsByOrigin.set(`${stored.sessionId}#${stored.localSeq}`, event.ticket.id);
+      }
+      const slugKey = `${stored.sessionId}#${event.ticket.slug}`;
+      const bucket = createsBySlug.get(slugKey);
+      const candidate = { id: event.ticket.id, createdAt: event.ticket.createdAt };
+      if (bucket === undefined) {
+        createsBySlug.set(slugKey, [candidate]);
+      } else {
+        bucket.push(candidate);
       }
     }
     const map = new Map<string, TicketId>();
+    const slugConflicts: SlugMatchConflict[] = [];
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
+        const key = `${fold.sessionId}#${localId}`;
+        const final = fold.state.tickets.get(localId)!;
         const originSeq = fold.seqOfTicket.get(localId) ?? null;
-        if (originSeq === null) {
+        const seqFound =
+          originSeq === null
+            ? undefined
+            : createsByOrigin.get(`${fold.sessionId}#${originSeq}`);
+        const candidates = createsBySlug.get(`${fold.sessionId}#${final.slug}`) ?? [];
+        const agreeing = candidates.filter(
+          (candidate) => candidate.createdAt === final.createdAt,
+        );
+        // Exactly one birth-matching row: a resolved identity. Zero, or
+        // several that birth cannot tell apart, is no match — the ticket
+        // imports fresh (suffixed on collision) instead of fused.
+        const slugFound = agreeing.length === 1 ? agreeing[0]!.id : undefined;
+        if (seqFound !== undefined) {
+          map.set(key, seqFound);
+          if (slugFound !== undefined && slugFound !== seqFound) {
+            slugConflicts.push({
+              sessionId: fold.sessionId,
+              localId,
+              seqMatchedId: seqFound,
+              slugMatchedId: slugFound,
+            });
+          }
           continue;
         }
-        const found = createsByOrigin.get(`${fold.sessionId}#${originSeq}`);
-        if (found !== undefined) {
-          map.set(`${fold.sessionId}#${localId}`, found);
+        if (slugFound !== undefined) {
+          map.set(key, slugFound);
         }
       }
     }
-    return map;
+    return { map, slugConflicts };
   }
 
   /**

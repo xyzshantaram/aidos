@@ -28501,6 +28501,17 @@ var Store = class {
    * happens to be reading. Updates carry no origin (only creates are
    * noted). `localSeq` is null — unknown at mirror time, and the
    * columns stay nullable on purpose.
+   *
+   * #230: the null seq is structural, not a TODO. The session envelope
+   * seq is assigned by the session append, which runs AFTER the store
+   * row stages (the #40 order above); the port is append-only, so the
+   * staged row cannot be patched afterwards, and running the session
+   * first would leave a session event with no store row on a store
+   * refusal - the exact disagreement #40 exists to prevent. Predicting
+   * the seq would be inventing one. So mirrored rows stay seq-less and
+   * the backfill origin scan matches them by slug (+ createdAt)
+   * instead: the slug fallback is the standing mechanism, not a
+   * migration crutch.
    */
   commitHostMirror(event, sessionWrite, origin) {
     validateAidosEvent(this._state, event);
@@ -29161,13 +29172,15 @@ var Store = class {
           pendingEdges: [],
           repairedEdges: [],
           slugRenames: [],
+          slugMatchConflicts: [],
           skippedKinds: [],
           importerVersion: BACKFILL_IMPORTER_VERSION,
           lossless: true
         };
       }
     }
-    for (const [key, id] of this._reconstructTicketMap(folded)) {
+    const scan = this._reconstructTicketMap(folded);
+    for (const [key, id] of scan.map) {
       if (!priorMap.has(key)) {
         priorMap.set(key, id);
       }
@@ -29671,7 +29684,7 @@ var Store = class {
       }
       throw new StoreWriteRefused(error51);
     }
-    const lossless = droppedDependencies.length === 0 && skippedPlans.length === 0 && skippedPhases.length === 0 && droppedRefusals.length === 0 && newStillPending.length === 0 && slugRenames.length === 0;
+    const lossless = droppedDependencies.length === 0 && skippedPlans.length === 0 && skippedPhases.length === 0 && droppedRefusals.length === 0 && newStillPending.length === 0 && slugRenames.length === 0 && scan.slugConflicts.length === 0;
     return {
       alreadyRan: false,
       sessionIds: folded.map((fold) => fold.sessionId),
@@ -29689,6 +29702,7 @@ var Store = class {
       pendingEdges: newStillPending,
       repairedEdges: repaired,
       slugRenames,
+      slugMatchConflicts: scan.slugConflicts,
       skippedKinds: [...skippedKinds],
       importerVersion: BACKFILL_IMPORTER_VERSION,
       lossless
@@ -29699,29 +29713,83 @@ var Store = class {
    * left behind. Each imported create's origin columns are the source
    * ticket's last-touch seq, which the fold recomputes deterministically,
    * so matching them pairs every source ticket with the id v1 gave it.
+   *
+   * #230: plus the slug-keyed fallback for LIVE-mirrored rows. A mirrored
+   * create stamps its origin session but no localSeq (unknown at mirror
+   * time — see commitHostMirror), so the seq-keyed index above is blind to
+   * exactly the rows the old host-side mirrored exclusion used to protect.
+   * The fallback indexes stored creates of each handed-in session by slug
+   * (the stable identity the migration path already keys on, unique per
+   * project) and matches folded tickets the seq lookup missed. A slug hit
+   * must ALSO agree on createdAt — birth data no write path rewrites, and
+   * the mirror lands the same event object in both homes — so a ticket
+   * that reused a renamed sibling's slug is imported fresh (suffixed)
+   * instead of fused onto the sibling's id. Several stored rows may
+   * share a slug (rename-then-reuse); the birth instant disambiguates,
+   * and an ambiguity that birth cannot resolve (same slug AND same
+   * instant, different ids) declines to match rather than guessing —
+   * a suffixed fresh import is always safer than a fused identity.
+   * The seq match stays primary: where both match and disagree, the seq
+   * id wins and the disagreement is returned alongside the map, never
+   * silently picked.
+   *
+   * Known residual, deliberately out of scope: a ticket renamed AFTER its
+   * mirrored create carries its NEW slug at lookup while storage holds the
+   * OLD one, so the fallback misses and the ticket imports fresh (suffixed)
+   * next to its mirrored row. Narrower than the stranding it replaces, and
+   * visible rather than silent — but not yet closed.
    */
   _reconstructTicketMap(folded) {
     const createsByOrigin = /* @__PURE__ */ new Map();
+    const createsBySlug = /* @__PURE__ */ new Map();
     for (const stored of this._storage.readAll()) {
       const event = stored.event;
-      if (event.kind === "ticket/change" && event.operation === "create" && stored.sessionId !== null && stored.localSeq !== null) {
+      if (event.kind !== "ticket/change" || event.operation !== "create" || stored.sessionId === null) {
+        continue;
+      }
+      if (stored.localSeq !== null) {
         createsByOrigin.set(`${stored.sessionId}#${stored.localSeq}`, event.ticket.id);
+      }
+      const slugKey = `${stored.sessionId}#${event.ticket.slug}`;
+      const bucket = createsBySlug.get(slugKey);
+      const candidate = { id: event.ticket.id, createdAt: event.ticket.createdAt };
+      if (bucket === void 0) {
+        createsBySlug.set(slugKey, [candidate]);
+      } else {
+        bucket.push(candidate);
       }
     }
     const map2 = /* @__PURE__ */ new Map();
+    const slugConflicts = [];
     for (const fold of folded) {
       for (const localId of sortedLocalIds(fold)) {
+        const key = `${fold.sessionId}#${localId}`;
+        const final = fold.state.tickets.get(localId);
         const originSeq = fold.seqOfTicket.get(localId) ?? null;
-        if (originSeq === null) {
+        const seqFound = originSeq === null ? void 0 : createsByOrigin.get(`${fold.sessionId}#${originSeq}`);
+        const candidates = createsBySlug.get(`${fold.sessionId}#${final.slug}`) ?? [];
+        const agreeing = candidates.filter(
+          (candidate) => candidate.createdAt === final.createdAt
+        );
+        const slugFound = agreeing.length === 1 ? agreeing[0].id : void 0;
+        if (seqFound !== void 0) {
+          map2.set(key, seqFound);
+          if (slugFound !== void 0 && slugFound !== seqFound) {
+            slugConflicts.push({
+              sessionId: fold.sessionId,
+              localId,
+              seqMatchedId: seqFound,
+              slugMatchedId: slugFound
+            });
+          }
           continue;
         }
-        const found = createsByOrigin.get(`${fold.sessionId}#${originSeq}`);
-        if (found !== void 0) {
-          map2.set(`${fold.sessionId}#${localId}`, found);
+        if (slugFound !== void 0) {
+          map2.set(key, slugFound);
         }
       }
     }
-    return map2;
+    return { map: map2, slugConflicts };
   }
   /**
    * One classified dependency reference — see the module-level
@@ -33902,7 +33970,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     const closedIds = await this._closedWorkspaceSessionIds(agent, liveIds);
     if (closedIds === null) return;
     const report = entry.store.backfillReport();
-    const fresh = this._unimportedSessionIds(entry.store, report, closedIds);
+    const fresh = this._unimportedSessionIds(report, closedIds);
     if (fresh.length === 0) {
       this._backfillVerified.add(path);
       return;
@@ -33925,46 +33993,35 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
   }
   /**
    * #221: the sessions of `closedIds` the store does not already account
-   * for — the resume set. Two sources, both read without touching a log:
+   * for — the resume set. Read without touching a log:
    *  - the marker's `sessionIds`: every batch that landed names its
    *    sessions, so a crashed import resumes after its last landed batch
-   *    instead of restarting the workspace;
-   *  - the store's origin index: on a RESUME (marker present) a session
-   *    whose tickets the live mirror (#218) already owns is skipped, so a
-   *    session that mirrored its rows and then closed is never re-imported
-   *    as suffixed duplicates — EXCEPT v1-listed sessions, which are handed
-   *    even though v1 stamped their origins: #211 round 2 completes v1
-   *    history per handed-in batch (tickets scan-matched, never re-imported;
-   *    plans, phases and refusals replayed), and withholding them would
-   *    strand that history forever. On the FIRST import (no marker) the set
-   *    is exactly `closedIds`, byte-for-byte #42's set: changing it would
-   *    trade today's duplication corner for a silent plan-loss corner, and
-   *    that trade is out of scope — it is recorded on BACKFILL_BATCH_SESSIONS.
+   *    instead of restarting the workspace.
+   *
+   * #230: what the resume set is NOT. It used to also subtract the
+   * store's origin index (every session id the store holds ANY ticket
+   * for), so a session that live-mirrored even one row while it was
+   * alive was treated as fully imported and excluded from every future
+   * backfill — a PRESENCE test standing in for a COMPLETENESS test,
+   * stranding 231 thursday tickets and 142 dotfiles-ai tickets forever.
+   * The subtraction is gone: the kernel's origin scan-match
+   * (`_reconstructTicketMap`, seq-keyed with a slug fallback for
+   * seq-less mirrored rows) is the correct and sufficient guard against
+   * re-importing mirrored rows as suffixed duplicates — the same
+   * reasoning the v1 branch below always relied on when it handed
+   * v1-listed sessions in DESPITE their origins. On the FIRST import (no
+   * marker) the set is exactly `closedIds`, byte-for-byte #42's set:
+   * changing it would trade today's duplication corner for a silent
+   * plan-loss corner, and that trade is out of scope — it is recorded
+   * on BACKFILL_BATCH_SESSIONS.
    */
-  _unimportedSessionIds(store, report, closedIds) {
+  _unimportedSessionIds(report, closedIds) {
     if (report === null) return [...closedIds];
-    const mirrored = this._storeOriginSessions(store);
     if (report.dropsUnknown) {
-      const v1 = new Set(report.sessionIds);
-      return closedIds.filter((id) => v1.has(String(id)) || !mirrored.has(String(id)));
+      return [...closedIds];
     }
     const imported = new Set(report.sessionIds);
-    return closedIds.filter(
-      (id) => !imported.has(String(id)) && !mirrored.has(String(id))
-    );
-  }
-  /**
-   * #221: every session id the store holds tickets for — the mirrored-rows
-   * side of the resume set above. One in-memory pass over the workspace
-   * fold, once per import, never per read.
-   */
-  _storeOriginSessions(store) {
-    const out = /* @__PURE__ */ new Set();
-    for (const id of store.state.tickets.keys()) {
-      const origin = store.originSessionOf(id);
-      if (origin !== null) out.add(origin);
-    }
-    return out;
+    return closedIds.filter((id) => !imported.has(String(id)));
   }
   /**
    * #221: run one backfill batch exclusive process-wide (criterion 7). The

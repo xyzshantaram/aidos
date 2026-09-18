@@ -206,6 +206,7 @@ describe("#41 criterion 2: a second open does not import again", () => {
         pendingEdges: [],
         repairedEdges: [],
         slugRenames: [],
+        slugMatchConflicts: [],
         skippedKinds: [],
         importerVersion: 4,
         lossless: true,

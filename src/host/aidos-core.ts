@@ -4681,7 +4681,7 @@ registerAidosSessionEventTypes(ctx);
     // and every closed log would be lost. Leave the import for the next open.
     if (closedIds === null) return;
     const report = entry.store.backfillReport();
-    const fresh = this._unimportedSessionIds(entry.store, report, closedIds);
+    const fresh = this._unimportedSessionIds(report, closedIds);
     if (fresh.length === 0) {
       this._backfillVerified.add(path);
       return;
@@ -4713,55 +4713,44 @@ registerAidosSessionEventTypes(ctx);
 
   /**
    * #221: the sessions of `closedIds` the store does not already account
-   * for — the resume set. Two sources, both read without touching a log:
+   * for — the resume set. Read without touching a log:
    *  - the marker's `sessionIds`: every batch that landed names its
    *    sessions, so a crashed import resumes after its last landed batch
-   *    instead of restarting the workspace;
-   *  - the store's origin index: on a RESUME (marker present) a session
-   *    whose tickets the live mirror (#218) already owns is skipped, so a
-   *    session that mirrored its rows and then closed is never re-imported
-   *    as suffixed duplicates — EXCEPT v1-listed sessions, which are handed
-   *    even though v1 stamped their origins: #211 round 2 completes v1
-   *    history per handed-in batch (tickets scan-matched, never re-imported;
-   *    plans, phases and refusals replayed), and withholding them would
-   *    strand that history forever. On the FIRST import (no marker) the set
-   *    is exactly `closedIds`, byte-for-byte #42's set: changing it would
-   *    trade today's duplication corner for a silent plan-loss corner, and
-   *    that trade is out of scope — it is recorded on BACKFILL_BATCH_SESSIONS.
+   *    instead of restarting the workspace.
+   *
+   * #230: what the resume set is NOT. It used to also subtract the
+   * store's origin index (every session id the store holds ANY ticket
+   * for), so a session that live-mirrored even one row while it was
+   * alive was treated as fully imported and excluded from every future
+   * backfill — a PRESENCE test standing in for a COMPLETENESS test,
+   * stranding 231 thursday tickets and 142 dotfiles-ai tickets forever.
+   * The subtraction is gone: the kernel's origin scan-match
+   * (`_reconstructTicketMap`, seq-keyed with a slug fallback for
+   * seq-less mirrored rows) is the correct and sufficient guard against
+   * re-importing mirrored rows as suffixed duplicates — the same
+   * reasoning the v1 branch below always relied on when it handed
+   * v1-listed sessions in DESPITE their origins. On the FIRST import (no
+   * marker) the set is exactly `closedIds`, byte-for-byte #42's set:
+   * changing it would trade today's duplication corner for a silent
+   * plan-loss corner, and that trade is out of scope — it is recorded
+   * on BACKFILL_BATCH_SESSIONS.
    */
   private _unimportedSessionIds(
-    store: Store,
     report: BackfillReport | null,
     closedIds: SessionId[],
   ): SessionId[] {
     if (report === null) return [...closedIds];
-    const mirrored = this._storeOriginSessions(store);
     if (report.dropsUnknown) {
-      // v1: hand every closed session except mirrored rows the v1 import
-      // never saw. v1-listed sessions are handed DESPITE their origins so
-      // round 2 can replay the history v1 skipped; the origin scan matches
-      // their tickets, so nothing lands twice (F4, kernel-tested).
-      const v1 = new Set<string>(report.sessionIds);
-      return closedIds.filter((id) => v1.has(String(id)) || !mirrored.has(String(id)));
+      // v1: hand every closed session. v1-listed sessions are handed so
+      // round 2 can replay the history v1 skipped; never-imported
+      // sessions are handed for the full import. Either way the origin
+      // scan matches their tickets, so nothing lands twice (F4,
+      // kernel-tested) — and mirrored sessions are no exception anymore
+      // (#230: the scan-match, not an exclusion, is the guard).
+      return [...closedIds];
     }
     const imported = new Set<string>(report.sessionIds);
-    return closedIds.filter(
-      (id) => !imported.has(String(id)) && !mirrored.has(String(id)),
-    );
-  }
-
-  /**
-   * #221: every session id the store holds tickets for — the mirrored-rows
-   * side of the resume set above. One in-memory pass over the workspace
-   * fold, once per import, never per read.
-   */
-  private _storeOriginSessions(store: Store): Set<string> {
-    const out = new Set<string>();
-    for (const id of store.state.tickets.keys()) {
-      const origin = store.originSessionOf(id);
-      if (origin !== null) out.add(origin);
-    }
-    return out;
+    return closedIds.filter((id) => !imported.has(String(id)));
   }
 
   /**

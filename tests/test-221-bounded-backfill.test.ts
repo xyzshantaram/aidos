@@ -423,8 +423,8 @@ describe("#221 criterion 7: concurrent workspace imports stay within one batch",
   });
 });
 
-describe("#221 resume skips sessions the live mirror already owns", () => {
-  it("after a restart, a mirrored-then-closed session is not re-imported while a fresh legacy log is", async () => {
+describe("#230 resume re-hands mirrored sessions; the scan-match dedupes", () => {
+  it("after a restart, a mirrored-then-closed session is inspected and scan-matched while a fresh legacy log imports", async () => {
     // One shared home for two harnesses: the second harness is a new
     // PROCESS (empty verified set, same store file with its marker).
     // A harness-minted home would NOT be shared (installService treats a
@@ -492,9 +492,14 @@ describe("#221 resume skips sessions the live mirror already owns", () => {
         const result = await second.service.workspaceTickets(second.asAgent());
         const titles = result.tickets.map((row) => row.title);
         expect(titles).toContain("fresh legacy ticket");
-        // The mirrored session was never inspected — its rows were already
-        // owned — and its ticket appears exactly once (no suffixed duplicate).
-        expect(inspected).toEqual(["t221-fresh"]);
+        // #230 inversion of the old #221 expectation below: the mirrored
+        // session IS inspected now — the host no longer subtracts
+        // sessions the store holds any ticket for (that presence test
+        // stranded every large orchestrator log). Its ticket is
+        // scan-matched by the kernel (seq-less mirror row paired by slug
+        // + createdAt), so it still appears exactly once: handed in,
+        // never re-imported, no suffixed duplicate.
+        expect([...inspected].sort()).toEqual(["t221-fresh", "t221-mirrored"]);
         expect(titles.filter((title) => title === "mirrored live ticket").length).toBe(1);
         expect(spy.mock.calls.length).toBe(1);
       } finally {
