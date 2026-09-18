@@ -200,6 +200,47 @@ function summarizeTicket(view: TicketView): TicketSummary {
   };
 }
 
+/**
+ * #235: the FULL row. The full branch used to return the raw merge row
+ * (`BoardTicketView`) straight through, while its declared schema
+ * (`TICKET_VIEW_SCHEMA`) is closed and enumerates only the `TicketView`
+ * fields — so every merge-only field (`sourceSessionId`, `foreign`,
+ * `supersededCopies`, and since #233 `createdAt`) failed validation and
+ * `detail: "full"` was refused for EVERY row.
+ *
+ * The fix narrows here, the way the summary branch already does: the tool's
+ * output is an explicit construction over `TicketView`, a deliberate
+ * contract rather than "whatever the merge happens to carry". A new field
+ * on `BoardTicketView` then can neither break this call (the closed schema
+ * never sees it) nor leak into the tool surface (merge provenance and
+ * dedupe internals stay host-side). The return type is the coupling: it is
+ * `TicketView`, not a fresh interface, so a new REQUIRED view field breaks
+ * this builder at compile time instead of drifting past it.
+ */
+function presentFullTicket(view: TicketView): TicketView {
+  return {
+    id: view.id,
+    projectId: view.projectId,
+    title: view.title,
+    description: view.description,
+    body: view.body,
+    criteria: view.criteria,
+    phase: view.phase,
+    order: view.order,
+    state: view.state,
+    dependsOn: [...view.dependsOn],
+    allowlist: [...view.allowlist],
+    tags: [...view.tags],
+    confidenceScore: view.confidenceScore,
+    gateFraction: view.gateFraction,
+    gatePresent: view.gatePresent,
+    gateTotal: view.gateTotal,
+    updatedAt: view.updatedAt,
+    workspaceKey: view.workspaceKey,
+    slug: view.slug,
+  };
+}
+
 const TICKET_SUMMARY_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -720,8 +761,12 @@ function registerGetTickets(ctx: Context): void {
           const limit = Math.max(1, args.limit ?? DEFAULT_LIMIT);
           const page = all.slice(offset, offset + limit);
           const full = args.detail === "full";
+          // #235: both branches construct their rows explicitly. The full
+          // branch narrows the merge row to the TicketView contract (see
+          // presentFullTicket); passing the raw row through fails the
+          // closed output schema on every merge-only field.
           const tickets = full
-            ? page
+            ? page.map(presentFullTicket)
             : page.map(summarizeTicket);
           const end = offset + page.length;
           const hasMore = end < total;
@@ -816,7 +861,13 @@ function registerGetTicket(ctx: Context): void {
           const result = ctx.aidos.getTicket(agent, { ticketId: args.ticketId });
           return {
             ok: true as const,
-            ticket: result.ticket,
+            // #235 sibling: getTicket returns kernel-projection TicketViews
+            // (aidos-core getTicket reads ticketsProjection, never the
+            // merge), so this narrowing is a no-op today — established by
+            // reading the service, not by observing that it works. It rides
+            // the same builder anyway, so the shared closed schema stays
+            // satisfied even if the service ever hands back a merge row.
+            ticket: presentFullTicket(result.ticket),
             // BOUNDED on purpose (#92): a payload can be a whole reviewer
             // report. The agent gets kind, author, when, and a short excerpt;
             // the full payload lives in the evidence viewer.

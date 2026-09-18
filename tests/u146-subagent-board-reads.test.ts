@@ -174,11 +174,11 @@ describe("#146 a subagent's reads resolve against the dispatching board", () => 
     harness.service.setTicket(harness.asAgent(fork), { title: "Fork ticket" });
 
     const payload = successJson(await harness.runTool("get_tickets", { detail: "full" }, { agent: fork })) as {
-      tickets: { title: string; foreign: boolean; sourceSessionId: string }[];
+      tickets: { title: string }[];
     };
     const parentPayload = successJson(
       await harness.runTool("get_tickets", { detail: "full" }, { agent: harness.agent }),
-    ) as { tickets: { title: string; foreign: boolean; sourceSessionId: string }[] };
+    ) as { tickets: { title: string }[] };
     /*
      * #207: the fork still SEES the parent's ticket — same workspace — and
      * #45 deleted the foreign flag that used to prove whose board this is.
@@ -196,9 +196,18 @@ describe("#146 a subagent's reads resolve against the dispatching board", () => 
     expect(titles).toContain("Fork ticket");
     const parentTitles = parentPayload.tickets.map((t) => t.title);
     expect(parentTitles[0]).toBe("Parent ticket");
-    const byTitle = new Map(payload.tickets.map((t) => [t.title, t]));
-    expect(byTitle.get("Parent ticket")?.sourceSessionId).toBe(harness.agent.session.id);
-    expect(byTitle.get("Fork ticket")?.sourceSessionId).toBe(fork.session.id);
+    /*
+     * #235: the ownership proof above is content, not provenance. Full rows
+     * used to leak the merge's `sourceSessionId` (and the always-false
+     * `foreign` flag #45 left behind), and this test read them — but the
+     * harness never validated output, so it observed a shape the live
+     * registry refused for every row. The tool surface is a deliberate
+     * TicketView contract now; merge provenance stays host-side.
+     */
+    for (const row of [...payload.tickets, ...parentPayload.tickets] as Record<string, unknown>[]) {
+      expect(row, "full rows carry no merge provenance").not.toHaveProperty("sourceSessionId");
+      expect(row, "full rows carry no merge provenance").not.toHaveProperty("foreign");
+    }
   });
 
   it("walks a nested child all the way to the orchestrator", async () => {
