@@ -32326,15 +32326,24 @@ function dedupeBoardRows(rows, callerSessionId) {
     }
     group.push(row);
   }
-  const createdAts = /* @__PURE__ */ new Map();
+  const createdFrom = /* @__PURE__ */ new Map();
   for (const [identity, group] of groups) {
-    const ats = /* @__PURE__ */ new Set();
-    for (const row of group) {
-      if (typeof row.createdAt === "number") ats.add(row.createdAt);
+    let perAt = createdFrom.get(identity);
+    if (perAt === void 0) {
+      perAt = /* @__PURE__ */ new Map();
+      createdFrom.set(identity, perAt);
     }
-    createdAts.set(identity, ats);
+    for (const row of group) {
+      if (typeof row.createdAt !== "number") continue;
+      let sessions = perAt.get(row.createdAt);
+      if (sessions === void 0) {
+        sessions = /* @__PURE__ */ new Set();
+        perAt.set(row.createdAt, sessions);
+      }
+      sessions.add(row.sourceSessionId);
+    }
   }
-  const rootIdentityOf = (identity, slug, workspaceKey, createdAt) => {
+  const rootIdentityOf = (identity, slug, workspaceKey, createdAt, sourceSessionId) => {
     let current = identity;
     let stem = slug;
     const seen = /* @__PURE__ */ new Set([identity]);
@@ -32344,8 +32353,16 @@ function dedupeBoardRows(rows, callerSessionId) {
       if (cut <= 0) return current;
       if (!/^\d+$/.test(stem.slice(cut + 1))) return current;
       const base = workspaceKey + ":" + stem.slice(0, cut);
-      const baseAts = createdAts.get(base);
-      if (baseAts === void 0 || !baseAts.has(createdAt)) return current;
+      const baseSessions = createdFrom.get(base)?.get(createdAt);
+      if (baseSessions === void 0) return current;
+      let lineage = false;
+      for (const session of baseSessions) {
+        if (session !== sourceSessionId) {
+          lineage = true;
+          break;
+        }
+      }
+      if (!lineage) return current;
       if (seen.has(base)) return current;
       seen.add(base);
       current = base;
@@ -32358,7 +32375,13 @@ function dedupeBoardRows(rows, callerSessionId) {
   for (const identity of order) {
     const group = groups.get(identity);
     for (const row of group) {
-      const root = rootIdentityOf(identity, row.slug, row.workspaceKey, row.createdAt);
+      const root = rootIdentityOf(
+        identity,
+        row.slug,
+        row.workspaceKey,
+        row.createdAt,
+        row.sourceSessionId
+      );
       let target = merged.get(root);
       if (target === void 0) {
         target = [];
@@ -32384,13 +32407,30 @@ function dedupeBoardRows(rows, callerSessionId) {
       out.push(group[0]);
       continue;
     }
-    const ranked = [...group].sort(compareBoardCopiesNewestFirst(callerSessionId));
+    const isBase = (row) => row.workspaceKey + ":" + row.slug === identity;
+    const ranked = [...group].sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
+      const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
+      if (aOwn !== bOwn) return aOwn - bOwn;
+      const aBase = isBase(a) ? 0 : 1;
+      const bBase = isBase(b) ? 0 : 1;
+      if (aBase !== bBase) return aBase - bBase;
+      return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
+    });
     const [winner, ...losers] = ranked;
     const copies = losers.map((row) => ({
       sessionId: row.sourceSessionId,
       updatedAt: row.updatedAt
     }));
-    out.push({ ...winner, supersededCopies: copies });
+    let display = winner;
+    if (!isBase(winner)) {
+      const baseBest = ranked.find((row) => isBase(row));
+      if (baseBest !== void 0) {
+        display = { ...winner, id: baseBest.id, slug: baseBest.slug };
+      }
+    }
+    out.push({ ...display, supersededCopies: copies });
     reports.push({
       identity,
       winner: { sessionId: winner.sourceSessionId, updatedAt: winner.updatedAt },

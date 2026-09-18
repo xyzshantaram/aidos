@@ -926,9 +926,11 @@ export interface BoardTicketView extends TicketView {
    *
    * The backfill preserves it across import, so it is the durable identity
    * that survives the backfill's slug-collision rename: a suffixed-slug row
-   * with the same createdAt as the base identity is a COPY of that ticket.
-   * Optional because rows predate it; the twin rule treats a missing value
-   * as no proof, never as a match.
+   * with the same createdAt as the base identity, from a DIFFERENT origin
+   * session than a same-instant base row, is a COPY of that ticket (the
+   * lineage half of the proof — same session plus same instant declines,
+   * see dedupeBoardRows). Optional because rows predate it; the twin rule
+   * treats a missing value as no proof, never as a match.
    */
   createdAt?: number;
 }
@@ -1044,18 +1046,26 @@ export interface DedupeReport {
  * shadows, each sharing its base's createdAt (81 sharing updatedAt too; the
  * 82nd is the fork moved one step further). A row whose slug is a numeric
  * suffixed `S-N`, whose base identity `workspaceKey:S` is ALSO in this
- * merge, and whose createdAt EQUALS a base row's createdAt is therefore a
- * copy of that ticket — the same rule the #222 migration export proved on
- * this exact data — so it joins the base group: newest updatedAt wins, the
- * twin rides as a superseded copy, and the id it shadowed names the live
- * ticket again (which is also what `get_ticket` resolves by id).
+ * merge, whose createdAt EQUALS a same-instant base row's createdAt from a
+ * DIFFERENT origin session, is therefore a copy of that ticket — the same
+ * rule the #222 migration export proved on
+ * this exact data, plus the lineage the review proved necessary (all 82
+ * real twins come from a different origin session than their base, while
+ * same-instant tickets a user creates share one session) — so it joins
+ * the base group: newest updatedAt wins, the twin rides as a superseded
+ * copy, and the winner displays under the BASE identity's id and slug, so
+ * the id the twin shadowed names the live ticket again (which is also what
+ * `get_ticket` resolves by id) and a twin win can never re-duplicate an
+ * id. Exact ties prefer the base BY RULE, never by session-id luck.
  *
- * The createdAt gate is load-bearing, never a bare suffix guess: a
- * legitimately-suffixed ticket (different createdAt, or no base present, or
+ * The instant-plus-lineage gate is load-bearing, never a bare suffix
+ * guess: a legitimately-suffixed ticket from the same session (same
+ * createdAt, or different createdAt, or no base present, or
  * a non-numeric tail, or a missing createdAt on either side) stays in its
  * own group and stays visible — showing two rows beats hiding a real
  * ticket. Chains (`S-2-3` whose base `S-2` is itself a twin) resolve to the
- * surviving root, mirroring the migration.
+ * surviving root step by step, each step proving its own lineage,
+ * mirroring the migration.
  *
  * Pure, and separate from the Remote, so it is testable: logic trapped
  * inside a Remote is logic no test can reach, which is how the allowlist
@@ -1082,25 +1092,55 @@ export function dedupeBoardRows(
   }
 
   /*
-   * #233: index each identity's createdAt values. A twin proves itself per
-   * ROW against this index — a twin-group row with no createdAt match stays
-   * visible rather than joining on a suffix alone. Non-numeric values never
-   * match: rows predate the field (and every u83 fixture omits it), and
+   * #233: index each identity's createdAt values AND, per value, the origin
+   * sessions of the rows carrying it. A twin proves itself per ROW against
+   * this index — a twin-group row with no createdAt match stays visible
+   * rather than joining on a suffix alone. Non-numeric values never match:
+   * rows predate the field (and every u83 fixture omits it), and
    * `undefined === undefined` must not read as proof of a copy.
+   *
+   * #233 review: the instant alone is NOT proof. The clock is
+   * Date.now()/1000 (only 16 distinct values across 300k tight
+   * iterations), creates take raw _now() with no monotonic guard, batch
+   * creation runs milliseconds apart, parallel agents create
+   * simultaneously, and set_ticket accepts explicit slugs — so two
+   * genuinely distinct tickets CAN share a stem and an instant. What the
+   * 82 real twins have that a same-instant coincidence never does is
+   * LINEAGE: every real twin comes from a DIFFERENT origin session than
+   * its base (measured on the live store: 82/82 differ — base
+   * session-21aca9bc-… vs twin session-e39817a8-…), because the backfill
+   * produced them by renaming a slug while importing a second session
+   * whose ticket collided with an already-imported one. Two tickets a
+   * user or a plan import creates in one instant share ONE session. So
+   * each absorption step additionally requires a same-instant base row
+   * from a different origin session — and declines on ambiguity, exactly
+   * as `_reconstructTicketMap` (store.ts) declines to match rather than
+   * guessing on same-slug-plus-same-instant ambiguity. Showing two rows
+   * beats hiding a ticket, always.
    */
-  const createdAts = new Map<string, Set<number>>();
+  const createdFrom = new Map<string, Map<number, Set<string>>>();
   for (const [identity, group] of groups) {
-    const ats = new Set<number>();
-    for (const row of group) {
-      if (typeof row.createdAt === "number") ats.add(row.createdAt);
+    let perAt = createdFrom.get(identity);
+    if (perAt === undefined) {
+      perAt = new Map<number, Set<string>>();
+      createdFrom.set(identity, perAt);
     }
-    createdAts.set(identity, ats);
+    for (const row of group) {
+      if (typeof row.createdAt !== "number") continue;
+      let sessions = perAt.get(row.createdAt);
+      if (sessions === undefined) {
+        sessions = new Set<string>();
+        perAt.set(row.createdAt, sessions);
+      }
+      sessions.add(row.sourceSessionId);
+    }
   }
   const rootIdentityOf = (
     identity: string,
     slug: string,
     workspaceKey: string,
     createdAt: unknown,
+    sourceSessionId: string,
   ): string => {
     let current = identity;
     let stem = slug;
@@ -1111,8 +1151,16 @@ export function dedupeBoardRows(
       if (cut <= 0) return current;
       if (!/^\d+$/.test(stem.slice(cut + 1))) return current;
       const base = workspaceKey + ":" + stem.slice(0, cut);
-      const baseAts = createdAts.get(base);
-      if (baseAts === undefined || !baseAts.has(createdAt)) return current;
+      const baseSessions = createdFrom.get(base)?.get(createdAt);
+      if (baseSessions === undefined) return current;
+      let lineage = false;
+      for (const session of baseSessions) {
+        if (session !== sourceSessionId) {
+          lineage = true;
+          break;
+        }
+      }
+      if (!lineage) return current;
       if (seen.has(base)) return current;
       seen.add(base);
       current = base;
@@ -1127,7 +1175,13 @@ export function dedupeBoardRows(
   for (const identity of order) {
     const group = groups.get(identity) as BoardTicketView[];
     for (const row of group) {
-      const root = rootIdentityOf(identity, row.slug, row.workspaceKey, row.createdAt);
+      const root = rootIdentityOf(
+        identity,
+        row.slug,
+        row.workspaceKey,
+        row.createdAt,
+        row.sourceSessionId,
+      );
       let target = merged.get(root);
       if (target === undefined) {
         target = [];
@@ -1154,13 +1208,58 @@ export function dedupeBoardRows(
       out.push(group[0]);
       continue;
     }
-    const ranked = [...group].sort(compareBoardCopiesNewestFirst(callerSessionId));
+    /*
+     * #233 review: a twin group ranks by the #83 rule (newest updatedAt
+     * wins — so a twin that moved further still wins, as 68/150 proves —
+     * then the caller's own writable copy) with ONE addition: exact ties
+     * prefer the BASE identity BY RULE. The old code fell through to the
+     * session-id lexical coin-flip, and store rows carry their closed
+     * origin sessions, so the caller's own-first step never fires in
+     * these groups and the base won all 81 real ties purely because
+     * '2' < 'e' — a reversed import order would have elected all 81
+     * twins. For a pure fork-copy group every row IS the base identity,
+     * so this step is a no-op there and #83 behaviour is unchanged.
+     */
+    const isBase = (row: BoardTicketView): boolean =>
+      row.workspaceKey + ":" + row.slug === identity;
+    const ranked = [...group].sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      const aOwn = a.sourceSessionId === callerSessionId ? 0 : 1;
+      const bOwn = b.sourceSessionId === callerSessionId ? 0 : 1;
+      if (aOwn !== bOwn) return aOwn - bOwn;
+      const aBase = isBase(a) ? 0 : 1;
+      const bBase = isBase(b) ? 0 : 1;
+      if (aBase !== bBase) return aBase - bBase;
+      return a.sourceSessionId < b.sourceSessionId ? -1 : a.sourceSessionId > b.sourceSessionId ? 1 : 0;
+    });
     const [winner, ...losers] = ranked;
     const copies = losers.map((row) => ({
       sessionId: row.sourceSessionId,
       updatedAt: row.updatedAt,
     }));
-    out.push({ ...winner, supersededCopies: copies });
+    /*
+     * #233 review: a twin-group winner displays under the BASE identity's
+     * id and slug — otherwise a twin win re-duplicates the numeric id
+     * (two board rows with id 84) and the board's id-84 row disagrees
+     * with get_ticket(84). The id and slug are the two ADDRESS forms
+     * (boardKeyText keys evidence by bare id; coverage and search key on
+     * workspaceKey:slug), so both come from the best-ranked base row;
+     * everything else — title, state, recency, provenance — stays the
+     * winner's, so a twin that moved further still shows its newer
+     * content, now under the address get_ticket already resolves. (When
+     * no base-identity row is present — unreachable in every measured
+     * shape, since a root only enters the merge from an identity present
+     * in it — the winner keeps its own address rather than inventing
+     * one.)
+     */
+    let display = winner;
+    if (!isBase(winner)) {
+      const baseBest = ranked.find((row) => isBase(row));
+      if (baseBest !== undefined) {
+        display = { ...winner, id: baseBest.id, slug: baseBest.slug };
+      }
+    }
+    out.push({ ...display, supersededCopies: copies });
     reports.push({
       identity,
       winner: { sessionId: winner.sourceSessionId, updatedAt: winner.updatedAt },
