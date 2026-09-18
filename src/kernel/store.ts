@@ -1765,7 +1765,27 @@ export class Store {
             sameStrings(stored!.allowlist, final.allowlist) &&
             sameStrings(stored!.tags, final.tags) &&
             sameStrings(stored!.dependsOn, remappedDeps);
-          if (storedEqualsFinal) {
+          // #230 round 4: content equality is NOT enough to no-op. The
+          // dependency accounting must be empty too. A dep-only tail after
+          // a mirror gap leaves every compared field equal while
+          // classifying a PENDING edge (target expected but not yet handed
+          // in) or a DROPPED one (unknown session) — and round 3 discarded
+          // both along with the set: no record, lossless still true, and
+          // the marker closing the session so nothing ever retried or
+          // repaired it. Silent, certified, permanent.
+          //
+          // When the accounting is non-empty the set is emitted even
+          // though its content changed nothing: it is what carries the
+          // remapped deps, clears `lossless`, and puts the pendings on the
+          // marker for a later batch to repair.
+          //
+          // `ticketMapped` is deliberately NOT counted on the no-op path.
+          // A mapped-and-equal edge means the store ALREADY holds the
+          // rewritten form, so this run rewrote nothing; counting it would
+          // inflate `edgesRewritten` with work that never happened. That
+          // is a decision, not an oversight — the honest count of a no-op
+          // is zero.
+          if (storedEqualsFinal && ticketDrops.length === 0 && ticketPendings.length === 0) {
             continue;
           }
           droppedDependencies.push(...ticketDrops);

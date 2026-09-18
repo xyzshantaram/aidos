@@ -29420,7 +29420,7 @@ var Store = class {
           }
           const sameStrings = (a, b) => a.length === b.length && a.every((value, index) => value === b[index]);
           const storedEqualsFinal = stale !== void 0 && stored.title === final.title && stored.description === final.description && stored.body === final.body && stored.criteria === final.criteria && stored.phase === final.phase && stored.order === final.order && stored.state === final.state && stored.slug === stale.slug && sameStrings(stored.allowlist, final.allowlist) && sameStrings(stored.tags, final.tags) && sameStrings(stored.dependsOn, remappedDeps);
-          if (storedEqualsFinal) {
+          if (storedEqualsFinal && ticketDrops.length === 0 && ticketPendings.length === 0) {
             continue;
           }
           droppedDependencies.push(...ticketDrops);

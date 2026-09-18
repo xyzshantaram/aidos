@@ -1040,3 +1040,118 @@ describe("#230 host: a partially mirrored session stays in the resume set", () =
     expect(resume.map(String).sort()).toEqual(["session-big", "session-small"]);
   });
 });
+
+describe("#230 round 4: a no-op replay must never swallow dependency accounting", () => {
+  /**
+   * The shape round 3 lost: a mirror-stale ticket whose post-mirror tail
+   * is a DEP-ONLY set. Every compared field still matches the stored
+   * snapshot, so the content check says "no-op" — but the set carries a
+   * dependency reference that classifies as PENDING or DROPPED, and
+   * round 3 discarded the accounting along with the set. Silent (nothing
+   * recorded), certified (`lossless` stayed true) and permanent (the
+   * marker closes the session, so no later batch retries or repairs it).
+   *
+   * Reachable, not contrived: lockstep mirroring breaks permanently on a
+   * revision divergence — a store-unavailable window, a crash — after
+   * which every later write is a session-only tail.
+   */
+  function depOnlyTail(ref: string): {
+    store: Store;
+    projectId: number;
+    workspaceId: TicketId;
+    log: { sessionId: string; events: { seq: number; type: string; data: AidosEvent }[] };
+  } {
+    const storage = new MemoryStorage();
+    const { store, projectId } = targetStore(storage);
+    const source = new Store(makeConfig(), {
+      now: tickingClock(),
+      storage: new MemoryStorage(),
+    });
+    const sourceProject = source.createProject(WORKSPACE, "alpha");
+    const ids = new Map<number, number>();
+    let mirrored = 0;
+    const mirrorTail = (): void => {
+      const events = source.events();
+      for (let index = mirrored; index < events.length; index++) {
+        mirrorSessionEvent(store, projectId, "session-dep", ids, events[index]!);
+      }
+      mirrored = events.length;
+    };
+
+    // Create and mirror. Then the mirror GAP: the tail changes only
+    // dependsOn, so every compared field stays equal.
+    source.createTicket(sourceProject, "Dep task", "d-dep");
+    mirrorTail();
+    source.setTicket(1, { dependsOn: [ref] });
+
+    return {
+      store,
+      projectId,
+      workspaceId: ids.get(1)! as TicketId,
+      log: {
+        sessionId: "session-dep",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      },
+    };
+  }
+
+  it("a PENDING edge on an otherwise content-identical tail is recorded, not swallowed", () => {
+    const { store, projectId, workspaceId, log } = depOnlyTail("session-later:1");
+    const result = store.backfillSessionLogs(projectId, [log], {
+      expectedSessionIds: ["session-dep", "session-later"],
+    });
+
+    // The edge waits on the marker for the batch carrying its target.
+    expect(result.pendingEdges.length).toBe(1);
+    // Silence is the defect: an unresolved edge must clear `lossless`.
+    expect(result.lossless).toBe(false);
+    // And the set DID emit, because it is what carries the accounting.
+    expect(store.state.tickets.get(workspaceId)!.revision).toBe(2);
+  });
+
+  it("a DROPPED edge on an otherwise content-identical tail is recorded, not swallowed", () => {
+    const { store, projectId, log } = depOnlyTail("session-unknown:1");
+    const result = store.backfillSessionLogs(projectId, [log]);
+
+    expect(result.droppedDependencies.length).toBe(1);
+    expect(result.lossless).toBe(false);
+  });
+
+  it("a clean tail with no accounting still replays to a true no-op", () => {
+    // The guard must not cost round 3 its revision cleanliness: with
+    // nothing to account for, the no-op still stands.
+    const storage = new MemoryStorage();
+    const { store, projectId } = targetStore(storage);
+    const source = new Store(makeConfig(), {
+      now: tickingClock(),
+      storage: new MemoryStorage(),
+    });
+    const sourceProject = source.createProject(WORKSPACE, "alpha");
+    const ids = new Map<number, number>();
+    source.createTicket(sourceProject, "Quiet task", "d-quiet");
+    for (const event of source.events()) {
+      mirrorSessionEvent(store, projectId, "session-quiet", ids, event);
+    }
+    const workspaceId = ids.get(1)!;
+    const before = store.state.tickets.get(workspaceId)!.revision;
+
+    const result = store.backfillSessionLogs(projectId, [
+      {
+        sessionId: "session-quiet",
+        events: source.events().map((data, index) => ({
+          seq: index + 1,
+          type: data.kind,
+          data,
+        })),
+      },
+    ]);
+
+    expect(result.tickets).toBe(0);
+    expect(result.lossless).toBe(true);
+    expect(store.state.tickets.get(workspaceId)!.revision).toBe(before);
+  });
+});
