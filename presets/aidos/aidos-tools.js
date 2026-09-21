@@ -33006,6 +33006,13 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
      * throttled to one warning per message.
      */
     __publicField(this, "_lastCoverageSignature", /* @__PURE__ */ new Map());
+    /*
+     * #465: the same throttle, for the dedupe reports in `_workspaceBoardMerge`.
+     * Deliberately a sibling of `_lastCoverageSignature` and not a shared map:
+     * the two describe different facts about the same merge, and one going
+     * quiet must never silence the other.
+     */
+    __publicField(this, "_lastDedupeSignature", /* @__PURE__ */ new Map());
     /**
      * #43: the synthetic store-backed session a closed origin's write runs
      * against. One per origin id per workspace store, memoized so the host's
@@ -33765,15 +33772,27 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
         if (evidence[key] !== void 0) keptEvidence[key] = evidence[key];
         if (comments[key] !== void 0) keptComments[key] = comments[key];
       }
-      for (const report of deduped.reports) {
-        const twins = report.twinSlugs !== void 0 && report.twinSlugs.length > 0 ? `; #233 twins absorbed: ${report.twinSlugs.join(", ")}` : "";
+      let dedupeLogKey;
+      try {
+        dedupeLogKey = this._workspacePath(agent);
+      } catch {
+        dedupeLogKey = null;
+      }
+      const dedupeSignature = `${tickets.length}:${deduped.rows.length}:` + deduped.reports.map(
+        (r) => `${r.identity}>${r.winner.sessionId}<${r.losers.map((l) => l.sessionId).join(",")}~${(r.twinSlugs ?? []).join(",")}`
+      ).join("|");
+      if (dedupeLogKey === null || this._lastDedupeSignature.get(dedupeLogKey) !== dedupeSignature) {
+        if (dedupeLogKey !== null) this._lastDedupeSignature.set(dedupeLogKey, dedupeSignature);
+        for (const report of deduped.reports) {
+          const twins = report.twinSlugs !== void 0 && report.twinSlugs.length > 0 ? `; #233 twins absorbed: ${report.twinSlugs.join(", ")}` : "";
+          this.ctx.logger?.info?.(
+            `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` + report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ") + twins
+          );
+        }
         this.ctx.logger?.info?.(
-          `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` + report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ") + twins
+          `aidos: #83 workspace merge ${tickets.length} rows -> ${deduped.rows.length} after dedupe`
         );
       }
-      this.ctx.logger?.info?.(
-        `aidos: #83 workspace merge ${tickets.length} rows -> ${deduped.rows.length} after dedupe`
-      );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
       this._reportStoreCoverage(agent, out, workspaceStore, includeRetired);

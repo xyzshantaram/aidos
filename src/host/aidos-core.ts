@@ -3668,20 +3668,71 @@ registerAidosSessionEventTypes(ctx);
         if (evidence[key] !== undefined) keptEvidence[key] = evidence[key];
         if (comments[key] !== undefined) keptComments[key] = comments[key];
       }
-      for (const report of deduped.reports) {
-        const twins =
-          report.twinSlugs !== undefined && report.twinSlugs.length > 0
-            ? `; #233 twins absorbed: ${report.twinSlugs.join(", ")}`
-            : "";
+      /*
+       * #465: this block used to log one line PER REPORT on EVERY merge, plus
+       * the summary. The board merges on every board read and this workspace
+       * holds 82 twin families, so a single read emitted well over a hundred
+       * lines — measured, 94,014 of dsh-web's 96,546 journal lines in 24h
+       * (97.4%) were the dedupe statement alone, roughly a gigabyte of
+       * journal every few days.
+       *
+       * The repetition carried no information: the same families resolve the
+       * same way on every merge, so 97% of those lines were byte-identical to
+       * the one before. What IS signal is the dedupe outcome CHANGING.
+       *
+       * So it is throttled on a signature of the whole report set — the same
+       * mechanism `_reportStoreCoverage` uses just below (`_lastCoverageSignature`),
+       * rather than a second mechanism for the same job. A changed outcome is
+       * still reported in full and immediately, every line of it; a stable one
+       * is silent. The summary rides the same gate because it is constant for
+       * the same reason.
+       *
+       * Keyed per workspace path, and the key is taken defensively: a log
+       * throttle must not break the board read it rides on, which is the rule
+       * `_reportStoreCoverage` already follows.
+       */
+      let dedupeLogKey: string | null;
+      try {
+        dedupeLogKey = this._workspacePath(agent);
+      } catch {
+        dedupeLogKey = null;
+      }
+      /*
+       * The signature is the DECISION, deliberately not the timestamps. An
+       * earlier draft folded `updatedAt` into it, which meant editing any one
+       * ticket changed the signature and re-logged all 82 families — trading
+       * "noisy on every read" for "noisy on every write". What matters is
+       * WHICH row wins and which are superseded; when they were last touched
+       * is not a dedupe outcome. Row counts stay in, because a ticket
+       * appearing or disappearing IS one.
+       */
+      const dedupeSignature =
+        `${tickets.length}:${deduped.rows.length}:` +
+        deduped.reports
+          .map(
+            (r) =>
+              `${r.identity}>${r.winner.sessionId}` +
+              `<${r.losers.map((l) => l.sessionId).join(",")}` +
+              `~${(r.twinSlugs ?? []).join(",")}`,
+          )
+          .join("|");
+      if (dedupeLogKey === null || this._lastDedupeSignature.get(dedupeLogKey) !== dedupeSignature) {
+        if (dedupeLogKey !== null) this._lastDedupeSignature.set(dedupeLogKey, dedupeSignature);
+        for (const report of deduped.reports) {
+          const twins =
+            report.twinSlugs !== undefined && report.twinSlugs.length > 0
+              ? `; #233 twins absorbed: ${report.twinSlugs.join(", ")}`
+              : "";
+          this.ctx.logger?.info?.(
+            `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` +
+              report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ") +
+              twins,
+          );
+        }
         this.ctx.logger?.info?.(
-          `aidos: #83 dedupe ${report.identity} -> session ${report.winner.sessionId} (updated ${report.winner.updatedAt}); superseded ` +
-            report.losers.map((l) => `${l.sessionId}@${l.updatedAt}`).join(", ") +
-            twins,
+          `aidos: #83 workspace merge ${tickets.length} rows -> ${deduped.rows.length} after dedupe`,
         );
       }
-      this.ctx.logger?.info?.(
-        `aidos: #83 workspace merge ${tickets.length} rows -> ${deduped.rows.length} after dedupe`,
-      );
       const out = deduped.rows;
       out.sort((a, b) => a.phase - b.phase || a.order - b.order || a.id - b.id);
       // #222: the merge already holds both sides — the board it just built
@@ -3895,6 +3946,14 @@ registerAidosSessionEventTypes(ctx);
    * throttled to one warning per message.
    */
   private readonly _lastCoverageSignature = new Map<string, string>();
+
+  /*
+   * #465: the same throttle, for the dedupe reports in `_workspaceBoardMerge`.
+   * Deliberately a sibling of `_lastCoverageSignature` and not a shared map:
+   * the two describe different facts about the same merge, and one going
+   * quiet must never silence the other.
+   */
+  private readonly _lastDedupeSignature = new Map<string, string>();
 
   private _reportStoreCoverage(
     agent: Agent,
