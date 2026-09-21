@@ -3221,7 +3221,11 @@ registerAidosSessionEventTypes(ctx);
   /** Create or edit one ticket. Creates the phase when absent. */
   setTicket(agent: Agent, args: SetTicketArgs): TicketRow {
     if (args.ticketId !== undefined) {
-      return this._editTicket(agent, args, "agent");
+      // #459: route the edit to the ticket's owning session — the caller's
+      // own fold holds only the tickets it created, while the board is the
+      // workspace merge.
+      const { routed } = this._routeWriteToTicket(agent, args.ticketId);
+      return this._editTicket(routed, args, "agent");
     }
     return this._createTicket(agent, args, "agent");
   }
@@ -4670,7 +4674,10 @@ registerAidosSessionEventTypes(ctx);
 
   /** Attach agent-authored evidence. The author is the agent, never the payload. */
   agentAttachEvidence(agent: Agent, args: AttachEvidenceArgs): EvidenceView {
-    return this._attachEvidence(agent, args, "agent");
+    // #459: the `no such ticket` path — this ran against the caller's own
+    // fold, so any ticket another session owned refused. Route first.
+    const { routed } = this._routeWriteToTicket(agent, args.ticketId);
+    return this._attachEvidence(routed, args, "agent");
   }
 
   /**
@@ -5250,8 +5257,22 @@ registerAidosSessionEventTypes(ctx);
       throw new Error(`allowlist proposal refused: ${detail}`);
     }
     // The ticket must exist — a request for an unknown id queues a card no
-    // poll can ever show (finding 6).
-    const snapshot = this._cache(agent.session).state.tickets.get(args.ticketId as TicketId);
+    // poll can ever show (finding 6). #459: resolve against the workspace
+    // board (the owning session's fold), not the caller's own fold, which
+    // holds only the tickets it created.
+    let routed: Agent;
+    let ticketId: TicketId;
+    try {
+      ({ routed, ticketId } = this._routeWriteToTicket(agent, args.ticketId));
+    } catch (error) {
+      if (error instanceof UnknownTicket) {
+        throw new Error(`unknown ticket ${args.ticketId}`);
+      }
+      throw error;
+    }
+    const cache = this._cache(routed.session);
+    this._sync(routed.session, cache);
+    const snapshot = cache.state.tickets.get(ticketId);
     if (snapshot === undefined) {
       throw new Error(`unknown ticket ${args.ticketId}`);
     }
@@ -5260,7 +5281,7 @@ registerAidosSessionEventTypes(ctx);
      * retired rows, so an approval card for one could never be answered —
      * the agent would wait forever on a card the human cannot see.
      */
-    if (this._isRetired(this._cache(agent.session).state, args.ticketId as TicketId)) {
+    if (this._isRetired(cache.state, ticketId)) {
       throw new Error(
         `ticket ${args.ticketId} is retired; it takes no allowlist requests until it is un-retired`,
       );
@@ -5584,8 +5605,28 @@ registerAidosSessionEventTypes(ctx);
     args: { limit?: number; since?: number; ticketId?: number } = {},
   ): { changes: Array<BoardChange & { nextStep?: string }>; omitted: number; covers: string } {
     const reader = this._boardAgent(agent);
-    const session = reader.session;
-    const folded = recentBoardChanges((session?.events ?? []) as readonly unknown[], args);
+    /*
+     * #459: a ticket-filtered digest folds the ticket's OWN log, not the
+     * reader's — the reader may have created nothing, in which case its own
+     * log folds to zero rows while the board holds real changes. Routing
+     * reaches the owning session (or the #43 orphan session when the origin
+     * is closed, whose events are the store's own log). The unfiltered
+     * digest keeps folding the reader's session: merging every session's
+     * raw log would double-count rows the store backfill already mirrors.
+     */
+    const source =
+      args.ticketId !== undefined ? this._routedAgent(reader, args.ticketId) : reader;
+    const session = source.session;
+    /*
+     * The session log carries envelopes (`{type, seq, time, data}`); the
+     * fold reads the enclosed aidos events, exactly as `foldSessionEvent`
+     * does for the board. Non-aidos envelopes unwrap to rows without a
+     * `kind`, which the fold ignores.
+     */
+    const log = ((session?.events ?? []) as readonly { data?: unknown }[]).map(
+      (envelope) => envelope.data,
+    );
+    const folded = recentBoardChanges(log, args);
     return {
       changes: folded.changes.map((change) => {
         const step = this.nextStepFor(reader, change.ticketId);
@@ -5753,8 +5794,6 @@ registerAidosSessionEventTypes(ctx);
         );
       }
     }
-    const state = this._cache(agent.session).state;
-
     /*
      * VALIDATE THE WHOLE BATCH FIRST, then commit (#93 review, finding 2).
      * The first cut validated and mutated in one pass, so a batch of
@@ -5768,7 +5807,21 @@ registerAidosSessionEventTypes(ctx);
       if (!Number.isFinite(ticketId)) {
         throw new Error(`bad ticketId ${String(suggestion.ticketId)}`);
       }
-      if (state.tickets.get(ticketId as TicketId) === undefined) {
+      // #459: each suggestion resolves against the workspace board — the
+      // caller's own fold holds only the tickets it created.
+      let routed: Agent;
+      let boardId: TicketId;
+      try {
+        ({ routed, ticketId: boardId } = this._routeWriteToTicket(agent, suggestion.ticketId));
+      } catch (error) {
+        if (error instanceof UnknownTicket) {
+          throw new Error(`unknown ticket ${ticketId}`);
+        }
+        throw error;
+      }
+      const boardCache = this._cache(routed.session);
+      this._sync(routed.session, boardCache);
+      if (boardCache.state.tickets.get(boardId) === undefined) {
         throw new Error(`unknown ticket ${ticketId}`);
       }
       /*
@@ -5777,7 +5830,7 @@ registerAidosSessionEventTypes(ctx);
        * exact "ask the human cannot act on" the gate-checked validation
        * exists to prevent.
        */
-      if (this._isRetired(state, ticketId as TicketId)) {
+      if (this._isRetired(boardCache.state, boardId)) {
         throw new Error(
           `ticket ${ticketId} is retired; it takes no nominations until it is un-retired`,
         );
@@ -5875,12 +5928,33 @@ registerAidosSessionEventTypes(ctx);
    */
   private _liveNominations(agent: Agent): ActionNomination[] {
     const sessionId = String(agent.session.id);
-    const cache = this._cache(agent.session);
-    this._sync(agent.session, cache);
     const live: ActionNomination[] = [];
     for (const [id, nomination] of [...this._nominations]) {
       if (nomination.sessionId !== sessionId) continue;
-      const snapshot = cache.state.tickets.get(Number(nomination.ticketId) as TicketId);
+      /*
+       * #459: the nomination may name a ticket another session owns — prune
+       * against the workspace board, never against the caller's own fold
+       * alone, or every foreign nomination reads as "no longer exists" and
+       * is pruned the moment it is counted. What cannot be resolved is
+       * spent (as before); what is merely not imported yet is kept, because
+       * silently dropping a queue row is the worse error.
+       */
+      let snapshot: TicketSnapshot | undefined;
+      let boardState: AidosState | undefined;
+      try {
+        const { routed, ticketId } = this._routeWriteToTicket(agent, nomination.ticketId);
+        const boardCache = this._cache(routed.session);
+        this._sync(routed.session, boardCache);
+        boardState = boardCache.state;
+        snapshot = boardState.tickets.get(ticketId);
+      } catch (error) {
+        if (error instanceof TicketNotYetImported) {
+          live.push(nomination);
+          continue;
+        }
+        snapshot = undefined;
+        boardState = undefined;
+      }
       /*
        * A ticket that no longer exists cannot be acted on, so its
        * nomination is dead weight in the cap. Same for an action whose
@@ -5897,7 +5971,8 @@ registerAidosSessionEventTypes(ctx);
       if (
         !spent &&
         snapshot !== undefined &&
-        this._isRetired(cache.state, Number(nomination.ticketId) as TicketId)
+        boardState !== undefined &&
+        this._isRetired(boardState, snapshot.id)
       ) {
         spent = true;
       }
@@ -6075,19 +6150,23 @@ registerAidosSessionEventTypes(ctx);
    * the approved proposal. Two commits never grow here a second way.
    */
   private _applyTags(
-    agent: Agent,
+    // #459: the owning session's handle, never the caller's — every caller
+    // routes through `_routedAgent` (or passes the session a snapshot was
+    // read from) before landing here, which is why attach_tags kept
+    // resolving while the unrouted entries refused.
+    owner: Agent,
     ticketId: TicketId,
     delta: { add: string[]; remove: string[] },
     actor: Actor,
   ): { ticketId: TicketId; added: string[]; removed: string[] } {
-    const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
+    const snapshot = this._cache(owner.session).state.tickets.get(ticketId);
     if (!snapshot) {
       throw new UnknownTicket(ticketId);
     }
-    this._assertLocalWorkspace(agent, snapshot);
+    this._assertLocalWorkspace(owner, snapshot);
     if (
       actor === "agent" &&
-      (delta.remove.length > 0 || this._isRetired(this._cache(agent.session).state, ticketId))
+      (delta.remove.length > 0 || this._isRetired(this._cache(owner.session).state, ticketId))
     ) {
       if (delta.remove.length > 0) {
         throw new TagDetachRefused(actor);
@@ -6097,8 +6176,8 @@ registerAidosSessionEventTypes(ctx);
     const added: string[] = [];
     const removed: string[] = [];
     if (delta.add.length > 0) {
-      const at = this._atFor(agent.session, ticketId);
-      this._commit(agent, {
+      const at = this._atFor(owner.session, ticketId);
+      this._commit(owner, {
         kind: "tags/attached",
         version: 1,
         ticketId,
@@ -6107,7 +6186,7 @@ registerAidosSessionEventTypes(ctx);
       });
       added.push(...delta.add.filter((name) => !(snapshot.tags ?? []).includes(name)));
     }
-    const afterAttach = this._cache(agent.session).state.tickets.get(ticketId);
+    const afterAttach = this._cache(owner.session).state.tickets.get(ticketId);
     if (delta.remove.length > 0) {
       const present = delta.remove.filter((name) => (afterAttach?.tags ?? []).includes(name));
       if (present.length === 0) {
@@ -6115,19 +6194,19 @@ registerAidosSessionEventTypes(ctx);
           `ticket ${ticketId} carries none of: ${delta.remove.join(", ")}`,
         );
       }
-      this._commit(agent, {
+      this._commit(owner, {
         kind: "tags/detached",
         version: 1,
         ticketId,
         names: present,
-        at: this._atFor(agent.session, ticketId),
+        at: this._atFor(owner.session, ticketId),
       });
       removed.push(...present);
     }
     if (added.length > 0 && _isUserAction(actor)) {
-      const title = this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
+      const title = this._cache(owner.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`;
       this._queueInjection(
-        agent.session,
+        owner.session,
         `${_mdTicketHead(ticketId, title)} — tagged by ${actor}: ${added.map(_mdCode).join(" ")}`,
       );
     }
@@ -6452,7 +6531,10 @@ registerAidosSessionEventTypes(ctx);
     fromState: TicketState;
     toState: TicketState;
   } {
-    return this._moveTicket(agent, args, "agent");
+    // #459: same ownership routing as every other write — the caller's own
+    // fold is not the board.
+    const { routed } = this._routeWriteToTicket(agent, args.ticketId);
+    return this._moveTicket(routed, args, "agent");
   }
 
   /**
@@ -6471,7 +6553,10 @@ registerAidosSessionEventTypes(ctx);
 
   /** Append one agent-authored comment to one ticket. */
   agentAddComment(agent: Agent, args: AddCommentArgs): CommentRecord {
-    return this._addComment(agent, args, "agent");
+    // #459: same ownership routing as every other write — the caller's own
+    // fold is not the board.
+    const { routed } = this._routeWriteToTicket(agent, args.ticketId);
+    return this._addComment(routed, args, "agent");
   }
 
   /** The user-actor comment path, exported over the typert Remote surface. */
@@ -7216,7 +7301,7 @@ registerAidosSessionEventTypes(ctx);
       slug: args.slug,
       dependsOn: args.dependsOn === undefined ? undefined : [...args.dependsOn],
     });
-    const snapshot = this._cache(agent.session).state.tickets.get(ticketId);
+    const snapshot = cache.state.tickets.get(ticketId);
     if (!snapshot) {
       throw new Error("a created ticket is missing from the folded state");
     }
@@ -7970,7 +8055,9 @@ registerAidosSessionEventTypes(ctx);
    * is here to surface.
    */
   private _reportWorktreePreparation(
-    agent: Agent,
+    // #459: the owning session's handle — this runs inside a routed move,
+    // so the title lookup reads the board, not a stranger's fold.
+    owner: Agent,
     ticketId: number,
     path: string,
     problems: string[],
@@ -7993,7 +8080,7 @@ registerAidosSessionEventTypes(ctx);
       return;
     }
     if (problems.length === 0) {
-      const { configPath, spec } = this._recordedPreparation(agent);
+      const { configPath, spec } = this._recordedPreparation(owner);
       for (const problem of spec.problems) {
         problems.push(`the recorded preparation recipe is unusable: ${problem}`);
       }
@@ -8024,7 +8111,7 @@ registerAidosSessionEventTypes(ctx);
             `recorded for this workspace yet: work out what makes it build in one of them, confirm ` +
             `it, then record it at ${_mdCode(recipe)} so later worktrees are configured automatically.`;
         this._queueInjection(
-          agent.session,
+          owner.session,
           `worktree for #${ticketId} at ${_mdCode(path)}${DIGEST_SEPARATOR}${instruction}`,
         );
         return;
@@ -8037,8 +8124,8 @@ registerAidosSessionEventTypes(ctx);
         `next move to in_progress:\n${detail}`,
     );
     this._queueInjection(
-      agent.session,
-      `${_mdTicketHead(ticketId, this._cache(agent.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} — ` +
+      owner.session,
+      `${_mdTicketHead(ticketId, this._cache(owner.session).state.tickets.get(ticketId)?.title ?? `#${ticketId}`)} — ` +
         `**worktree preparation failed** at ${_mdCode(path)}. A subagent dispatched for this ` +
         `ticket may not be able to build or test there. Retried on the next move to ` +
         `in_progress.\n${detail}`,
@@ -8898,6 +8985,49 @@ registerAidosSessionEventTypes(ctx);
     const row = merged.tickets.find((candidate) => candidate.id === ticketId);
     const owner = row?.sourceSessionId;
     return typeof owner === "string" && owner !== "" ? owner : null;
+  }
+
+  /**
+   * #459: route a WRITE to its ticket's owning session and resolve the id —
+   * the write-side twin of getTicket's route + resolve prologue. Every
+   * board write entry runs through here (or, for the user remotes, through
+   * the same `_routedAgent` + `_resolveTicketId` pair inline), so a session
+   * writes to the workspace board rather than only to the tickets its own
+   * fold happens to hold. A dead origin lands on the #43 orphan session,
+   * whose appends go to the store alone.
+   *
+   * Resolution failures keep getTicket's transient-versus-settled
+   * distinction (#217): while the one-time import could still land the
+   * ticket, the refusal is `TicketNotYetImported` ("not loaded yet, retry
+   * after a board read"), never a settled absence. Without a persistence
+   * service there are no closed logs left to import (#42 reads an empty
+   * list), so the miss is settled even mid-`!verified`. Non-numeric refs
+   * stay settled: no retry ever resolves them (#45). `OwnerUnavailable`
+   * (no store can serve the write either) propagates untouched.
+   */
+  private _routeWriteToTicket(
+    agent: Agent,
+    ticketRef: number | string,
+  ): { routed: Agent; ticketId: TicketId } {
+    try {
+      const routed = this._routedAgent(agent, ticketRef);
+      return { routed, ticketId: this._resolveTicketId(routed, ticketRef) };
+    } catch (error) {
+      if (error instanceof UnknownTicket || error instanceof OwnerUnavailable) {
+        const plainNumeric =
+          typeof ticketRef === "number" ||
+          (typeof ticketRef === "string" && /^\d+$/.test(ticketRef));
+        if (
+          plainNumeric &&
+          this._workspaceStoreForRead(agent) !== null &&
+          !this._isBackfillVerified(agent) &&
+          this.ctx.get("sessionPersistence") !== undefined
+        ) {
+          throw new TicketNotYetImported(ticketRef);
+        }
+      }
+      throw error;
+    }
   }
 
   /** Refuse a write against a ticket whose workspace is not the current one. */
