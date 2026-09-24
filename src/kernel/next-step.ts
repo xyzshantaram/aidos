@@ -48,6 +48,11 @@ export interface NextStepInput {
   allowlist?: readonly string[];
   /** The ticket's acceptance criteria, verbatim. Empty means ungrilled. */
   criteria?: string;
+  /**
+   * #468: whether the ticket is retired. Retirement is a KIND (#108), not a
+   * state, so it arrives as an explicit flag — never inferred from `state`.
+   */
+  retired?: boolean;
 }
 
 /** Who can supply one kind, in the words a reader needs. */
@@ -87,6 +92,22 @@ export function nextStep(
   attached: ReadonlySet<string>,
 ): string | undefined {
   if (ticket.state === "done") return undefined;
+
+  /*
+   * #468: a retired ticket keeps the guidance of whatever state it was
+   * retired in without this — and the `open` branch then proposes an
+   * allowlist the tools REFUSE for retired tickets. Guidance naming a
+   * refused action teaches the agent to ignore guidance, so a retired
+   * ticket in ANY state gets one fact line naming what the refusals
+   * enforce — no writes, no gate moves, no allowlist requests — and only
+   * the human can un-retire it from the Retired panel.
+   */
+  if (ticket.retired === true) {
+    return (
+      "this ticket is retired: it takes no writes, no gate moves, and no " +
+      "allowlist requests until the human un-retires it from the Retired panel"
+    );
+  }
 
   const gate = forwardGate(config, ticket.state);
   const missing =

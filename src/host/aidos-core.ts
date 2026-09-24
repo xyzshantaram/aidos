@@ -5771,12 +5771,20 @@ registerAidosSessionEventTypes(ctx);
    *
    * Never throws: a ticket that cannot be read has no next step, and a piece
    * of guidance must never be the reason a tool call or a digest fails.
+   *
+   * #468: retirement threads from `_isRetired` on the routed cache — the
+   * folded retirement marker, the same source of truth every refusal uses.
+   * The kernel takes it as an explicit flag because retirement is orthogonal
+   * to state (#108), never inferable from it.
    */
   nextStepFor(agent: Agent, ticketId: number | string): string | undefined {
     try {
-      const read = this.getTicket(this._routedAgent(agent, ticketId), { ticketId });
-      const attached = new Set(read.evidence.map((row) => row.kind));
-      return nextStep(this._resolvedConfig, read.ticket, attached);
+      const routed = this._routedAgent(agent, ticketId);
+      const read = this.getTicket(routed, { ticketId });
+      const cache = this._cache(routed.session);
+      this._sync(routed.session, cache);
+      const retired = this._isRetired(cache.state, read.ticket.id);
+      return nextStep(this._resolvedConfig, { ...read.ticket, retired }, new Set(read.evidence.map((row) => row.kind)));
     } catch {
       return undefined;
     }

@@ -27929,6 +27929,9 @@ function nameKind(kind) {
 }
 function nextStep(config2, ticket, attached) {
   if (ticket.state === "done") return void 0;
+  if (ticket.retired === true) {
+    return "this ticket is retired: it takes no writes, no gate moves, and no allowlist requests until the human un-retires it from the Retired panel";
+  }
   const gate = forwardGate(config2, ticket.state);
   const missing = gate === void 0 ? [] : gate.requiredKinds.filter((kind) => isMissing(gate, attached, kind));
   if (ticket.state === "open") {
@@ -34635,12 +34638,20 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
    *
    * Never throws: a ticket that cannot be read has no next step, and a piece
    * of guidance must never be the reason a tool call or a digest fails.
+   *
+   * #468: retirement threads from `_isRetired` on the routed cache — the
+   * folded retirement marker, the same source of truth every refusal uses.
+   * The kernel takes it as an explicit flag because retirement is orthogonal
+   * to state (#108), never inferable from it.
    */
   nextStepFor(agent, ticketId) {
     try {
-      const read = this.getTicket(this._routedAgent(agent, ticketId), { ticketId });
-      const attached = new Set(read.evidence.map((row) => row.kind));
-      return nextStep(this._resolvedConfig, read.ticket, attached);
+      const routed = this._routedAgent(agent, ticketId);
+      const read = this.getTicket(routed, { ticketId });
+      const cache = this._cache(routed.session);
+      this._sync(routed.session, cache);
+      const retired = this._isRetired(cache.state, read.ticket.id);
+      return nextStep(this._resolvedConfig, { ...read.ticket, retired }, new Set(read.evidence.map((row) => row.kind)));
     } catch {
       return void 0;
     }
