@@ -397,6 +397,40 @@ function parseContextSectionsArg(raw: string | undefined): ContextSection[] | un
 // ---- registration, and the access each tool declares ----
 
 /**
+ * #237: criteria accept a string or an array of strings on the tool
+ * boundary. An array joins with newline before storage; a plain string
+ * passes through exactly as today, so the storage format is unchanged --
+ * no event change, no migration, and the host needs no new validation.
+ *
+ * RECORDED DECISION on an element that itself contains a newline: it
+ * SPLITS. Joining is byte-identical to what the string form would have
+ * stored for the same text, so refusing would force the agent to work
+ * around a refusal for input the string form accepts silently -- while a
+ * silent renumbering would corrupt #69's line-identity annotations. The
+ * middle path is a visible split: the tool result reports the element
+ * count passed versus the criterion lines that landed (criteriaPassed vs
+ * criteriaStored), so the renumbering shows up in the result.
+ */
+function normalizeCriteriaArg(value: string | string[] | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") return value;
+  return value.join("\n");
+}
+
+/*
+ * #237: the landed-line count for the array form, by the same
+ * trim-and-drop-empties rules parseCriteria (src/client/board-logic.ts)
+ * reads with. Kept local: tools/ has no imports from client/, and the
+ * rule is one line.
+ */
+function countCriteriaLines(stored: string): number {
+  return stored
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0).length;
+}
+
+/**
  * Register one board tool and DECLARE its access class in the same call
  * (#146).
  *
@@ -634,6 +668,7 @@ const AIDOS_GUIDANCE =
   "Run the ticket lifecycle of the session's project with the board tools. " +
   "get_tickets reads the board; every row carries the confidence score and the gate fraction, and the score is advisory. " +
   "set_ticket creates a ticket when you omit ticketId and edits the named fields when you give one; it never changes a ticket's state, and it creates the phase when the phase is absent. " +
+  "Pass set_ticket criteria as an array of strings: one element is one criterion -- one row in the criteria panel and one linkable unit for per-criterion evidence -- while a prose string without newlines is a single criterion no matter how many requirements it names. " +
   "attach_evidence records agent-authored evidence for the agent-allowed kinds (automated_check, review_pass, review_fail, review_note, agent_report); user_signoff and user_verified are the human's to supply, never yours. " +
   "review_pass means the reviewer ACCEPTED the change and it is the gate key; a reviewer who FAILED the change is recorded with review_fail, which satisfies no gate. Never record a failing review as a review_pass. " +
   "move_ticket moves a ticket only when the required proof exists: the gate's refusal names the missing kinds, and signoff is the human's to give. You never move a ticket to done; the human marks done. " +
@@ -1131,7 +1166,16 @@ function registerSetTicket(ctx: Context): void {
         title: { type: "string", description: "The ticket title; required when creating." },
         description: { type: "string", description: "The ticket description." },
         body: { type: "string", description: "The ticket body." },
-        criteria: { type: "string", description: "The evaluation criteria." },
+        criteria: {
+          oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+          description:
+            "The evaluation criteria. Prefer an array of strings: one element is one criterion -- " +
+            "one row in the criteria panel and one linkable unit for per-criterion evidence (#69, #151). " +
+            "A single string is stored verbatim, and newlines separate criteria, so multi-sentence prose " +
+            "without newlines is ONE criterion no matter how many requirements it names. An array is joined " +
+            "with newlines before storage; empty elements land as blank lines, which the criteria panel " +
+            "skips like any other blank line.",
+        },
         phase: { type: "integer", description: "The phase number; defaults to 1 on create." },
         phaseTitle: { type: "string", description: "The title a newly created phase takes; defaults to 'Untitled phase'." },
         order: { type: "integer", description: "The order within the phase; defaults to the next free position on create." },
@@ -1158,6 +1202,15 @@ function registerSetTicket(ctx: Context): void {
             confidenceScore: { type: "number", required: true },
             updatedAt: { type: "number", required: true },
             /*
+             * #237: present only when criteria arrived as an array -- the
+             * element count passed versus the criterion lines that landed.
+             * An element holding a newline splits on join (byte-identical to
+             * what the string form would have stored), so the two counts
+             * differ exactly then; the split is recorded, never silent.
+             */
+            criteriaPassed: { type: "integer" },
+            criteriaStored: { type: "integer" },
+            /*
              * #174: what the ticket needs NOW, derived from the gate the
              * board just re-evaluated. Absent when it needs nothing, so a
              * reader can branch on it rather than parsing an empty string.
@@ -1175,7 +1228,10 @@ function registerSetTicket(ctx: Context): void {
         ctx.logger?.debug?.(`aidos: set_ticket args ${JSON.stringify(args)}`);
         try {
           const created = args.ticketId === undefined;
-          const ticket = ctx.aidos.setTicket(agent, { ...args });
+          // #237: the array form joins with newline before storage; a plain
+          // string passes through exactly as today.
+          const criteria = normalizeCriteriaArg(args.criteria);
+          const ticket = ctx.aidos.setTicket(agent, { ...args, criteria });
           ctx.logger?.info?.(`aidos: set_ticket wrote ticket ${ticket.id} for agent ${agent.session?.id}`);
           /*
            * #92: return only what the CALLER COULD NOT HAVE KNOWN. Echoing the
@@ -1195,6 +1251,18 @@ function registerSetTicket(ctx: Context): void {
             gateTotal: view.gateTotal,
             confidenceScore: view.confidenceScore,
             updatedAt: view.updatedAt,
+            /*
+             * #237: the array form reports the element count passed versus
+             * the criterion lines that landed, so a newline inside one
+             * element -- which splits on join -- shows up in the result
+             * instead of silently renumbering #69's line-identity slots.
+             */
+            ...(Array.isArray(args.criteria)
+              ? {
+                  criteriaPassed: args.criteria.length,
+                  criteriaStored: countCriteriaLines(view.criteria),
+                }
+              : {}),
             /*
              * #174: creating a ticket is the motivating case for the next
              * step — the kernel already derives the open-ticket guidance
