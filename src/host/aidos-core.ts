@@ -6133,8 +6133,12 @@ registerAidosSessionEventTypes(ctx);
    * the paste-to-path route, which resolves the workspace itself). Read-only
    * and harmless: the cwd is not a secret to the session's own client.
    */
+  // Named `args`, not absent: see the note on pendingApprovals. Without it
+  // every client call is refused with `unexpected "args"`, and the call
+  // site in evidence-attach swallowed the refusal, silently dropping the
+  // paste upload's x-workspace header.
   @Remote("workspaceRoot")
-  workspaceRoot(agent: Agent): { workspace: string } {
+  workspaceRoot(agent: Agent, args?: Record<string, never>): { workspace: string } {
     const cwd = agent.session?.header?.cwd ?? "";
     return { workspace: cwd };
   }
@@ -6497,8 +6501,10 @@ registerAidosSessionEventTypes(ctx);
    * activity order. Aggregated from the SAME merge the board reads
    * (workspaceTickets), so the browser cannot disagree with the board.
    */
+  // Named `args`, not absent: see the note on pendingApprovals. Without it
+  // the Tags modal renders the gateway refusal instead of the tag list.
   @Remote("workspaceTags")
-  async workspaceTags(agent: Agent): Promise<{
+  async workspaceTags(agent: Agent, args?: Record<string, never>): Promise<{
     tags: Array<{ tag: string; count: number; tickets: Array<{ boardKey: string; id: number; title: string; state: string; slug: string; workspaceKey: string }> }>;
   }> {
     const merged = await this.workspaceTickets(agent);

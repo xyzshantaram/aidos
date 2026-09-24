@@ -128,8 +128,11 @@ async function uploadImagePaste(agentId: string, file: Blob, name: string): Prom
     "x-session-id": agentId,
   };
   // The workspace root rides the aidos Remote surface (read-only, the
-  // session's own cwd); the paste route needs it as a header.
-  const root = await callAidosRemote("workspaceRoot", {}, agentId).catch(() => undefined);
+  // session's own cwd); the paste route needs it as a header. A refusal
+  // here must REJECT -- handleFile surfaces it as pasteError in the modal.
+  // The previous `.catch(() => undefined)` degraded a refusal to a null
+  // workspaceDir and silently dropped the header on every upload (#458).
+  const root = await callAidosRemote("workspaceRoot", {}, agentId);
   const workspaceDir =
     root !== undefined &&
     typeof root === "object" &&
