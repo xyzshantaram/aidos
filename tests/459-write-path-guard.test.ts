@@ -1,19 +1,25 @@
 /**
- * Ticket #459, criterion 5: the regression guard.
+ * Ticket #459, criterion 5: the regression guard — hardened by #466.
  *
- * Fails the build if any board write path resolves a ticket id through the
- * calling session's own fold (`_cache(agent.session).state.tickets`) instead
- * of the workspace board. Two halves:
+ * What this guard proves, honestly:
  *
- * 1. No occurrence of the caller-fold ticket lookup anywhere in the
- *    decommented service source. The fixed code reads tickets through a
- *    routed owner handle (`_cache(routed.session)`, `_cache(owner.session)`)
- *    or a bound `cache` variable, so the literal's return means the defect
- *    is back, wherever it hides.
- * 2. Every board write entry resolves through `_routedAgent` and never
- *    touches the caller's fold directly. Some entries delegate (setTicket
- *    hands to _editTicket), so the absence of the literal alone would not
- *    catch a reintroduction there — the routing call is the tripwire.
+ * - Every listed write entry CALLS the routing seam AND threads the routed
+ *   handle into the call that performs the write. A route-then-ignore body —
+ *   call the router, discard its result, rebuild an unrouted handle through a
+ *   session alias — fails it (the pre-#466 guard passed such a mutant 23/23).
+ * - A NEW entry that hands the raw `agent` to a known write helper fails the
+ *   name-agnostic half without anyone adding the entry to the list.
+ *
+ * What it does NOT prove:
+ *
+ * - That the routed handle is CORRECT (that the router resolves to the owning
+ *   session) — only that each entry uses what the router returned. The
+ *   router's correctness is proved behaviourally by
+ *   tests/459-foreign-session-writes.test.ts, which is the backstop: if this
+ *   guard and that suite ever disagree, believe the suite.
+ * - Coverage of a brand-new write HELPER (a new seam beside _editTicket and
+ *   friends) — the name-agnostic half bans the known shapes, not unknown
+ *   ones; a new seam needs a new assertion.
  *
  * Method windows are extracted by brace balance from the member definition
  * and self-check with a per-entry marker: a wrong window fails loudly
@@ -258,6 +264,68 @@ const ENTRIES: [string, string][] = [
   ["userMoveTicket", "this._moveTicket(this._routedAgent"],
 ];
 
+/** Entry → its marker, for tables that extend ENTRIES without restating it. */
+function markerOf(name: string): string {
+  const found = ENTRIES.find((row) => row[0] === name);
+  if (found === undefined) throw new Error(`guard: no marker for ${name}`);
+  return found[1];
+}
+
+/**
+ * #466: the routed handle must be the one USED, not merely obtained. The
+ * reviewer's route-then-ignore mutant calls `_routeWriteToTicket` and then
+ * rebuilds an unrouted handle through a session alias — so "contains a
+ * routing call" passes on it while the defect is live. Each entry below must
+ * thread the routed handle into the call that performs the write: the
+ * must-contain spelling takes `routed` (or routes inline in the receiver
+ * argument, where route-then-ignore is impossible by construction), and the
+ * must-not spelling hands the raw `agent` parameter to the same helper.
+ */
+const ROUTED_USE: [string, string[], string][] = [
+  // [entry, fragments the write call must contain, the same call with raw `agent`]
+  ["setTicket", ["this._editTicket(routed,"], "this._editTicket(agent,"],
+  ["agentAttachEvidence", ["this._attachEvidence(routed,"], "this._attachEvidence(agent,"],
+  ["agentMoveTicket", ["this._moveTicket(routed,"], "this._moveTicket(agent,"],
+  ["agentAddComment", ["this._addComment(routed,"], "this._addComment(agent,"],
+  ["userSetTicket", ["this._editTicket(this._routedAgent("], "this._editTicket(agent,"],
+  ["userMoveTicket", ["this._moveTicket(this._routedAgent("], "this._moveTicket(agent,"],
+  // attachCommit wraps the receiver onto the next line, so the use is two
+  // fragments: the helper call and the route inside its receiver argument.
+  ["attachCommit", ["this._attachCommitEvidence(", "this._routedAgent(agent, args.ticketId)"], "this._attachCommitEvidence(agent,"],
+  ["agentAttachTags", ["this._applyTags(routed,"], "this._applyTags(agent,"],
+  ["requestAllowlist", ["this._cache(routed.session)"], "this._cache(agent.session)"],
+  ["suggestActions", ["this._cache(routed.session)"], "this._cache(agent.session)"],
+  ["recentChanges", ["this._routedAgent(reader, args.ticketId)"], "this._cache(agent.session)"],
+];
+
+/**
+ * #466: the entries that destructure `routed` from `_routeWriteToTicket` must
+ * have no other way to build a handle. The reviewer's mutant rebuilds one via
+ * `agent.session` (`const sess = agent.session; const routed = { ...agent,
+ * session: sess }`) — either half of that rebuild fails this test, so the
+ * mutant fails twice over. None of these bodies reads `agent.session` or
+ * spreads `agent` today; the legitimate `agent` uses (the route call itself,
+ * the create branch) stay untouched.
+ */
+const DESTRUCTURED_ROUTED = [
+  "setTicket",
+  "agentAttachEvidence",
+  "agentMoveTicket",
+  "agentAddComment",
+];
+
+/**
+ * #466, criterion 2: a NEW write entry that resolves through the caller fold
+ * is caught without anyone adding it to ENTRIES. Any call that hands the raw
+ * `agent` parameter to a ticket-write helper anywhere in the service breaks
+ * the build — routing first is the only way to hold a handle those helpers
+ * accept. Creates (`_createTicket`) and plan-meta (`_setPlanMeta`) are
+ * deliberately outside this list: with no ticket id there is nothing to
+ * route.
+ */
+const RAW_AGENT_WRITE =
+  /this\._(?:editTicket|attachEvidence|moveTicket|addComment|applyTags|attachCommitEvidence)\(\s*agent\s*,/;
+
 describe("#459 no board write path reads the caller's own fold", () => {
   it("the caller-fold ticket lookup appears nowhere in the service", () => {
     expect(CODE).not.toContain("_cache(agent.session).state.tickets");
@@ -272,5 +340,29 @@ describe("#459 no board write path reads the caller's own fold", () => {
   it.each(ENTRIES)("%s never touches the caller's fold directly", (name, marker) => {
     const body = methodBody(CODE, name, marker);
     expect(body).not.toContain("_cache(agent.session)");
+  });
+
+  it.each(ROUTED_USE)(
+    "%s threads the routed handle into the write",
+    (name, mustAll, mustNot) => {
+      const marker = markerOf(name);
+      const body = methodBody(CODE, name, marker);
+      for (const must of mustAll) expect(body).toContain(must);
+      expect(body).not.toContain(mustNot);
+    },
+  );
+
+  it.each(DESTRUCTURED_ROUTED)(
+    "%s builds no handle except the router's",
+    (name) => {
+      const marker = markerOf(name);
+      const body = methodBody(CODE, name, marker);
+      expect(body).not.toContain("agent.session");
+      expect(body).not.toContain("...agent");
+    },
+  );
+
+  it("no write-helper call anywhere in the service takes the raw agent", () => {
+    expect(CODE).not.toMatch(RAW_AGENT_WRITE);
   });
 });
