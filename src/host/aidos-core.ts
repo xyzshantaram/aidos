@@ -4584,6 +4584,42 @@ registerAidosSessionEventTypes(ctx);
     this._sync(agent.session, cache);
     if (cache.state.tickets.has(numeric)) return agent;
     const owner = this._workspaceOwnerOf(agent, numeric as TicketId);
+    if (owner !== null && owner !== agent.session.id) {
+      const ownerAgent = this._ownerAgent(agent, owner);
+      /*
+       * #467: the owner's fold may still lack the id. The one-time reimport
+       * renumbered tickets IN THE STORE ONLY, stamping each imported row's
+       * origin with the session that authored it — a session that can be
+       * LIVE in this very process while its session log still folds the OLD
+       * id space. `_ownerSession`'s live-preference is right only when the
+       * live fold actually holds the row, so check before committing to it;
+       * on a miss fall through to the store-backed route below instead of
+       * refusing a ticket the board is displaying.
+       */
+      const ownerCache = this._cache(ownerAgent.session);
+      this._sync(ownerAgent.session, ownerCache);
+      if (ownerCache.state.tickets.has(numeric)) return ownerAgent;
+    }
+    /*
+     * #467: an id the caller's fold and the owner's fold both lack may
+     * still live in the workspace store — renumbered there by the backfill
+     * (origin stamped, so the merge names a live-but-stale session above),
+     * or created directly in the store with NO origin (which the merge
+     * stamps as the reader, making the own-fold miss look settled). The
+     * store-backed session is then the row's only true fold: route there —
+     * the same durable home #43 gives a dead origin's writes, with appends
+     * committing under the same #40/#43 bracket. Declined when the
+     * read-side store cannot serve the id (no file, or no such row), so a
+     * genuinely unknown id keeps its settled UnknownTicket and the
+     * transient-versus-settled distinction #217 defined is untouched.
+     */
+    const storeEntry = this._workspaceStoreForRead(agent);
+    if (storeEntry !== null && storeEntry.store.state.tickets.has(numeric as TicketId)) {
+      const orphan = this._orphanSession(agent, owner ?? agent.session.id);
+      if (orphan !== null) {
+        return { ...agent, session: orphan } as unknown as Agent;
+      }
+    }
     if (owner === null || owner === agent.session.id) return agent;
     return this._ownerAgent(agent, owner);
   }

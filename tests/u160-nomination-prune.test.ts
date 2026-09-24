@@ -108,6 +108,14 @@ describe("#160 a fulfilled nomination stops existing", () => {
      * the c5 distinct-ids test's not-yet-implemented-delete simulation —
      * which is exactly the state that folded log would be in if a delete
      * had happened.
+     *
+     * #467: "no longer exists" now means no fold AND no store row. Every
+     * service write mirrors into the workspace store (#218), so dropping
+     * the session fold alone leaves the ticket resolvable through the
+     * store-backed route — the nomination stays actionable, which is
+     * correct, not wedged. The simulation therefore drops the store's
+     * folded row too, exactly as a real delete event replayed everywhere
+     * would.
      */
     const { harness, agent } = setup();
     const id = openTicket(harness);
@@ -124,6 +132,12 @@ describe("#160 a fulfilled nomination stops existing", () => {
     );
     expect(cache).toBeDefined();
     cache?.state.tickets.delete(id);
+    const stores = (harness.service as unknown as {
+      _workspaceStores: Map<string, { store: { state: { tickets: Map<number, unknown> } } }>;
+    })._workspaceStores;
+    for (const entry of stores?.values() ?? []) {
+      entry.store.state.tickets.delete(id);
+    }
 
     expect(harness.service.actionNominations(agent)).toHaveLength(0);
   });

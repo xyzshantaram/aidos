@@ -33871,6 +33871,19 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     this._sync(agent.session, cache);
     if (cache.state.tickets.has(numeric)) return agent;
     const owner = this._workspaceOwnerOf(agent, numeric);
+    if (owner !== null && owner !== agent.session.id) {
+      const ownerAgent = this._ownerAgent(agent, owner);
+      const ownerCache = this._cache(ownerAgent.session);
+      this._sync(ownerAgent.session, ownerCache);
+      if (ownerCache.state.tickets.has(numeric)) return ownerAgent;
+    }
+    const storeEntry = this._workspaceStoreForRead(agent);
+    if (storeEntry !== null && storeEntry.store.state.tickets.has(numeric)) {
+      const orphan = this._orphanSession(agent, owner ?? agent.session.id);
+      if (orphan !== null) {
+        return { ...agent, session: orphan };
+      }
+    }
     if (owner === null || owner === agent.session.id) return agent;
     return this._ownerAgent(agent, owner);
   }
