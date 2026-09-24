@@ -198,6 +198,39 @@ describe("#467 writes resolve when the origin session is live but its log predat
     const ownerRead = svc.getTicket(harness.asAgent(owner), { ticketId: live.id });
     expect(ownerRead.evidence.some((row) => row.kind === "builtin:test_run")).toBe(true);
   });
+
+  /*
+   * Review finding (a): the NULL-origin facet. A row created DIRECTLY in
+   * the store carries no origin stamp, so the merge stamps it with whoever
+   * is READING (`origin ?? agent.session.id`, aidos-core.ts merge) — the
+   * caller's own id, which makes the own-fold miss look like a settled
+   * absence. The fallback must route the write to the store-backed session
+   * under the caller's key all the same. Seeded with `createTicket` on the
+   * store itself: no backfill, no origin, nothing but the row.
+   */
+  it("a store row with NULL origin (reader-stamped by the merge) accepts a write", () => {
+    const ws = mkdtempSync(join(tmpdir(), "ws467n-"));
+    const harness = createHarness(undefined, { cwd: ws });
+    harness.installService();
+    const seed = new Store(DEFAULT_CONFIG, { storage: openWorkspaceStorage(ws) });
+    const project = seed.createProject(ws, "aidos");
+    const ticketId = seed.createTicket(project, "Direct-in-store ticket", "");
+    const stranger = harness.makeAgent({ id: "s467-null-stranger" });
+    (stranger.session.header as { cwd?: string }).cwd = ws;
+
+    const svc = harness.service;
+    const attached = svc.agentAttachEvidence(harness.asAgent(stranger), {
+      ticketId,
+      kind: "builtin:test_run",
+      payload: { ok: true },
+    });
+    expect(attached.ticketId).toBe(ticketId);
+    const read = svc.getTicket(harness.asAgent(stranger), { ticketId });
+    expect(read.evidence.some((row) => row.kind === "builtin:test_run")).toBe(true);
+    // Durable in the store's own log, not only in the reading fold.
+    const reopened = new Store(DEFAULT_CONFIG, { storage: openWorkspaceStorage(ws) });
+    expect([...(reopened.state.evidence.get(ticketId as never) ?? [])]).not.toHaveLength(0);
+  });
 });
 
 /** The workspace path of a harness agent, as the store resolves it. */
