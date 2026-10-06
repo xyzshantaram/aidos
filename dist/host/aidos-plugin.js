@@ -25429,11 +25429,11 @@ function date4(params) {
 config(en_default());
 
 // src/host/aidos-core.ts
-import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { dshHomePath as dshHomePath3 } from "@deepseek-ai/dsh-home-paths";
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
+import "@deepseek-ai/dsh-settings";
 import {
   existsSync,
   mkdirSync as mkdirSync3,
@@ -32673,7 +32673,7 @@ var AidosService = class extends (_a3 = TypertRemoteService, _userSetTicket_dec 
     };
     ctx.inject(["settings"], (settingsCtx) => {
       const scope = settingsCtx.settings.register(
-        settingsNamespace("aidos"),
+        "aidos",
         AIDOS_SETTINGS_SCHEMA,
         /*
          * #107: gates are normalised so every one carries an excusedBy.

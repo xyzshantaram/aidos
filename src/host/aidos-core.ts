@@ -16,14 +16,17 @@ import { z as zod } from "zod";
 import type { Agent } from "@deepseek-ai/dsh-agent";
 import { Session } from "@deepseek-ai/dsh-session";
 import type { SessionEvent } from "@deepseek-ai/dsh-session";
-import { settingsNamespace } from "@deepseek-ai/dsh-settings";
 import { dshHomePath } from "@deepseek-ai/dsh-home-paths";
 // The Remote decorator and the Typert service base: the B2 human surface.
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 // Load the Context augmentations the service reads (workspace binding and
 // the projection registry) and the projection table its units merge into.
+// The dsh-settings import is types-only: it supplies the ctx.settings
+// augmentation (the register namespace argument is a plain string, no value
+// import needed under 0.1.5-rc.3).
 import "@deepseek-ai/dsh-workspace";
 import "@deepseek-ai/dsh-session-projection";
+import "@deepseek-ai/dsh-settings";
 import type { KindDef } from "../kernel/types";
 
 // The node builtins ("fs", "path") are declared in ./node-builtins.d.ts.
@@ -2673,7 +2676,7 @@ registerAidosSessionEventTypes(ctx);
     // settings service going away restores the defaults with it.
     ctx.inject(["settings"], (settingsCtx) => {
       const scope = settingsCtx.settings.register(
-        settingsNamespace("aidos"),
+        "aidos",
         AIDOS_SETTINGS_SCHEMA,
         /*
          * #107: gates are normalised so every one carries an excusedBy.
